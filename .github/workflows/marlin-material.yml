@@ -1,0 +1,63 @@
+name: Marlin Material Height
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/marlin-material-*']
+    paths:
+      - 'firmware/marlin_material/**'
+      - 'tests/*marlin_material*'
+      - 'laser_aligner/machine/z_probe.py'
+      - '.github/workflows/marlin-material.yml'
+  pull_request:
+    paths:
+      - 'firmware/marlin_material/**'
+      - 'tests/*marlin_material*'
+      - 'laser_aligner/machine/z_probe.py'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-marlin:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install build and test tools
+        run: python -m pip install platformio==6.1.18 -r requirements.txt -r requirements-dev.txt -r firmware/ender_aux/requirements.txt
+      - name: Get pinned Creality source
+        shell: pwsh
+        run: |
+          $baseline = Get-Content firmware/marlin_material/baseline.json -Raw | ConvertFrom-Json
+          git init build/marlin-material-height
+          git -C build/marlin-material-height fetch --depth 1 $baseline.repository $baseline.revision
+          git -C build/marlin-material-height checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build without hardware
+        run: python firmware/marlin_material/build.py build/marlin-material-height --core build/platformio
+      - name: Execute real probe functions with fake I/O
+        run: python firmware/marlin_material/run_native_tests.py build/marlin-material-height --toolchain build/platformio/packages/toolchain-gccarmnoneeabi/bin
+      - name: Audit startup and package application
+        run: python firmware/marlin_material/package.py build/marlin-material-height/.pio/build/STM32F401RC_creality/firmware.elf --objdump build/platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-objdump.exe --output dist
+      - name: Test guarded host path
+        run: python -m pytest -q tests/test_marlin_material.py tests/test_native_height.py tests/test_native_probe.py
+      - name: Lint and compile
+        shell: pwsh
+        run: |
+          python -m ruff check firmware/marlin_material laser_aligner/machine/z_probe.py tests/test_marlin_material.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m compileall -q firmware/marlin_material laser_aligner/machine/z_probe.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marlin-material-experimental
+          path: dist/marlin-material-v1-*
+          if-no-files-found: error

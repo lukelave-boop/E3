@@ -1,0 +1,2 @@
+# Patches and their source hashes must survive Windows checkout unchanged.
+* text eol=lf

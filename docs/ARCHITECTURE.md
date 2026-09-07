@@ -1,4 +1,20 @@
 # Architecture
+## Native material-height Marlin prototype
+
+`firmware/marlin_material/` pins external Creality source plus narrowly scoped
+patches/overlays, independently of the retained `ender_aux` updater and BENCH
+application. G39 uses the native probe machinery with a separate fixed material
+contact interval. Builds, executable tests and ELF packaging never open serial.
+The relocated application restores interrupts after the retained-loader handoff.
+The profile disables Marlin laser support and EEPROM auto-initialization.
+
+`CrealityZProbe.native_measure` uses G39 only after the session's complete M115
+identity advertises the exact V1 capability, and checks it again before contact.
+Both border and material use the same cycle. Stock firmware continues using G30;
+failed/unknown G39 never falls back. MachineService remains the sole normal
+controller path and retains existing authorization, reference, session and STOP
+rules. No browser/desktop geometry, camera service or runtime reconnect behavior
+changes. See [the protocol and checks](../firmware/marlin_material/README.md).
 
 ## Experimental auxiliary MCU firmware
 

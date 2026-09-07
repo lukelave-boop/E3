@@ -1,4 +1,115 @@
 # Current repository state
+## Active: bounded native Marlin material-height prototype
+
+Implemented on `codex/marlin-material-height`, starting from `eb6f1d4`, which
+already includes material-height development through `d69d916`. Existing
+auxiliary firmware, both recovery packages, worktrees and temporary files are
+preserved. Main remains separate; this is an experimental branch, not a
+production-ready machine integration. No new Windows EXE was built or selected.
+
+`firmware/marlin_material/` pins Creality `s1_pro_plus` source at
+`7fffa9270ff8fb5ee208a5b04f832e20bab19c60`. The published source identifies as
+2.0.8.24F4; it is not asserted to match the working board's 2.0.8.26F4 binary.
+The patch adds G39 and `Cap:E3_MATERIAL_HEIGHT_V1:1`, plus the read-only M119
+axis-trust fields E3 expects. Both material touches use a separate -2 to +10.5 mm
+contact interval in the native border frame. +10.5 mm corresponds to a 12 mm
+sheet for this rig's recorded -1.5 mm support offset. Native fast touch, 5 mm
+retract, slow touch and stow are retained; ordinary probing keeps its original
+sample selection and checks. Missing contact and out-of-range touches fail.
+G39 rejects before deployment unless native Z20, trusted Z, absolute millimetres,
+leveling off, no Z workspace shift and sufficient complete-cycle headroom are
+established. No parameter can widen the interval. It does not move XY or reset
+the border datum. G39 omits G30's fixed return-to-bed-clearance move.
+
+The host uses G39 for the border check and material only on the exact V1
+capability; it rechecks the complete M115 identity each time. Stock firmware
+keeps its existing G30 CLI path. Unknown/duplicate capabilities and malformed
+results reject, with no fallback/retry. MachineService retains its existing
+hardware/motion/confirmation/session/STOP gates and invalidates failed references.
+Legacy desktop buttons remain blocked and camera-height compensation is still
+not applied to tracing or jobs. The webcam and both production pipelines are
+unchanged.
+
+The firmware profile uses the identified RET6's 512 KiB flash and a conservative
+64 KiB RAM region. It links at 0x08020200 after the existing updater metadata;
+it never includes loader/updater bytes. A CMSIS SystemInit wrapper restores
+interrupts after the updater's masked handoff. The unrelated laser feature and
+automatic EEPROM initialization are disabled. ELF allocation/reset-flow checks,
+Cortex-M4 execution of the actual startup wrapper with fake RCC/SCB registers,
+and existing image validation pass. The final payload is 148080 bytes;
+RAM allocation reported by the build is 10092 bytes. The package is
+`dist/marlin-material-v1-7cdbc0e9`, application.e3fw SHA-256
+`7cdbc0e9f7ae1ff862654e36766338ed09cc34bd0b88f00ec4df8c9c14fbd379`.
+Its exact binary is retained independently of later documentation commits.
+
+### Spare-board physical verification, 2026-09-07
+
+The user explicitly superseded the earlier assistant-no-hardware restriction
+for the plugged-in spare only and requested autonomous validation. The Pi,
+working machine, webcam and their services were not operated or changed.
+Windows enumerated one CH340 on COM6 (VID:PID 1A86:7523, location 1-1); the
+existing client positively identified BENCH 0.2.0 before any upload. The board
+is the previously identified CR4NS200141C13 / STM32F401RET6 bare spare. USB and
+COM6/115200 8N1 were used; its supply voltage was not independently measured.
+
+The assistant uploaded the final 7cdbc0e9 application through the retained
+0.1.0 updater, received its verified-and-committed response, requested boot,
+and obtained Marlin 2.0.8.24F4 with exactly `Cap:E3_MATERIAL_HEIGHT_V1:1`.
+M119 reported all three axis-trust flags false. M114 reported
+X -9.00, Y -6.00, Z 0.00, counts -720/-480/0. G39 returned
+`Error:E3MH:1 PRECONDITION` and `ok`; the subsequent M114 was identical.
+No G28, axis move, pin deployment, or positive-output command was sent.
+The matching compiled branch rejects before deployment; unchanged coordinates
+are not an electrical measurement of output pins. Firmware startup may perform
+its native initialization; no attached probe/motor behavior was observed.
+
+M115 identity was checked again before explicit M997. That reset successfully
+returned to the retained updater, where HOLD was acknowledged. The exact
+accepted BENCH 0.2.0 `f96d3a21` image was then uploaded, verified/committed,
+booted and identified as BENCH. **The spare is back on BENCH 0.2.0.** Both the
+0.1.0 and 0.2.0 recovery packages remain intact. This verifies normal Marlin
+startup, bidirectional communications, unhomed G39 rejection and this maintenance
+return/restore cycle. It does not verify cold boot, stock-loader byte identity,
+power interruption, physical touch accuracy, fan voltage, or motor/probe motion.
+Local raw transcripts remain under ignored `build/`, not in Git.
+
+### Software verification
+
+The real patched G39, material wrapper and run_z_probe functions pass compiled
+Cortex-M4 execution with fake I/O for TOTAL_PROBING=2, TOTAL_PROBING=3, and the
+published three-sample/one-extra configuration. Tests cover both touches,
+missing contact, exact range edges, offset conversion, headroom, stow failure,
+and unchanged ordinary probing. The actual final startup wrapper passes its
+masked-interrupt/VTOR audit. All 187 focused Windows host/core/service/RPC/CLI
+and secondary-owner tests passed; repository Ruff, compileall and diff checks
+passed. A fresh isolated checkout reproduced every patched-source SHA-256.
+The disconnect regression now waits for service cleanup after serial close and
+covers both G30 and G39; the prior immediate assertion raced that cleanup.
+Dedicated Windows Python 3.12 Marlin CI and Fast Development CI are configured;
+their results will be recorded when available. No GUI, real camera, physical
+motor or physical contact test was performed for this change.
+
+### Consolidated working-machine evidence from the two planning tasks
+
+The last operator-reported Pi runtime was 0.7.31/fingerprint a89995ba. The operator
+measured an approximately 2.1 mm piece as 1.94 mm, observing a completed fast/slow
+cycle and return to Z20. This single 0.16 mm discrepancy does not qualify accuracy.
+A 7 mm piece (5.5 mm above the border) received one touch and no contact-height
+report; the clearance-derived early-trigger check in published Marlin is the
+supported explanation, not proof of the installed binary's exact threshold.
+These later observations supersede earlier blanket measurement-pending notes.
+
+The operator's USB capture `ender-usb-ti0haryk.tar.gz` recorded stopped receive
+requests before the failed Inspect: five stalls and one cleanup cancellation,
+with no reported capture drops. Cable replacement did not cure it and autosuspend
+was already disabled. The operator selected `[pi3] dtoverlay=dwc2,dr_mode=host`;
+topology confirmed dwc2. Four checks over about seven minutes passed with the
+webcam working, followed by another successful check after the requested longer
+idle test (actual duration not explicitly confirmed). This is improved observed
+stability, not a permanent cure or proof the webcam caused the original stalls.
+The recorded Pi rollback is `/boot/firmware/config.txt.before-e3-dwc2`; it was
+not accessed or changed in this task. The capture helper has therefore been
+physically exercised, superseding earlier capture-pending notes below.
 
 ## Active: bare-board FAN1/FAN2, Z probe and Z axis bench application
 

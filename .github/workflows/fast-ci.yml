@@ -8,6 +8,7 @@ on:
       - "agent/**"
       - "cleanup/**"
       - "architecture/**"
+      - "codex/marlin-material-*"
 
 permissions:
   contents: read

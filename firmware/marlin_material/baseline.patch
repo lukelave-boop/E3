@@ -1,0 +1,19 @@
+--- a/Marlin/Configuration.h
++++ b/Marlin/Configuration.h
+@@ -70,13 +70,13 @@
+ 
+ 
+ // @section info
+-/
++//
+ //  #define ENDER_3S1_PLUS
+ #define ENDER_3S1_PRO
+   
+ // 主控芯片
+-#define USER_STM32F103  1
+-// #define USER_STM32F401  1
++// #define USER_STM32F103  1
++#define USER_STM32F401  1
+ 
+ 
+ #if ENABLED(ENDER_3S1_PRO)

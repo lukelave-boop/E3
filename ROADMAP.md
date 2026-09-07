@@ -1,4 +1,10 @@
 # Roadmap
+Native material-height firmware now has a bounded Marlin prototype and guarded
+host integration. Spare-board communications, unhomed rejection and restoration
+to BENCH passed. Remaining work is physical native-cycle/contact qualification
+with attached hardware, repeatability/known-thickness evidence, then desktop and
+camera-plane integration. See [the prototype](firmware/marlin_material/README.md).
+No operator validation is requested as part of this software/board-only task.
 
 Spare-controller firmware: SD installation, USB update and cold startup of the communications-only retained-loader updater have operator verification on the spare. Controlled incomplete-image recovery has also passed, including USB restoration and cold startup. The next application adds raw input reporting and FAN1/FAN2/probe/Z simulation for a board-only bench setup. Physical probe, Z and fan control remain later stages after bench acceptance. Broader fault recovery, physical outputs and exact target compatibility remain to be verified before using the working machine board. See [the isolated firmware project](firmware/ender_aux/README.md).
 

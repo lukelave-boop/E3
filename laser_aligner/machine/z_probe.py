@@ -26,6 +26,27 @@ _CONTACT = re.compile(
     rf"^Bed X:\s*({_NUMBER})\s+Y:\s*({_NUMBER})\s+Z:\s*({_NUMBER})\s*$", re.I
 )
 _REPEATABILITY_MM = 0.10
+_MATERIAL_CAPABILITY = "Cap:E3_MATERIAL_HEIGHT_V1:1"
+_MATERIAL_CONTACT = re.compile(rf"^E3MH:1 Z:({_NUMBER})$")
+
+
+def material_height_supported(firmware: str) -> bool:
+    """Recognize exactly the fixed V1 contract; never guess a future version."""
+    capabilities = [token for token in firmware.split()
+                    if token.startswith("Cap:E3_MATERIAL_HEIGHT")]
+    if not capabilities:
+        return False
+    if capabilities != [_MATERIAL_CAPABILITY]:
+        raise MachineError("Unsupported or ambiguous E3 material-height capability")
+    return True
+
+
+def parse_material_contact(lines: tuple[str, ...]) -> float:
+    reports = [line.strip() for line in lines if line.strip().startswith("E3MH")]
+    match = _MATERIAL_CONTACT.fullmatch(reports[0]) if len(reports) == 1 else None
+    if match is None:
+        raise MachineError("G39 must report exactly one E3MH:1 contact; an OK is not a measurement")
+    return finite_number(float(match[1]), "Material contact Z", -2, 10.5)
 
 
 def finite_number(value: object, label: str, lower: float, upper: float) -> float:
@@ -205,7 +226,11 @@ class CrealityZProbe:
         carriage_xy_mm: tuple[float, float], guard: WriteGuardFactory,
         on_motion_start: Callable[[], None],
     ) -> dict[str, object]:
-        """One G30 at clearance, retaining the native border's coordinate frame."""
+        """One native contact cycle retaining the border's coordinate frame.
+
+        Exact E3 material V1 firmware uses G39 for both border and material.
+        Existing stock firmware keeps its physically tested G30 path.
+        """
         self.native_motion_started = False
         self.transcript = []
         reference = self.reference
@@ -229,6 +254,12 @@ class CrealityZProbe:
         def precheck(command: str) -> tuple[str, ...]:
             return self._execute(command, guard, motion_possible=False)
 
+        material_mode = material_height_supported(reference.firmware)
+        if material_mode:
+            firmware = " ".join(precheck("M115"))
+            if firmware != reference.firmware or not material_height_supported(firmware):
+                raise MachineError("Material firmware identity changed; reference the border again")
+
         flags = [line.strip().lower() for line in precheck("M119")]
         if (
             [line for line in flags if line.startswith("test_axis_known_z_flag")]
@@ -245,7 +276,10 @@ class CrealityZProbe:
         on_motion_start()
         # E1 explicitly requests firmware deployment/stow. No raw servo handling,
         # repeated G30, rehoming or coordinate reset is interleaved.
-        contact = parse_contact(self._execute("G30 X110 Y110 E1", guard))
+        contact = (
+            parse_material_contact(self._execute("G39", guard)) if material_mode
+            else parse_contact(self._execute("G30 X110 Y110 E1", guard))
+        )
         if not -2 <= contact <= reference.clearance_z_mm - 5:
             raise MachineError("Contact is outside the measurement range; no further move sent")
         flags = [line.strip().lower() for line in self._execute("M119", guard)]

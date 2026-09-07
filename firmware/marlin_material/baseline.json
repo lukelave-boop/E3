@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/CrealityOfficial/Ender-3S1.git",
+  "revision": "7fffa9270ff8fb5ee208a5b04f832e20bab19c60",
+  "platformio": "6.1.18",
+  "platform": "ststm32@12.1.1",
+  "environment": "STM32F401RC_creality",
+  "hardware_verified": false,
+  "packages": {
+    "framework-arduinoststm32": "4.10900.200819",
+    "framework-cmsis": "2.50501.200527",
+    "tool-scons": "4.40801.0",
+    "toolchain-gccarmnoneeabi": "1.90201.191206"
+  }
+}

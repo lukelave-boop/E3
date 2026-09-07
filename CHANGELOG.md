@@ -7,6 +7,18 @@ behavior. Actual Pi validation is pending.
 Probe failures now retain controller replies in the Pi journal for diagnosis;
 remote status continues to omit the local command log. Motion is unchanged.
 
+## Unreleased - native material-height Marlin prototype
+
+- Add a revision-pinned Marlin G39 patch with native fast/retract/slow/stow,
+  separate -2 to +10.5 mm contact bounds, missing-contact rejection and unchanged
+  ordinary homing/bed-leveling behavior.
+- Add exact capability and identity checking to the guarded existing height CLI;
+  preserve the stock G30 path and reject failed G39 without fallback.
+- Adapt the application layout/startup to the retained updater, disable the
+  unrelated laser feature and automatic EEPROM initialization, and add ELF,
+  Cortex-M4 and Windows CI checks. No desktop controls are unblocked.
+- Verify spare-board startup, reporting, unhomed rejection and restoration to
+  BENCH 0.2.0. Physical material probing remains unverified.
 ## Unreleased - spare-board firmware bootstrap
 
 - Add 0.2.0 BENCH application with independent simulated FAN1/FAN2 percentages,

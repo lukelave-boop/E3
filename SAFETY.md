@@ -1,4 +1,11 @@
 # Safety requirements
+The experimental Marlin G39 material mode is separate from ordinary bed probing.
+Its fixed contact interval, offset-aware retract headroom, homed/absolute/mm
+preconditions and explicit failure reports are software guardrails. The host
+requires the exact capability and unchanged session identity and never retries
+or falls back after a failed contact. Bare-board startup/unhomed-rejection tests
+do not qualify physical probe deployment, motor stopping or material accuracy.
+See [the prototype boundary](firmware/marlin_material/README.md).
 
 For the current five-tab calibration order, use the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).

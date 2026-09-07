@@ -4,6 +4,13 @@ For the intermittent Ender connection investigation, see the bounded
 [operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer
 metadata with the webcam running; actual Pi capture validation is pending.
 
+An experimental [native Marlin material-height patch](firmware/marlin_material/README.md)
+now preserves the fast/slow probe cycle with a separate bounded contact range.
+The spare has verified USB startup, capability reporting, unhomed rejection and
+return to the retained updater; it has been restored to BENCH 0.2.0. Physical
+probing of this new firmware remains unverified. The working-machine stock
+firmware previously measured a thin piece successfully; see CURRENT_STATE.md
+for the latest measurement and dwc2 USB evidence, superseding older pending notes.
 Experimental spare-board firmware now has a separate [retained-loader USB updater project](firmware/ender_aux/README.md). It builds a USB-updatable STM32F401RET6 bench application with simulated FAN1/FAN2, Z probe and Z controls, plus raw probe-input reporting; physical outputs stay disabled. See the [bench console guide](firmware/ender_aux/BENCH_GUIDE.md). The operator verified SD installation, a USB update and cold startup on the spare. The controlled incomplete-upload test also recovered successfully through USB and normal startup. Power loss during active flash writes and broader fault recovery remain unverified.
 
 Source material-height tests now provide `reference-border` and `measure-height` with a required border contact check and one contact per material reading. See [the test procedure](docs/MATERIAL_HEIGHT.md#current-height-test-using-the-source-cli). Physical measurement validation is pending; legacy desktop probe buttons remain blocked.

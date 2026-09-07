@@ -208,7 +208,8 @@ def test_post_contact_state_failure_prevents_lift(native_probe, report):
     assert not probe.native_border_checked
 
 
-def test_disconnect_during_single_contact_prevents_retry_and_final_lift(native_rpc):
+@pytest.mark.parametrize("material", [False, True])
+def test_disconnect_during_single_contact_prevents_retry_and_final_lift(native_rpc, material):
     import socket
     import threading
     import uuid
@@ -216,19 +217,29 @@ def test_disconnect_during_single_contact_prevents_retry_and_final_lift(native_r
     from laser_aligner.machine.pi_job_protocol import authenticate_client
 
     harness, serial = native_rpc
+    command = "G39" if material else "G30 X110 Y110 E1"
+    if material:
+        serial.overrides["M115"] = [
+            "FIRMWARE_NAME:Marlin E3-material MACHINE_TYPE:Ender-3 S1 Pro",
+            "Cap:E3_MATERIAL_HEIGHT_V1:1", "ok",
+        ]
     assert rpc(harness, "native_reference")["ok"]
     serial.writes.clear()
-    serial.overrides["G30 X110 Y110 E1"] = []
+    serial.overrides[command] = []
     entered = threading.Event()
-    serial.on_write = lambda line: entered.set() if line.startswith("G30") else None
+    serial.on_write = lambda line: entered.set() if line == command else None
     args = native.fields(harness)
     args["operation"] = "native_measure"
     with socket.create_connection(("127.0.0.1", harness.server.bound_port), timeout=3) as sock:
         channel = authenticate_client(sock, helpers._TOKEN)
         channel.send_json({"action": ACTION_MACHINE_PROBE_Z, "request_id": str(uuid.uuid4()), **args})
         assert entered.wait(3)
-    helpers._wait_until(lambda: serial.close_calls > 0, timeout=3)
-    assert serial.writes.count("G30 X110 Y110 E1") == 1
+    # The owner closes first; MachineService then unwinds and invalidates the
+    # reference. Wait for that completed cleanup instead of racing its handler.
+    helpers._wait_until(lambda: serial.close_calls > 0
+                       and harness.machine._z_probe.reference is None
+                       and not harness.machine._z_probe_active, timeout=3)
+    assert serial.writes.count(command) == 1
     assert not any(line.startswith("G1") for line in serial.writes)
     assert harness.machine._z_probe.reference is None
 

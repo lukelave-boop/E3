@@ -1,0 +1,61 @@
+--- a/ini/stm32f4.ini
++++ b/ini/stm32f4.ini
+@@ -15,7 +15,7 @@
+ #   R : 64 or 66 pins  (V:100, Z:144, I:176)
+ #   G : 1024KB Flash-memory  (C:256KB, D:384KB, E:512KB)
+ #   T : LQFP package
+-#   6 : -40...85°C   (7: ...105°C)
++#   6 : -40...85Â°C   (7: ...105Â°C)
+ #
+ #################################
+ 
+@@ -453,12 +453,13 @@
+ # 'creality' STM32F401RC board
+ #
+ [env:STM32F401RC_creality]
+-platform             = ${common_stm32.platform}
++platform             = ststm32@12.1.1
++board_upload.maximum_size = 524288
+ extends              = common_stm32
+ board                = marlin_CREALITY_STM32F401RC
+-board_build.offset   = 0x10000
++board_build.offset   = 0x20200
+ build_flags          = ${common_stm32.build_flags} 
+-  -DSTM32F401xC -DSTM32F4
++  -DSTM32F401xE -DSTM32F4 -Wl,--wrap=SystemInit
+ build_unflags        = -DUSBCON -DUSBD_USE_CDC
+ extra_scripts        = ${common.extra_scripts}
+   pre:buildroot/share/PlatformIO/scripts/generic_create_variant.py
+--- a/Marlin/Configuration_adv.h
++++ b/Marlin/Configuration_adv.h
+@@ -3205,7 +3205,7 @@
+  * See https://marlinfw.org/docs/configuration/laser_spindle.html for more config details.
+  */
+ //#define SPINDLE_FEATURE
+-#define LASER_FEATURE // 激光宏定义
++//#define LASER_FEATURE // 激光宏定义
+ #if EITHER(SPINDLE_FEATURE, LASER_FEATURE)
+   #define SPINDLE_LASER_ACTIVE_STATE    LOW    // Set to "HIGH" if the on/off function is active HIGH
+   #define SPINDLE_LASER_PWM             true   // Set to "true" if your controller supports setting the speed/power
+--- a/Marlin/Configuration.h
++++ b/Marlin/Configuration.h
+@@ -1938,7 +1938,7 @@
+ #define EEPROM_CHITCHAT       // Give feedback on EEPROM commands. Disable to save PROGMEM.
+ #define EEPROM_BOOT_SILENT    // Keep M503 quiet and only give errors during first load
+ #if ENABLED(EEPROM_SETTINGS)
+-  #define EEPROM_AUTO_INIT  // Init EEPROM automatically on any errors.
++  //#define EEPROM_AUTO_INIT  // Init EEPROM automatically on any errors.
+ #endif
+ 
+ //
+--- a/Marlin/src/HAL/STM32/HAL.cpp
++++ b/Marlin/src/HAL/STM32/HAL.cpp
+@@ -141,6 +141,8 @@
+ 
+ void HAL_reboot() { NVIC_SystemReset(); }
+ 
++#include "e3_startup.inc"
++
+ void _delay_ms(const int delay_ms) { delay(delay_ms); }
+ 
+ extern "C" {

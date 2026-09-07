@@ -1,4 +1,20 @@
 # Material height and camera geometry
+## Latest experimental firmware path
+
+The [native Marlin prototype](../firmware/marlin_material/README.md) provides G39
+with a separate -2 to +10.5 mm contact range and preserved native fast/slow
+probing. The existing CLI selects it only on its exact capability and a matching
+session identity; ordinary stock firmware keeps G30. The spare passed startup,
+reporting and unhomed rejection and was restored to BENCH. Attached probe/motor
+behavior remains unverified; legacy desktop controls stay blocked.
+
+Later operator evidence on stock Marlin 2.0.8.26F4 / Pi 0.7.31: the border check
+passed and an approximately 2.1 mm piece measured 1.94 mm, completing the observed
+fast/slow cycle and returning to Z20. The 7 mm piece failed after one touch with
+no contact report. These later observations supersede the blanket pending
+statements in the historical procedure below; they do not establish accuracy
+or physically validate the new G39 firmware. Production camera correction is
+still unfinished. See CURRENT_STATE.md for the dwc2 comparison with webcam intact.
 
 Failed probe operations now write `Probe failure transcript` entries to the Pi
 journal, including the command and captured replies. Remote machine.status
