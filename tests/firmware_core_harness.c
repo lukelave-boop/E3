@@ -6,6 +6,7 @@
 #include "image.h"
 #include "platform.h"
 #include "protocol.h"
+#include "bench_inputs.h"
 
 #define FLASH_WORDS ((E3_HEADER_SIZE + E3_PAYLOAD_CAPACITY) / 4)
 #define CHECK(value) do { if (!(value)) return __LINE__; } while (0)
@@ -38,6 +39,8 @@ static uint32_t programmed;
 static uint32_t booted;
 static uint32_t resets;
 static uint32_t off_calls;
+static uint32_t raw_probe;
+static int input_pullup;
 static uint32_t fail_program;
 static uint32_t partial_program_bytes;
 static uint32_t write_addresses[512];
@@ -47,7 +50,9 @@ static int corrupt_program;
 static int illegal_access;
 
 void platform_init(void) {}
-void platform_safe_outputs(void) { ++off_calls; }
+void platform_safe_outputs(void) { ++off_calls; input_pullup = 0; }
+void bench_inputs_init(void) { input_pullup = 1; }
+uint32_t bench_probe_raw(void) { return raw_probe; }
 bool platform_board_supported(void) { return true; }
 uint32_t platform_millis(void) { return now; }
 int platform_getchar(void) { return -1; }
@@ -123,6 +128,8 @@ static void setup(void) {
     clear_output();
     now = erased = programmed = booted = fail_program = 0;
     off_calls = resets = 0;
+    raw_probe = 1;
+    input_pullup = 0;
     partial_program_bytes = 0;
     fail_erase = partial_erase = corrupt_program = illegal_access = 0;
     protocol_init();
@@ -545,49 +552,252 @@ static void app_send(const char *text) {
     while (*text) application_receive((unsigned char)*text++);
 }
 
-static int test_application(void) {
-    setup();
-    application_init();
-    CHECK(off_calls == 1);
-    app_send("INFO\nM115\r\n");
-    CHECK(same(output, E3_APPLICATION_ID "\n" E3_APPLICATION_ID "\n"));
-    CHECK(off_calls == 1 && resets == 0);
+static int app_exchange(const char *command, const char *reply) {
     clear_output();
-    app_send("M5\n");
-    CHECK(same(output, "OK M5 OUTPUTS_OFF\n") && off_calls == 2);
-    clear_output();
-    app_send("UPDATE\n");
-    CHECK(same(output, "OK UPDATE\n") && off_calls == 3 && resets == 1);
+    app_send(command);
+    return same(output, reply) && input_pullup && erased == 0 && programmed == 0;
+}
 
-    const char *rejected[] = {
+static int app_status(const char *expected) {
+    return app_exchange("STATUS\n", expected);
+}
+
+static void app_setup(void) {
+    /* App cases never touch flash. Avoid repeatedly clearing 384 KiB merely
+     * to establish unrelated virtual-motion state; writes remain counted. */
+    clear_output();
+    now = erased = programmed = booted = fail_program = 0;
+    off_calls = resets = partial_program_bytes = 0;
+    raw_probe = 1;
+    input_pullup = fail_erase = partial_erase = corrupt_program = illegal_access = 0;
+    application_init();
+}
+
+static int test_application(void) {
+    app_setup();
+    CHECK(off_calls == 1 && input_pullup);
+    CHECK(app_exchange("INFO\nM115\r\n", E3_APPLICATION_ID "\n" E3_APPLICATION_ID "\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=NONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("INPUTS\n", "INPUTS PROBE_PC14=1\n"));
+    raw_probe = 0;
+    CHECK(app_exchange("INPUTS\n", "INPUTS PROBE_PC14=0\n"));
+    CHECK(app_exchange("SIM FAN 1 100\n", "OK SIM FAN 1 100\n"));
+    CHECK(app_exchange("SIM FAN 2 37\n", "OK SIM FAN 2 37\n"));
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM TRIGGER 1\n", "OK SIM TRIGGER 1\n"));
+    CHECK(app_status("BENCH FAN1=100 FAN2=37 PROBE=DEPLOYED TRIGGER=1 SOURCE=SIM Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=NONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM TRIGGER 0\n", "OK SIM TRIGGER 0\n"));
+    CHECK(app_exchange("SIM PROBE STOW\n", "OK SIM PROBE STOW\n"));
+    CHECK(app_exchange("SIM FAN 1 0\n", "OK SIM FAN 1 0\n"));
+    CHECK(app_exchange("SIM FAN 2 100\n", "OK SIM FAN 2 100\n"));
+    CHECK(app_exchange("SIM SOURCE SWITCH\n", "OK SIM SOURCE SWITCH\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=100 PROBE=STOWED TRIGGER=1 SOURCE=SWITCH Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=NONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z SET 200000\n", "OK SIM Z SET 200000\n"));
+    CHECK(app_exchange("SIM RESET\n", "OK SIM RESET\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=NONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("M5\n", "OK M5 OUTPUTS_OFF\n"));
+    CHECK(app_exchange("UPDATE\n", "OK UPDATE\n"));
+    CHECK(resets == 1 && !booted && !illegal_access);
+    return 0;
+}
+
+static int test_virtual_move(void) {
+    app_setup();
+    CHECK(app_exchange("SIM Z MOVE +1000 1000\n", "OK SIM Z MOVE +1000 1000\n"));
+    now = 499;
+    application_tick();
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10499 TARGET_UM=11000 MOTION=MOVE RESULT=NONE OUTPUTS=DISABLED\n"));
+    now = 1000;
+    application_tick();
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=11000 TARGET_UM=11000 MOTION=IDLE RESULT=DONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z MOVE -10000 1000\n", "OK SIM Z MOVE -10000 1000\n"));
+    now += 10000;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=1000 TARGET_UM=1000 MOTION=IDLE RESULT=DONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z SET 0\n", "OK SIM Z SET 0\n"));
+    CHECK(app_exchange("SIM Z MOVE 1 10000\n", "OK SIM Z MOVE 1 10000\n"));
+    ++now;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=1 TARGET_UM=1 MOTION=IDLE RESULT=DONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z SET 200000\n", "OK SIM Z SET 200000\n"));
+    CHECK(app_exchange("SIM Z MOVE -3000 100\n", "OK SIM Z MOVE -3000 100\n"));
+    now += 29999;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=197001 TARGET_UM=197000 MOTION=MOVE RESULT=NONE OUTPUTS=DISABLED\n"));
+    ++now;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=197000 TARGET_UM=197000 MOTION=IDLE RESULT=DONE OUTPUTS=DISABLED\n"));
+    return 0;
+}
+
+static int test_virtual_probe(void) {
+    app_setup();
+    CHECK(app_exchange("SIM Z PROBE 1000 1000\n", "ERR PROBE_STATE\n"));
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 1000 1000\n", "OK SIM Z PROBE 1000 1000\n"));
+    now = 250;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=0 SOURCE=SIM Z_UM=9750 TARGET_UM=9000 MOTION=PROBE RESULT=NONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM TRIGGER 1\n", "OK SIM TRIGGER 1\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=1 SOURCE=SIM Z_UM=9750 TARGET_UM=9750 MOTION=IDLE RESULT=CONTACT OUTPUTS=DISABLED\n"));
+    now = 5000;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=1 SOURCE=SIM Z_UM=9750 TARGET_UM=9750 MOTION=IDLE RESULT=CONTACT OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z PROBE 100 1000\n", "ERR TRIGGERED\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=1 SOURCE=SIM Z_UM=9750 TARGET_UM=9750 MOTION=IDLE RESULT=ERROR OUTPUTS=DISABLED\n"));
+
+    app_setup();
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 200 100\n", "OK SIM Z PROBE 200 100\n"));
+    now = 2000;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=0 SOURCE=SIM Z_UM=9800 TARGET_UM=9800 MOTION=IDLE RESULT=NO_TRIGGER OUTPUTS=DISABLED\n"));
+    now = 100000;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=0 SOURCE=SIM Z_UM=9800 TARGET_UM=9800 MOTION=IDLE RESULT=NO_TRIGGER OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z MOVE 100 1000\n", "ERR PROBE_STATE\n"));
+    return 0;
+}
+
+static int test_virtual_switch_probe(void) {
+    app_setup();
+    CHECK(app_exchange("SIM SOURCE SWITCH\n", "OK SIM SOURCE SWITCH\n"));
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 1000 1000\n", "OK SIM Z PROBE 1000 1000\n"));
+    now = 400;
+    raw_probe = 0;
+    application_tick();
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=1 SOURCE=SWITCH Z_UM=9600 TARGET_UM=9600 MOTION=IDLE RESULT=CONTACT OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("INPUTS\n", "INPUTS PROBE_PC14=0\n"));
+    CHECK(app_exchange("SIM TRIGGER 0\n", "ERR SOURCE\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=1 SOURCE=SWITCH Z_UM=9600 TARGET_UM=9600 MOTION=IDLE RESULT=ERROR OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 100 1000\n", "ERR TRIGGERED\n"));
+    raw_probe = 1;
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 100 1000\n", "OK SIM Z PROBE 100 1000\n"));
+    now += 100;
+    application_tick();
+    raw_probe = 0;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=1 SOURCE=SWITCH Z_UM=9500 TARGET_UM=9500 MOTION=IDLE RESULT=NO_TRIGGER OUTPUTS=DISABLED\n"));
+    for (uint32_t late = 0; late < 2; ++late) {
+        app_setup();
+        app_send("SIM SOURCE SWITCH\nSIM PROBE DEPLOY\nSIM Z PROBE 1000 1000\n");
+        now = 1000 + late * 1000;
+        raw_probe = 0;
+        application_tick();
+        CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=DEPLOYED TRIGGER=1 SOURCE=SWITCH Z_UM=9000 TARGET_UM=9000 MOTION=IDLE RESULT=NO_TRIGGER OUTPUTS=DISABLED\n"));
+    }
+    return 0;
+}
+
+static int test_virtual_rejections(void) {
+    static const char *const malformed[] = {
         "M3 S1\n", "M4 S1\n", "G0 Z1\n", "G1 Z1\n", "G28\n", "G30\n",
         "M280 P0 S10\n", "M106 S255\n", "M104 S200\n", "M140 S60\n",
         "BEGIN 0401E013 00000010 00000000\n", "BOOT\n", "M5 M3 S1\n",
         "M115 X1\n", "UPDATE NOW\n", "INFO\rUPDATE\n", "\n",
+        "SIM FAN 1\n", "SIM  FAN 1 1\n", "SIM FAN 1 1 \n", " SIM RESET\n",
+        "SIM Z MOVE 1 1000 EXTRA\n", "SIM PROBE BOGUS\n", "SIM SOURCE BOGUS\n",
     };
-    for (uint32_t i = 0; i < sizeof(rejected) / sizeof(rejected[0]); ++i) {
-        clear_output();
-        app_send(rejected[i]);
-        CHECK(same(output, "ERR UNSUPPORTED\n"));
-        CHECK(resets == 1 && off_calls == 3);
-        CHECK(erased == 0 && programmed == 0 && booted == 0);
+    static const char *const range_errors[] = {
+        "SIM FAN 0 1\n", "SIM FAN 3 1\n", "SIM FAN 1 101\n", "SIM FAN 1 -1\n",
+        "SIM FAN 1 4294967296\n", "SIM TRIGGER 2\n", "SIM Z SET -1\n",
+        "SIM Z SET 200001\n", "SIM Z SET 4294967296\n", "SIM Z MOVE 0 1000\n",
+        "SIM Z MOVE -0 1000\n", "SIM Z MOVE + 1000\n", "SIM Z MOVE --1 1000\n",
+        "SIM Z MOVE 10001 1000\n", "SIM Z MOVE -10001 1000\n",
+        "SIM Z MOVE 1 99\n", "SIM Z MOVE 1 10001\n", "SIM Z MOVE 1 +1000\n",
+        "SIM Z MOVE 99999999999999999999999 1000\n", "SIM FAN 1 1.5\n",
+    };
+    for (uint32_t i = 0; i < sizeof(malformed) / sizeof(malformed[0]); ++i) {
+        app_setup();
+        app_send("SIM FAN 1 100\nSIM FAN 2 100\n");
+        CHECK(app_exchange(malformed[i], "ERR UNSUPPORTED\n"));
+        CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=ERROR OUTPUTS=DISABLED\n"));
     }
-    clear_output();
-    for (uint32_t i = 0; i < 300; ++i) application_receive('X');
-    app_send("UPDATE\nINFO\n");
-    CHECK(same(output, "ERR LINE\n" E3_APPLICATION_ID "\n"));
+    for (uint32_t i = 0; i < sizeof(range_errors) / sizeof(range_errors[0]); ++i) {
+        app_setup();
+        CHECK(app_exchange(range_errors[i], "ERR RANGE\n"));
+        CHECK(!resets && !booted && input_pullup);
+    }
+    app_setup();
+    CHECK(app_exchange("SIM Z MOVE 3001 100\n", "ERR DURATION\n"));
+    CHECK(app_exchange("SIM Z SET 0\n", "OK SIM Z SET 0\n"));
+    CHECK(app_exchange("SIM Z MOVE -1 100\n", "ERR BOUNDS\n"));
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 1 100\n", "ERR BOUNDS\n"));
+    CHECK(app_exchange("SIM Z SET 200000\n", "OK SIM Z SET 200000\n"));
+    CHECK(app_exchange("SIM Z MOVE 1 100\n", "ERR BOUNDS\n"));
+    CHECK(app_exchange("SIM PROBE DEPLOY\n", "OK SIM PROBE DEPLOY\n"));
+    CHECK(app_exchange("SIM Z PROBE 3001 100\n", "ERR DURATION\n"));
+    static const char *const bad_probes[] = {
+        "SIM Z PROBE 0 1000\n", "SIM Z PROBE -1 1000\n", "SIM Z PROBE 10001 1000\n",
+        "SIM Z PROBE 1 99\n", "SIM Z PROBE 1 10001\n",
+    };
+    for (uint32_t i = 0; i < sizeof(bad_probes) / sizeof(bad_probes[0]); ++i) {
+        app_setup();
+        app_send("SIM PROBE DEPLOY\n");
+        CHECK(app_exchange(bad_probes[i], "ERR RANGE\n"));
+    }
+    return 0;
+}
+
+static int test_virtual_busy_and_stop(void) {
+    static const char *const busy[] = {
+        "SIM Z SET 5000\n", "SIM SOURCE SWITCH\n", "SIM PROBE DEPLOY\n",
+        "SIM PROBE STOW\n", "SIM RESET\n", "SIM Z MOVE 1 1000\n", "SIM Z PROBE 1 1000\n",
+    };
+    for (uint32_t i = 0; i < sizeof(busy) / sizeof(busy[0]); ++i) {
+        app_setup();
+        app_send("SIM FAN 1 100\nSIM FAN 2 100\nSIM Z MOVE -1000 1000\n");
+        now = 400;
+        CHECK(app_exchange(busy[i], "ERR BUSY\n"));
+        now = 5000;
+        CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=9600 TARGET_UM=9600 MOTION=IDLE RESULT=ERROR OUTPUTS=DISABLED\n"));
+    }
+    app_setup();
+    app_send("SIM FAN 1 100\nSIM FAN 2 100\nSIM PROBE DEPLOY\nSIM Z PROBE 1000 1000\n");
+    now = 250;
+    CHECK(app_exchange("STOP\n", "OK STOP\n"));
+    now = 5000;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=9750 TARGET_UM=9750 MOTION=IDLE RESULT=STOPPED OUTPUTS=DISABLED\n"));
+    app_send("SIM Z MOVE 1000 1000\n");
+    now += 250;
+    CHECK(app_exchange("M5\n", "OK M5 OUTPUTS_OFF\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=STOPPED OUTPUTS=DISABLED\n"));
+    app_send("SIM FAN 1 100\nSIM Z MOVE 1000 1000\n");
+    now += 500;
+    CHECK(app_exchange("UPDATE\n", "OK UPDATE\n"));
     CHECK(resets == 1);
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10500 TARGET_UM=10500 MOTION=IDLE RESULT=STOPPED OUTPUTS=DISABLED\n"));
+    return 0;
+}
+
+static int test_virtual_input_failures_and_wrap(void) {
+    app_setup();
+    app_send("SIM FAN 1 100\nSIM PROBE DEPLOY\nSIM Z PROBE 1000 1000\n");
+    now = 250;
     clear_output();
     app_send("UP");
     application_receive(-2);
-    app_send("DATE\nINFO\n");
-    CHECK(same(output, "ERR UART\nERR LINE\n" E3_APPLICATION_ID "\n"));
-    CHECK(resets == 1 && off_calls == 4);
+    app_send("DATE\n");
+    CHECK(same(output, "ERR UART\nERR LINE\n") && !resets);
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=9750 TARGET_UM=9750 MOTION=IDLE RESULT=ERROR OUTPUTS=DISABLED\n"));
+    app_send("SIM FAN 2 100\nSIM Z MOVE -1000 1000\n");
+    now += 250;
+    clear_output();
+    for (uint32_t i = 0; i < 300; ++i) application_receive('X');
+    app_send("SIM RESET\n");
+    CHECK(same(output, "ERR LINE\n"));
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=9500 TARGET_UM=9500 MOTION=IDLE RESULT=ERROR OUTPUTS=DISABLED\n"));
     clear_output();
     application_receive(0);
     app_send("UPDATE\n");
-    CHECK(same(output, "ERR LINE\n") && resets == 1);
-    CHECK(!illegal_access);
+    CHECK(same(output, "ERR LINE\n") && !resets && input_pullup);
+
+    app_setup();
+    now = UINT32_C(0xFFFFFF00);
+    CHECK(app_exchange("SIM Z MOVE 1000 1000\n", "OK SIM Z MOVE 1000 1000\n"));
+    now += 500;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10500 TARGET_UM=11000 MOTION=MOVE RESULT=NONE OUTPUTS=DISABLED\n"));
+    now += 500;
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=11000 TARGET_UM=11000 MOTION=IDLE RESULT=DONE OUTPUTS=DISABLED\n"));
+    CHECK(app_exchange("SIM Z MOVE -1000 1000\n", "OK SIM Z MOVE -1000 1000\n"));
+    now += UINT32_C(0xFFFFFF00);
+    CHECK(app_status("BENCH FAN1=0 FAN2=0 PROBE=STOWED TRIGGER=0 SOURCE=SIM Z_UM=10000 TARGET_UM=10000 MOTION=IDLE RESULT=DONE OUTPUTS=DISABLED\n"));
+    CHECK(!illegal_access && !erased && !programmed && !booted && !resets);
     return 0;
 }
 
@@ -606,5 +816,17 @@ int tests_main(void) {
     if (result) return result;
     result = test_interruption_and_recovery();
     if (result) return result;
-    return test_application();
+    result = test_application();
+    if (result) return result;
+    result = test_virtual_move();
+    if (result) return result;
+    result = test_virtual_probe();
+    if (result) return result;
+    result = test_virtual_switch_probe();
+    if (result) return result;
+    result = test_virtual_rejections();
+    if (result) return result;
+    result = test_virtual_busy_and_stop();
+    if (result) return result;
+    return test_virtual_input_failures_and_wrap();
 }

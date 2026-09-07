@@ -4,7 +4,7 @@ For the intermittent Ender connection investigation, see the bounded
 [operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer
 metadata with the webcam running; actual Pi capture validation is pending.
 
-Experimental spare-board firmware now has a separate [retained-loader USB updater project](firmware/ender_aux/README.md). It builds an SD installation image and a communications-only application for STM32F401RET6; it does not add motion or change the working machine. The operator verified SD installation, a USB update and cold startup on the spare. The controlled incomplete-upload test also recovered successfully through USB and normal startup. Power loss during active flash writes and broader fault recovery remain unverified.
+Experimental spare-board firmware now has a separate [retained-loader USB updater project](firmware/ender_aux/README.md). It builds a USB-updatable STM32F401RET6 bench application with simulated FAN1/FAN2, Z probe and Z controls, plus raw probe-input reporting; physical outputs stay disabled. See the [bench console guide](firmware/ender_aux/BENCH_GUIDE.md). The operator verified SD installation, a USB update and cold startup on the spare. The controlled incomplete-upload test also recovered successfully through USB and normal startup. Power loss during active flash writes and broader fault recovery remain unverified.
 
 Source material-height tests now provide `reference-border` and `measure-height` with a required border contact check and one contact per material reading. See [the test procedure](docs/MATERIAL_HEIGHT.md#current-height-test-using-the-source-cli). Physical measurement validation is pending; legacy desktop probe buttons remain blocked.
 

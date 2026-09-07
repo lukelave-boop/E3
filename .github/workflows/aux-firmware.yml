@@ -6,13 +6,13 @@ on:
     branches: ['codex/aux-firmware-*']
     paths:
       - 'firmware/ender_aux/**'
-      - 'tests/test_ender_aux_host.py'
+      - 'tests/test_ender_aux_*.py'
       - 'tests/firmware_core_harness.c'
       - '.github/workflows/aux-firmware.yml'
   pull_request:
     paths:
       - 'firmware/ender_aux/**'
-      - 'tests/test_ender_aux_host.py'
+      - 'tests/test_ender_aux_*.py'
       - 'tests/firmware_core_harness.c'
       - '.github/workflows/aux-firmware.yml'
 
@@ -46,10 +46,12 @@ jobs:
         run: python firmware/ender_aux/run_core_tests.py
       - name: Execute production flash wrappers with fake registers
         run: python firmware/ender_aux/run_platform_tests.py
+      - name: Execute bench application with fake GPIO
+        run: python firmware/ender_aux/run_bench_platform_tests.py
       - name: Test operator client without hardware
-        run: python -m pytest -q tests/test_ender_aux_host.py
+        run: python -m pytest -q tests/test_ender_aux_host.py tests/test_ender_aux_bench.py
       - name: Lint maintenance tooling
-        run: python -m ruff check firmware/ender_aux tests/test_ender_aux_host.py
+        run: python -m ruff check firmware/ender_aux tests/test_ender_aux_host.py tests/test_ender_aux_bench.py
       - name: Compile Python maintenance tooling
         run: python -m compileall -q firmware/ender_aux
       - uses: actions/upload-artifact@v4

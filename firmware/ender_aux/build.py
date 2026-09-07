@@ -17,7 +17,7 @@ from host import HEADER_SIZE, MAX_PAYLOAD, VECTOR_BASE, pack_image, validate_ima
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 UPDATER_BASE = 0x08010000
 UPDATER_SIZE = 0x10000
 FLAGS = [
@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
     common = ["startup.c", "platform.c"]
     updater = compile_target(folder, output, "updater", [*common, "image.c", "protocol.c", "updater.c"], "updater.ld")
-    application = compile_target(folder, output, "application", [*common, "application.c"], "application.ld")
+    application = compile_target(folder, output, "application", [*common, "application.c", "bench_inputs.c"], "application.ld")
     stack, reset = struct.unpack_from("<II", updater)
     if not (8 <= len(updater) <= UPDATER_SIZE and 0x20000000 < stack <= 0x20018000 and stack % 8 == 0
             and reset & 1 and UPDATER_BASE <= reset & ~1 < UPDATER_BASE + len(updater)):
@@ -101,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     sd_name = f"e3aux_{hashlib.sha256(combined).hexdigest()[:8]}.bin"
     (sd / sd_name).write_bytes(combined)
     (bundle / "application.e3fw").write_bytes(package)
-    shutil.copyfile(HERE / "host.py", bundle / "host.py")
+    for name in ("host.py", "bench.py", "BENCH_GUIDE.md"):
+        shutil.copyfile(HERE / name, bundle / name)
     shutil.copyfile(HERE / "UPLOAD_README.md", bundle / "UPLOAD_README.md")
     (bundle / "requirements.txt").write_text("pyserial==3.5\n", encoding="utf-8")
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=True).stdout.strip()
@@ -109,7 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest = {
         "project": "E3 auxiliary retained-loader bench firmware", "version": VERSION,
         "target": "STM32F401RET6 / CR4NS200141C13", "board_id": "0401E013",
-        "verification": "experimental; physical flashing and recovery not yet verified",
+        "verification": "experimental; this generated build requires its own operator acceptance",
+        "updater_version": "0.1.0", "application_mode": "BENCH", "physical_outputs": "disabled",
         "source_sha256": digest, "repository_base_revision": revision,
         "compiler": compiler, "compiler_flags": FLAGS,
         "uart": {"interface": "USART1 PA9/PA10 via CH340", "baud": 115200, "format": "8N1"},
@@ -118,8 +120,10 @@ def main(argv: list[str] | None = None) -> int:
                     "application_header": ["0x08020000", f"0x{VECTOR_BASE:08X}"],
                     "application_payload_max_bytes": MAX_PAYLOAD, "header_bytes": HEADER_SIZE},
         "sd_install_assumption": "Existing loader loads .bin at 0x08010000; must be physically verified on spare",
-        "capabilities": ["identity", "output-off baseline", "application-only serial update"],
-        "not_implemented": ["motion", "probe actuation", "laser", "air-assist ON", "automatic rollback"],
+        "capabilities": ["identity", "output-off baseline", "application-only serial update",
+                         "simulated FAN1/FAN2 percentages", "simulated Z/probe", "raw PC14 input"],
+        "not_implemented": ["physical motion", "physical probe actuation", "laser",
+                            "physical fan/air-assist ON", "automatic rollback", "production machine integration"],
         "files": {},
     }
     for path in sorted(bundle.rglob("*")):

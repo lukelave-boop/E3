@@ -1,13 +1,18 @@
-# E3 spare-board firmware 0.1.0
+# E3 spare-board firmware 0.2.0 BENCH
 
-This package is the first **communications-only bench build** for the photographed
-Creality CR4NS200141C13 / STM32F401RET6 spare. It contains an SD installation image
-with a second-stage USB-serial updater and an inert test application. It does not
+For a spare already running our updater, use the application-only USB update and
+[bench console guide](BENCH_GUIDE.md); there is no need to reinstall through SD.
+This package adds simulated FAN1/FAN2, probe and Z controls plus real raw PC14
+input reporting. Physical fan, motor and probe outputs remain disabled.
+
+The target is the photographed Creality CR4NS200141C13 / STM32F401RET6 spare.
+The optional SD installation image combines the unchanged 0.1.0 updater with
+the 0.2.0 bench application. It does not
 contain or overwrite the first 64 KiB Creality bootloader through its own update
 code. The original SD loader's actual installation/launch behavior remains a
 physical test item. There is no guarantee against bricking.
 
-No Z motion, CR Touch deployment, laser output, heating, or air-assist ON is
+No physical Z motion, CR Touch deployment, laser output, heating, or air-assist ON is
 implemented. This is not Marlin and must not be configured as the E3 application's
 controller. The normal machine and its software are unchanged. Use the spare
 with all actuator/output loads disconnected; output states during the original
@@ -43,8 +48,8 @@ safety-rated controls.
    Replace COM4 if the spare enumerates differently. The maintenance interface
    is **115200, 8 data bits, no parity, 1 stop bit**; CubeProgrammer's previous
    even-parity ROM settings and protocol do not apply here. Expected result is
-   `APP` after the five-second updater window, or `UPDATER` if contacted during
-   that window. The client accepts only this project's exact firmware identity.
+   `BENCH` after the five-second updater window, or `UPDATER` if contacted during
+   that window. The older 0.1.0 application still identifies as `APP`. The client accepts only this project's exact firmware identity.
    An opened COM port alone does not establish installation success.
 
 If there is no valid identity, stop and retain the logs. Do not use mass erase,
@@ -104,7 +109,8 @@ its allowed erase/program region. Recovery remains a test, not a guarantee.
    five-second window avoids mistaking the normal startup window for recovery.
 3. Once UPDATER is confirmed, use the ordinary `upload` command with the complete
    known application file. Require successful verification/commit, then separately
-   `boot` and `inspect`; expect `APP`. Stop on any error. A final cold startup
+   `boot` and `inspect`; expect `BENCH` for 0.2.0 or `APP` for the accepted
+   0.1.0 recovery image. Stop on any error. A final cold startup
    followed by `inspect` checks that the restored application boots normally.
 
 This tests restart/re-upload after a transfer abandoned between completed flash

@@ -1,6 +1,6 @@
 # Roadmap
 
-Spare-controller firmware: SD installation, USB update and cold startup of the communications-only retained-loader updater have operator verification on the spare. Controlled incomplete-image recovery has also passed, including USB restoration and cold startup. Next add read-only input reporting, then controlled Z/probe/air-assist behavior. Broader fault recovery, physical outputs and exact target compatibility remain to be verified before using the working machine board. See [the isolated firmware project](firmware/ender_aux/README.md).
+Spare-controller firmware: SD installation, USB update and cold startup of the communications-only retained-loader updater have operator verification on the spare. Controlled incomplete-image recovery has also passed, including USB restoration and cold startup. The next application adds raw input reporting and FAN1/FAN2/probe/Z simulation for a board-only bench setup. Physical probe, Z and fan control remain later stages after bench acceptance. Broader fault recovery, physical outputs and exact target compatibility remain to be verified before using the working machine board. See [the isolated firmware project](firmware/ender_aux/README.md).
 
 Material-height next step: operator-test the single-contact border check and a known-thickness material, then wire the accepted path into desktop controls and camera correction. The native homing cycle has operator acceptance.
 

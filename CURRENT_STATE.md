@@ -1,6 +1,48 @@
 # Current repository state
 
-## Active: spare STM32F401RET6 firmware bootstrap
+## Active: bare-board FAN1/FAN2, Z probe and Z axis bench application
+
+The operator requested these four functions and has only the spare board, power,
+USB, a meter and some switches. Repeated printer-harness swaps are not practical.
+Application 0.2.0 therefore provides independent virtual fan percentages, virtual
+probe deploy/stow/contact and bounded asynchronous virtual Z moves/searches, with
+all physical output paths disabled. It separately samples real PC14 as an input
+with weak pull-up; optional SWITCH source means a bench dry switch active LOW,
+not a verified CR Touch polarity or connector pinout. The default SIM source
+needs no wiring or external component. Firmware and host reports explicitly
+identify BENCH mode and disabled physical outputs.
+
+The updater stays at 0.1.0. New application uploads use the existing USB path and
+image format. The accepted 0.1.0 image/package remains the recovery artifact.
+A separate typed console handles status, inputs, fans, deployment, virtual
+trigger, position, bounded move/probe, stop and reset; it accepts only the exact
+BENCH identity and never becomes a production MachineService controller path.
+No wiring changes, hardware commands or GUI operation are performed by the
+assistant. The application and operator console are implemented and packaged;
+all 0.2.0 behavior remains physically unverified. The earlier 0.1.0 acceptance
+below does not qualify the new application's simulated behavior or physical input.
+
+Local Windows verification: 227 Python tests passed (115 image/update host and
+112 bench-console cases); focused Ruff, compileall and diff checks passed.
+Fourteen compiled ARM core groups passed (seven retained updater groups plus
+seven bench state/parser/timing groups). The existing production flash-wrapper
+checks passed 27 cases; the new compiled production application with fake
+UART/time/MMIO passed 23 cases, monitoring inactive GPIO requests, PC14 input
+fields, raw reads and absence of flash writes. A contact first sampled at or
+after the probe search deadline reports NO_TRIGGER, covered by boundary tests.
+No GUI, electrical timing, physical component or real serial test was performed.
+
+The 0.2.0 image has a 4712-byte payload, CRC32 9A49FE26, application.e3fw SHA-256
+0834abf9cdb664f59c3e012626009d5dce92f420dab2801d94d434e117379cd7.
+The package is `dist/ender-aux-0.2.0-8e443968` (source SHA-256
+8e443968b1fc796cbbee7757ac60c3ceee84248e9a8f078e105120248a762f65).
+The updater padded to its 64 KiB region is byte-identical to the accepted
+0.1.0 package (SHA-256 6af48a8c8cbb59f55641fa1bc5efc5404bc6717b3e2a2b1b1a538ee9e2a8f8d0).
+Only the application.e3fw needs operator USB upload. BENCH_GUIDE.md contains
+console commands and tests that need no added wiring or parts. This development
+branch remains experimental and is not ready for production machine integration.
+
+## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
 The operator supplied CR4NS200141C13 / STM32F401RET6 identification and owns SD access. Prior CH340 COM4 ROM-bootloader attempts at 115200 and 9600 opened the serial port but received no acknowledgment. No firmware was written in those attempts. The operator requested an upload-ready project preserving the original loader.
 

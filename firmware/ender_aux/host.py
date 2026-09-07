@@ -30,6 +30,7 @@ PREFIX = "E3AUX1"
 IDENTITIES = {
     "E3AUX1 UPDATER 0.1.0 BOARD=0401E013": "UPDATER",
     "E3AUX1 APP 0.1.0 BOARD=0401E013": "APP",
+    "E3AUX1 APP 0.2.0 BOARD=0401E013 MODE=BENCH OUTPUTS=DISABLED": "BENCH",
 }
 
 
@@ -129,7 +130,7 @@ class Link:
 
     def hold_updater(self) -> None:
         role = self.identity()
-        if role == "APP":
+        if role in ("APP", "BENCH"):
             self.send("UPDATE")
             self.expect("OK UPDATE")
             # No port reopen or DTR pulse: the CH340 stays enumerated across reset.

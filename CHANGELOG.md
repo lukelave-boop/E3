@@ -9,6 +9,15 @@ remote status continues to omit the local command log. Motion is unchanged.
 
 ## Unreleased - spare-board firmware bootstrap
 
+- Add 0.2.0 BENCH application with independent simulated FAN1/FAN2 percentages,
+  virtual probe deployment/contact and bounded asynchronous Z moves/searches.
+  Physical fan, stepper, heater and probe-control outputs remain disabled.
+- Add real raw PC14 probe-input sampling with a weak pull-up and optional dry-switch
+  input for simulation. No connector pinout, CR Touch polarity or timing claim.
+- Add an explicit BENCH-only interactive console with typed commands, status,
+  stop-on-failure handling and no automatic connection recovery. The updater
+  remains 0.1.0 and accepts the new application through the existing USB path.
+
 - Add an isolated STM32F401RET6 communications-only firmware project, a second-stage USB-serial updater retaining the expected Creality loader, and an SD upload package builder.
 - Add strict image/vector/CRC checks, application-sector-only flash operations, explicit maintenance-client hardware admission, and fake-serial/ARM-emulated recovery tests. No motion, probe actuation or working-machine changes; the operator has verified SD installation, USB updating, cold startup and controlled incomplete-transfer recovery on the spare. Power loss during active flash operations remains unverified.
 

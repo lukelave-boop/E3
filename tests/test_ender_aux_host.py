@@ -11,6 +11,7 @@ from firmware.ender_aux import host
 
 UPDATER = "E3AUX1 UPDATER 0.1.0 BOARD=0401E013"
 APPLICATION = "E3AUX1 APP 0.1.0 BOARD=0401E013"
+BENCH = "E3AUX1 APP 0.2.0 BOARD=0401E013 MODE=BENCH OUTPUTS=DISABLED"
 
 
 def payload_bytes(length=452, *, stack=0x20018000, reset=0x08020395):
@@ -270,15 +271,29 @@ def test_second_identity_must_confirm_updater_before_begin():
     assert port.commands == ["INFO", "HOLD", "INFO"]
 
 
-def test_application_update_entry_is_acknowledged_and_rechecked(offline_clock_and_port):
+@pytest.mark.parametrize("identity", [APPLICATION, BENCH])
+def test_application_update_entry_is_acknowledged_and_rechecked(identity, offline_clock_and_port):
     port = ScriptedPort([
-        ("INFO", APPLICATION), ("UPDATE", "OK UPDATE"),
+        ("INFO", identity), ("UPDATE", "OK UPDATE"),
         ("HOLD", f"{UPDATER}\nOK HOLD"), ("INFO", UPDATER),
     ])
     host.Link(port).hold_updater()
     assert port.commands == ["INFO", "UPDATE", "HOLD", "INFO"]
     assert port.input_resets == 1
     assert offline_clock_and_port.sleeps == [0.5]
+
+
+def test_bench_application_upload_uses_existing_updater_protocol():
+    payload = payload_bytes()
+    exchanges = [
+        ("INFO", BENCH), ("UPDATE", "OK UPDATE"), ("HOLD", "OK HOLD"), ("INFO", UPDATER),
+        (begin_command(payload), "OK BEGIN"),
+    ] + data_exchanges(payload) + [("END", "OK END")]
+    port = ScriptedPort(exchanges)
+    host.upload(host.Link(port), image_bytes(payload))
+    assert not port.exchanges
+    assert port.commands == [command for command, _ in exchanges]
+    assert "BOOT" not in port.commands
 
 
 @pytest.mark.parametrize("response", [None, "ERR UNSUPPORTED", "OK"])

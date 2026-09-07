@@ -1,10 +1,12 @@
 # Retained-loader Ender auxiliary firmware
 
-Version **0.1.0**, experimental STM32F401RET6 / CR4NS200141C13 bench project.
-See [UPLOAD_README.md](UPLOAD_README.md) for the operator procedure. SD access
-is operator-owned; this project neither repairs the slot nor opens a controller
-while building/testing. This is the first upload/update baseline, not a motion
-or material-height implementation and not a production Marlin replacement.
+Application **0.2.0 BENCH**, updater **0.1.0**, experimental STM32F401RET6 /
+CR4NS200141C13 project. See [BENCH_GUIDE.md](BENCH_GUIDE.md) for the USB upload and
+interactive FAN1/FAN2, Z probe and Z axis simulations. Physical outputs remain
+disabled; real PC14 input sampling is separate from simulated probe contact.
+See [UPLOAD_README.md](UPLOAD_README.md) for initial installation and recovery.
+SD access is operator-owned; building/testing does not open a controller. This
+is not a physical motion/material-height implementation or production Marlin replacement.
 
 ## Architecture and flash ownership
 
@@ -70,10 +72,11 @@ From the repository root, using the repository Python:
 ```powershell
 python firmware/ender_aux/build.py
 python -m pip install -r firmware/ender_aux/requirements.txt
-python -m pytest -q tests/test_ender_aux_host.py
+python -m pytest -q tests/test_ender_aux_host.py tests/test_ender_aux_bench.py
 python firmware/ender_aux/run_core_tests.py
 python firmware/ender_aux/run_platform_tests.py
-python -m ruff check firmware/ender_aux tests/test_ender_aux_host.py
+python firmware/ender_aux/run_bench_platform_tests.py
+python -m ruff check firmware/ender_aux tests/test_ender_aux_host.py tests/test_ender_aux_bench.py
 python -m compileall -q firmware/ender_aux
 ```
 
@@ -109,7 +112,14 @@ sequential; block bytes are programmed and read back. END checks payload/vector
 integrity, writes header words, then the magic/commit word last. A failed block
 or malformed command aborts the session; start a new transaction explicitly.
 No host command supplies a flash address or sector index. INFO/HOLD do not erase.
-Application supports INFO/M115, M5 (output-off acknowledgement), and UPDATE only.
+Application identity is `E3AUX1 APP 0.2.0 BOARD=0401E013 MODE=BENCH OUTPUTS=DISABLED`.
+It retains INFO/M115, M5 and UPDATE and adds STATUS, INPUTS, STOP and a strict SIM
+command set documented in BENCH_GUIDE.md. Fans are independent virtual percentages;
+Z is an asynchronous bounded virtual coordinate; probe simulation stops on contact
+or reports missing contact at its search limit. Invalid firmware commands stop
+virtual activity. Physical PWM, step pulses and probe pulses have no enabled path.
+PC14 is input/pull-up and reported raw; optional SWITCH source interprets LOW as
+a pressed bench switch, without asserting CR Touch signal polarity.
 
 The `.e3fw` file has a 512-byte header. Seven little-endian uint32 words:
 magic `0x55413345`, format 1, board `0x0401E013`, payload byte count, payload CRC32,
