@@ -34,13 +34,20 @@ No GUI, electrical timing, physical component or real serial test was performed.
 
 The 0.2.0 image has a 4712-byte payload, CRC32 9A49FE26, application.e3fw SHA-256
 0834abf9cdb664f59c3e012626009d5dce92f420dab2801d94d434e117379cd7.
-The package is `dist/ender-aux-0.2.0-8e443968` (source SHA-256
-8e443968b1fc796cbbee7757ac60c3ceee84248e9a8f078e105120248a762f65).
+The package is `dist/ender-aux-0.2.0-f96d3a21` (source SHA-256
+f96d3a216692939f486f223ed460fc5f50ceb8bfd226e7c7212e36e135476a1b).
 The updater padded to its 64 KiB region is byte-identical to the accepted
 0.1.0 package (SHA-256 6af48a8c8cbb59f55641fa1bc5efc5404bc6717b3e2a2b1b1a538ee9e2a8f8d0).
 Only the application.e3fw needs operator USB upload. BENCH_GUIDE.md contains
 console commands and tests that need no added wiring or parts. This development
 branch remains experimental and is not ready for production machine integration.
+
+Dedicated Windows Python 3.12 firmware CI passed for source commit 8da170f:
+https://github.com/lukelave-boop/E3/actions/runs/34137652240 . The run rebuilt
+the package and passed the ARM core, both production-MMIO suites, all 227
+Python client tests, lint and compileall. Every local packaged file matches
+its manifest; the manifest records source revision 8da170f. No 0.2.0 operator
+upload or bench acceptance has yet been reported.
 
 ## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
