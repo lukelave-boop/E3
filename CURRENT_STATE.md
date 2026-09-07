@@ -44,7 +44,11 @@ passed independent 0/64/128/192/255 combinations. M280 deploy/stow reported serv
 angles 10/90. A native 1 mm Z command reported 400 steps, then returned to Z0
 and zero steps. Unhomed G39 rejected with PRECONDITION; M123 arguments rejected.
 M997 returned to the updater, HOLD succeeded, and reboot returned to the same
-Marlin image with unhomed rejection intact. **The spare now runs this final
+Marlin image with unhomed rejection intact. Native automatic boot after M997
+also passed after a 30-second startup interval, without HOLD or BOOT. An
+earlier query at seven seconds timed out during native initialization; source
+includes a ten-second display progress animation. Installation now specifies
+60 seconds for the first SD boot and 30 seconds before reconnecting USB. **The spare now runs this final
 mainboard firmware**, superseding the earlier BENCH-restored state below. Fans
 were left commanded OFF, servo stowed, Z0. This verifies firmware command paths
 on a real bare MCU; it does not measure connector voltage, attached-fan behavior,
@@ -56,7 +60,25 @@ Verification: 200 focused existing/new host tests passed; five packaging tests
 passed after correcting their synthetic vector fixture. A final 44-test new
 control/RPC/package group passed, including idle STOP/disarm cleanup. All three
 native probing configurations, real startup/VTOR audit, real kill GPIO audit,
-repository Ruff and compileall passed. CI results are recorded below when complete.
+repository Ruff and compileall passed. The independent final checks passed for
+implementation a347eb1:
+- Mainboard SD Firmware: https://github.com/lukelave-boop/E3/actions/runs/34162116137
+  rebuilt the pinned firmware/updater, passed native probing/startup/fan-kill
+  audits, assembled the complete SD/stock recovery package and passed 139 host tests.
+- Fast Development CI: https://github.com/lukelave-boop/E3/actions/runs/34162116198
+  passed 4452 Windows Python 3.12 tests (25 skipped), plus Ruff, dependencies,
+  bytecode and POSIX controller-session coverage.
+- Compatibility CI: https://github.com/lukelave-boop/E3/actions/runs/34162117861
+  passed both Windows Python 3.10 core and Python 3.12 desktop jobs, Ruff and
+  POSIX controller-session coverage.
+
+The later installation-timing/source-metadata edits do not change the tested
+SD binary or host runtime. A fresh pinned checkout reproduced the exact patched
+source hashes. Final bundle checks verified every file checksum, its SD/ZIP byte
+identity, official stock recovery and matching companion source; archive installs
+also carry explicit build identity. The package is ready for operator SD transfer
+and physical validation. Attached-load qualification remains the operator's next
+step; all software/build/spare validation in this task is complete.
 
 ## Active: bounded native Marlin material-height prototype
 

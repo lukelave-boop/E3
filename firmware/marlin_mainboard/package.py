@@ -86,6 +86,12 @@ def main() -> None:
                 "pyproject.toml", "README.md", "requirements.txt", "requirements-desktop.txt",
             }:
                 archive.write(ROOT / filename, filename)
+        from laser_aligner.versioning import build_version
+        archive.writestr("build-info.json", json.dumps({
+            "schema_version": 1, "version": build_version(ROOT),
+            "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+            "channel": "development", "packaged": False,
+        }, indent=2) + "\n")
     # Ship corresponding sources, including native Marlin and the retained updater.
     with zipfile.ZipFile(folder / "firmware-source.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         names = subprocess.check_output(["git", "-C", str(args.source), "ls-files"], text=True).splitlines()

@@ -20,11 +20,12 @@ the retained updater plus the Marlin application at 0x08020200.
 3. Use the existing working FAT32 SD card, or a FAT32 card with 4096-byte
    allocation units. Put the package's STM32F4_UPDATE folder at its root.
 4. Insert the card in the **mainboard** SD slot, not the display. Power the board
-   on and leave it undisturbed for at least 30 seconds. Native probe initialization
+   on and leave it undisturbed for at least 60 seconds. Native probe initialization
    can occur at boot, so keep the pin area clear.
 5. Power off, remove the SD card, then power on with the controller USB still
-   unplugged. Wait at least 10 seconds before reconnecting its USB lead to the Pi.
-   This lets the updater's five-second window expire and starts Marlin.
+   unplugged. Wait at least 30 seconds before reconnecting its USB lead to the Pi.
+   This covers the updater's five-second window and Marlin's native probe/display
+   initialization (the display startup animation alone takes over ten seconds).
 6. Connect in E3. Inspect M115. It must contain both
    `Cap:E3_MAINBOARD_V1:1` and `Cap:E3_MATERIAL_HEIGHT_V1:1`, plus
    `Cap:EMERGENCY_PARSER:1`. The Marlin base version reports 2.0.8.24F4; the E3
@@ -40,15 +41,31 @@ control interface for these added functions.
 
 ## Companion application controls
 
-HOST_SOURCE.zip contains the matching installable E3 source, including the
-new fan/Z CLI and Pi RPC. To use these controls, extract it into a new software
-folder and install it with the existing E3 node's Python environment using
-`python -m pip install --no-deps <extracted-folder>` during the normal node
-software update procedure, then restart that node service yourself. Use its
-existing configuration and authentication token. `--no-deps` preserves the
-installed camera/OpenCV stack. Keep the webcam connected. The same source
-provides the Windows CLI commands in VALIDATE.md. Firmware-native commands are
-already available immediately after SD installation.
+HOST_SOURCE.zip contains matching E3 source, including the new fan/Z CLI and
+Pi RPC. Firmware-native commands are available immediately after SD installation.
+The new E3 controls also require the matching software on the Pi; that update
+has not been run automatically.
+
+For this rig's recorded source installation, the operator software update is:
+
+```sh
+set -e
+cd /home/greenhouse-climate/Projects/laser-camera-aligner
+git status --short
+git fetch origin codex/marlin-material-height
+git switch --detach a347eb1f949410d948ce14e4fec5b0c9f4e5a2e6
+.venv/bin/python -m pip install --no-deps --no-build-isolation --editable .
+sudo systemctl restart e3-hardware-node.service
+```
+
+This selects the tested implementation, keeps the existing configuration/token,
+and preserves the installed camera/OpenCV dependencies. If Git reports a conflict
+with local changes, stop without using reset/clean/force. The existing unit must
+still use this recorded source directory; do not install into an unrelated folder
+while leaving the service pointed at old code. Keep the webcam connected.
+The same source supplies the Windows CLI commands in VALIDATE.md. HOST_SOURCE.zip
+is the corresponding source archive for inspection or installation through a
+separately configured source environment; it does not relocate an existing service.
 
 ## Stock rollback
 
@@ -66,4 +83,4 @@ The archived F103 and touchscreen images are intentionally excluded.
 
 If serial traffic arrives during the E3 updater's boot window, it holds in
 UPDATER instead of starting Marlin. Disconnect controller USB, power-cycle,
-wait ten seconds, then reconnect. Do not send probe/motion commands to UPDATER.
+wait thirty seconds, then reconnect. Do not send probe/motion commands to UPDATER.
