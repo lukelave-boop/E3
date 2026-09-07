@@ -55,7 +55,10 @@ are required. The existing accepted `177e5965` application's image remains the
 recovery file. Host verification: 113 fake-serial/image tests pass, including
 22 new recovery-test cases. Focused Ruff, compileall and diff checks pass. The
 known application file still passes offline validation with CRC32 9E177C8B.
-Physical execution/recovery is pending the operator.
+Dedicated Windows Python 3.12 firmware CI also passed for c78377f:
+https://github.com/lukelave-boop/E3/actions/runs/34135682703 . It rebuilt the
+package and passed ARM core/production-platform cases, all 113 host tests,
+lint and compileall. Physical execution/recovery is pending the operator.
 
 This file records implementation and verification evidence. It is not an
 operator procedure. Follow the canonical
