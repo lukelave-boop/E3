@@ -18,10 +18,11 @@ A separate typed console handles status, inputs, fans, deployment, virtual
 trigger, position, bounded move/probe, stop and reset; it accepts only the exact
 BENCH identity and never becomes a production MachineService controller path.
 No wiring changes, hardware commands or GUI operation are performed by the
-assistant. The application and operator console are implemented and packaged;
+assistant. The application and operator console are implemented and packaged.
 The operator has now verified USB installation and the initial BENCH console
-identity/status exchange on the spare. Virtual control sequences, real input
-transitions and electrical output levels remain pending. Earlier 0.1.0 acceptance
+identity/status exchange and the FAN1/FAN2 simulation sequence on the spare.
+Virtual Z/probe sequences, real input transitions and electrical output levels
+remain pending. Earlier 0.1.0 acceptance
 does not qualify the new application's behavior.
 
 Local Windows verification: 227 Python tests passed (115 image/update host and
@@ -62,9 +63,18 @@ The console accepts this state only after the exact BENCH 0.2.0 firmware identit
 This verifies upload, application execution and initial bidirectional console
 communication on this spare. A boot-command acknowledgment was not supplied;
 application execution is established by the accepted identity/status exchange.
-No fan/probe/Z simulation commands or PC14 input transitions have yet been
-reported. The outputs-disabled status is a firmware report, not a measurement
+At that initial startup, no control commands or PC14 transitions were reported. The outputs-disabled status is a firmware report, not a measurement
 of connector voltages. No hardware was operated by the assistant.
+
+Operator FAN1/FAN2 simulation result, 2026-09-07: on the same spare, BENCH
+0.2.0 f96d3a21 application and COM6/115200 8N1 configuration above, the supplied
+console transcript shows `fan1 50` -> 50%/0%, `fan2 75` -> 50%/75%, `fan1 0`
+-> 0%/75%, and `stop` -> 0%/0% with result stopped. Throughout, the virtual Z
+coordinate stayed at 10.000 mm, probe stowed, trigger 0 (SIM), motion idle and
+outputs DISABLED. This verifies independent virtual fan state and virtual STOP
+through the real board/USB console. It does not verify fan connector voltage,
+PWM, current capability or attached fan behavior. No hardware was operated by
+the assistant. The next operator sequence checks virtual Z motion.
 
 ## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
