@@ -92,7 +92,8 @@ def control(
             pwm = (int(value) * 255 + 50) // 100
             execute(f"M106 P{1 if action == 'fan1' else 0} S{pwm}")
             if action == "fan2":
-                owner._secondary_fan_enabled = bool(pwm)
+                # The job client caches exact S255/S0, not arbitrary manual PWM.
+                owner._secondary_fan_enabled = False if pwm == 0 else True if pwm == 255 else None
             after = parse_status(execute("M123"))
             other = "fan2_pwm" if action == "fan1" else "fan1_pwm"
             if after[action + "_pwm"] != pwm or after[other] != before[other]:

@@ -173,3 +173,12 @@ def test_uncertain_fan_cleanup_attempts_native_kill():
     fan.best_effort_off()
     assert "M106 S0" in serial.writes and "M106 P1 S0" in serial.writes
     assert "M112" in serial.writes
+
+
+def test_manual_partial_fan2_does_not_satisfy_job_full_speed_cache():
+    serial, owner, fan, _, _ = ready_probe()
+    state = mainboard_serial(serial)
+    control(owner, "fan2", 50, confirmed=True, guard=nullcontext, on_failure=lambda: None)
+    assert state["fan2"] == 128 and owner._secondary_fan_enabled is None
+    fan.set_enabled(True, mapping_digest=fan.binding.mapping_digest)
+    assert state["fan2"] == 255
