@@ -21,8 +21,9 @@ No wiring changes, hardware commands or GUI operation are performed by the
 assistant. The application and operator console are implemented and packaged.
 The operator has now verified USB installation and the initial BENCH console
 identity/status exchange, FAN1/FAN2 simulation, a virtual Z round trip and
-simulated probe contact and missing-contact behavior on the spare. Real input
-transitions and electrical output levels remain pending. Earlier 0.1.0 acceptance
+simulated probe contact and missing-contact behavior on the spare. The bare
+board PC14 input reports HIGH. Real input transitions and electrical output
+levels remain pending. Earlier 0.1.0 acceptance
 does not qualify the new application's behavior.
 
 Local Windows verification: 227 Python tests passed (115 image/update host and
@@ -106,6 +107,17 @@ trigger 0 (SIM), fans 0%/0% and outputs DISABLED. This verifies the bounded
 simulated search ending without contact through the real board/USB console;
 it does not establish physical probe-failure handling or motor travel limits.
 No hardware was operated by the assistant.
+
+Operator probe-input baseline and post-search STOP result, 2026-09-07:
+on the same spare, BENCH 0.2.0 f96d3a21 application and COM6/115200 8N1
+configuration above, `stop` after the missing-contact search returned fans
+0%/0%, probe stowed, simulated trigger 0, virtual Z/target 9.000 mm, idle,
+result stopped and outputs DISABLED. `inputs` then returned
+`Physical probe input PC14: 1`, with the same virtual state. This records a
+real MCU input read reported through the operator console, consistent with
+the configured weak pull-up on an unconnected input. It does not establish
+connector pin mapping, measured voltage, a HIGH/LOW transition or CR Touch
+behavior. No hardware was operated by the assistant.
 
 ## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
