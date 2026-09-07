@@ -192,10 +192,10 @@ def test_largest_application_fits_but_cannot_enter_reserved_bootloader_region():
         host.validate_image(image_bytes(payload + b"\xff" * 4))
 
 
-@pytest.mark.parametrize("action", ["inspect", "boot", "upload"])
+@pytest.mark.parametrize("action", ["inspect", "boot", "upload", "interrupt-upload"])
 def test_hardware_flag_required_before_any_port_open(action, tmp_path, capsys):
     args = [action, "--port", "COM4"]
-    if action == "upload":
+    if action in ("upload", "interrupt-upload"):
         path = tmp_path / "test.e3a"
         path.write_bytes(image_bytes())
         args.append(str(path))
@@ -203,10 +203,10 @@ def test_hardware_flag_required_before_any_port_open(action, tmp_path, capsys):
     assert "--hardware-enabled" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("action", ["inspect", "boot", "upload"])
+@pytest.mark.parametrize("action", ["inspect", "boot", "upload", "interrupt-upload"])
 def test_no_implicit_com_port(action):
     args = [action, "--hardware-enabled"]
-    if action == "upload":
+    if action in ("upload", "interrupt-upload"):
         args.append("unused.e3a")
     with pytest.raises(SystemExit) as exc:
         host.main(args)
@@ -220,10 +220,11 @@ def test_offline_verify_never_needs_hardware(tmp_path, capsys):
     assert "452 payload bytes" in capsys.readouterr().out
 
 
-def test_invalid_upload_never_opens_port_even_with_hardware_flag(tmp_path, capsys):
+@pytest.mark.parametrize("action", ["upload", "interrupt-upload"])
+def test_invalid_upload_never_opens_port_even_with_hardware_flag(action, tmp_path, capsys):
     path = tmp_path / "bad.e3a"
     path.write_bytes(image_bytes(board=0))
-    assert host.main(["upload", str(path), "--port", "COM4", "--hardware-enabled"]) == 1
+    assert host.main([action, str(path), "--port", "COM4", "--hardware-enabled"]) == 1
     assert "Wrong image" in capsys.readouterr().err
 
 
@@ -379,6 +380,105 @@ def test_cli_boot_is_a_separate_explicit_command(monkeypatch, capsys):
     assert port.commands[-1] == "BOOT"
     assert port.closed
     assert "Boot requested" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("role", ["APP", "UPDATER"])
+def test_interrupt_upload_cli_sends_one_block_and_closes_without_commit_or_boot(
+    role, tmp_path, monkeypatch, capsys, offline_clock_and_port,
+):
+    payload = payload_bytes()
+    path = tmp_path / "recovery-test.e3fw"
+    path.write_bytes(image_bytes(payload))
+    if role == "APP":
+        exchanges = [
+            ("INFO", APPLICATION), ("UPDATE", "OK UPDATE"),
+            ("HOLD", "OK HOLD"), ("INFO", UPDATER),
+        ]
+    else:
+        exchanges = updater_handshake()
+    exchanges += [(begin_command(payload), "OK BEGIN"), data_exchanges(payload)[0]]
+    expected_commands = [command for command, _ in exchanges]
+
+    class SlowErasePort(ScriptedPort):
+        remaining_erase_reads = 5000
+
+        def read(self, size):
+            # Five simulated seconds before BEGIN ACK exercises the longer
+            # erase allowance rather than the normal three-second reply limit.
+            if self.commands[-1].startswith("BEGIN ") and self.remaining_erase_reads:
+                self.remaining_erase_reads -= 1
+                return b""
+            return super().read(size)
+
+    port = SlowErasePort(exchanges)
+    opened = []
+    monkeypatch.setattr(host, "open_port", lambda name: opened.append(name) or port)
+    assert host.main(["interrupt-upload", str(path), "--port", "COM6", "--hardware-enabled"]) == 0
+    assert opened == ["COM6"]
+    assert port.closed and not port.exchanges
+    assert port.commands == expected_commands
+    assert port.commands[-1] == f"DATA 00000000 {payload[:64].hex().upper()}"
+    assert "END" not in port.commands and "BOOT" not in port.commands
+    assert offline_clock_and_port.sleeps == ([0.5] if role == "APP" else [])
+    assert capsys.readouterr().out.strip() == (
+        "Application deliberately left incomplete after 64 bytes. No commit or boot was sent."
+    )
+
+
+def test_interrupt_upload_validates_entire_image_before_sending_identity():
+    # Damage bytes after the only block that the recovery test will transmit.
+    image = bytearray(image_bytes())
+    image[-1] ^= 1
+    port = ScriptedPort([])
+    with pytest.raises(host.FirmwareError, match="CRC"):
+        host.interrupt_upload(host.Link(port), bytes(image))
+    assert not port.commands
+
+
+def test_interrupt_upload_corrupt_tail_rejected_before_port_open(tmp_path, capsys):
+    image = bytearray(image_bytes())
+    image[-1] ^= 1
+    path = tmp_path / "corrupt-tail.e3fw"
+    path.write_bytes(image)
+    assert host.main(["interrupt-upload", str(path), "--port", "COM6", "--hardware-enabled"]) == 1
+    assert "CRC" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("exchanges", [
+    [("INFO", "FIRMWARE_NAME:Marlin 2.0.8.26F4")],
+    [("INFO", "E3AUX1 UPDATER 0.1.0 BOARD=0401E014")],
+    [("INFO", None)],
+    [("INFO", APPLICATION), ("UPDATE", None)],
+    [("INFO", APPLICATION), ("UPDATE", "ERR UNSUPPORTED")],
+    [("INFO", UPDATER), ("HOLD", "OK")],
+    [("INFO", UPDATER), ("HOLD", None)],
+    [("INFO", UPDATER), ("HOLD", "OK HOLD"), ("INFO", APPLICATION)],
+    updater_handshake() + [(begin_command(payload_bytes()), None)],
+    updater_handshake() + [(begin_command(payload_bytes()), "ERR ERASE")],
+    updater_handshake() + [(begin_command(payload_bytes()), "OK BEGIN extra")],
+    updater_handshake() + [(begin_command(payload_bytes()), "OK BEGIN"),
+                           (data_exchanges(payload_bytes())[0][0], None)],
+    updater_handshake() + [(begin_command(payload_bytes()), "OK BEGIN"),
+                           (data_exchanges(payload_bytes())[0][0], "OK DATA 00000000")],
+    updater_handshake() + [(begin_command(payload_bytes()), "OK BEGIN"),
+                           (data_exchanges(payload_bytes())[0][0], "OK DATA 00000080")],
+    updater_handshake() + [(begin_command(payload_bytes()), "OK BEGIN"),
+                           (data_exchanges(payload_bytes())[0][0], "ERR WRITE")],
+])
+def test_interrupt_upload_failure_closes_port_without_retry_commit_or_boot(exchanges, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "recovery-test.e3fw"
+    path.write_bytes(image_bytes())
+    port = ScriptedPort(exchanges)
+    opened = []
+    monkeypatch.setattr(host, "open_port", lambda name: opened.append(name) or port)
+    assert host.main(["interrupt-upload", str(path), "--port", "COM6", "--hardware-enabled"]) == 1
+    assert opened == ["COM6"]
+    assert port.closed and not port.exchanges
+    assert port.commands == [command for command, _ in exchanges]
+    assert "END" not in port.commands and "BOOT" not in port.commands
+    output = capsys.readouterr()
+    assert "Stopped:" in output.err
+    assert "deliberately left incomplete" not in output.out
 
 
 def test_open_port_configures_control_lines_before_open(monkeypatch):

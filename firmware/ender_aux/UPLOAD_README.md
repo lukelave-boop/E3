@@ -55,7 +55,8 @@ package does not include a stock firmware dump or a proven recovery procedure.
 
 ## Exercise USB updates on the spare
 
-Use the same packaged application for the first update test:
+Use the same packaged application for the first update test. Run each command
+separately and proceed only after its success; stop on any error:
 
 ```powershell
 python host.py upload application.e3fw --port COM4 --hardware-enabled
@@ -79,6 +80,37 @@ USB interruptions or power loss can leave the application incomplete. The
 updater validates length, vectors, and CRC and writes its validity marker last.
 On the next normal boot it should then wait for another upload. It does not keep
 two application copies and cannot automatically roll back to the old image.
+
+## Controlled incomplete-upload test
+
+Run this only on the spare, with SD removed and actuator/output loads disconnected,
+after a normal upload/boot/inspect and cold startup have succeeded. Keep the known
+working `application.e3fw` locally available. This command **erases the existing
+application**, writes the first 64 payload bytes, waits for acknowledgment and
+stops without committing or booting. The updater and original loader are outside
+its allowed erase/program region. Recovery remains a test, not a guarantee.
+
+1. Use the updated source host (older extracted packages may not have this command):
+
+   ```powershell
+   python host.py interrupt-upload application.e3fw --port COM6 --hardware-enabled
+   ```
+
+   Require exactly `Application deliberately left incomplete after 64 bytes. No commit or boot was sent.`
+   Stop and retain output on any error; do not automatically repeat the command.
+2. Disconnect both 24 V and USB for ten seconds. With SD still removed, reconnect
+   24 V and then USB. Leave all serial clients closed for at least ten seconds
+   after startup, then run `inspect`. Expect `UPDATER`. Waiting beyond the normal
+   five-second window avoids mistaking the normal startup window for recovery.
+3. Once UPDATER is confirmed, use the ordinary `upload` command with the complete
+   known application file. Require successful verification/commit, then separately
+   `boot` and `inspect`; expect `APP`. Stop on any error. A final cold startup
+   followed by `inspect` checks that the restored application boots normally.
+
+This tests restart/re-upload after a transfer abandoned between completed flash
+writes. It does not test a power cut while erasing/programming, a torn commit,
+or recovery from damaged updater/stock-loader bytes. No timing of a cable pull
+is needed. Record the image, board, supply, COM port and each observed result.
 
 ## Acceptance record before any machine-board use
 

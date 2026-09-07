@@ -161,6 +161,21 @@ def upload(link: Link, image: bytes) -> None:
     # Do not run the new application automatically. Inspect/boot is separate.
 
 
+def interrupt_upload(link: Link, image: bytes) -> None:
+    """Leave one acknowledged block uncommitted for an operator recovery test.
+
+    This erases the previous application. It stops between completed writes;
+    it does not emulate power loss while the flash controller is busy.
+    """
+    payload = validate_image(image)
+    link.hold_updater()
+    link.send(f"BEGIN {BOARD:08X} {len(payload):08X} {crc32(payload):08X}")
+    link.expect("OK BEGIN", timeout=30.0)
+    # Every accepted image is larger than this one block. Never send END/BOOT.
+    link.send(f"DATA 00000000 {payload[:64].hex().upper()}")
+    link.expect("OK DATA 00000040")
+
+
 def open_port(name: str):
     try:
         import serial
@@ -181,11 +196,14 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="action", required=True)
     verify = commands.add_parser("verify", help="Validate an image offline")
     verify.add_argument("image", type=Path)
-    for name in ("inspect", "upload", "boot"):
-        command = commands.add_parser(name)
+    for name in ("inspect", "upload", "boot", "interrupt-upload"):
+        command = commands.add_parser(
+            name, help=("Erase application, write one block, stop without commit (spare recovery test)"
+                        if name == "interrupt-upload" else None),
+        )
         command.add_argument("--port", required=True, help="Explicit spare-board COM port")
         command.add_argument("--hardware-enabled", action="store_true")
-        if name == "upload":
+        if name in ("upload", "interrupt-upload"):
             command.add_argument("image", type=Path)
     return result
 
@@ -194,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         image = None
-        if args.action in ("verify", "upload"):
+        if args.action in ("verify", "upload", "interrupt-upload"):
             image = read_image(args.image)
             payload = validate_image(image)
         if args.action == "verify":
@@ -209,6 +227,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.action == "upload":
                 upload(link, image)
                 print("Application verified and committed. Updater remains active; use boot when ready.")
+            elif args.action == "interrupt-upload":
+                interrupt_upload(link, image)
+                print("Application deliberately left incomplete after 64 bytes. No commit or boot was sent.")
             else:
                 link.hold_updater()
                 link.send("BOOT")

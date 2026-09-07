@@ -16,8 +16,9 @@ or material-height implementation and not a production Marlin replacement.
 | 0x08020200–0x08080000 | Application vectors, code and data load image, sectors 5–7 | Only during application upload |
 
 Creality is expected to load the SD `.bin` at 0x08010000 and launch that vector
-table. This is the published S1-family 64 KiB application offset, **not a
-physically verified statement about the spare's installed loader**. Our combined
+table. This is the published S1-family 64 KiB application offset. The operator has
+verified SD installation and application startup on the spare with this layout;
+the original loader has not been read back to establish its exact bytes/behavior. Our combined
 SD file starts with the updater, pads to the next erase boundary, then includes
 metadata and the linked application. It includes no bytes for sectors 0–3.
 The STM32 factory ROM is separate and is not changed.
@@ -116,6 +117,14 @@ image-format version 1, CRC32 of bytes 4 through 23. Remaining header bytes are
 0xFF. Payload starts with vectors at 0x08020200 and is padded to four bytes.
 Both CRCs use the standard reflected IEEE/zlib CRC32. The vector stack must be
 8-byte aligned in 96 KiB SRAM, and the Thumb reset vector must be within payload.
+
+The host's explicit `interrupt-upload` command validates a complete image,
+performs the normal updater handshake and BEGIN, sends only the first 64 payload
+bytes and waits for their exact ACK. It then closes without END or BOOT, leaving
+the erased image header uncommitted. This deliberately invalidates the previous
+application for an operator recovery test; no MCU code changes are needed.
+It stops between completed writes and does not test power loss during flash
+operations. See the [recovery procedure](UPLOAD_README.md#controlled-incomplete-upload-test).
 
 ## Verification and remaining work
 
