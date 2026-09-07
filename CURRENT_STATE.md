@@ -1,5 +1,13 @@
 # Current repository state
 
+## Active: spare STM32F401RET6 firmware bootstrap
+
+The operator supplied CR4NS200141C13 / STM32F401RET6 identification and owns SD access. Prior CH340 COM4 ROM-bootloader attempts at 115200 and 9600 opened the serial port but received no acknowledgment. No firmware was written in those attempts. The operator requested an upload-ready project preserving the original loader.
+
+`firmware/ender_aux/` provides a standalone second stage at the published 64 KiB S1-family application offset, an inert application after a separate metadata area, and an explicit operator-run USB maintenance client. The C updater restricts erase/program to sectors 5-7, checks image metadata/vectors/CRC and commits validity last. No updater self-write, option-byte change, motor movement, probe pulse, laser output or air-assist ON is implemented. It is not a Marlin replacement ready for machine operation. The stock loader remains outside this code; its actual SD erase/handoff and physical output behavior are unverified.
+
+Windows verification: Arm GNU 14.2.Rel1 compiled both images; 91 Python host tests and 27 compiled production-platform cases passed. Eight ARM-executed core test groups passed, including malformed commands, commit interruption, partial-upload recovery and application command rejection. Production disassembly confirms flash-busy routines/callees/literals execute from SRAM and no unresolved relocations remain. The build uses 0x20010000 for the initial stack to reach the MCU capacity check without requiring more than 64 KiB SRAM. Actual target remains RET6/512 KiB; the loader/application leave the unused SRAM available within the declared 96 KiB region. No GUI, camera, serial controller, power or hardware operation has been performed by the assistant. Operator SD installation, output-state checks, UART timing, update interruption recovery and stock SD recovery remain physically unverified. The working machine and MachineService are unchanged. This experimental branch is not ready for production integration.
+
 This file records implementation and verification evidence. It is not an
 operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)

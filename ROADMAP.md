@@ -1,5 +1,7 @@
 # Roadmap
 
+Spare-controller firmware: prepare and operator-test the communications-only retained-loader updater before implementing Z/probe/air-assist behavior. Verify SD installation, USB update, corrupt/interrupted-image recovery and exact target compatibility before using the working machine board. See [the isolated firmware project](firmware/ender_aux/README.md).
+
 Material-height next step: operator-test the single-contact border check and a known-thickness material, then wire the accepted path into desktop controls and camera correction. The native homing cycle has operator acceptance.
 
 Probe priority: verify the new single native fast/slow homing test with a 5 mm initial

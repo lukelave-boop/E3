@@ -7,6 +7,11 @@ behavior. Actual Pi validation is pending.
 Probe failures now retain controller replies in the Pi journal for diagnosis;
 remote status continues to omit the local command log. Motion is unchanged.
 
+## Unreleased - spare-board firmware bootstrap
+
+- Add an isolated STM32F401RET6 communications-only firmware project, a second-stage USB-serial updater retaining the expected Creality loader, and an SD upload package builder.
+- Add strict image/vector/CRC checks, application-sector-only flash operations, explicit maintenance-client hardware admission, and fake-serial/ARM-emulated recovery tests. No motion, probe actuation or working-machine changes; physical flashing and recovery are pending.
+
 Added operator-run native border reference and single-contact height tests, with a required border zero check, signed honeycomb offset, verified final clearance and session/STOP invalidation. The native homing cycle has operator acceptance; the G30 measurement combination awaits physical testing.
 
 ## Unreleased - material-height calibration study

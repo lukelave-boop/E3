@@ -1,5 +1,9 @@
 # Architecture
 
+## Experimental auxiliary MCU firmware
+
+`firmware/ender_aux/` is a standalone Cortex-M4 maintenance project. It preserves the expected first 64 KiB Creality loader, places a second-stage UART updater in sector 4, and confines its flash writes to application sectors 5-7. It does not participate in desktop/browser pipelines or replace MachineService. The Python client requires explicit hardware authority and a port; builds and verification remain offline. The initial application implements identity, output-off and updater entry only. Stock-loader handoff, GPIO states and recovery require physical verification. See [firmware design and protocol](../firmware/ender_aux/README.md).
+
 Source CLI native_reference/native_measure operations use MachineService admission and the existing Creality owner. Native homing stores a provisional session-bound datum; an explicit G30 border check establishes measured zero before material contacts. Each request retains coordinates, verifies homed/retracted state and final clearance, and reports one sample without a repeatability estimate. Legacy GUI operations remain suspended.
 
 The material-height calibration study in `calibration/surface.py` fits a single

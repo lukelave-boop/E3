@@ -1,0 +1,59 @@
+name: Auxiliary Firmware Bench Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/aux-firmware-*']
+    paths:
+      - 'firmware/ender_aux/**'
+      - 'tests/test_ender_aux_host.py'
+      - 'tests/firmware_core_harness.c'
+      - '.github/workflows/aux-firmware.yml'
+  pull_request:
+    paths:
+      - 'firmware/ender_aux/**'
+      - 'tests/test_ender_aux_host.py'
+      - 'tests/firmware_core_harness.c'
+      - '.github/workflows/aux-firmware.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-firmware:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Get checksum-pinned Arm GNU toolchain
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/firmware-tools | Out-Null
+          $archivePath = Join-Path $PWD 'build/firmware-tools/arm-toolchain.zip'
+          Invoke-WebRequest 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi.zip' -OutFile $archivePath
+          if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ne '6facb152ce431ba9a4517e939ea46f057380f8f1e56b62e8712b3f3b87d994e1') { throw 'Toolchain checksum mismatch' }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath build/firmware-tools
+      - name: Install test dependencies
+        run: python -m pip install -r firmware/ender_aux/requirements.txt pytest ruff
+      - name: Build upload package
+        run: python firmware/ender_aux/build.py
+      - name: Execute ARM core tests with fake flash
+        run: python firmware/ender_aux/run_core_tests.py
+      - name: Execute production flash wrappers with fake registers
+        run: python firmware/ender_aux/run_platform_tests.py
+      - name: Test operator client without hardware
+        run: python -m pytest -q tests/test_ender_aux_host.py
+      - name: Lint maintenance tooling
+        run: python -m ruff check firmware/ender_aux tests/test_ender_aux_host.py
+      - name: Compile Python maintenance tooling
+        run: python -m compileall -q firmware/ender_aux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ender-aux-experimental-upload
+          path: dist/ender-aux-*.zip
+          if-no-files-found: error

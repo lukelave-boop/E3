@@ -1,0 +1,5 @@
+# Operator maintenance client; installed only when this firmware project is used.
+pyserial==3.5
+# Offline ARM executable tests, not used by the controller or uploader.
+unicorn==2.1.4
+pyelftools==0.32
