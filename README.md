@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+For the intermittent Ender connection investigation, see the bounded
+[operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer
+metadata with the webcam running; actual Pi capture validation is pending.
+
 Source material-height tests now provide `reference-border` and `measure-height` with a required border contact check and one contact per material reading. See [the test procedure](docs/MATERIAL_HEIGHT.md#current-height-test-using-the-source-cli). Physical measurement validation is pending; legacy desktop probe buttons remain blocked.
 
 **Material-height Z sequences are under correction** after observed descent

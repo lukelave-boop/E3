@@ -5,7 +5,23 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-09-06**
+Snapshot: **2026-09-07**
+
+## Active: Ender USB idle-failure diagnosis
+
+The operator replaced the Ender USB cable; a successful Inspect was followed
+roughly ten minutes later by another zero-response timeout. The reported Ender
+USB device power/control is already on. Supplied kernel logs contain CH340
+receive URBs stopped with -32. That identifies a receive-path failure, but the
+underlying trigger remains unknown; webcam causation is not established.
+
+Added a standalone, operator-run [USB metadata capture](docs/ENDER_USB_CAPTURE.md).
+It requests no payload bytes, filters to the Ender adapter, has time/size bounds,
+and reports capture loss. The webcam stays connected. It does not open serial,
+change the application, recover connections, or send hardware commands.
+Windows synthetic tests, focused Ruff and compileall pass; actual Pi usbmon
+capture is implemented but physically unverified. No hardware was operated by
+the assistant. Material-height validation remains pending below.
 
 ## Active: existing-controller Z offset measurement
 

@@ -1,5 +1,9 @@
 # Changelog
 
+Added a standalone, bounded operator-run Ender USB metadata capture for idle
+connection failures. It records no USB payloads and changes no controller
+behavior. Actual Pi validation is pending.
+
 Probe failures now retain controller replies in the Pi journal for diagnosis;
 remote status continues to omit the local command log. Motion is unchanged.
 
