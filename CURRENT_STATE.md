@@ -85,9 +85,15 @@ and secondary-owner tests passed; repository Ruff, compileall and diff checks
 passed. A fresh isolated checkout reproduced every patched-source SHA-256.
 The disconnect regression now waits for service cleanup after serial close and
 covers both G30 and G39; the prior immediate assertion raced that cleanup.
-Dedicated Windows Python 3.12 Marlin CI and Fast Development CI are configured;
-their results will be recorded when available. No GUI, real camera, physical
-motor or physical contact test was performed for this change.
+Implementation commit 163f362 passed dedicated Windows Python 3.12 Marlin CI:
+https://github.com/lukelave-boop/E3/actions/runs/34158944410 . It rebuilt the
+pinned firmware, passed all three compiled probing configurations and startup/
+package audits, and passed 95 focused host tests plus lint and compileall.
+Fast Development CI also passed:
+https://github.com/lukelave-boop/E3/actions/runs/34158944465 . The complete
+Windows Python 3.12 desktop suite reported 4407 passed and 25 skipped; repository
+Ruff and dependency/bytecode checks passed. These are automated checks, not an
+interactive GUI, real camera, physical motor or physical contact qualification.
 
 ### Consolidated working-machine evidence from the two planning tasks
 
