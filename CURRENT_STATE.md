@@ -20,9 +20,9 @@ BENCH identity and never becomes a production MachineService controller path.
 No wiring changes, hardware commands or GUI operation are performed by the
 assistant. The application and operator console are implemented and packaged.
 The operator has now verified USB installation and the initial BENCH console
-identity/status exchange, FAN1/FAN2 simulation and a virtual Z round trip on the
-spare. Probe sequences, real input transitions and electrical output levels
-remain pending. Earlier 0.1.0 acceptance
+identity/status exchange, FAN1/FAN2 simulation, a virtual Z round trip and
+simulated probe contact on the spare. Missing-contact behavior, real input
+transitions and electrical output levels remain pending. Earlier 0.1.0 acceptance
 does not qualify the new application's behavior.
 
 Local Windows verification: 227 Python tests passed (115 image/update host and
@@ -85,6 +85,16 @@ probe stowed, simulated trigger 0 and outputs DISABLED. This verifies the
 virtual round trip through the real board/USB console; no motor movement,
 step pulses, electrical output levels or physical timing calibration were
 verified. No hardware was operated by the assistant.
+
+Operator simulated probe-contact result, 2026-09-07: on the same spare,
+BENCH 0.2.0 f96d3a21 application and COM6/115200 8N1 configuration above,
+`trigger off`, `deploy`, and `probe 5 0.2` started a virtual downward search
+from 10.000 mm toward 5.000 mm. The subsequent `trigger on` returned virtual
+Z/target 8.352 mm, idle, result contact, probe deployed and simulated trigger 1.
+Fans remained 0%/0% and outputs DISABLED. This verifies stopping the simulated
+search on a simulated contact through the real board/USB console. It does not
+verify a physical probe input, probe actuation or motor stopping behavior.
+No hardware was operated by the assistant.
 
 ## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
