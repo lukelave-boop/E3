@@ -175,12 +175,13 @@ def test_service_rejects_unauthorized_height_operations(native_rpc, operation, c
     assert not serial.writes
 
 
-def test_service_missing_contact_invalidates_reference(native_rpc):
+def test_service_missing_contact_invalidates_reference(native_rpc, caplog):
     harness, serial = native_rpc
     assert rpc(harness, "native_reference")["ok"]
     serial.overrides["G30 X110 Y110 E1"] = ["ok"]
     assert not rpc(harness, "native_measure")["ok"]
     assert harness.machine._z_probe.reference is None
+    assert '"command": "G30 X110 Y110 E1", "responses": ["ok"]' in caplog.text
 
 
 def test_primary_home_invalidates_material_reference(native_rpc):

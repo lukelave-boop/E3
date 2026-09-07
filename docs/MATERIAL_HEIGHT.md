@@ -1,5 +1,10 @@
 # Material height and camera geometry
 
+Failed probe operations now write `Probe failure transcript` entries to the Pi
+journal, including the command and captured replies. Remote machine.status
+intentionally excludes the local diagnostic log; it cannot retrieve these
+replies. This logging change does not alter motion or accept missing contacts.
+
 **The full Z sequence is under correction.** The operator observed descent
 without the CR Touch pin deploying and cut power. Reference and Measure are
 blocked by the updated Pi MachineService while deployment and initial clearance

@@ -4182,6 +4182,7 @@ class MachineService:
                 self._z_probe_result = None
                 for entry in probe.transcript:
                     self._append_log("Z PROBE", json.dumps(entry))
+                    LOGGER.warning("Probe failure transcript: %s", json.dumps(entry, ensure_ascii=True))
                 self._append_log("ERROR", f"Probe failed: {exc}")
                 LOGGER.warning(
                     "Probe operation=%s failed motion_started=%s detail=%s",

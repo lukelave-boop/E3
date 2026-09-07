@@ -9,6 +9,24 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### Probe failure evidence logging
+
+Operator 0.7.30 evidence: reference-border and the subsequent G30 border check
+completed; contact was -0.00 mm and final clearance was Z 20.00. The operator
+confirmed expected physical behavior. A subsequent contact on paper directly
+over honeycomb was rejected for a missing/unparseable contact report. The
+operator observed deployment, one touch and a return to starting height. This
+does not establish paper thickness or the cause of rejection.
+
+The Pi journal previously retained only the parser error; detailed probe replies
+were in a local memory log deliberately omitted from remote status. Asking the
+operator to fetch that log through machine.status was incorrect. Probe failures
+now write their existing transcript to the journal, preserving remote status
+filtering and all motion/rejection behavior. Earlier missing replies cannot be
+recovered through that status endpoint. No hardware was operated by the assistant.
+Verification: the focused missing-contact RPC test passed and asserts the G30
+reply appears in captured logging. Ruff, compileall and diff checks passed.
+
 ### Native border reference and single-contact height test
 
 Operator acceptance on 2026-09-06: Pi 0.7.29/fingerprint `cc4c1cfe`, Marlin

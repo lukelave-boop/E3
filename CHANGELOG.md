@@ -1,5 +1,8 @@
 # Changelog
 
+Probe failures now retain controller replies in the Pi journal for diagnosis;
+remote status continues to omit the local command log. Motion is unchanged.
+
 Added operator-run native border reference and single-contact height tests, with a required border zero check, signed honeycomb offset, verified final clearance and session/STOP invalidation. The native homing cycle has operator acceptance; the G30 measurement combination awaits physical testing.
 
 ## Unreleased - material-height calibration study
