@@ -33,7 +33,24 @@ Updater padded-region SHA-256:
 5229f49d7477c62979ea51b0b3c6d8b38e23d7f14dd2ab1192620c0836278254.
 STARTUP.md defines operator connected-power-up and recovery acceptance;
 SOURCE_REVISION.txt pins the companion Pi source. No hardware, serial, service,
-webcam or Pi operation was performed. Physical acceptance and CI are pending.
+webcam or Pi operation was performed. Physical acceptance remains pending.
+
+CI passed on implementation 5f52e403487ad286ff8de06df8840b7847fa5a38:
+- Mainboard SD Firmware: https://github.com/lukelave-boop/E3/actions/runs/34351697836
+  rebuilt/audited firmware, passed 277 Windows host/package tests and 51 Linux
+  startup/owner tests, plus compiled updater/platform/native probing checks.
+- Fast Development CI: https://github.com/lukelave-boop/E3/actions/runs/34351697711
+  passed the full Windows Python 3.12 desktop suite (4491 passed, 25 skipped),
+  POSIX serial/recovery tests, dependency/bytecode validation and repository Ruff.
+
+The final local package's SOURCE_REVISION.txt and HOST_SOURCE build information
+both pin 5f52e40; all packaged file hashes match its manifest. CI generated
+05408fd0e4c30f8de2932fba7a4aa00a7c61c0a20f019c7915231a06acfc67a8
+(214516 bytes): its Marlin embeds different absolute compiler paths and build
+date/time strings. The updater checksum is identical. The downloaded CI ELF
+also passed startup/layout/kill audits locally. The selected operator package
+remains 6991d999 to retain the previous application's exact bytes. This is an
+experimental physical-test handoff, not a main merge or production qualification.
 Existing uncommitted USB-capture investigation notes are preserved separately.
 
 ## Active: SD-installable FAN1/FAN2, probe and Z mainboard firmware
