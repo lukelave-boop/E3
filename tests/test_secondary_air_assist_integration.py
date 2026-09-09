@@ -28,6 +28,7 @@ from laser_aligner.project import (
     SceneObject,
     generate_project_gcode,
 )
+from tests.fakes.secondary_ready import ReadyMarlinTransport
 from tests.fakes.simulator_transport import SimulatedTransport
 
 _SECONDARY_PORT = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
@@ -171,7 +172,7 @@ def _fan_controller(
         assert (requested_port, requested_baudrate) == (port, baudrate)
         if not serials:
             raise AssertionError("unexpected secondary serial reopen")
-        return serials.pop(0)
+        return ReadyMarlinTransport(serials.pop(0))
 
     owner = CrealityControllerOwner(
         port,

@@ -463,22 +463,62 @@ static int test_input_and_startup(void) {
     protocol_receive('I');
     now += 6000;
     protocol_tick();
-    CHECK(booted == 1); /* Even an incomplete command cancels autoboot. */
+    CHECK(booted == 2); /* Incomplete traffic cannot cancel autoboot. */
     protocol_init();
     send("HOLD\n");
     now += 6000;
     protocol_tick();
-    CHECK(booted == 1);
+    CHECK(booted == 2);
     protocol_init();
     send("INFO\n");
     now += 6000;
     protocol_tick();
-    CHECK(booted == 1);
+    CHECK(booted == 3);
     protocol_init();
     begin(E3_BOARD_ID ^ 1, 512, 0);
     now += 6000;
     protocol_tick();
-    CHECK(booted == 1 && erased == 0 && image_validate());
+    CHECK(booted == 4 && erased == 0 && image_validate());
+
+    /* Sustained runtime traffic, malformed/oversized lines and UART errors
+     * cannot extend the deadline or write flash. Only exact HOLD can hold. */
+    const char *noise[] = {"M115\n", "M106 S0\n", "INFO\r\n", "\n", "HOLD \n",
+                           "hold\n", "BEGIN bad\n", "DATA bad\n", "END\n", "G1 Z5\n"};
+    for (uint32_t n = 0; n < sizeof(noise) / sizeof(noise[0]); ++n) {
+        protocol_init();
+        for (uint32_t ms = 0; ms < 5000; ms += 100) {
+            send(noise[n]);
+            now += 100;
+            protocol_tick();
+        }
+        CHECK(booted == 5 + n && erased == 0 && image_validate());
+    }
+    uint32_t boots_before = booted;
+    protocol_init();
+    for (uint32_t i = 0; i < 300; ++i) protocol_receive('A');
+    protocol_receive(-2);
+    protocol_receive(0);
+    now += 5000;
+    protocol_tick();
+    CHECK(booted == boots_before + 1 && erased == 0);
+
+    /* A valid BEGIN before deadline stays in recovery even on erase failure. */
+    protocol_init();
+    fail_erase = 1;
+    begin(E3_BOARD_ID, 512, image_crc32(bytes, 512));
+    now += 10000;
+    protocol_tick();
+    CHECK(booted == boots_before + 1 && erased == 1);
+    fail_erase = 0;
+    protocol_init();
+    begin(E3_BOARD_ID, 512, image_crc32(bytes, 512));
+    all_data(bytes, 512);
+    send("END\n");
+    now += 20000;
+    protocol_tick();
+    CHECK(booted == boots_before + 1 && image_validate());
+    send("BOOT\n");
+    CHECK(booted == boots_before + 2);
 
     setup();
     begin(E3_BOARD_ID, 512, image_crc32(bytes, 512));

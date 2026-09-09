@@ -21,6 +21,7 @@ from typing import Protocol
 
 from ..air_assist import AirAssistCommands, AirAssistMode, AirAssistTarget
 from ..errors import MachineError
+from .secondary_startup import wait_for_marlin
 
 _FAN_ON_COMMAND = "M106 S255"
 _FAN_OFF_COMMAND = "M106 S0"
@@ -240,7 +241,7 @@ class CrealityControllerOwner:
             self._sleep(self.session.startup_delay_seconds)
             # Startup chatter, including an unterminated fragment and unread
             # kernel RX bytes, predates the next command and cannot acknowledge it.
-            transport.synchronize_input()
+            wait_for_marlin(transport)
         except Exception as exc:
             if transport is not None:
                 self._transport = transport
@@ -506,7 +507,7 @@ class SecondaryMarlinFanController:
             try:
                 self._force_off()
             except SecondaryControllerError as exc:
-                if "unknown command" not in str(exc).casefold():
+                if "unknown command" not in str(exc).casefold() or "M106 S0:" not in str(exc):
                     raise
                 self._force_off()
 

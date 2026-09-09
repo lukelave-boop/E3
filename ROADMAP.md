@@ -1,4 +1,11 @@
 # Roadmap
+
+Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
+handshake. Ordinary traffic cannot hold the updater; incomplete images still
+remain in recovery. A new SD install and companion Pi source update are required.
+[Startup validation](firmware/marlin_mainboard/STARTUP.md) remains operator-pending; no physical
+fix of the separate zero-response fault is claimed. Earlier release notes follow.
+
 Mainboard firmware now has a complete SD installation/recovery package for
 both fans, probe and Z. The next stage is operator physical validation of the
 attached loads and known-thickness measurement using

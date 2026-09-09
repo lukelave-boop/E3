@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         "project": "E3 auxiliary retained-loader bench firmware", "version": VERSION,
         "target": "STM32F401RET6 / CR4NS200141C13", "board_id": "0401E013",
         "verification": "experimental; this generated build requires its own operator acceptance",
-        "updater_version": "0.1.0", "application_mode": "BENCH", "physical_outputs": "disabled",
+        "updater_version": "0.2.0", "application_mode": "BENCH", "physical_outputs": "disabled",
         "source_sha256": digest, "repository_base_revision": revision,
         "compiler": compiler, "compiler_flags": FLAGS,
         "uart": {"interface": "USART1 PA9/PA10 via CH340", "baud": 115200, "format": "8N1"},

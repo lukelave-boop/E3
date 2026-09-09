@@ -1,6 +1,6 @@
 # Retained-loader Ender auxiliary firmware
 
-Application **0.2.0 BENCH**, updater **0.1.0**, experimental STM32F401RET6 /
+Application **0.2.0 BENCH**, updater **0.2.0**, experimental STM32F401RET6 /
 CR4NS200141C13 project. See [BENCH_GUIDE.md](BENCH_GUIDE.md) for the USB upload and
 interactive FAN1/FAN2, Z probe and Z axis simulations. Physical outputs remain
 disabled; real PC14 input sampling is separate from simulated probe contact.
@@ -33,7 +33,10 @@ restrictions are not hardware write protection against arbitrary future firmware
 
 The updater does not depend on the application's health to expose its serial
 protocol after a normal startup: five-second command window, or indefinite wait
-when application validation fails. Any received traffic holds it. A valid image
+when application validation fails. Only exact HOLD or a validated BEGIN request
+holds it; INFO/M115, ordinary commands, noise and partial lines do not extend
+the deadline. This 0.2.0 updater requires SD installation; application-only USB
+upload cannot replace the earlier 0.1.0 updater. A valid image
 has a checked length, board/format IDs, vector bounds, header CRC and payload CRC.
 CRC detects corruption, **not maliciously authored firmware**. No signatures or
 firmware authenticity claim. Both updater and app normalize inherited startup
@@ -94,7 +97,7 @@ The command set and exact replies are in `protocol.c`; example update:
 
 ```text
 INFO
-E3AUX1 UPDATER 0.1.0 BOARD=0401E013
+E3AUX1 UPDATER 0.2.0 BOARD=0401E013
 HOLD
 OK HOLD
 BEGIN 0401E013 <8-hex payload-length> <8-hex payload-crc32>

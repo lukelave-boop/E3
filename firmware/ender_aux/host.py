@@ -27,7 +27,12 @@ RAM_BASE = 0x20000000
 RAM_END = 0x20018000
 MAX_PAYLOAD = FLASH_END - VECTOR_BASE
 PREFIX = "E3AUX1"
+UPDATER_IDENTITIES = {
+    "E3AUX1 UPDATER 0.1.0 BOARD=0401E013",
+    "E3AUX1 UPDATER 0.2.0 BOARD=0401E013",
+}
 IDENTITIES = {
+    "E3AUX1 UPDATER 0.2.0 BOARD=0401E013": "UPDATER",
     "E3AUX1 UPDATER 0.1.0 BOARD=0401E013": "UPDATER",
     "E3AUX1 APP 0.1.0 BOARD=0401E013": "APP",
     "E3AUX1 APP 0.2.0 BOARD=0401E013 MODE=BENCH OUTPUTS=DISABLED": "BENCH",
@@ -139,7 +144,7 @@ class Link:
         self.send("HOLD")
         # A new startup identity can precede the HOLD response after reset.
         response = self.receive()
-        if response == "E3AUX1 UPDATER 0.1.0 BOARD=0401E013":
+        if response in UPDATER_IDENTITIES:
             response = self.receive()
         if response != "OK HOLD":
             raise FirmwareError(f"Updater did not hold: {response!r}")

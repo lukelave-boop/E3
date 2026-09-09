@@ -13,6 +13,13 @@ For the intermittent Ender connection investigation, see the bounded
 [operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer
 metadata with the webcam running; actual Pi capture validation is pending.
 
+
+Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
+handshake. Ordinary traffic cannot hold the updater; incomplete images still
+remain in recovery. A new SD install and companion Pi source update are required.
+[Startup validation](firmware/marlin_mainboard/STARTUP.md) remains operator-pending; no physical
+fix of the separate zero-response fault is claimed. Earlier release notes follow.
+
 An experimental [native Marlin material-height patch](firmware/marlin_material/README.md)
 now preserves the fast/slow probe cycle with a separate bounded contact range.
 The spare has verified USB startup, capability reporting, unhomed rejection and

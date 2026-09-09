@@ -58,6 +58,9 @@ static void begin(void) {
         abort_with("ERR IMAGE");
         return;
     }
+    /* Only a validated update request may cancel the normal boot deadline.
+     * Stay here even if erase fails; a partial erase must never boot. */
+    automatic_boot = 0;
     session_active = 0;
     if (!platform_erase_application()) {
         send("ERR ERASE");
@@ -123,8 +126,11 @@ static int prefix(const char *value, const char *start) {
 }
 
 static void command(void) {
-    if (same(line, "INFO")) send(E3_UPDATER_ID);
-    else if (same(line, "HOLD")) send("OK HOLD");
+    if (same(line, "INFO") || same(line, "M115")) send(E3_UPDATER_ID);
+    else if (same(line, "HOLD")) {
+        automatic_boot = 0;
+        send("OK HOLD");
+    }
     else if (prefix(line, "BEGIN ")) begin();
     else if (prefix(line, "DATA ")) data();
     else if (same(line, "END")) {
@@ -161,7 +167,7 @@ void protocol_init(void) {
 
 void protocol_receive(int byte) {
     if (byte == -1) return;
-    automatic_boot = 0; /* Even partial or malformed traffic holds the updater. */
+    /* Ordinary queries, partial lines and UART errors do not hold startup. */
     if (byte < 0 || byte > 255) {
         session_active = 0;
         line_length = 0;

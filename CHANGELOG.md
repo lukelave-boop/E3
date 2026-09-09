@@ -17,6 +17,16 @@ behavior. Actual Pi validation is pending.
 Probe failures now retain controller replies in the Pi journal for diagnosis;
 remote status continues to omit the local command log. Motion is unchanged.
 
+
+## Connected startup correction (2026-09-09)
+
+- Updater 0.2.0 boots a valid application despite normal serial traffic; only
+  deliberate maintenance commands hold it. Invalid images retain recovery.
+- The Pi uses bounded read-only M115 readiness checks before acknowledged fan
+  OFF, retaining one serial owner and refusing unknown firmware or missing ACKs.
+- Ship a new combined SD installer and matching host source; physical connected
+  startup and the working-board zero-response fault still require verification.
+
 ## Unreleased - native material-height Marlin prototype
 
 - Add a revision-pinned Marlin G39 patch with native fast/retract/slow/stow,

@@ -272,10 +272,11 @@ def test_second_identity_must_confirm_updater_before_begin():
 
 
 @pytest.mark.parametrize("identity", [APPLICATION, BENCH])
-def test_application_update_entry_is_acknowledged_and_rechecked(identity, offline_clock_and_port):
+@pytest.mark.parametrize("updater", sorted(host.UPDATER_IDENTITIES))
+def test_application_update_entry_is_acknowledged_and_rechecked(identity, updater, offline_clock_and_port):
     port = ScriptedPort([
         ("INFO", identity), ("UPDATE", "OK UPDATE"),
-        ("HOLD", f"{UPDATER}\nOK HOLD"), ("INFO", UPDATER),
+        ("HOLD", f"{updater}\nOK HOLD"), ("INFO", updater),
     ])
     host.Link(port).hold_updater()
     assert port.commands == ["INFO", "UPDATE", "HOLD", "INFO"]

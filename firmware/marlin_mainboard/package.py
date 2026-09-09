@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 from firmware.ender_aux.host import validate_image  # noqa: E402
 from firmware.marlin_mainboard.prepare import verify  # noqa: E402
 
-UPDATER_SHA256 = "6af48a8c8cbb59f55641fa1bc5efc5404bc6717b3e2a2b1b1a538ee9e2a8f8d0"
+UPDATER_SHA256 = "5229f49d7477c62979ea51b0b3c6d8b38e23d7f14dd2ab1192620c0836278254"
 STOCK_SHA256 = "9a81f7564d62b2b131dcc96f0bf47725e3ee78c3b68b198bb54680f431e02710"
 STOCK_URL = "https://cdn.creality.com/ow/official/c2721d8d-b8d8-423c-84bb-e87be0b17dd6.zip"
 
@@ -29,7 +29,7 @@ def sha(data: bytes) -> str:
 
 def assemble(updater: bytes, image: bytes) -> bytes:
     if len(updater) != 65536 or sha(updater) != UPDATER_SHA256:
-        raise ValueError("The installer requires the exact accepted 0.1.0 updater")
+        raise ValueError("The installer requires the checksum-pinned startup-fixed 0.2.0 updater")
     stack, reset = struct.unpack_from("<II", updater)
     if stack != 0x20010000 or not reset & 1 or not 0x08010000 <= reset & ~1 < 0x08020000:
         raise ValueError("Invalid retained-updater entry vectors")
@@ -49,7 +49,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--objdump", type=Path, required=True)
-    parser.add_argument("--accepted-sd", type=Path, required=True)
+    parser.add_argument("--updater-bin", type=Path, required=True)
     parser.add_argument("--stock-bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
@@ -57,7 +57,10 @@ def main() -> None:
     elf = args.source / ".pio/build/STM32F401RC_creality/firmware.elf"
     image = audit(elf, args.objdump)
     audit_outputs(elf)
-    updater = args.accepted_sd.read_bytes()[:65536]
+    updater = args.updater_bin.read_bytes()
+    if not 8 <= len(updater) <= 65536:
+        raise ValueError("Updater binary exceeds its reserved region")
+    updater = updater.ljust(65536, b"\xff")
     combined = assemble(updater, image)
     stock = args.stock_bin.read_bytes()
     if sha(stock) != STOCK_SHA256:
@@ -73,10 +76,12 @@ def main() -> None:
     recovery = folder / "RECOVERY_STOCK/STM32F4_UPDATE"
     recovery.mkdir(parents=True, exist_ok=True)
     (recovery / "stock_2_0_8_26_9a81f756.bin").write_bytes(stock)
-    for filename in ("INSTALL.md", "VALIDATE.md", "README.md"):
+    for filename in ("INSTALL.md", "VALIDATE.md", "README.md", "STARTUP.md"):
         shutil.copyfile(HERE / filename, folder / filename)
     shutil.copyfile(HERE.parent / "ender_aux/host.py", folder / "host.py")
     (folder / "requirements.txt").write_text("pyserial==3.5\n")
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    (folder / "SOURCE_REVISION.txt").write_text(revision + "\n")
     # Installable companion source, without local machine configuration/captures.
     # Includes the typed controls so the firmware handoff is self-contained.
     host_names = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
@@ -110,6 +115,7 @@ def main() -> None:
         "features": ["independent FAN1 PC0 / M106 P1", "independent FAN2 PA0 / M106 P0",
                      "native CR Touch deploy/stow", "native Z homing and movement", "bounded G39 material height"],
         "sd_file": f"SD_CARD/STM32F4_UPDATE/{name}", "sd_load_address": "0x08010000",
+        "updater_version": "0.2.0", "requires_sd_updater_replacement": True,
         "sd_sha256": digest, "updater_sha256": sha(updater), "application_sha256": sha(image),
         "source_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "stock_source": STOCK_URL, "stock_sha256": sha(stock), "files": {},

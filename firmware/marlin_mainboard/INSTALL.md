@@ -22,11 +22,11 @@ the retained updater plus the Marlin application at 0x08020200.
 4. Insert the card in the **mainboard** SD slot, not the display. Power the board
    on and leave it undisturbed for at least 60 seconds. Native probe initialization
    can occur at boot, so keep the pin area clear.
-5. Power off, remove the SD card, then power on with the controller USB still
-   unplugged. Wait at least 30 seconds before reconnecting its USB lead to the Pi.
-   This covers the updater's five-second window and Marlin's native probe/display
-   initialization (the display startup animation alone takes over ten seconds).
-6. Connect in E3. Inspect M115. It must contain both
+5. Power off and remove the SD card. Reconnect controller USB to the Pi before
+   normal power-up; keep the webcam connected too. Updater 0.2.0 does not let
+   ordinary serial traffic cancel boot. Install the companion Pi code below
+   for the readiness handshake; no timed USB reconnection is required.
+6. Connect in E3 after the Pi service is available. Inspect M115. It must contain both
    `Cap:E3_MAINBOARD_V1:1` and `Cap:E3_MATERIAL_HEIGHT_V1:1`, plus
    `Cap:EMERGENCY_PARSER:1`. The Marlin base version reports 2.0.8.24F4; the E3
    capabilities identify this custom build. M123 should initially report
@@ -50,10 +50,12 @@ For this rig's recorded source installation, the operator software update is:
 
 ```sh
 set -e
+# Begin in this extracted firmware package directory on the Pi.
+target_revision=$(cat SOURCE_REVISION.txt)
 cd /home/greenhouse-climate/Projects/laser-camera-aligner
 git status --short
 git fetch origin codex/marlin-material-height
-git switch --detach a347eb1f949410d948ce14e4fec5b0c9f4e5a2e6
+git switch --detach "$target_revision"
 .venv/bin/python -m pip install --no-deps --no-build-isolation --editable .
 sudo systemctl restart e3-hardware-node.service
 ```
@@ -81,6 +83,8 @@ The rollback `.bin` is byte-identical to the F401 file from Creality's official
 `9a81f7564d62b2b131dcc96f0bf47725e3ee78c3b68b198bb54680f431e02710`.
 The archived F103 and touchscreen images are intentionally excluded.
 
-If serial traffic arrives during the E3 updater's boot window, it holds in
-UPDATER instead of starting Marlin. Disconnect controller USB, power-cycle,
-wait thirty seconds, then reconnect. Do not send probe/motion commands to UPDATER.
+Normal startup keeps both USB devices connected. Follow STARTUP.md to test
+Ender-first, Pi-first and simultaneous power-up after this one-time installation.
+A persistent UPDATER identity is not permission to send motion or automatic BOOT;
+verify the installed version and application validity. The separate working-board
+zero-response fault is not proven to be caused by startup traffic.

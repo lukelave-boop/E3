@@ -72,8 +72,10 @@ python host.py inspect --port COM4 --hardware-enabled
 The client verifies the image offline, identifies the firmware, enters/holds the
 updater, and transfers acknowledged blocks. It never automatically retries an
 uncertain write or boots a newly uploaded image. `boot` is explicit. `inspect`
-does not move or actuate anything; during the startup window it holds the updater
-until `boot` or a power cycle.
+does not move or actuate anything. With updater 0.2.0, inspect/INFO/M115 do not
+hold startup. Updater 0.1.0 still holds on any received byte. This package
+contains updater 0.2.0; replacing the updater requires the combined SD image,
+not an application.e3fw upload. Keep earlier accepted packages intact.
 
 There is a five-second updater window at every normal startup. A missing or
 invalid application leaves the updater active indefinitely. With a working

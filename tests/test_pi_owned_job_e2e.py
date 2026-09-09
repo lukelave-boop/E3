@@ -34,6 +34,7 @@ from laser_aligner.machine.secondary_controller import (
     SecondaryMarlinFanController,
 )
 from laser_aligner.machine.service import MachineService
+from tests.fakes.secondary_ready import ReadyMarlinTransport
 from tests.fakes.simulator_transport import SimulatedTransport
 
 _TOKEN = "pi-owned-e2e-token-0123456789abcdef"
@@ -362,7 +363,7 @@ def test_windows_detach_does_not_change_pi_owned_secondary_fan(
     owner = CrealityControllerOwner(
         _SECONDARY_PORT,
         115200,
-        serial_factory=lambda _port, _baudrate: secondary_serial,
+        serial_factory=lambda _port, _baudrate: ReadyMarlinTransport(secondary_serial),
         sleep=lambda _delay: None,
         startup_delay_seconds=0.0,
         read_timeout_seconds=0.1,

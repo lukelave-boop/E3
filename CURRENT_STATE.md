@@ -1,4 +1,41 @@
 # Current repository state
+
+## Active: connected-startup correction, updater 0.2.0 (2026-09-09)
+
+The operator authorized fixing normal connected power-up. Updater 0.2.0 keeps
+its five-second automatic boot deadline despite ordinary traffic, INFO/M115,
+partial/oversized lines and UART errors. Only exact HOLD or a validated BEGIN
+holds maintenance; invalid/incomplete images still remain in recovery. Flash
+ownership, commit-last validation and physical output initialization are unchanged.
+Replacing updater 0.1.0 requires the new combined SD installer, not a USB
+application upload. Earlier accepted artifacts remain intact.
+
+The Pi's existing Creality owner now performs a bounded read-only M115 readiness
+handshake before its acknowledged fan-OFF exchange: up to 15 queries within
+45 seconds, plus existing settle/synchronization bounds. Marlin identity and
+OK are required; stale input is synchronized before OFF. Unknown firmware,
+persistent updater, silence and transport faults fail closed. No runtime command,
+reset, BOOT, HOLD, flash, probe or motion is replayed by this handshake. This is
+startup readiness, not repair of a missing/faulted USB link or automatic job
+resumption. The prior zero-response fault remains causally unconfirmed.
+
+Local Windows verification: 479 focused Python tests pass, repository Ruff and
+compileall pass, compiled Cortex-M4 core startup/recovery tests pass, production
+flash-wrapper tests pass 27 cases, and bench application MMIO tests pass 23.
+Native probing tests pass all three configurations; the mainboard build and
+startup/kill audits pass. The application.e3fw is byte-identical to the previous
+7f45686b package; only the updater changes in the combined firmware image.
+
+Prepared SD package: dist/e3-mainboard-v1-6991d999, installer
+SD_CARD/STM32F4_UPDATE/e3main_6991d999.bin, 214620 bytes, SHA-256
+6991d999ed14fb82d43087bdca78b08a58d2b5f013b111c108fe8b0fb8e2f2f4.
+Updater padded-region SHA-256:
+5229f49d7477c62979ea51b0b3c6d8b38e23d7f14dd2ab1192620c0836278254.
+STARTUP.md defines operator connected-power-up and recovery acceptance;
+SOURCE_REVISION.txt pins the companion Pi source. No hardware, serial, service,
+webcam or Pi operation was performed. Physical acceptance and CI are pending.
+Existing uncommitted USB-capture investigation notes are preserved separately.
+
 ## Active: SD-installable FAN1/FAN2, probe and Z mainboard firmware
 
 The user requested a complete mainboard SD file ready for physical validation.

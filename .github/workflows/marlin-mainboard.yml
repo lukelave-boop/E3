@@ -7,6 +7,10 @@ on:
     paths:
       - 'firmware/marlin_mainboard/**'
       - 'firmware/marlin_material/**'
+      - 'firmware/ender_aux/**'
+      - 'laser_aligner/machine/secondary*'
+      - 'tests/test_secondary*'
+      - 'tests/firmware_core_harness.c'
       - 'tests/test_*mainboard*'
       - '.github/workflows/marlin-mainboard.yml'
   pull_request:
@@ -45,8 +49,14 @@ jobs:
           Invoke-WebRequest 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi.zip' -OutFile $archivePath
           if ((Get-FileHash $archivePath -Algorithm SHA256).Hash -ne '6facb152ce431ba9a4517e939ea46f057380f8f1e56b62e8712b3f3b87d994e1') { throw 'Toolchain checksum mismatch' }
           Expand-Archive -LiteralPath $archivePath -DestinationPath build/firmware-tools
-      - name: Build unchanged retained updater
+      - name: Build startup-fixed updater
         run: python firmware/ender_aux/build.py
+      - name: Test compiled updater recovery and startup
+        shell: pwsh
+        run: |
+          python firmware/ender_aux/run_core_tests.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/ender_aux/run_platform_tests.py
       - name: Build mainboard firmware
         run: python firmware/marlin_mainboard/build.py build/marlin-mainboard --core build/platformio
       - name: Verify native probing and fan kill
@@ -70,10 +80,9 @@ jobs:
       - name: Package audited SD installer
         shell: pwsh
         run: |
-          $accepted = Get-ChildItem 'dist/ender-aux-*/SD_CARD/STM32F4_UPDATE/*.bin' | Select-Object -First 1
-          python firmware/marlin_mainboard/package.py build/marlin-mainboard --objdump build/platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-objdump.exe --accepted-sd $accepted.FullName --stock-bin build/stock-f401-2.0.8.26.bin
+          python firmware/marlin_mainboard/package.py build/marlin-mainboard --objdump build/platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-objdump.exe --updater-bin build/ender_aux/updater.bin --stock-bin build/stock-f401-2.0.8.26.bin
       - name: Test host control and packaging
-        run: python -m pytest -q tests/test_marlin_mainboard.py tests/test_mainboard_rpc.py tests/test_mainboard_package.py tests/test_secondary_controller.py tests/test_native_height.py tests/test_marlin_material.py
+        run: python -m pytest -q tests/test_marlin_mainboard.py tests/test_mainboard_rpc.py tests/test_mainboard_package.py tests/test_secondary_controller.py tests/test_secondary_startup.py tests/test_ender_aux_host.py tests/test_native_height.py tests/test_marlin_material.py
       - name: Lint and compile
         shell: pwsh
         run: |
@@ -85,3 +94,16 @@ jobs:
           name: mainboard-sd-installation
           path: dist/e3-mainboard-v1-*.zip
           if-no-files-found: error
+
+  linux-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pytest -q tests/test_secondary_startup.py tests/test_secondary_controller.py
