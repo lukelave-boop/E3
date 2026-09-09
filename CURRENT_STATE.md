@@ -7,6 +7,19 @@ preserving the earlier material patch, auxiliary updater, BENCH builds and all
 recovery artifacts. No working-machine, Pi, webcam or service operation was
 performed. No new Windows EXE was built or selected.
 
+Final-product startup requirement, explicitly confirmed by the operator on
+2026-09-09: Ender USB and the webcam must remain connected during ordinary
+power-up. Manual unplugging, timed reconnection and hardware-service restarts
+are diagnostic workarounds, not acceptable product operation. The retained
+0.1.0 updater currently cancels automatic application boot on any received byte
+during its five-second window, including ordinary host traffic. This is a
+confirmed integration weakness, not yet the proven cause of this board's
+zero-response fault. Production integration must separate deliberate update
+entry from normal traffic and establish/recover controller readiness without
+operator cable timing, while preserving recovery, output-off behavior, shared
+serial ownership and the webcam. The proposed 30-second isolated boot is only
+a diagnostic margin for updater plus native Marlin initialization.
+
 Final package: `dist/e3-mainboard-v1-7f45686b`; install
 `SD_CARD/STM32F4_UPDATE/e3main_7f45686b.bin` (214620 bytes), SHA-256
 `7f45686bb003b6ecd83e628461b331b87c69aa382cfea4d1faa13f15704ac950`.
@@ -24,6 +37,72 @@ automatic hotend ownership is disabled. M123 reports commanded fan PWM and Z
 trust; M115 advertises exact E3_MAINBOARD_V1 and E3_MATERIAL_HEIGHT_V1 capabilities.
 Emergency parsing is enabled. Native kill explicitly clears both PWM settings
 and both fan pins; compiled Cortex-M4 execution with fake MMIO verified this.
+
+Operator mainboard installation attempt, 2026-09-07: the user reported powering
+the Ender with the supplied SD card, waiting three minutes, removing the card
+and powering on again. The subsequent operator-run Inspect returned Pi build
+0.7.31/a89995ba, boot e9248610-3d37-426f-baa3-07eb1b8daa96, controller session
+generation 2, READY_HOME_REQUIRED and controller.rejected: "Secondary Creality
+controller session failed: Serial connection closed unexpectedly". No firmware
+identity was returned, so installation on the working board remains unconfirmed.
+A stale connection after the power/USB cycle is a possible explanation; the
+reply does not establish when the connection closed or its cause. At that point
+the Pi still needed the packaged companion software update and a new
+operator-established controller session. A read-only SSH log retrieval
+could not authenticate; no controller commands or service operations were sent.
+
+After the operator update/restart, mainboard status reported Pi 0.7.51/a454470b,
+boot 43b74882-d6e3-4aeb-8888-9d87f15d03ba, primary session generation 1 and
+READY_HOME_REQUIRED, but rejected because the shared Creality connection was
+not initialized. An assistant read of cached machine.status (no controller
+commands) retrieved the actual secondary fault: M106 S0 timed out, receiving
+zero lines, on /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 at 115200 baud.
+The secondary is configured but not ready; primary connection success does not
+establish secondary readiness. The firmware identity remains unconfirmed.
+Operator service/kernel logs are the next diagnostic evidence; no homing,
+reflash or assistant hardware-service operation was initiated.
+
+The operator's subsequent journal capture shows CH340 1a86:7523 on USB 1-1.2,
+using dwc2, disconnected/re-enumerated at 16:22, 16:24 and 16:27-16:29. The
+last attachment was ttyUSB0 at 16:29:54; no later kernel disconnect appears
+through the capture at 16:36:27. Two -32 receive errors occurred immediately
+before the 16:22 disconnect; they do not establish the cause or prove a new
+spontaneous USB failure during these operator power/USB operations. The service
+tail contains only machine.status polling from PID 69679, so it omits the
+startup failure. USB enumeration alone does not confirm Marlin execution or
+working serial transfers. The existing by-id configuration avoids dependence
+on the observed ttyUSB0/ttyUSB1 renumbering. No webcam or dwc2 change is proposed.
+
+On 2026-09-09 the operator reported a complete power-off and power-on of the
+system. A read of cached machine.status returned a new Pi service boot ID,
+34a7db96-66a7-42c2-a807-c071e6221cdf, still 0.7.51/a454470b. The primary was
+disconnected; the configured secondary remained not ready with the same M106 S0
+timeout and zero response lines at 115200 baud. Thus the failure recurred in a
+new service boot, rather than being only the prior service's retained error.
+Working-board firmware identity is still unconfirmed. The next proposed
+operator test boots the Ender with USB unplugged, allows 30 seconds for startup,
+then reconnects USB and restarts the Pi service before connecting in E3 and
+requesting mainboard status. Startup-order involvement remains unproven. No
+controller command, service restart, firmware change or webcam operation was
+performed by the assistant during this check.
+
+The operator completed that controlled startup and service restart. On Pi boot
+01f08aa7-0c57-491c-85f6-2d1fcf33aa2e, mainboard status again rejected the
+uninitialized secondary. An assistant cached-status read confirmed the same
+M106 S0 timeout with zero received lines. The proposed boot-order workaround
+did not restore communication in this test; its failure does not identify the
+firmware currently running on the working board.
+
+`scripts/inspect_ender_usb.py` and `docs/ENDER_USB_IDENTITY.md` now provide an
+operator-run direct Windows identity diagnostic. It selects only one newly
+attached CH340 (excluding existing adapters/spare), captures 35 seconds of
+startup reception, sends M115 once and INFO only after ERR UNSUPPORTED. It
+does not send reset/update/boot, motion, probe, fan or heater commands or touch
+Pi/webcam services. It is a maintenance diagnostic, not a normal control path.
+Sixteen Windows fake-serial tests, focused Ruff and compileall pass; no real
+working-board execution has been performed by the assistant. The existing
+firmware packages and Pi runtime are unchanged. Direct Windows identity is the
+next operator evidence before any firmware correction or further probing.
 
 The companion machine.mainboard RPC and mainboard_control CLI route independent
 fan percentages and bounded manual Z through MachineService and the existing
