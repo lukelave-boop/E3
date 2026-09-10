@@ -1,5 +1,28 @@
 # Current repository state
 
+## Compact Z endpoint and Pi CPU cooling (2026-09-10)
+
+Operator reports installed compact 08beaf0d firmware (Marlin 2.0.8.24F4,
+Sep 10 2026 10:08:40, MCU:423 FLASH_KIB:256), Pi 0.7.54 with endpoint patch
+393a2d2c. Native homing ends Z0; the corrected host verifies that endpoint
+before its final Z20 lift. Operator observed full homing/clearance and manual
+Z21/back-to-Z20. FAN1 is Pi cooler and FAN2 air assist, each physically on/off
+verified; pin deploy/stow observed. The 7 mm sample measured 6.984, 6.983,
+6.984 mm at one XY position with -0.001 border baseline and configured 1.5 mm
+support offset. Reported 0.001 mm spread is not absolute accuracy calibration.
+
+Added opt-in Pi E3_CPU_COOLING=1: 45 C on, 40 C off, five-second polling,
+shared MachineService FAN1-only authority, STOP/session pause and no FAN2,
+primary laser or motion command. Kit dist/e3-pi-cooling-79cbe077 validates
+known previous source hashes and retains backups; existing probe/startup
+patches are preserved. 125 focused Windows tests plus Ruff/compileall passed.
+Exact original node/service LF sources pass local patch/backup verification.
+Windows/Linux fast CI is pending. Automatic thermal switching and installed
+board USB uploads remain physically untested. The earlier service shutdown
+timeout is not fixed by these changes. See docs/PI_CPU_COOLING.md for behavior,
+installation and caliper-based next calibration checks. No main merge while
+physical qualification and CI are pending.
+
 ## Active: compact F401 installer with initial USB updates (2026-09-10)
 
 The restored working machine now boots stock 2.0.8.26F4 and responds to Pi M115

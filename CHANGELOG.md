@@ -1,6 +1,11 @@
 # Changelog
 ## Mainboard SD firmware and typed controls
 
+Added opt-in Pi CPU cooling on Ender FAN1 (45 C on / 40 C off) through the
+shared controller, with FAN2 preservation and STOP/session guards. Corrected
+the compact V1 homing endpoint from the stock Z5 assumption to verified Z0
+before final Z20 clearance. Source-checked Pi patch kits preserve backups.
+
 ## Compact F401 SD/USB installer candidate (2026-09-10)
 
 - Add a separate 256 KiB/64 KiB F401 profile with USB updates included in the

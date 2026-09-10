@@ -1,5 +1,11 @@
 # Compact F401 auxiliary application
 
+Compact V1 native G28 ends at Z0 (Z_AFTER_HOMING=0). The Pi must recognize
+its exact E3_COMPACT_F401_V1:1 capability, verify known Z and the expected
+probe input at Z0, then request and verify Z20. Legacy stock remains Z5.
+Use the Pi-only kit produced by scripts/package_compact_probe_fix.py to fix
+older companions that abort at the Z5 check. This does not change firmware.
+
 This profile retains the native Marlin planner, Z homing, CR Touch / BLTouch,
 G39 material-height cycle, both independent fans, readbacks and emergency parser.
 It targets the common STM32F401RC/RE subset: Cortex-M4, 64 KiB RAM, application

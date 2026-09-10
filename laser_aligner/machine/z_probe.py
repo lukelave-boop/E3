@@ -41,6 +41,17 @@ def material_height_supported(firmware: str) -> bool:
     return True
 
 
+def native_homing_endpoint(firmware: str) -> float:
+    """Compact V1 homes to Z0; retain the observed stock Z5 contract otherwise."""
+    capabilities = [token for token in firmware.split()
+                    if token.startswith("Cap:E3_COMPACT")]
+    if not capabilities:
+        return 5.0
+    if capabilities != ["Cap:E3_COMPACT_F401_V1:1"]:
+        raise MachineError("Unsupported or ambiguous E3 compact homing capability")
+    return 0.0
+
+
 def parse_material_contact(lines: tuple[str, ...]) -> float:
     reports = [line.strip() for line in lines if line.strip().startswith("E3MH")]
     match = _MATERIAL_CONTACT.fullmatch(reports[0]) if len(reports) == 1 else None
@@ -160,6 +171,7 @@ class CrealityZProbe:
         firmware = " ".join(precheck("M115"))
         if "marlin" not in firmware.lower() or "ender-3 s1 pro" not in firmware.lower():
             raise MachineError("Expected the existing Ender-3 S1 Pro / Marlin controller")
+        expected_homed_z = native_homing_endpoint(firmware)
         flags = [line.strip().lower() for line in precheck("M119")]
         states = [line for line in flags if line.startswith("z_min:")]
         if states != ["z_min: triggered"]:
@@ -195,8 +207,12 @@ class CrealityZProbe:
         flags = [line.strip().lower() for line in self._execute("M119", guard)]
         if [line for line in flags if line.startswith("test_axis_known_z_flag")] != ["test_axis_known_z_flag = true"]:
             raise MachineError("Native homing did not report a known Z axis")
-        if [line for line in flags if line.startswith("z_min:")] != ["z_min: triggered"] or abs(homed - 5.0) > 0.25:
-            raise MachineError("Native homing did not finish in the expected retracted Z 5 mm state")
+        probe_states = [line for line in flags if line.startswith("z_min:")]
+        if probe_states != ["z_min: triggered"] or abs(homed - expected_homed_z) > 0.25:
+            raise MachineError(
+                f"Native homing did not finish in the expected retracted Z {expected_homed_z:g} mm state; "
+                f"reported Z {homed:.3f} mm, probe input {probe_states!r}. Final Z20 lift was not sent."
+            )
         self._raise(20.0, guard)
         return {
             "kind": "native_cycle_test", "command": "G28 Z R0",

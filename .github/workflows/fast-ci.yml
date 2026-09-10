@@ -139,3 +139,5 @@ jobs:
           tests/test_pi_owned_job_e2e.py
           tests/test_remote_machine_service.py
           tests/test_remote_node.py
+          tests/test_cpu_cooling.py
+          tests/test_cpu_cooling_install.py

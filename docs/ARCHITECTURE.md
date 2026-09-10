@@ -1,5 +1,10 @@
 # Architecture
 
+Opt-in Pi CPU cooling polls a Linux thermal sensor and passes only FAN1
+OFF/full-speed demand through MachineService and the shared Ender owner.
+It preserves primary job and FAN2 control, defers during probing, and pauses
+after STOP/error until owner reinitialization. See PI_CPU_COOLING.md.
+
 The separate `ender_aux_f401compact` / `marlin_mainboard_compact` target uses
 one 256 KiB flash / 64 KiB RAM layout for the exact F401 RC/256 and RE/512 pairs.
 It preserves the first-stage loader below 0x08010000, retains its updater in

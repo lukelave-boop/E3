@@ -8,6 +8,10 @@ firmware command/readback paths and now runs this image. See
 [validation](firmware/marlin_mainboard/VALIDATE.md). The working machine, Pi and
 webcam have not been changed. Earlier prototype/BENCH notes below are historical.
 
+Automatic Pi cooling on FAN1 is available as an opt-in companion: 45 C on,
+40 C off. See [Pi CPU cooling](docs/PI_CPU_COOLING.md) for installation,
+validation limits and the next Z calibration checks.
+
 The working Ender has been restored to stock **2.0.8.26F4**, with its normal
 screen and Pi USB M115 response verified by the operator. A new
 [compact F401 SD/USB installer](firmware/marlin_mainboard_compact/README.md)

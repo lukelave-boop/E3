@@ -21,6 +21,7 @@ class NativeSerial(FakeSerial):
         self.z = .03
         self.relative = False
         self.homed = False
+        self.home_z = 5
         self.overrides = {}
 
     def write_line(self, line):
@@ -42,7 +43,7 @@ class NativeSerial(FakeSerial):
             target = float(line.split()[1][1:])
             self.z = self.z + target if self.relative else target
         elif line == "G28 Z R0":
-            self.z = 5
+            self.z = self.home_z
             self.homed = True
         elif line not in {"M106 S0", "G21", "M84 S0", "M400", "M420 S0", "M112"}:
             raise AssertionError(f"Unexpected native test command {line}")
@@ -272,3 +273,83 @@ def test_native_disconnect_during_homing_prevents_retry_and_final_lift(native_rp
     assert serial.writes.count("G1 Z5.000 F300") == 1
     assert "G1 Z20.000 F300" not in serial.writes
     assert harness.machine._z_probe.reference is None
+
+
+COMPACT_IDENTITY = "FIRMWARE_NAME:Marlin 2.0.8.24F4 MACHINE_TYPE:Ender-3 S1 Pro Cap:E3_COMPACT_F401_V1:1"
+
+
+def test_compact_observed_z0_homing_continues_to_final_clearance(native_probe):
+    serial, probe, _ = native_probe
+    serial.home_z = 0
+    serial.overrides["M115"] = [COMPACT_IDENTITY, "ok"]
+    result = run(probe)
+    assert result["homed_z_mm"] == 0
+    assert serial.z == 20
+    assert serial.writes[-3:] == ["G1 Z20.000 F300", "M400", "M114"]
+    assert serial.writes.count("G28 Z R0") == 1
+
+
+@pytest.mark.parametrize(("identity", "home_z", "expected"), [
+    (COMPACT_IDENTITY, 5, "Z 0 mm state; reported Z 5.000"),
+    (COMPACT_IDENTITY, 0.251, "Z 0 mm state; reported Z 0.251"),
+    (COMPACT_IDENTITY, -0.251, "Z 0 mm state; reported Z -0.251"),
+    ("FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", 0, "Z 5 mm state; reported Z 0.000"),
+])
+def test_wrong_firmware_specific_endpoint_never_lifts(native_probe, identity, home_z, expected):
+    serial, probe, _ = native_probe
+    serial.overrides["M115"] = [identity, "ok"]
+    serial.home_z = home_z
+    with pytest.raises(MachineError, match=expected):
+        run(probe)
+    assert "G1 Z20.000 F300" not in serial.writes
+    assert serial.writes.count("G28 Z R0") == 1
+
+
+@pytest.mark.parametrize("cap", [
+    "Cap:E3_COMPACT_F401_V1:0", "Cap:E3_COMPACT_F401_V2:1",
+    "Cap:E3_COMPACT_F401_V1:1junk",
+    "Cap:E3_COMPACT_F401_V1:1 Cap:E3_COMPACT_F401_V1:1",
+])
+def test_unknown_or_ambiguous_compact_contract_never_moves(native_probe, cap):
+    serial, probe, _ = native_probe
+    serial.overrides["M115"] = ["FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro " + cap, "ok"]
+    with pytest.raises(MachineError, match="compact homing capability"):
+        run(probe)
+    assert not any(command.startswith(("G1 ", "G28")) for command in serial.writes)
+
+
+@pytest.mark.parametrize("report", [
+    ["z_min: open", "test_axis_known_z_flag = true", "ok"],
+    ["z_min: TRIGGERED", "test_axis_known_z_flag = false", "ok"],
+    ["z_min: TRIGGERED", "z_min: TRIGGERED", "test_axis_known_z_flag = true", "ok"],
+])
+def test_compact_z0_still_requires_known_z_and_expected_probe_input(native_probe, report):
+    serial, probe, _ = native_probe
+    serial.home_z = 0
+    serial.overrides["M115"] = [COMPACT_IDENTITY, "ok"]
+    serial.on_write = lambda line: serial.overrides.update({"M119": report}) if line == "G28 Z R0" else None
+    with pytest.raises(MachineError):
+        run(probe)
+    assert "G1 Z20.000 F300" not in serial.writes
+
+
+def test_compact_failed_final_lift_is_not_success(native_probe):
+    serial, probe, _ = native_probe
+    serial.home_z = 0
+    serial.overrides["M115"] = [COMPACT_IDENTITY, "ok"]
+    serial.overrides["G1 Z20.000 F300"] = ["ok"]
+    with pytest.raises(MachineError, match="retract"):
+        run(probe)
+    assert probe.reference is None
+
+
+def test_compact_endpoint_through_machine_service_keeps_connection_and_finishes_at_z20(native_rpc):
+    harness, serial = native_rpc
+    serial.home_z = 0
+    serial.overrides["M115"] = [COMPACT_IDENTITY, "ok"]
+    result = helpers._rpc(harness, ACTION_MACHINE_PROBE_Z, **fields(harness))
+    assert result["ok"]
+    assert result["result"]["homed_z_mm"] == 0
+    assert serial.z == 20
+    assert harness.machine.status()["connected"]
+    assert serial.writes.count("G28 Z R0") == 1

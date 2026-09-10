@@ -206,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.hardware is not True:
         parser.error("--hardware is required before the E3 node may open a controller")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from .cpu_cooling import CpuCoolingWorker, enabled_from_environment
+    cpu_cooling_enabled = enabled_from_environment()
     settings = load_settings(args.config)
     if settings.machine.backend != "serial":
         raise MachineError("The Pi hardware-node configuration must use machine.backend='serial'")
@@ -235,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             hardware_enabled=True,
             laser_lockout=False,
             secondary_air_assist=secondary_air_assist,
+            cpu_cooling_enabled=cpu_cooling_enabled,
         )
         job_service = PiJobService(
             machine,
@@ -243,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         machine_server: PiMachineServer | None = None
         camera_server: CameraBridgeServer | None = None
         workers: list[Thread] = []
+        cooling = CpuCoolingWorker(machine) if cpu_cooling_enabled else None
         stop_requested = Event()
         previous_signal_handlers: dict[int, object] = {}
         try:
@@ -287,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
             for worker in workers:
                 worker.start()
             previous_signal_handlers = _install_termination_handlers(stop_requested)
+            if cooling is not None:
+                cooling.start()
             try:
                 while all(worker.is_alive() for worker in workers):
                     if stop_requested.wait(0.5):
@@ -302,6 +308,9 @@ def main(argv: list[str] | None = None) -> int:
             except KeyboardInterrupt:
                 LOGGER.info("Stopping E3 hardware node")
         finally:
+            if cooling is not None and cooling.thread.ident is not None:
+                machine.cpu_cooling_enabled = False
+                cooling.stop()
             try:
                 try:
                     if machine_server is not None:

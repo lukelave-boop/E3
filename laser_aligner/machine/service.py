@@ -715,9 +715,16 @@ class MachineService:
         laser_lockout: bool = False,
         *,
         secondary_air_assist: SecondaryMarlinFanController | None = None,
+        cpu_cooling_enabled: bool = False,
     ):
         if type(laser_lockout) is not bool:
             raise TypeError("laser_lockout must be an exact boolean")
+        if type(cpu_cooling_enabled) is not bool:
+            raise TypeError("cpu_cooling_enabled must be an exact boolean")
+        if cpu_cooling_enabled and (hardware_enabled is not True or secondary_air_assist is None):
+            raise SafetyError("CPU cooling requires hardware authority and the shared Ender connection")
+        self.cpu_cooling_enabled = cpu_cooling_enabled
+        self._cpu_cooling_session: tuple[int, int] | None = None
         self.settings = settings
         self.laser_settings = laser_settings
         self.hardware_enabled = hardware_enabled
@@ -4006,12 +4013,58 @@ class MachineService:
             ),
         }
 
+    def update_cpu_cooling(self, pwm: int) -> dict[str, Any]:
+        """Local opt-in FAN1 only; never opens hardware, homes, arms or touches FAN2."""
+        from .cpu_cooling import update_fan
+
+        if not self.cpu_cooling_enabled or self.hardware_enabled is not True:
+            raise SafetyError("Automatic CPU cooling is not hardware-enabled")
+        if type(pwm) is not int or pwm not in (0, 255):
+            raise SafetyError("CPU cooling accepts only OFF or full speed")
+        fan = self._secondary_air_assist
+        if fan is None or self._z_probe_active:
+            return {"state": "deferred"}
+        owner = fan.owner
+        if not owner._lock.acquire(blocking=False):
+            return {"state": "busy"}
+        try:
+            if not owner.ready:
+                return {"state": "unavailable"}
+            generation = owner.generation
+            epoch = self.operation_generation()
+            previous = self._cpu_cooling_session
+            if previous is not None and previous[0] == generation and previous[1] != epoch:
+                return {"state": "paused_until_reconnect"}
+            self._cpu_cooling_session = (generation, epoch)
+
+            @contextmanager
+            def guard():
+                with self._secondary_write_gate, self._stop_epoch_lock:
+                    if (self._stop_epoch != epoch or owner.generation != generation
+                            or not self.cpu_cooling_enabled or self._z_probe_active):
+                        raise MachineError("CPU cooling cancelled by stop, probe or session change")
+                    yield
+
+            try:
+                result = update_fan(owner, pwm, guard=guard)
+            except Exception:
+                self._cpu_cooling_session = (generation, -1)
+                raise
+            return dict(result, state="active")
+        finally:
+            owner._lock.release()
+
     def mainboard_control(
         self, action: str, value: int | float | None = None, *, confirmed: bool = False,
         _connection_alive: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Exclusive typed fan / Z controls; the Pi retains the sole serial owner."""
         validate_control(action, value, confirmed)
+        if action == "fan1" and self.cpu_cooling_enabled:
+            if value != 0:
+                raise SafetyError("FAN1 is owned by automatic CPU cooling; disable E3_CPU_COOLING to use manual ON")
+            if self._secondary_air_assist is not None:
+                self._cpu_cooling_session = (self._secondary_air_assist.owner.generation, -1)
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
             self._require_safety_configuration()
@@ -5648,6 +5701,10 @@ class MachineService:
         stop_call_deadline = time.monotonic() + _REALTIME_STOP_WRITE_DEADLINE_SECONDS
         with self._stop_epoch_lock:
             self._stop_epoch += 1
+            if self.cpu_cooling_enabled and self._secondary_air_assist is not None:
+                # Read the generation snapshot without waiting for the serial lock:
+                # STOP must not wait for an auxiliary acknowledgement.
+                self._cpu_cooling_session = (self._secondary_air_assist.owner._generation, -1)
             stop_epoch = self._stop_epoch
             self._authorization_epoch += 1
             self._job_stop.set()

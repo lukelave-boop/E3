@@ -1,5 +1,11 @@
 # Roadmap
 
+Compact firmware's native Z cycle and approximately 7 mm material measurement
+have operator evidence. Automatic FAN1 CPU cooling is implemented; thermal
+switching and installed-board USB updates require physical qualification.
+Next Z work compares caliper-measured samples, physical travel and support
+variation. See docs/PI_CPU_COOLING.md.
+
 The stock F401 baseline is restored and its Pi USB identity works. Next,
 operator-test the [compact F401 kit](firmware/marlin_mainboard_compact/README.md):
 confirm live MCU/capacity and all capabilities, cold start with normal Pi/webcam
