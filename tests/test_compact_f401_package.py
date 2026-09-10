@@ -15,6 +15,7 @@ CAPABILITIES = (
     b"Cap:E3_MAINBOARD_V1:1",
     b"Cap:E3_MATERIAL_HEIGHT_V1:1",
     b"Cap:E3_USB_UPDATER_F401_V1:1",
+    b"Cap:E3_Z_LIMIT_80_V1:1",
     b"E3HW:1 MCU:",
 )
 
@@ -43,7 +44,7 @@ def updater(length):
     return bytes(raw)
 
 
-@pytest.mark.parametrize("cap", CAPABILITIES[:3])
+@pytest.mark.parametrize("cap", CAPABILITIES[:-1])
 def test_capability_prefix_is_not_an_exact_capability(cap):
     payload = host.validate_image(application()).replace(cap + b"\0", cap + b"0\0")
     with pytest.raises(ValueError, match="Missing"):

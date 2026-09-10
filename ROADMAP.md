@@ -1,5 +1,11 @@
 # Roadmap
 
+## Desktop Ender Z controls
+
+Implemented Machine-tab jogging, live idle readback and persistent host maximum;
+Windows feature-build and Pi-companion operator verification are pending. The
+30 mm material probing extension remains separate and unimplemented.
+
 Compact firmware's native Z cycle and approximately 7 mm material measurement
 have operator evidence. Automatic FAN1 CPU cooling is implemented; thermal
 switching and installed-board USB updates require physical qualification.

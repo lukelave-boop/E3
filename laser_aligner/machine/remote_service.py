@@ -24,6 +24,7 @@ from typing import Any
 from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from .mainboard import validate_control
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
@@ -61,6 +62,7 @@ from .pi_machine_server import (
     ACTION_MACHINE_CONNECT,
     ACTION_MACHINE_DISCONNECT,
     ACTION_MACHINE_JOG,
+    ACTION_MACHINE_MAINBOARD,
     ACTION_MACHINE_PREPARE_JOB_START,
     ACTION_MACHINE_PREPARE_PHOTO_POSITION,
     ACTION_MACHINE_PROBE_Z,
@@ -72,6 +74,8 @@ from .pi_machine_server import (
     ACTION_SERVICE_CAPABILITIES,
 )
 from .service import MachineService, ValidatedProgram
+from .z_limits import HARD_MAX_Z_MM, MIN_Z_MM, PI_Z_CAPABILITY, validate_max_z
+from .z_probe import finite_number
 
 _DEFAULT_RPC_TIMEOUT_SECONDS = 130.0
 _CONNECT_RPC_TIMEOUT_SECONDS = 20.0
@@ -118,6 +122,7 @@ _CLIENT_POLICY_MISMATCH_ERROR = (
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
         ACTION_MACHINE_PROBE_Z,
+        ACTION_MACHINE_MAINBOARD,
         ACTION_MACHINE_CONNECT,
         ACTION_MACHINE_DISCONNECT,
         ACTION_MACHINE_JOG,
@@ -1657,6 +1662,50 @@ class RemoteMachineService:
             response,
             action=ACTION_MACHINE_PREPARE_JOB_START,
         )
+        return result
+
+    def mainboard_control(
+        self, action: str, value: int | float | None = None, *, confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Request one typed operation; the Pi owns Z position and saved ceiling."""
+        validate_control(action, value, confirmed)
+        self._require_hardware_authority()
+        generation = self._operation_stop_epoch()
+        self._require_operation_current(generation)
+        self._require_capabilities()
+        self._require_controller_session_capability()
+        if PI_Z_CAPABILITY not in (self._node_capabilities or ()):
+            raise MachineError("Update the E3 Pi service to use Z controls and saved Z limits")
+        if action in {"z", "z_jog"} and self.settings.allow_motion is not True:
+            raise SafetyError("Z movement requires machine.allow_motion")
+        if self.armed or self.pi_owned_job_active:
+            raise SafetyError("Mainboard controls require an idle machine and disarmed laser")
+        self._require_operation_current(generation)
+        response = self._rpc(ACTION_MACHINE_MAINBOARD, {
+            "control": action, "value": value, "confirmed": confirmed,
+        }, timeout=35.0)
+        result = self._response_mapping(response, "result")
+        # Missing, malformed or old-node data is never presented as a live Z.
+        for key in ("z_known", "firmware_z_limit_verified", "max_z_persistent"):
+            if type(result.get(key)) is not bool:
+                raise PiJobProtocolError(f"Invalid mainboard response: {key} is missing or invalid")
+        if (result.get("action") != action or result.get("available") is not True
+                or result.get("fresh") is not True
+                or type(result.get("hard_max_z_mm")) not in {int, float}
+                or result["hard_max_z_mm"] != HARD_MAX_Z_MM
+                or type(result.get("min_z_mm")) not in {int, float}
+                or result["min_z_mm"] != MIN_Z_MM):
+            raise PiJobProtocolError("The Pi did not return a current bounded mainboard status")
+        try:
+            validate_max_z(result.get("max_z_mm"))
+            finite_number(result.get("z_mm"), "Reported Z", -1000, 1000)
+        except SafetyError as exc:
+            raise PiJobProtocolError(f"Invalid mainboard response: {exc}") from exc
+        if action == "z_max" and (result["max_z_persistent"] is not True
+                                   or result["max_z_mm"] != float(value)):
+            raise PiJobProtocolError("The Pi did not confirm the saved Z maximum")
+        self._require_operation_current(generation)
+        self._commit_current_response(response, action=ACTION_MACHINE_MAINBOARD)
         return result
 
     def probe_z(

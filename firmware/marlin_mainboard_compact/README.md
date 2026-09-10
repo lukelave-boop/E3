@@ -1,5 +1,29 @@
 # Compact F401 mainboard with USB updates
 
+## Z80 ceiling update
+
+For the rig measured at Z20, the operator selected 60 mm of remaining upward
+travel: the absolute ceiling is Z80, about 15 mm below the reported collision
+position. This application sets Z_MAX_POS=80 and stops through native kill if
+the planner receives a nonfinite Z or a machine-space target above 80 mm,
+even with M211 soft endstops off. Ordinary homed G0/G1 soft-endstop handling
+may clamp a request to Z80; E3 rejects targets above Z80 before sending them.
+The cap depends on a valid border-homed coordinate frame, not physical position
+feedback. Do not home on material and treat that new zero as the border.
+
+M115 must advertise `Cap:E3_Z_LIMIT_80_V1:1` to identify this update. Earlier
+08beaf0d firmware lacks this planner ceiling. G39 remains limited to contact
+-2..10.5 mm and starts at Z20; this is not the 30 mm probing-range update.
+
+For an already working 08beaf0d installation with the Pi startup, probe and
+CPU-cooling patches applied, use **Later application-only USB update** below.
+Skip the one-time SD and Pi-support installation sections. Stop the Pi service
+before maintenance and restart it after verifying the new capability with the
+included diagnostic. Reconnect and Home / park before establishing a fresh
+border reference. No upper-limit collision test is required; do not deliberately
+send an out-of-range move to the attached machine. This exact candidate still
+requires operator installation and ordinary in-range motion verification.
+
 This experimental replacement is built for the S1 F401 pin mapping and supports
 the exact ID/capacity pairs F401RC 0x423/256 KiB and F401RE 0x433/512 KiB. The
 complete installer fits within the 256 KiB layout and uses at most 64 KiB RAM.

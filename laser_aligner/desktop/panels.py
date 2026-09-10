@@ -16,6 +16,7 @@ from ..units import parse_to_mm
 from .columns import configure_resizable_columns
 from .controls import MeasurementSpinBox
 from .machine_state import ControllerUiState, project_machine_state
+from .mainboard_z import MainboardZPanel
 from .qt import require_qt
 from .speed_controls import PercentageSpeedSpinBox, format_speed_percent, speed_tooltip
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
@@ -2978,6 +2979,9 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_group.setEnabled(False)
         layout.addWidget(self.jog_group)
 
+        self.z_control = MainboardZPanel(self)
+        layout.addWidget(self.z_control)
+
         self.safety_note = _muted(
             "Software stop requests feed hold, controller reset, and laser off. "
             "It does not replace the physical emergency stop."
@@ -3011,6 +3015,7 @@ class MachinePanel(QtWidgets.QWidget):
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         self._machine_status = dict(status or {})
+        self.z_control.set_machine_status(self._machine_status)
         self._ui_state = project_machine_state(
             self._machine_status,
             operation_busy=self._busy,
@@ -3031,6 +3036,7 @@ class MachinePanel(QtWidgets.QWidget):
         """Prevent overlapping machine actions."""
 
         self._busy = bool(busy)
+        self.z_control.set_busy(self._busy)
         self._ui_state = project_machine_state(
             self._machine_status,
             operation_busy=self._busy,

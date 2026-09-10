@@ -8,6 +8,10 @@ firmware command/readback paths and now runs this image. See
 [validation](firmware/marlin_mainboard/VALIDATE.md). The working machine, Pi and
 webcam have not been changed. Earlier prototype/BENCH notes below are historical.
 
+E3 Dev's Machine tab now includes Ender Z jogging, adjacent reported height and
+a visible saved Z maximum. The matching Pi companion owns movement validation
+and persistence; see [Z controls](docs/MAINBOARD_Z_CONTROLS.md).
+
 Automatic Pi cooling on FAN1 is available as an opt-in companion: 45 C on,
 40 C off. See [Pi CPU cooling](docs/PI_CPU_COOLING.md) for installation,
 validation limits and the next Z calibration checks.

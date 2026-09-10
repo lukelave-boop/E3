@@ -71,6 +71,7 @@ def test_remote_node_hosts_one_local_machine_service_and_no_raw_bridge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = SimpleNamespace(
+        source_path=tmp_path / "pi.json",
         machine=SimpleNamespace(
             backend="serial",
             port="/dev/ttyUSB0",
@@ -450,6 +451,7 @@ def test_startup_off_failure_is_degraded_and_secondary_closes_after_machine_shut
 ) -> None:
     events: list[object] = []
     settings = SimpleNamespace(
+        source_path=tmp_path / "pi.json",
         machine=SimpleNamespace(
             backend="serial",
             port="/dev/ttyUSB0",

@@ -1,6 +1,14 @@
 # Changelog
 ## Mainboard SD firmware and typed controls
 
+## Unreleased: Machine-tab Z controls
+
+- Add Ender Z-/Z+ and reported Z height with asynchronous freshness handling.
+- Display and persist a configurable 20..80 mm maximum on the controller host;
+  enforce it for absolute/relative manual Z and service probing clearance.
+- Reject unsupported Pi software, stale readbacks and late-session actions;
+  expose whether the separate firmware Z80 ceiling is advertised.
+
 Added opt-in Pi CPU cooling on Ender FAN1 (45 C on / 40 C off) through the
 shared controller, with FAN2 preservation and STOP/session guards. Corrected
 the compact V1 homing endpoint from the stock Z5 assumption to verified Z0

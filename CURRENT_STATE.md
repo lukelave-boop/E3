@@ -1,5 +1,39 @@
 # Current repository state
 
+## Active: desktop Ender Z controls and saved maximum (2026-09-10)
+
+The Machine tab now provides independent Ender Z-/Z+ controls, steps 0.1/1/5 mm,
+and an adjacent controller-reported Z height. Explicit asynchronous readbacks
+run while connected and idle; stale/unknown positions do not authorize motion.
+STOP, controller session changes and foreground operations invalidate or suppress
+old requests. A visible stowed-probe/path-clear checkbox gates one-click jogging.
+No automatic homing or raw primary-controller Z commands were added.
+
+The active maximum is shown beside an editable 20..80 mm setting. The Pi owns
+fresh read/compute/jog under the existing shared controller lock, validates
+absolute and relative targets, and saves its ceiling atomically in a schema-1
+configuration-adjacent sidecar bound to the Ender port. It refuses invalid saved
+limits instead of silently restoring Z80. The configured ceiling also bounds
+normal service probing clearance and initial native lifts; G39's fixed range
+is unchanged. Remote desktop requires pi-mainboard-z-v1, and reports whether
+firmware advertises E3_Z_LIMIT_80_V1. Copying the separate 934ef4b3 firmware kit
+has been confirmed by the operator; installation has not been reported.
+
+Verification: 210 focused Windows/offscreen desktop checks passed, including
+real worker/timer responsiveness, Machine Setup serialization, STOP and session
+cancellation; 102 backend/RPC/node/installer checks passed, including disk-stall
+STOP handling and persistent limits; 74 app/firmware-package/installer checks
+passed. Repository Ruff and compileall passed. The Pi companion
+`e3-pi-z-controls-a1c79819` applied successfully to a disposable reconstruction
+of the operator's known Pi source, which then imported successfully. A rendered
+400 px Machine panel was visually inspected with mock status. Local Python is
+3.14.4; Windows Python 3.12 full-suite and focused POSIX checks run in Fast CI.
+
+No live GUI, camera, serial, motion, Pi installation or firmware upload was
+performed. An exact frozen Windows feature build and permanent E3 DEV TEST
+pointer are the remaining packaging steps. Operator verification is pending.
+See docs/MAINBOARD_Z_CONTROLS.md.
+
 ## Compact Z endpoint and Pi CPU cooling (2026-09-10)
 
 Operator reports installed compact 08beaf0d firmware (Marlin 2.0.8.24F4,

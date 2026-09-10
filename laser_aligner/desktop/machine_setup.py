@@ -5,6 +5,7 @@ import json
 import math
 import threading
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -789,10 +790,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
         parent: QtWidgets.QWidget | None = None,
         *,
         navigation_only: bool = False,
+        controller_operation_scope: Callable[[int], AbstractContextManager[None]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.runtime = runtime
         self.context = runtime.context
+        self._controller_operation_scope = controller_operation_scope
         self._navigation_only = bool(navigation_only)
         self._bed_image: np.ndarray | None = None
         self._surface_capture_binding: dict[str, Any] | None = None
@@ -1154,8 +1157,17 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._sync_recapture_actions()
 
         def scoped_operation() -> Any:
+            gate = (
+                self._controller_operation_scope(machine_generation)
+                if self._controller_operation_scope is not None
+                and (requires_controller or machine_bound)
+                and name != "Controller disconnect"
+                else nullcontext()
+            )
             try:
-                with machine.operation_scope(machine_generation):
+                with gate, machine.operation_scope(machine_generation):
+                    if self._shutdown_started:
+                        raise RuntimeError("Machine Setup is shutting down; operation cancelled")
                     require_initial_machine_authority()
                     if requires_controller:
                         machine.ensure_connected()

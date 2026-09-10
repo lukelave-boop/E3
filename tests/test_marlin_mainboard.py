@@ -40,7 +40,7 @@ def mainboard_serial(serial):
 @pytest.mark.parametrize("args", [
     ("fan1", -1, True), ("fan2", 101, True), ("fan1", True, True),
     ("fan1", 1.5, True), ("fan1", 1, False), ("fan1", 1, 1),
-    ("z", 19, True), ("z", 81, True), ("z", float("nan"), True),
+    ("z", 19, True), ("z", 80.001, True), ("z", 81, True), ("z", float("nan"), True),
     ("z", 21, False), ("status", 1, False), ("M106", 50, True),
 ])
 def test_bad_controls_reject_before_transport(args):
@@ -182,3 +182,8 @@ def test_manual_partial_fan2_does_not_satisfy_job_full_speed_cache():
     assert state["fan2"] == 128 and owner._secondary_fan_enabled is None
     fan.set_enabled(True, mapping_digest=fan.binding.mapping_digest)
     assert state["fan2"] == 255
+
+
+@pytest.mark.parametrize("target", [20, 79.999, 80])
+def test_absolute_z_ceiling_accepts_boundary(target):
+    validate_control("z", target, True)

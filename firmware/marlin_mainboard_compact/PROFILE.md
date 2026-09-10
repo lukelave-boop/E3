@@ -1,5 +1,17 @@
 # Compact F401 auxiliary application
 
+## Border-relative Z80 ceiling
+
+The compact profile fixes Z_MAX_POS at 80 mm. A planner buffer_segment guard
+calls native kill before queueing nonfinite Z or machine-space Z above 80,
+independently of soft-endstop enable state. M115 advertises E3_Z_LIMIT_80_V1.
+The existing host manual range remains 20..80 with 5 mm per request. Homing
+must establish the border frame; this software limit cannot establish an
+unknown physical position or protect against lost steps. The operator measured
+about 75 mm upward collision clearance from Z20 and selected 60 mm usable
+travel (Z80). That is a measured clearance estimate, not a powered limit test.
+The G39 contact range and Z20 starting clearance are unchanged.
+
 Compact V1 native G28 ends at Z0 (Z_AFTER_HOMING=0). The Pi must recognize
 its exact E3_COMPACT_F401_V1:1 capability, verify known Z and the expected
 probe input at Z0, then request and verify Z20. Legacy stock remains Z5.

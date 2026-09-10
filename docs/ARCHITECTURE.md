@@ -1,5 +1,18 @@
 # Architecture
 
+## Ender Z controls and persistence
+
+The desktop mainboard_z coordinator schedules typed read/jog/maximum requests
+through the runtime machine facade. Idle reads do not block Qt or take foreground
+busy ownership. Ordinary controller work shares a worker gate with Machine
+Setup; STOP/disconnect bypass it, and hidden/modal panels stop polling. Result freshness and session epochs prevent stale UI motion.
+RemoteMachineService requires pi-mainboard-z-v1 and validates response shape.
+MachineService keeps the existing shared Ender owner, performs fresh position
+read/relative-target calculation atomically, and enforces its saved maximum.
+A validated schema-1 sidecar beside the loaded configuration binds the persistent
+maximum to the Ender port. Windows does not replace the Pi's active value with a
+local profile default. The firmware ceiling capability is displayed separately.
+
 Opt-in Pi CPU cooling polls a Linux thermal sensor and passes only FAN1
 OFF/full-speed demand through MachineService and the shared Ender owner.
 It preserves primary job and FAN2 control, defers during probing, and pauses

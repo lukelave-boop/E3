@@ -5,7 +5,8 @@ import logging
 import math
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -427,6 +428,7 @@ class DesktopController(QtCore.QObject):
         self._active_tasks = 0
         self._tasks: set[FunctionTask] = set()
         self._task_callbacks: dict[FunctionTask, _TaskCallbacks] = {}
+        self._controller_worker_gate = threading.Lock()
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation: int | None = None
         self._camera_refresh_pending = False
@@ -611,6 +613,29 @@ class DesktopController(QtCore.QObject):
         self._active_tasks = max(0, self._active_tasks + delta)
         self.busyChanged.emit(self._active_tasks > 0)
 
+    def _acquire_controller_worker_gate(self, operation_generation: int) -> None:
+        machine = self.runtime.context.machine
+        wait_deadline = time.monotonic() + 40.0
+        while True:
+            if self._shutdown_started or machine.operation_generation() != operation_generation:
+                raise RuntimeError("Controller operation cancelled by STOP or shutdown")
+            if time.monotonic() >= wait_deadline:
+                raise RuntimeError("Controller operation timed out waiting for the current read")
+            if self._controller_worker_gate.acquire(timeout=0.05):
+                if self._shutdown_started or machine.operation_generation() != operation_generation:
+                    self._controller_worker_gate.release()
+                    raise RuntimeError("Controller operation cancelled by STOP or shutdown")
+                return
+
+    @contextmanager
+    def controller_worker_scope(self, operation_generation: int) -> Iterator[None]:
+        """Share ordinary controller ownership with dialog-owned workers."""
+        self._acquire_controller_worker_gate(operation_generation)
+        try:
+            yield
+        finally:
+            self._controller_worker_gate.release()
+
     def _run(
         self,
         callback: Callable[[], Any],
@@ -623,6 +648,7 @@ class DesktopController(QtCore.QObject):
         show_busy: bool = True,
         requires_controller: bool = False,
         machine_bound: bool = False,
+        serialize_controller: bool | None = None,
     ) -> FunctionTask:
         publish_ui = not self._shutdown_started
         if show_busy and publish_ui:
@@ -705,11 +731,26 @@ class DesktopController(QtCore.QObject):
             )
             machine_authority.captured = True
 
+        # Background Ender readback shares the Pi's ordinary-operation owner
+        # with foreground XY/Home/job requests. Wait off the Qt thread instead
+        # of racing their RPCs and exposing a spurious "machine busy" rejection.
+        # STOP is direct; disconnect explicitly opts out of this waiting gate.
+        serialize = (
+            machine_bound or requires_controller
+            if serialize_controller is None else serialize_controller
+        )
+
         def guarded_callback() -> Any:
             if self._shutdown_started:
                 return None
+            gate_acquired = False
             try:
+                if serialize:
+                    self._acquire_controller_worker_gate(operation_generation)
+                    gate_acquired = True
                 with machine.operation_scope(operation_generation):
+                    # Recheck the request-time session AFTER waiting, before
+                    # any connect, serial write or network operation.
                     require_initial_machine_authority()
                     if requires_controller:
                         machine.ensure_connected()
@@ -719,7 +760,11 @@ class DesktopController(QtCore.QObject):
                         require_initial_machine_authority()
                     return callback()
             finally:
-                capture_machine_authority()
+                try:
+                    capture_machine_authority()
+                finally:
+                    if gate_acquired:
+                        self._controller_worker_gate.release()
 
         task = FunctionTask(guarded_callback, label=label, cancel=cancel)
         if not publish_ui:
@@ -2786,6 +2831,7 @@ class DesktopController(QtCore.QObject):
             on_success=lambda _: self._machine_changed("Controller disconnected"),
             label="Controller disconnect",
             machine_bound=True,
+            serialize_controller=False,
         )
 
     def park_at_camera_pose(self) -> None:

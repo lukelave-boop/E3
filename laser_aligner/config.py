@@ -246,6 +246,7 @@ class MachineSettings:
     controller_startup_delay: float = 2.0
     max_travel_feed_mm_min: float = 6000.0
     max_work_feed_mm_min: float = 6000.0
+    mainboard_max_z_mm: float = 80.0
     air_assist: AirAssistSettings = field(default_factory=AirAssistSettings)
 
 
@@ -367,6 +368,7 @@ class Settings:
                 "grbl_step_idle_delay_ms": self.machine.grbl_step_idle_delay_ms,
                 "max_travel_feed_mm_min": self.machine.max_travel_feed_mm_min,
                 "max_work_feed_mm_min": self.machine.max_work_feed_mm_min,
+                "mainboard_max_z_mm": self.machine.mainboard_max_z_mm,
                 "air_assist": {
                     "mode": coerce_air_assist_mode(
                         self.machine.air_assist.mode
@@ -469,6 +471,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "controller_startup_delay": 2.0,
         "max_travel_feed_mm_min": 6000.0,
         "max_work_feed_mm_min": 6000.0,
+        "mainboard_max_z_mm": 80.0,
         "air_assist": {
             "mode": "disabled",
             "fan_index": 0,
@@ -599,6 +602,9 @@ def _validate(raw: Mapping[str, Any]) -> None:
     )
     for label, value in number_values:
         _require_number(value, label)
+    maximum_z = _require_number(raw["machine"]["mainboard_max_z_mm"], "machine.mainboard_max_z_mm")
+    if not 20.0 <= maximum_z <= 80.0:
+        raise ConfigError("machine.mainboard_max_z_mm must be between 20 and 80 mm")
     honeycomb_span = raw["machine"]["honeycomb_span_mm"]
     if honeycomb_span is not None:
         span = _require_number(
@@ -935,6 +941,7 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             controller_startup_delay=float(raw["machine"]["controller_startup_delay"]),
             max_travel_feed_mm_min=float(raw["machine"]["max_travel_feed_mm_min"]),
             max_work_feed_mm_min=float(raw["machine"]["max_work_feed_mm_min"]),
+            mainboard_max_z_mm=float(raw["machine"]["mainboard_max_z_mm"]),
             air_assist=AirAssistSettings(
                 mode=AirAssistMode(raw["machine"]["air_assist"]["mode"]),
                 fan_index=int(raw["machine"]["air_assist"]["fan_index"]),

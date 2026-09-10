@@ -137,6 +137,7 @@ from .job_preview import (
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
 from .machine_state import ControllerUiState, project_machine_state
+from .mainboard_z import MainboardZCoordinator
 from .panels import (
     CameraPanel,
     ConsolePanel,
@@ -1264,6 +1265,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         self.machine_panel.parkRequested.connect(self.controller.park_at_camera_pose)
         self.machine_panel.jogRequested.connect(self.controller.jog)
+        self.mainboard_z = MainboardZCoordinator(
+            self.machine_panel.z_control, self.controller, self,
+        )
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
         self.material_panel.applyPresetRequested.connect(self.apply_material_preset)
         self.material_panel.notice.connect(self.show_notice)
@@ -6312,6 +6316,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.runtime,
             self,
             navigation_only=navigation_target is not None,
+            controller_operation_scope=self.controller.controller_worker_scope,
         )
         self._machine_setup_dialog = dialog
         if self._machine_status:

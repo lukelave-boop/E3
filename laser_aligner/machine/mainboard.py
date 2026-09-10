@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from ..errors import MachineError, SafetyError
 from .secondary_controller import CrealityControllerOwner, WriteGuardFactory
+from .z_limits import HARD_MAX_Z_MM, MIN_Z_MM, Z_LIMIT_CAPABILITY, validate_max_z
 from .z_probe import finite_number, parse_position
 
 CAPABILITY = "Cap:E3_MAINBOARD_V1:1"
@@ -14,15 +15,22 @@ _REPORT = re.compile(r"E3MB:1 FAN1:(\d+) FAN2:(\d+) Z_KNOWN:([01])")
 
 
 def validate_control(action: object, value: object, confirmed: object) -> None:
-    if type(action) is not str or action not in {"status", "fan1", "fan2", "z"}:
-        raise SafetyError("Mainboard action must be status, fan1, fan2 or z")
+    if type(action) is not str or action not in {"status", "fan1", "fan2", "z", "z_jog", "z_max"}:
+        raise SafetyError("Mainboard action must be status, fan1, fan2, z, z_jog or z_max")
     if type(confirmed) is not bool:
         raise SafetyError("Mainboard confirmation must be a boolean")
     if action == "status":
         if value is not None:
             raise SafetyError("Status does not accept a value")
-    elif action == "z":
-        finite_number(value, "Target Z", 20, 80)
+    elif action == "z_max":
+        validate_max_z(value)
+        if not confirmed:
+            raise SafetyError("Confirm the maximum Z height before saving")
+    elif action in {"z", "z_jog"}:
+        if action == "z":
+            finite_number(value, "Target Z", MIN_Z_MM, HARD_MAX_Z_MM)
+        elif finite_number(value, "Z jog distance", -5, 5) == 0:
+            raise SafetyError("Z jog distance must be nonzero")
         if not confirmed:
             raise SafetyError("Confirm a stowed probe and clearance for the Z move")
     elif type(value) is not int or not 0 <= value <= 100:
@@ -43,8 +51,11 @@ def parse_status(lines: tuple[str, ...]) -> dict[str, object]:
 def control(
     owner: CrealityControllerOwner, action: str, value: int | float | None, *,
     confirmed: bool, guard: WriteGuardFactory, on_failure: Callable[[], None],
+    max_z_mm: float = HARD_MAX_Z_MM,
 ) -> dict[str, object]:
     validate_control(action, value, confirmed)
+    maximum = validate_max_z(max_z_mm)
+    moving = action in {"z", "z_jog"}
     generation = owner.generation
     transcript: list[dict[str, object]] = []
 
@@ -53,8 +64,8 @@ def control(
             if owner.generation != generation:
                 raise MachineError("Mainboard session changed; operation cancelled")
         lines = owner._execute_acknowledged(
-            command, allow_open=False, timeout=20 if action == "z" else 3,
-            write_guard=guard, on_failure=on_failure, interrupt_on_failure=action == "z",
+            command, allow_open=False, timeout=20 if moving else 3,
+            write_guard=guard, on_failure=on_failure, interrupt_on_failure=moving,
         )
         transcript.append({"command": command, "responses": list(lines)})
         with guard():
@@ -72,9 +83,15 @@ def control(
         owner._mainboard_fan1_used = True
         before = parse_status(execute("M123"))
         initial_z = parse_position(execute("M114"))
-        if action == "z":
-            target = float(value)
-            if not before["z_known"] or not 20 <= initial_z <= 80:
+        if action == "z_max" and before["z_known"] and initial_z > float(value):
+            raise SafetyError("Maximum Z cannot be below the current acknowledged Z position")
+        if moving:
+            target = float(value) if action == "z" else initial_z + float(value)
+            # Both the delta and its absolute target are derived/admitted under
+            # this owner lock; stale desktop positions have no motion authority.
+            if not MIN_Z_MM <= target <= maximum:
+                raise SafetyError(f"Target Z must stay between {MIN_Z_MM:g} and configured maximum {maximum:g} mm")
+            if not before["z_known"] or not MIN_Z_MM <= initial_z <= maximum:
                 raise SafetyError("Reference the border and raise to Z20 before manual Z control")
             if abs(target - initial_z) > 5.0001:
                 raise SafetyError("Each Z move is limited to 5 mm")
@@ -99,6 +116,10 @@ def control(
             if after[action + "_pwm"] != pwm or after[other] != before[other]:
                 raise MachineError("Independent fan command readback did not match")
         result = parse_status(execute("M123"))
+        limit_caps = [word for word in identity.split() if word.startswith("Cap:E3_Z_LIMIT") ]
         result.update(z_mm=parse_position(execute("M114")), firmware=identity,
-                      action=action, transcript=transcript, physical_feedback=False)
+                      action=action, transcript=transcript, physical_feedback=False,
+                      max_z_mm=maximum, hard_max_z_mm=HARD_MAX_Z_MM, min_z_mm=MIN_Z_MM,
+                      firmware_z_limit_verified=limit_caps == [Z_LIMIT_CAPABILITY],
+                      available=True, fresh=True, controller_generation=generation)
         return result

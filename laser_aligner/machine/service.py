@@ -12,6 +12,7 @@ from collections import deque
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from ..air_assist import (
@@ -60,7 +61,8 @@ from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
 from .transport_factory import create_machine_transport
-from .z_probe import CrealityZProbe, finite_number
+from .z_limits import MainboardZLimits, validate_max_z
+from .z_probe import CrealityZProbe, finite_number, parse_position
 
 LOGGER = logging.getLogger(__name__)
 # Withdrawn after an operator observed descent with the CR Touch pin retracted.
@@ -716,6 +718,7 @@ class MachineService:
         *,
         secondary_air_assist: SecondaryMarlinFanController | None = None,
         cpu_cooling_enabled: bool = False,
+        mainboard_limits_path: Path | None = None,
     ):
         if type(laser_lockout) is not bool:
             raise TypeError("laser_lockout must be an exact boolean")
@@ -726,6 +729,8 @@ class MachineService:
         self.cpu_cooling_enabled = cpu_cooling_enabled
         self._cpu_cooling_session: tuple[int, int] | None = None
         self.settings = settings
+        self._mainboard_z_limits = MainboardZLimits(mainboard_limits_path, settings.air_assist.port)
+        settings.mainboard_max_z_mm = self._mainboard_z_limits.load(settings.mainboard_max_z_mm)
         self.laser_settings = laser_settings
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
@@ -4065,12 +4070,15 @@ class MachineService:
                 raise SafetyError("FAN1 is owned by automatic CPU cooling; disable E3_CPU_COOLING to use manual ON")
             if self._secondary_air_assist is not None:
                 self._cpu_cooling_session = (self._secondary_air_assist.owner.generation, -1)
+        moving = action in {"z", "z_jog"}
+        if action == "z_max" and self._mainboard_z_limits.path is None:
+            raise MachineError("Persistent Z limits are unavailable in this process; update the E3 node")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
             self._require_safety_configuration()
             if self.hardware_enabled is not True:
                 raise SafetyError("Mainboard controls require hardware authority")
-            if action == "z" and self.settings.allow_motion is not True:
+            if moving and self.settings.allow_motion is not True:
                 raise SafetyError("Z movement requires machine.allow_motion")
             session = self._require_session()
             if self._job.running or self.armed:
@@ -4093,24 +4101,44 @@ class MachineService:
                         raise MachineError("Mainboard monitoring connection was lost")
                     yield
 
-            if action != "status":
+            if action in {"z", "z_jog", "fan1", "fan2"}:
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
-            if action == "z":
+            if moving:
                 if self._z_probe is not None:
                     self._z_probe.invalidate()
                 self._z_probe_result = None
                 self._z_probe_active = True
             try:
-                return control_mainboard(
-                    owner, action, value, confirmed=confirmed, guard=guard,
-                    on_failure=lambda: self.request_stop(_recover=False),
-                )
+                with owner._lock:
+                    result = control_mainboard(
+                        owner, action, value, confirmed=confirmed, guard=guard,
+                        on_failure=lambda: self.request_stop(_recover=False),
+                        max_z_mm=self.settings.mainboard_max_z_mm,
+                    )
+                    if action == "z_max":
+                        maximum = validate_max_z(value)
+                        if result["z_known"] and result["z_mm"] > maximum:
+                            raise SafetyError("Maximum Z cannot be below the current acknowledged Z position")
+                        with guard():
+                            pass
+                        # Disk flush may stall. Keep it outside the STOP/write
+                        # gates; ordinary operations remain serialized by the
+                        # owner/manual scope. A completed save is authoritative
+                        # even if STOP arrived during fsync, so publish its value
+                        # before rejecting the cancelled/stale observation.
+                        self._mainboard_z_limits.save(maximum)
+                        self.settings.mainboard_max_z_mm = maximum
+                        with guard():
+                            pass
+                        result["max_z_mm"] = maximum
+                    result["max_z_persistent"] = self._mainboard_z_limits.path is not None
+                    return result
             except Exception:
-                if action != "status" and self.operation_generation() == epoch:
+                if action in {"z", "z_jog", "fan1", "fan2"} and self.operation_generation() == epoch:
                     self.request_stop(_recover=False)
                 raise
             finally:
-                if action == "z":
+                if moving:
                     self._z_probe_active = False
 
     def probe_pin(
@@ -4263,30 +4291,41 @@ class MachineService:
             try:
                 with guard():
                     pass
-                if operation == "native_test":
-                    result = probe.native_cycle_test(guard=guard, on_motion_start=native_motion_start)
-                elif operation == "native_reference":
-                    result = probe.native_reference(
-                        support_height_mm=support, primary_generation=session.generation,
-                        stop_epoch=epoch, carriage_xy_mm=position, guard=guard,
-                        on_motion_start=native_motion_start,
-                    )
-                elif operation == "native_measure":
-                    result = probe.native_measure(
-                        primary_generation=session.generation, stop_epoch=epoch,
-                        carriage_xy_mm=position, guard=guard, on_motion_start=native_motion_start,
-                    )
-                elif operation == "reference":
-                    result = probe.establish_reference(
-                        clearance_z_mm=clearance, support_height_mm=support,
-                        primary_generation=session.generation, stop_epoch=epoch,
-                        carriage_xy_mm=position, guard=guard,
-                    )
-                else:
-                    result = probe.measure(
-                        primary_generation=session.generation, stop_epoch=epoch,
-                        carriage_xy_mm=position, guard=guard,
-                    )
+                with probe.owner._lock:
+                    maximum = validate_max_z(self.settings.mainboard_max_z_mm)
+                    if clearance > maximum:
+                        raise SafetyError("Probe clearance exceeds the configured maximum Z")
+                    current_z = parse_position(probe.owner._execute_acknowledged(
+                        "M114", allow_open=False, timeout=3, write_guard=guard,
+                    ))
+                    if current_z > maximum:
+                        raise SafetyError("Current Z exceeds the configured maximum; probing was not started")
+                    if operation in {"native_test", "native_reference"} and current_z + 5 > maximum:
+                        raise SafetyError("The native probe's 5 mm initial lift exceeds the configured maximum Z")
+                    if operation == "native_test":
+                        result = probe.native_cycle_test(guard=guard, on_motion_start=native_motion_start)
+                    elif operation == "native_reference":
+                        result = probe.native_reference(
+                            support_height_mm=support, primary_generation=session.generation,
+                            stop_epoch=epoch, carriage_xy_mm=position, guard=guard,
+                            on_motion_start=native_motion_start,
+                        )
+                    elif operation == "native_measure":
+                        result = probe.native_measure(
+                            primary_generation=session.generation, stop_epoch=epoch,
+                            carriage_xy_mm=position, guard=guard, on_motion_start=native_motion_start,
+                        )
+                    elif operation == "reference":
+                        result = probe.establish_reference(
+                            clearance_z_mm=clearance, support_height_mm=support,
+                            primary_generation=session.generation, stop_epoch=epoch,
+                            carriage_xy_mm=position, guard=guard,
+                        )
+                    else:
+                        result = probe.measure(
+                            primary_generation=session.generation, stop_epoch=epoch,
+                            carriage_xy_mm=position, guard=guard,
+                        )
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
                 with guard():
                     self._z_probe_result = result

@@ -26,6 +26,7 @@ from .machine.secondary_controller import (
     SecondaryMarlinFanController,
 )
 from .machine.service import MachineService
+from .machine.z_limits import mainboard_limits_path
 
 LOGGER = logging.getLogger(__name__)
 _DEFAULT_MACHINE_PORT = 8765
@@ -238,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
             laser_lockout=False,
             secondary_air_assist=secondary_air_assist,
             cpu_cooling_enabled=cpu_cooling_enabled,
+            mainboard_limits_path=mainboard_limits_path(settings.source_path),
         )
         job_service = PiJobService(
             machine,

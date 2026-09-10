@@ -89,6 +89,7 @@ from .imaging import (
 )
 from .machine.network_transport import is_bridge_uri
 from .machine.service import MachineService, list_serial_ports
+from .machine.z_limits import mainboard_limits_path
 from .storage import (
     atomic_write_bytes,
     atomic_write_bytes_if_absent,
@@ -378,6 +379,7 @@ class AppContext:
                 settings.laser,
                 hardware_enabled=self.hardware_enabled,
                 laser_lockout=self.laser_lockout,
+                mainboard_limits_path=mainboard_limits_path(settings.source_path),
             )
         self.bed_reference_path = calibration_dir / "bed_reference.png"
         self.legacy_bed_reference_path = calibration_dir / "bed_reference.jpg"

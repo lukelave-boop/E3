@@ -92,6 +92,7 @@ def audit_profile(path: Path) -> None:
         expected = ("FIRMWARE_NAME:Marlin", "EXTRUDER_COUNT:0", "Cap:EMERGENCY_PARSER:1",
                     "Cap:E3_MAINBOARD_V1:1", "Cap:E3_MATERIAL_HEIGHT_V1:1",
                     "Cap:E3_USB_UPDATER_F401_V1:1", "Cap:E3_COMPACT_F401_V1:1",
+                    "Cap:E3_Z_LIMIT_80_V1:1",
                     "Cap:SDCARD:0", f"E3HW:1 MCU:{device:X} FLASH_KIB:{capacity}")
         if any(part not in text for part in expected):
             raise ValueError(f"Native M115 reported wrong capabilities/hardware: {text}")

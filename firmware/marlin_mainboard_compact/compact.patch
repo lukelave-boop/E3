@@ -1,5 +1,5 @@
 diff --git a/Marlin/Configuration.h b/Marlin/Configuration.h
-index 9981a52..cbe9c49 100644
+index 9981a52..ef8259e 100644
 --- a/Marlin/Configuration.h
 +++ b/Marlin/Configuration.h
 @@ -70,13 +70,13 @@
@@ -93,6 +93,33 @@ index 9981a52..cbe9c49 100644
    #endif
  #endif
  
+@@ -1429,7 +1430,7 @@
+ #define Z_MIN_POS 0
+ #define X_MAX_POS X_BED_SIZE
+ #define Y_MAX_POS Y_BED_SIZE
+-#define Z_MAX_POS 270
++#define Z_MAX_POS 80 // E3 border-relative Z ceiling
+ #endif
+ 
+ #if ENABLED(ENDER_3S1_PLUS)
+@@ -1444,7 +1445,7 @@
+ #define Z_MIN_POS 0
+ #define X_MAX_POS X_BED_SIZE
+ #define Y_MAX_POS Y_BED_SIZE
+-#define Z_MAX_POS 300
++#define Z_MAX_POS 80 // E3 border-relative Z ceiling
+ #endif
+ 
+ #if ENABLED(ENDER_3S1)
+@@ -1459,7 +1460,7 @@
+ #define Z_MIN_POS 0
+ #define X_MAX_POS X_BED_SIZE
+ #define Y_MAX_POS Y_BED_SIZE
+-#define Z_MAX_POS 270
++#define Z_MAX_POS 80 // E3 border-relative Z ceiling
+ #endif
+ 
+ /**
 @@ -1504,7 +1505,7 @@
   * RAMPS-based boards use SERVO3_PIN for the first runout sensor.
   * For other boards you may need to define FIL_RUNOUT_PIN, FIL_RUNOUT2_PIN, etc.
@@ -320,10 +347,10 @@ index 16fc47a..10e0fc8 100644
    #if HAS_STATUS_MESSAGE
      static void M117();
 diff --git a/Marlin/src/gcode/host/M115.cpp b/Marlin/src/gcode/host/M115.cpp
-index f095445..d4f47f7 100644
+index f095445..6058f0d 100644
 --- a/Marlin/src/gcode/host/M115.cpp
 +++ b/Marlin/src/gcode/host/M115.cpp
-@@ -73,6 +73,15 @@ void GcodeSuite::M115() {
+@@ -73,6 +73,16 @@ void GcodeSuite::M115() {
    //   SERIAL_ECHOLNPGM(STR_M115_DISABLE_REPORT);
    // }
    
@@ -331,6 +358,7 @@ index f095445..d4f47f7 100644
 +  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_USB_UPDATER_F401_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_COMPACT_F401_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_Z_LIMIT_80_V1:1");
 +  SERIAL_ECHOPGM("E3HW:1 MCU:");
 +  SERIAL_PRINT((*reinterpret_cast<volatile const uint32_t *>(0xE0042000UL)) & 0xFFFU, PrintBase::Hex);
 +  SERIAL_ECHOLNPAIR(" FLASH_KIB:", *reinterpret_cast<volatile const uint16_t *>(0x1FFF7A22UL));
@@ -400,7 +428,7 @@ index 219de4c..07debec 100644
    #undef SWITCHING_EXTRUDER
    #undef SWITCHING_NOZZLE
 diff --git a/Marlin/src/module/planner.cpp b/Marlin/src/module/planner.cpp
-index 5439420..00db1e7 100644
+index 5439420..90edd1a 100644
 --- a/Marlin/src/module/planner.cpp
 +++ b/Marlin/src/module/planner.cpp
 @@ -2373,13 +2373,13 @@ bool Planner::_populate_block(block_t * const block, bool split_move,
@@ -419,7 +447,21 @@ index 5439420..00db1e7 100644
      }
    }
    block->acceleration_steps_per_s2 = accel;
-@@ -2818,7 +2818,7 @@ bool Planner::buffer_segment(const_float_t a, const_float_t b, const_float_t c,
+@@ -2801,6 +2801,13 @@ bool Planner::buffer_segment(const_float_t a, const_float_t b, const_float_t c,
+   , const_feedRate_t fr_mm_s, const uint8_t extruder, const_float_t millimeters/*=0.0*/
+ ) {
+ 
++  // E3 machine-space upper bound also covers internal probe/retract moves.
++  // It cannot be disabled with M211. Coordinate trust still requires border homing.
++  if (!isfinite(c) || c > float(Z_MAX_POS)) {
++    kill(PSTR("E3 Z ceiling exceeded"));
++    return false;
++  }
++
+   // If we are cleaning, do not accept queuing of movements
+   if (cleaning_buffer_counter) return false;
+ 
+@@ -2818,7 +2825,7 @@ bool Planner::buffer_segment(const_float_t a, const_float_t b, const_float_t c,
      int32_t(LROUND(a * settings.axis_steps_per_mm[A_AXIS])),
      int32_t(LROUND(b * settings.axis_steps_per_mm[B_AXIS])),
      int32_t(LROUND(c * settings.axis_steps_per_mm[C_AXIS])),
@@ -428,7 +470,7 @@ index 5439420..00db1e7 100644
    };
  
    #if HAS_POSITION_FLOAT
-@@ -3014,7 +3014,7 @@ void Planner::set_machine_position_mm(const_float_t a, const_float_t b, const_fl
+@@ -3014,7 +3021,7 @@ void Planner::set_machine_position_mm(const_float_t a, const_float_t b, const_fl
    position.set(LROUND(a * settings.axis_steps_per_mm[A_AXIS]),
                 LROUND(b * settings.axis_steps_per_mm[B_AXIS]),
                 LROUND(c * settings.axis_steps_per_mm[C_AXIS]),
@@ -437,7 +479,7 @@ index 5439420..00db1e7 100644
    if (has_blocks_queued()) {
      //previous_nominal_speed_sqr = 0.0; // Reset planner junction speeds. Assume start from rest.
      //previous_speed.reset();
-@@ -3042,6 +3042,7 @@ void Planner::set_position_mm(const_float_t rx, const_float_t ry, const_float_t
+@@ -3042,6 +3049,7 @@ void Planner::set_position_mm(const_float_t rx, const_float_t ry, const_float_t
   * Setters for planner position (also setting stepper position).
   */
  void Planner::set_e_position_mm(const_float_t e) {
@@ -445,7 +487,7 @@ index 5439420..00db1e7 100644
    const uint8_t axis_index = E_AXIS_N(active_extruder);
    TERN_(DISTINCT_E_FACTORS, last_extruder = active_extruder);
  
-@@ -3054,6 +3055,10 @@ void Planner::set_e_position_mm(const_float_t e) {
+@@ -3054,6 +3062,10 @@ void Planner::set_e_position_mm(const_float_t e) {
      buffer_sync_block();
    else
      stepper.set_axis_position(E_AXIS, position.e);

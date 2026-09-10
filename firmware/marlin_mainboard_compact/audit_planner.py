@@ -99,11 +99,21 @@ def float_arguments(uc, values):
 
 
 def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
-             float_acceleration=False, set_position=False):
+             float_acceleration=False, set_position=False, ceiling_rejected=False):
     uc, symbols = load(path)
     uc.mem_write(0xE000ED88, struct.pack("<I", 0xF00000))  # CP10/11 for real hard-float instructions.
     wakeups = []
     counter_sets = []
+    kills = []
+
+    def kill_edge(emulator, *_):
+        kills.append(True)
+        emulator.reg_write(UC_ARM_REG_PC, emulator.reg_read(UC_ARM_REG_LR))
+
+    address = symbols["_Z4killPKcS0_b"] & ~1
+    uc.hook_add(UC_HOOK_CODE, kill_edge, begin=address, end=address)
+    # Deliberately turn ordinary soft endstops off. The planner ceiling remains.
+    uc.mem_write(symbols["soft_endstop"], b"\0")
 
     def timer_edge(emulator, *_):
         wakeups.append(emulator.reg_read(UC_ARM_REG_R0))
@@ -161,7 +171,9 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
     call(uc, symbols[SET_POSITION if set_position else BUFFER_SEGMENT])
     position = struct.unpack("<4i", uc.mem_read(symbols[P + "8positionE"], 16))
     head = uc.mem_read(symbols[P + "17block_buffer_headE"], 1)[0]
-    expected_position = tuple(round(value * scale) for value, scale in zip(xyz, (80, 80, 400), strict=True)) + (0,)
+    expected_position = None if ceiling_rejected else (
+        tuple(round(value * scale) for value, scale in zip(xyz, (80, 80, 400), strict=True)) + (0,)
+    )
     if violations:
         raise ValueError(f"Native no-extruder planner accessed removed E allocation: {violations}")
     if (bytes(uc.mem_read(settings_address, 60)) != settings
@@ -169,6 +181,14 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
             or bytes(uc.mem_read(accel_address, 12)) != accelerations
             or bytes(uc.mem_read(blocks + 96, len(untouched))) != untouched):
         raise ValueError("Planner changed immutable settings or an unused block canary")
+    if ceiling_rejected:
+        if (kills != [True] or uc.reg_read(UC_ARM_REG_R0) or head
+                or position != (0, 0, 0, 0) or wakeups or counter_sets
+                or bytes(uc.mem_read(blocks, 96)) != block_before):
+            raise ValueError("Z ceiling violation did not kill before queuing or changing position")
+        return
+    if kills:
+        raise ValueError("Z ceiling rejected an in-range target")
     if set_position:
         if position != expected_position or head or counter_sets != [expected_position] or wakeups:
             raise ValueError("Native machine-position conversion did not ignore E")
@@ -193,7 +213,9 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
                 zip((80000, 80000, 40000), expected_steps, strict=True) if step)
     if (accepted != 1 or head != 1 or position != expected_position
             or native_steps != expected_steps or count != max(expected_steps)
-            or not math.isclose(distance, math.sqrt(sum(value * value for value in xyz)), rel_tol=1e-6)
+            or not math.isclose(distance, math.sqrt(sum(
+                (value / scale) ** 2 for value, scale in zip(expected_steps, (80, 80, 400), strict=True)
+            )), rel_tol=1e-6)
             or not 0 < acceleration <= limit or block[72] != direction
             or wakeups != [0] or counter_sets):
         raise ValueError("Native planner produced an unexpected XYZ block/rate/direction")
@@ -202,6 +224,10 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
 def audit_planner(path: Path) -> None:
     functions = audit_layout(path)
     cases = (
+        {"xyz": (0, 0, 80)}, {"xyz": (0, 0, 79.999)},
+        {"xyz": (0, 0, -2)},
+        *({"xyz": (0, 0, z), "ceiling_rejected": True}
+          for z in (80.001, 95, 270, math.inf, -math.inf, math.nan)),
         {}, {"e": 12345, "extruder": 255}, {"e": -12345, "extruder": 7},
         {"e": math.nan, "extruder": 255},
         {"xyz": (1, -2, 3), "e": 12345, "extruder": 255},
@@ -215,7 +241,7 @@ def audit_planner(path: Path) -> None:
             scenario(path, functions, **options)
         except Exception as exc:
             raise ValueError(f"Native planner case {index + 1}: {options}: {exc}") from exc
-    print("Compiled planner passed 9 XYZ/E-ignored/cleaning/acceleration cases with fake GPIO/timer/stepper edges; settings and unused-block canaries intact. No stepper ISR or hardware motion exercised.")
+    print(f"Compiled planner passed {len(cases)} Z-ceiling/XYZ/E-ignored/cleaning/acceleration cases with fake GPIO/timer/stepper/kill edges; settings and unused-block canaries intact. No stepper ISR or hardware motion exercised.")
 
 
 if __name__ == "__main__":
