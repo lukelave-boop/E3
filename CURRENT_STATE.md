@@ -11,13 +11,13 @@ the original host also lacked native Marlin-to-updater entry. These findings
 are not proof of which limitation caused the installed machine's failure.
 
 The new [compact kit](firmware/marlin_mainboard_compact/README.md) is
-`dist/e3-mainboard-f401-usb-505a4551.zip`; its SD image is 147,300 bytes,
-SHA256 `505a455170c02b9a76541fe990fe361316c2f86d409a716d4c337476225e8cef`.
-The 81,252-byte application uses 6,740 bytes of static RAM. It accepts only the
+`dist/e3-mainboard-f401-usb-08beaf0d.zip`; its SD image is 147,188 bytes,
+SHA256 `08beaf0d9ae2758dc6382f3de77ad5ecfdef49d6622b48bd44b27c08e0c53d2e`.
+The 81,140-byte application uses 6,740 bytes of static RAM. It accepts only the
 F401 ID/capacity pairs 0x423/256 KiB and 0x433/512 KiB, uses 64 KiB RAM and a
 fixed 256 KiB flash layout, and leaves the first 64 KiB factory loader outside
 all installer/update writes. Updater 0.3.0 occupies sector 4; application/header
-occupy sector 5 at 0x08020000, vectors at 0x08020200, ending 0x08033F64. Native
+occupy sector 5 at 0x08020000, vectors at 0x08020200, ending 0x08033EF4. Native
 M115 reports actual MCU ID and flash size. Mismatch diagnostics remain queryable.
 
 This headless profile retains FAN1/FAN2, native CR Touch/Z/G39, emergency parsing
@@ -51,12 +51,71 @@ LF/CRLF patch transport and source preservation; the CI-style Windows checkout
 now prepares the same reviewed source. The dedicated CI workflow adds Windows
 firmware rebuilding and Linux startup/support tests.
 
+The selected operator kit is the exact artifact from passing Windows/Pi
+[compact firmware CI](https://github.com/lukelave-boop/E3/actions/runs/34464261129),
+source revision d1fdd23735965a3d4d53675ce8e7dcb4ddcdbf50: Windows clean build,
+compiled native audits and 463 host/package tests passed; Linux startup/support
+122 tests passed. Downloaded archive entries, source hashes, application image,
+SD placement and stock recovery checksums were independently verified. The
+locally built 505a4551 kit remains a development artifact; use 08beaf0d for the
+operator test. No code was merged into main while physical acceptance is pending.
+
+[Fast Development CI](https://github.com/lukelave-boop/E3/actions/runs/34464261305)
+also passed at d1fdd23: Windows Python 3.12 desktop suite 4,677 passed / 25
+platform skips; POSIX serial/session recovery 373 passed; Ruff and dependency/
+bytecode checks passed. These are automated tests, not interactive GUI, camera,
+controller or laser validation. The earlier clean-Windows patch and optional
+ELF-import CI failures were corrected and covered by focused regression tests.
+
 Implemented and tested offline, not physically accepted: this exact installer,
 normal cold start with USB/webcam attached, USB application updates on the working
 board, real fan/Z/probe behavior and measurement accuracy. Historical spare
 BENCH recovery does not qualify this native application. No assistant hardware
 operation was performed; the operator's Pi service remains stopped after the
 stock diagnostic. Prior entries below record earlier stages.
+
+The Pi's existing Creality owner now performs a bounded read-only M115 readiness
+handshake before its acknowledged fan-OFF exchange: up to 15 queries within
+45 seconds, plus existing settle/synchronization bounds. Marlin identity and
+OK are required; stale input is synchronized before OFF. Unknown firmware,
+persistent updater, silence and transport faults fail closed. No runtime command,
+reset, BOOT, HOLD, flash, probe or motion is replayed by this handshake. This is
+startup readiness, not repair of a missing/faulted USB link or automatic job
+resumption. The prior zero-response fault remains causally unconfirmed.
+
+Local Windows verification: 479 focused Python tests pass, repository Ruff and
+compileall pass, compiled Cortex-M4 core startup/recovery tests pass, production
+flash-wrapper tests pass 27 cases, and bench application MMIO tests pass 23.
+Native probing tests pass all three configurations; the mainboard build and
+startup/kill audits pass. The application.e3fw is byte-identical to the previous
+7f45686b package; only the updater changes in the combined firmware image.
+
+Prepared SD package: dist/e3-mainboard-v1-6991d999, installer
+SD_CARD/STM32F4_UPDATE/e3main_6991d999.bin, 214620 bytes, SHA-256
+6991d999ed14fb82d43087bdca78b08a58d2b5f013b111c108fe8b0fb8e2f2f4.
+Updater padded-region SHA-256:
+5229f49d7477c62979ea51b0b3c6d8b38e23d7f14dd2ab1192620c0836278254.
+STARTUP.md defines operator connected-power-up and recovery acceptance;
+SOURCE_REVISION.txt pins the companion Pi source. No hardware, serial, service,
+webcam or Pi operation was performed. Physical acceptance remains pending.
+
+CI passed on implementation 5f52e403487ad286ff8de06df8840b7847fa5a38:
+- Mainboard SD Firmware: https://github.com/lukelave-boop/E3/actions/runs/34351697836
+  rebuilt/audited firmware, passed 277 Windows host/package tests and 51 Linux
+  startup/owner tests, plus compiled updater/platform/native probing checks.
+- Fast Development CI: https://github.com/lukelave-boop/E3/actions/runs/34351697711
+  passed the full Windows Python 3.12 desktop suite (4491 passed, 25 skipped),
+  POSIX serial/recovery tests, dependency/bytecode validation and repository Ruff.
+
+The final local package's SOURCE_REVISION.txt and HOST_SOURCE build information
+both pin 5f52e40; all packaged file hashes match its manifest. CI generated
+05408fd0e4c30f8de2932fba7a4aa00a7c61c0a20f019c7915231a06acfc67a8
+(214516 bytes): its Marlin embeds different absolute compiler paths and build
+date/time strings. The updater checksum is identical. The downloaded CI ELF
+also passed startup/layout/kill audits locally. The selected operator package
+remains 6991d999 to retain the previous application's exact bytes. This is an
+experimental physical-test handoff, not a main merge or production qualification.
+Existing uncommitted USB-capture investigation notes are preserved separately.
 
 ## Active: connected-startup correction, updater 0.2.0 (2026-09-09)
 
