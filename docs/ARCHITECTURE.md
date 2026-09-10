@@ -1,5 +1,23 @@
 # Architecture
 
+The separate `ender_aux_f401compact` / `marlin_mainboard_compact` target uses
+one 256 KiB flash / 64 KiB RAM layout for the exact F401 RC/256 and RE/512 pairs.
+It preserves the first-stage loader below 0x08010000, retains its updater in
+sector 4 and confines application erasure to sector 5. Native Marlin vectors
+are at 0x08020200. Runtime M115/DIAG report silicon identity/capacity; unsupported
+hardware stays in a read-only diagnostic loop. Updater identity and image board
+ID 0401C013 are distinct from earlier F401/F103 targets.
+
+The compact application retains typed fan/probe/Z/G39 capabilities and adds an
+explicit guarded M997 transition. It omits display/SD jobs/heating/extrusion and
+uses EEPROM schema E31 without automatic initialization writes. Its standalone
+maintenance host requires explicit hardware authority, inactive Pi service,
+matching application/updater identity and validated image before flash writes.
+`install_pi_support.py` atomically installs only a hash-approved startup reader;
+normal runtime remains owned by MachineService/CrealityControllerOwner. Neither
+browser nor desktop geometry/project/camera pipelines change. See the
+[compact profile](../firmware/marlin_mainboard_compact/PROFILE.md).
+
 Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
 handshake. Ordinary traffic cannot hold the updater; incomplete images still
 remain in recovery. A new SD install and companion Pi source update are required.

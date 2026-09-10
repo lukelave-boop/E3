@@ -1,0 +1,131 @@
+name: Compact F401 SD and USB Firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/marlin-material-*']
+    paths:
+      - 'firmware/marlin_mainboard_compact/**'
+      - 'firmware/marlin_material/**'
+      - 'firmware/marlin_mainboard/**'
+      - 'firmware/ender_aux_f401compact/**'
+      - 'laser_aligner/machine/secondary*'
+      - 'tests/test_secondary*'
+      - 'tests/marlin_material_harness.cpp'
+      - 'tests/test_*mainboard*'
+      - 'tests/test_compact*'
+      - 'tests/test_ender_aux_f401compact.py'
+      - 'scripts/diagnose_ender_startup.py'
+      - '.github/workflows/compact-f401.yml'
+  pull_request:
+    paths:
+      - 'firmware/marlin_mainboard_compact/**'
+      - 'firmware/marlin_material/**'
+      - 'firmware/marlin_mainboard/**'
+      - 'firmware/ender_aux_f401compact/**'
+      - 'laser_aligner/machine/secondary*'
+      - 'tests/test_secondary*'
+      - 'tests/marlin_material_harness.cpp'
+      - 'tests/test_*mainboard*'
+      - 'tests/test_compact*'
+      - 'tests/test_ender_aux_f401compact.py'
+      - 'scripts/diagnose_ender_startup.py'
+      - '.github/workflows/compact-f401.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-firmware:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: python -m pip install platformio==6.1.18 -r requirements.txt -r requirements-dev.txt -r firmware/ender_aux/requirements.txt
+      - name: Get pinned sources and updater compiler
+        shell: pwsh
+        run: |
+          $baseline = Get-Content firmware/marlin_material/baseline.json -Raw | ConvertFrom-Json
+          git init build/marlin-mainboard-compact
+          git -C build/marlin-mainboard-compact fetch --depth 1 $baseline.repository $baseline.revision
+          git -C build/marlin-mainboard-compact checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force build/firmware-tools | Out-Null
+          $archivePath = Join-Path $PWD 'build/firmware-tools/arm-toolchain.zip'
+          Invoke-WebRequest 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi.zip' -OutFile $archivePath
+          if ((Get-FileHash $archivePath -Algorithm SHA256).Hash -ne '6facb152ce431ba9a4517e939ea46f057380f8f1e56b62e8712b3f3b87d994e1') { throw 'Toolchain checksum mismatch' }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath build/firmware-tools
+      - name: Build startup-fixed updater
+        run: python firmware/ender_aux_f401compact/build.py
+      - name: Test compiled updater recovery and startup
+        shell: pwsh
+        run: |
+          python firmware/ender_aux_f401compact/run_core_tests.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/ender_aux_f401compact/run_platform_tests.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/ender_aux_f401compact/run_diagnostic_tests.py
+      - name: Build mainboard firmware
+        run: python firmware/marlin_mainboard_compact/build.py build/marlin-mainboard-compact --core build/platformio
+      - name: Verify native probing and fan kill
+        shell: pwsh
+        run: |
+          python firmware/marlin_material/run_native_tests.py build/marlin-mainboard-compact --toolchain build/platformio/packages/toolchain-gccarmnoneeabi/bin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/marlin_mainboard/audit_outputs.py build/marlin-mainboard-compact/.pio/build/STM32F401RC_creality/firmware.elf
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/marlin_mainboard_compact/audit_profile.py build/marlin-mainboard-compact/.pio/build/STM32F401RC_creality/firmware.elf
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/marlin_mainboard_compact/audit_planner.py build/marlin-mainboard-compact/.pio/build/STM32F401RC_creality/firmware.elf
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/marlin_mainboard_compact/run_transition_tests.py
+      - name: Fetch checksum-pinned stock recovery
+        shell: python
+        run: |
+          import hashlib, urllib.request, zipfile
+          from pathlib import Path
+          p = Path('build/stock.zip')
+          p.write_bytes(urllib.request.urlopen('https://cdn.creality.com/ow/official/c2721d8d-b8d8-423c-84bb-e87be0b17dd6.zip').read())
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == '20947c7fdf2131b8c3520feb1371431d3129457298f94c90a304b2e59f8cfc15'
+          with zipfile.ZipFile(p) as z:
+              names = [n for n in z.namelist() if '/STM32F4_UPDATE/' in n and n.endswith('.bin')]
+              assert len(names) == 1
+              Path('build/stock-f401-2.0.8.26.bin').write_bytes(z.read(names[0]))
+      - name: Package audited SD installer
+        shell: pwsh
+        run: |
+          python firmware/marlin_mainboard_compact/package.py build/marlin-mainboard-compact --objdump build/platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-objdump.exe --updater build/ender_aux_f401compact/updater.bin --stock build/stock-f401-2.0.8.26.bin
+      - name: Test host control and packaging
+        run: python -m pytest -q tests/test_ender_aux_f401compact.py tests/test_compact_f401_package.py tests/test_compact_pi_support.py tests/test_diagnose_ender_startup.py tests/test_marlin_mainboard.py tests/test_mainboard_rpc.py tests/test_mainboard_package.py tests/test_secondary_controller.py tests/test_secondary_startup.py tests/test_ender_aux_host.py tests/test_native_height.py tests/test_marlin_material.py
+      - name: Lint and compile
+        shell: pwsh
+        run: |
+          python -m ruff check .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m compileall -q laser_aligner firmware/ender_aux_f401compact firmware/marlin_mainboard_compact scripts/diagnose_ender_startup.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compact-f401-sd-usb-installation
+          path: dist/e3-mainboard-f401-usb-*.zip
+          if-no-files-found: error
+
+  linux-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pytest -q tests/test_secondary_startup.py tests/test_secondary_controller.py tests/test_compact_pi_support.py tests/test_diagnose_ender_startup.py

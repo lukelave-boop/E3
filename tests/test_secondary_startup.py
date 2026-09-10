@@ -8,11 +8,12 @@ from tests.test_secondary_controller import _binding
 
 
 class Peer:
-    def __init__(self, ready_at=0.0, reply=None, off_reply="ok"):
+    def __init__(self, ready_at=0.0, reply=None, off_reply="ok", board="0401E013"):
         self.now = 0.0
         self.ready_at = ready_at
         self.reply = reply
         self.off_reply = off_reply
+        self.board = board
         self.pending = []
         self.writes = []
         self.opens = self.closes = self.syncs = 0
@@ -36,7 +37,8 @@ class Peer:
                 self.pending.extend(["FIRMWARE_NAME:Marlin 2.0.8.24F4 MACHINE_TYPE:Ender-3 S1 Pro",
                                      "Cap:E3_MAINBOARD_V1:1", "ok", "ok"])
             elif self.now < 5:
-                self.pending.append("E3AUX1 UPDATER 0.2.0 BOARD=0401E013")
+                version = "0.3.0" if self.board == "0401C013" else "0.2.0"
+                self.pending.append(f"E3AUX1 UPDATER {version} BOARD={self.board}")
         elif line == "M106 S0" and self.off_reply is not None:
             self.pending.append(self.off_reply)
         else:
@@ -59,8 +61,9 @@ def connect(peer, monkeypatch):
 
 
 @pytest.mark.parametrize("ready_at", [0, 7, 20, 35, 42])
-def test_cold_boot_waits_for_identity_then_off_on_one_connection(ready_at, monkeypatch):
-    peer = Peer(ready_at)
+@pytest.mark.parametrize("board", ["0401E013", "0103E013", "0401C013"])
+def test_cold_boot_waits_for_identity_then_off_on_one_connection(ready_at, board, monkeypatch):
+    peer = Peer(ready_at, board=board)
     owner, fan = connect(peer, monkeypatch)
     fan.initialize_off()
     assert owner.ready and fan.status.enabled is False
@@ -75,6 +78,9 @@ def test_cold_boot_waits_for_identity_then_off_on_one_connection(ready_at, monke
     (["ok"], "readiness timed out"),
     (["FIRMWARE_NAME:Marlin 2.0"], "readiness timed out"),
     (["E3AUX1 UPDATER 0.2.0 BOARD=0401E013"], "readiness timed out"),
+    (["E3AUX1 UPDATER 0.2.0 BOARD=0103E013"], "readiness timed out"),
+    (["E3AUX1 UPDATER 0.3.0 BOARD=0401C013"], "readiness timed out"),
+    (["E3AUX1 UPDATER 0.2.0 BOARD=DEADBEEF"], "startup rejected"),
     (["ERR UNSUPPORTED"], "readiness timed out"),
     (["FIRMWARE_NAME:Marlin 2.0", "start", "ok"], "readiness timed out"),
     (["E3AUX1 UPDATER 0.1.0 BOARD=0401E013"], "updater 0.1.0"),

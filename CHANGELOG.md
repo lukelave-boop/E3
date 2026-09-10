@@ -1,6 +1,18 @@
 # Changelog
 ## Mainboard SD firmware and typed controls
 
+## Compact F401 SD/USB installer candidate (2026-09-10)
+
+- Add a separate 256 KiB/64 KiB F401 profile with USB updates included in the
+  initial SD installation, live chip/capacity reporting and persistent mismatch
+  diagnostics. Preserve factory-loader and upper-flash boundaries.
+- Retain fan/probe/Z/material-height controls and emergency parsing; remove the
+  stock touchscreen, heating, extrusion and SD job features. Correct extruderless
+  planner accesses and use an independent EEPROM schema without auto-writing.
+- Package explicit idle-only M997 entry, target-specific USB client, bounded Pi
+  support installer, exact firmware source and the operator-proven stock recovery.
+  Automated checks pass; physical acceptance of the new image remains pending.
+
 Added a complete retained-loader SD installer with independent FAN1/FAN2 PWM,
 native probe and Z control, bounded G39 material probing, fan status, enabled
 emergency parsing and explicit fan shutdown in native kill. The bundle includes

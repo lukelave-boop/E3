@@ -60,7 +60,12 @@ def wait_for_marlin(
                     return
             elif text == "E3AUX1 UPDATER 0.1.0 BOARD=0401E013":
                 raise MachineError("Secondary is in updater 0.1.0; install the startup-fixed SD firmware")
-            elif text == "E3AUX1 UPDATER 0.2.0 BOARD=0401E013" or text == "ERR UNSUPPORTED":
+            elif text in {
+                "E3AUX1 UPDATER 0.2.0 BOARD=0401E013",
+                "E3AUX1 UPDATER 0.2.0 BOARD=0103E013",
+                "E3AUX1 UPDATER 0.3.0 BOARD=0401C013",
+                "ERR UNSUPPORTED",
+            }:
                 identity = False  # Updater is not application readiness.
             elif text == "start" or text.casefold().startswith("echo:marlin"):
                 identity = False  # A reset invalidates a preceding identity.

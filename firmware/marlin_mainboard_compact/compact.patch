@@ -1,0 +1,599 @@
+diff --git a/Marlin/Configuration.h b/Marlin/Configuration.h
+index 9981a52..cbe9c49 100644
+--- a/Marlin/Configuration.h
++++ b/Marlin/Configuration.h
+@@ -70,13 +70,13 @@
+ 
+ 
+ // @section info
+-/
++//
+ //  #define ENDER_3S1_PLUS
+ #define ENDER_3S1_PRO
+   
+ // 主控芯片
+-#define USER_STM32F103  1
+-// #define USER_STM32F401  1
++// #define USER_STM32F103  1
++#define USER_STM32F401  1
+ 
+ 
+ #if ENABLED(ENDER_3S1_PRO)
+@@ -276,7 +276,8 @@
+ 
+ // This defines the number of extruders
+ // :[0, 1, 2, 3, 4, 5, 6, 7, 8]
+-#define EXTRUDERS 1
++#define EXTRUDERS 0
++#define PLATFORM_M997_SUPPORT
+ 
+ // Generally expected filament diameter (1.75, 2.85, 3.0, ...). Used for Volumetric, Filament Width Sensor, etc.
+ #define DEFAULT_NOMINAL_FILAMENT_DIA 1.75
+@@ -544,7 +545,7 @@
+  *   998 : Dummy Table that ALWAYS reads 25°C or the temperature defined below.
+  *   999 : Dummy Table that ALWAYS reads 100°C or the temperature defined below.
+  */
+-#define TEMP_SENSOR_0 1
++#define TEMP_SENSOR_0 0
+ #define TEMP_SENSOR_1 0
+ #define TEMP_SENSOR_2 0
+ #define TEMP_SENSOR_3 0
+@@ -552,7 +553,7 @@
+ #define TEMP_SENSOR_5 0
+ #define TEMP_SENSOR_6 0
+ #define TEMP_SENSOR_7 0
+-#define TEMP_SENSOR_BED 1
++#define TEMP_SENSOR_BED 0
+ #define TEMP_SENSOR_PROBE 0
+ #define TEMP_SENSOR_CHAMBER 0
+ #define TEMP_SENSOR_COOLER 0
+@@ -954,18 +955,18 @@
+  * Override with M92
+  *                                      X, Y, Z, E0 [, E1[, E2...]]
+  */
+-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 80, 80, 400, 424.9}
++#define DEFAULT_AXIS_STEPS_PER_UNIT   { 80, 80, 400 }
+ 
+ /**
+  * Default Max Feed Rate (mm/s)
+  * Override with M203
+  *                                      X, Y, Z, E0 [, E1[, E2...]]
+  */
+-#define DEFAULT_MAX_FEEDRATE          {300 , 300 , 5 , 25} //{ 3000, 3000, 60, 25 }   // 最大进给率
++#define DEFAULT_MAX_FEEDRATE          { 300, 300, 5 } //{ 3000, 3000, 60, 25 }   // 最大进给率
+ 
+ #define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
+ #if ENABLED(LIMITED_MAX_FR_EDITING)
+-  #define MAX_FEEDRATE_EDIT_VALUES    { 600, 600, 10, 50 } // ...or, set your own edit limits
++  #define MAX_FEEDRATE_EDIT_VALUES    { 600, 600, 10 } // ...or, set your own edit limits
+ #endif
+ 
+ /**
+@@ -974,12 +975,12 @@
+  * Override with M201
+  *                                      X, Y, Z, E0 [, E1[, E2...]]
+  */
+-#define DEFAULT_MAX_ACCELERATION      { 500, 500, 100, 1000 }  //加速度//{ 500, 500, 100, 1000 }  //加速度
++#define DEFAULT_MAX_ACCELERATION      { 500, 500, 100 }  //加速度//{ 500, 500, 100, 1000 }  //加速度
+ 
+ 
+ #define LIMITED_MAX_ACCEL_EDITING     // Limit edit via M201 or LCD to DEFAULT_MAX_ACCELERATION * 2
+ #if ENABLED(LIMITED_MAX_ACCEL_EDITING)
+-  #define MAX_ACCEL_EDIT_VALUES       { 3000, 3000, 100, 10000 } // ...or, set your own edit limits
++  #define MAX_ACCEL_EDIT_VALUES       { 3000, 3000, 100 } // ...or, set your own edit limits
+ #endif
+ 
+ /**
+@@ -1012,7 +1013,7 @@
+ 
+   //#define LIMITED_JERK_EDITING        // Limit edit via M205 or LCD to DEFAULT_aJERK * 2
+   #if ENABLED(LIMITED_JERK_EDITING)
+-    #define MAX_JERK_EDIT_VALUES { 20, 20, 0.6, 10 } // ...or, set your own edit limits
++    #define MAX_JERK_EDIT_VALUES { 20, 20, 0.6 } // ...or, set your own edit limits
+   #endif
+ #endif
+ 
+@@ -1504,7 +1505,7 @@
+  * RAMPS-based boards use SERVO3_PIN for the first runout sensor.
+  * For other boards you may need to define FIL_RUNOUT_PIN, FIL_RUNOUT2_PIN, etc.
+  */
+-#define FILAMENT_RUNOUT_SENSOR
++//#define FILAMENT_RUNOUT_SENSOR
+ #if ENABLED(FILAMENT_RUNOUT_SENSOR)
+   #define FIL_RUNOUT_ENABLED_DEFAULT true // Enable the sensor on startup. Override with M412 followed by M500.
+   #define NUM_RUNOUT_SENSORS   1          // Number of sensors, up to one per extruder. Define a FIL_RUNOUT#_PIN for each.
+@@ -1652,7 +1653,7 @@
+  * NOTE: Requires a lot of PROGMEM!
+  */
+ //zhang
+-#define DEBUG_LEVELING_FEATURE
++//#define DEBUG_LEVELING_FEATURE
+ 
+ #if ANY(MESH_BED_LEVELING, AUTO_BED_LEVELING_UBL, PROBE_MANUALLY)
+   // Set a height for the start of manual adjustment
+@@ -1938,7 +1939,7 @@
+ #define EEPROM_CHITCHAT       // Give feedback on EEPROM commands. Disable to save PROGMEM.
+ #define EEPROM_BOOT_SILENT    // Keep M503 quiet and only give errors during first load
+ #if ENABLED(EEPROM_SETTINGS)
+-  #define EEPROM_AUTO_INIT  // Init EEPROM automatically on any errors.
++  //#define EEPROM_AUTO_INIT  // Init EEPROM automatically on any errors.
+ #endif
+ 
+ //
+@@ -2249,7 +2250,7 @@
+  * SD Card support is disabled by default. If your controller has an SD slot,
+  * you must uncomment the following option or it won't work.
+  */
+-#define SDSUPPORT
++//#define SDSUPPORT
+ 
+ /**
+  * SD CARD: ENABLE CRC
+@@ -2887,10 +2888,10 @@
+ //
+ // Creality V4.2.5 display. Creality board but retain the display.
+ //
+-#define RET6_12864_LCD
++//#define RET6_12864_LCD
+ 
+ // resistive touch screen
+-#define RTS_AVAILABLE
++//#define RTS_AVAILABLE
+ 
+ //
+ // Touch Screen Settings
+diff --git a/Marlin/Configuration_adv.h b/Marlin/Configuration_adv.h
+index 0f88d46..8dfe0a7 100644
+--- a/Marlin/Configuration_adv.h
++++ b/Marlin/Configuration_adv.h
+@@ -496,7 +496,7 @@
+  *
+  * Define one or both of these to override the default 0-255 range.
+  */
+-#define FAN_MIN_PWM 50
++#define FAN_MIN_PWM 0
+ //#define FAN_MAX_PWM 128
+ 
+ /**
+@@ -542,7 +542,8 @@
+  */
+ //视新板子是用哪个管脚来接风扇，比如为PAx，则在Configuration_adv.h中定义#define E0_AUTO_FAN_PIN PAx即可。 
+ //按新硬件原理图，假设用PC0接喉管风扇，改为#define E0_AUTO_FAN_PIN PC0，当喉管温度大于EXTRUDER_AUTO_FAN_TEMPERATURE时喉管风扇开启 --zy
+-#define E0_AUTO_FAN_PIN PC0
++#define E0_AUTO_FAN_PIN -1
++#define FAN1_PIN PC0  // E3 FAN1; FAN0/PA0 remains the existing FAN2 output
+ #define E1_AUTO_FAN_PIN -1
+ #define E2_AUTO_FAN_PIN -1
+ #define E3_AUTO_FAN_PIN -1
+@@ -915,7 +916,7 @@
+ 
+ // @section motion
+ 
+-#define AXIS_RELATIVE_MODES { false, false, false, false }
++#define AXIS_RELATIVE_MODES { false, false, false }
+ 
+ // Add a Duplicate option for well-separated conjoined nozzles
+ //#define MULTI_NOZZLE_DUPLICATION
+@@ -2033,7 +2034,7 @@
+ //
+ // G2/G3 Arc Support
+ //
+-#define ARC_SUPPORT                 // Disable this feature to save ~3226 bytes
++//#define ARC_SUPPORT                 // Disable this feature to save ~3226 bytes
+ #if ENABLED(ARC_SUPPORT)
+   #define MM_PER_ARC_SEGMENT      1 // (mm) Length (or minimum length) of each arc segment
+   //#define ARC_SEGMENTS_PER_R    1 // Max segment length, MM_PER = Min
+@@ -2189,7 +2190,7 @@
+  * Currently handles M108, M112, M410, M876
+  * NOTE: Not yet implemented for all platforms.
+  */
+-//#define EMERGENCY_PARSER
++#define EMERGENCY_PARSER
+ 
+ /**
+  * Realtime Reporting (requires EMERGENCY_PARSER)
+@@ -2359,7 +2360,7 @@
+  *
+  * Enable PARK_HEAD_ON_PAUSE to add the G-code M125 Pause and Park.
+  */
+-#define ADVANCED_PAUSE_FEATURE   
++//#define ADVANCED_PAUSE_FEATURE   
+ #if ENABLED(ADVANCED_PAUSE_FEATURE)
+   #define PAUSE_PARK_RETRACT_FEEDRATE         60  // (mm/s) Initial retract feedrate. (mm/s) 初始回抽进给率。
+   #define PAUSE_PARK_RETRACT_LENGTH            2  // (mm) Initial retract.断料后第一次的回抽长度
+@@ -3205,7 +3206,7 @@
+  * See https://marlinfw.org/docs/configuration/laser_spindle.html for more config details.
+  */
+ //#define SPINDLE_FEATURE
+-#define LASER_FEATURE // 激光宏定义
++//#define LASER_FEATURE // 激光宏定义
+ #if EITHER(SPINDLE_FEATURE, LASER_FEATURE)
+   #define SPINDLE_LASER_ACTIVE_STATE    LOW    // Set to "HIGH" if the on/off function is active HIGH
+   #define SPINDLE_LASER_PWM             true   // Set to "true" if your controller supports setting the speed/power
+diff --git a/Marlin/src/HAL/STM32/HAL.cpp b/Marlin/src/HAL/STM32/HAL.cpp
+index e09b52f..e93fe5e 100644
+--- a/Marlin/src/HAL/STM32/HAL.cpp
++++ b/Marlin/src/HAL/STM32/HAL.cpp
+@@ -62,6 +62,11 @@ TERN_(POSTMORTEM_DEBUGGING, extern void install_min_serial());
+ // HAL initialization task
+ void HAL_init() {
+   FastIO_init();
++  // E3 has no heater control path. Drive both heater gates and extrusion STEP
++  // inactive explicitly instead of relying only on the updater's GPIO state.
++  OUT_WRITE(HEATER_0_PIN, LOW);
++  OUT_WRITE(HEATER_BED_PIN, LOW);
++  OUT_WRITE(E0_STEP_PIN, LOW);
+ 
+   // Ensure F_CPU is a constant expression.
+   // If the compiler breaks here, it means that delay code that should compute at compile time will not work.
+@@ -141,6 +146,8 @@ uint8_t HAL_get_reset_source() {
+ 
+ void HAL_reboot() { NVIC_SystemReset(); }
+ 
++#include "e3_startup.inc"
++
+ void _delay_ms(const int delay_ms) { delay(delay_ms); }
+ 
+ extern "C" {
+diff --git a/Marlin/src/MarlinCore.cpp b/Marlin/src/MarlinCore.cpp
+index ddfc95c..26e5c7e 100644
+--- a/Marlin/src/MarlinCore.cpp
++++ b/Marlin/src/MarlinCore.cpp
+@@ -998,6 +998,10 @@ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
+  * After this the machine will need to be reset.
+  */
+ void kill(PGM_P const lcd_error/*=nullptr*/, PGM_P const lcd_component/*=nullptr*/, const bool steppers_off/*=false*/) {
++  // E3 auxiliary outputs must be off even after interrupts/planner stop.
++  thermalManager.zero_fan_speeds();
++  WRITE(FAN_PIN, LOW);
++  WRITE(FAN1_PIN, LOW);
+   thermalManager.disable_all_heaters();
+ 
+   TERN_(HAS_CUTTER, cutter.kill()); // Full cutter shutdown including ISR control
+diff --git a/Marlin/src/gcode/config/M92.cpp b/Marlin/src/gcode/config/M92.cpp
+index 06c47b8..27c2ab3 100644
+--- a/Marlin/src/gcode/config/M92.cpp
++++ b/Marlin/src/gcode/config/M92.cpp
+@@ -28,7 +28,7 @@ void report_M92(const bool echo=true, const int8_t e=-1) {
+   SERIAL_ECHOPAIR_P(PSTR(" M92 X"), LINEAR_UNIT(planner.settings.axis_steps_per_mm[X_AXIS]),
+                           SP_Y_STR, LINEAR_UNIT(planner.settings.axis_steps_per_mm[Y_AXIS]),
+                           SP_Z_STR, LINEAR_UNIT(planner.settings.axis_steps_per_mm[Z_AXIS]));
+-  #if DISABLED(DISTINCT_E_FACTORS)
++  #if HAS_EXTRUDERS && DISABLED(DISTINCT_E_FACTORS)
+     SERIAL_ECHOPAIR_P(SP_E_STR, VOLUMETRIC_UNIT(planner.settings.axis_steps_per_mm[E_AXIS]));
+   #endif
+   SERIAL_EOL();
+diff --git a/Marlin/src/gcode/control/M997.cpp b/Marlin/src/gcode/control/M997.cpp
+index cdff96f..9ef0b70 100644
+--- a/Marlin/src/gcode/control/M997.cpp
++++ b/Marlin/src/gcode/control/M997.cpp
+@@ -27,10 +27,6 @@
+ /**
+  * M997: Perform in-application firmware update
+  */
+-void GcodeSuite::M997() {
+-
+-  flashFirmware(parser.intval('S'));
+-
+-}
++#include "e3_usb_update.inc"
+ 
+ #endif
+diff --git a/Marlin/src/gcode/gcode.cpp b/Marlin/src/gcode/gcode.cpp
+index 7fda7cf..fc51adb 100644
+--- a/Marlin/src/gcode/gcode.cpp
++++ b/Marlin/src/gcode/gcode.cpp
+@@ -384,6 +384,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
+       #endif
+ 
+       #if HAS_BED_PROBE
++        case 39: G39(); break;                                    // E3 material height V1
+         case 30: G30(); break;                                    // G30: Single Z probe
+         #if ENABLED(Z_PROBE_SLED)
+           case 31: G31(); break;                                  // G31: dock the sled
+@@ -633,6 +634,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
+       case 85: M85(); break;                                      // M85: Set inactivity stepper shutdown timeout
+       case 92: M92(); break;                                      // M92: Set the steps-per-unit for one or more axes
+       case 114: M114(); break;                                    // M114: Report current position
++      case 123: M123(); break; // E3 read-only mainboard status
+       case 115: M115(); break;                                    // M115: Report capabilities
+ 
+       case 117: TERN_(HAS_STATUS_MESSAGE, M117()); break;         // M117: Set LCD message text, if possible
+diff --git a/Marlin/src/gcode/gcode.h b/Marlin/src/gcode/gcode.h
+index 16fc47a..10e0fc8 100644
+--- a/Marlin/src/gcode/gcode.h
++++ b/Marlin/src/gcode/gcode.h
+@@ -485,6 +485,7 @@ private:
+ 
+   #if HAS_BED_PROBE
+     static void G30();
++    static void G39();
+     #if ENABLED(Z_PROBE_SLED)
+       static void G31();
+       static void G32();
+@@ -678,6 +679,7 @@ private:
+ 
+   static void M114();
+   static void M115();
++  static void M123();
+ 
+   #if HAS_STATUS_MESSAGE
+     static void M117();
+diff --git a/Marlin/src/gcode/host/M115.cpp b/Marlin/src/gcode/host/M115.cpp
+index f095445..d4f47f7 100644
+--- a/Marlin/src/gcode/host/M115.cpp
++++ b/Marlin/src/gcode/host/M115.cpp
+@@ -73,6 +73,15 @@ void GcodeSuite::M115() {
+   //   SERIAL_ECHOLNPGM(STR_M115_DISABLE_REPORT);
+   // }
+   
++  SERIAL_ECHOLNPGM("Cap:E3_MATERIAL_HEIGHT_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_USB_UPDATER_F401_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_COMPACT_F401_V1:1");
++  SERIAL_ECHOPGM("E3HW:1 MCU:");
++  SERIAL_PRINT((*reinterpret_cast<volatile const uint32_t *>(0xE0042000UL)) & 0xFFFU, PrintBase::Hex);
++  SERIAL_ECHOLNPAIR(" FLASH_KIB:", *reinterpret_cast<volatile const uint16_t *>(0x1FFF7A22UL));
++
++
+   #if ENABLED(EXTENDED_CAPABILITIES_REPORT)
+ 
+     // The port that sent M115
+diff --git a/Marlin/src/gcode/host/M119.cpp b/Marlin/src/gcode/host/M119.cpp
+index f0066bd..216e0da 100644
+--- a/Marlin/src/gcode/host/M119.cpp
++++ b/Marlin/src/gcode/host/M119.cpp
+@@ -22,6 +22,7 @@
+ 
+ #include "../gcode.h"
+ #include "../../module/endstops.h"
++#include "../../module/motion.h"
+ 
+ /**
+  * M119: Output endstop states to serial output
+@@ -30,4 +31,11 @@ void GcodeSuite::M119() {
+ 
+   endstops.report_states();
+ 
++  if (axis_is_trusted(X_AXIS)) SERIAL_ECHOLNPGM("test_axis_known_x_flag = true");
++  else SERIAL_ECHOLNPGM("test_axis_known_x_flag = false");
++  if (axis_is_trusted(Y_AXIS)) SERIAL_ECHOLNPGM("test_axis_known_y_flag = true");
++  else SERIAL_ECHOLNPGM("test_axis_known_y_flag = false");
++  if (axis_is_trusted(Z_AXIS)) SERIAL_ECHOLNPGM("test_axis_known_z_flag = true");
++  else SERIAL_ECHOLNPGM("test_axis_known_z_flag = false");
++
+ }
+diff --git a/Marlin/src/gcode/probe/G30.cpp b/Marlin/src/gcode/probe/G30.cpp
+index 4347f55..3465ef4 100644
+--- a/Marlin/src/gcode/probe/G30.cpp
++++ b/Marlin/src/gcode/probe/G30.cpp
+@@ -63,4 +63,6 @@ void GcodeSuite::G30() {
+   report_current_position();
+ }
+ 
++#include "G39.inc"
++
+ #endif // HAS_BED_PROBE
+diff --git a/Marlin/src/gcode/temp/M106_M107.cpp b/Marlin/src/gcode/temp/M106_M107.cpp
+index 73dc82b..1b640b3 100644
+--- a/Marlin/src/gcode/temp/M106_M107.cpp
++++ b/Marlin/src/gcode/temp/M106_M107.cpp
+@@ -108,4 +108,6 @@ void GcodeSuite::M107() {
+   TERN_(LASER_SYNCHRONOUS_M106_M107, planner.buffer_sync_block(BLOCK_FLAG_SYNC_FANS));
+ }
+ 
++#include "e3_mainboard.inc"
++
+ #endif // HAS_FAN
+diff --git a/Marlin/src/inc/Conditionals_LCD.h b/Marlin/src/inc/Conditionals_LCD.h
+index 219de4c..07debec 100644
+--- a/Marlin/src/inc/Conditionals_LCD.h
++++ b/Marlin/src/inc/Conditionals_LCD.h
+@@ -544,8 +544,7 @@
+     #define HAS_MULTI_EXTRUDER 1
+   #endif
+ #else
+-  #undef EXTRUDERS
+-  #define EXTRUDERS 1
++  // E3 auxiliary profile has no extruder or hotend; keep EXTRUDERS at zero.
+   #undef SINGLENOZZLE
+   #undef SWITCHING_EXTRUDER
+   #undef SWITCHING_NOZZLE
+diff --git a/Marlin/src/module/planner.cpp b/Marlin/src/module/planner.cpp
+index 5439420..00db1e7 100644
+--- a/Marlin/src/module/planner.cpp
++++ b/Marlin/src/module/planner.cpp
+@@ -2373,13 +2373,13 @@ bool Planner::_populate_block(block_t * const block, bool split_move,
+       LIMIT_ACCEL_LONG(A_AXIS, 0);
+       LIMIT_ACCEL_LONG(B_AXIS, 0);
+       LIMIT_ACCEL_LONG(C_AXIS, 0);
+-      LIMIT_ACCEL_LONG(E_AXIS, E_INDEX_N(extruder));
++      TERN_(HAS_EXTRUDERS, LIMIT_ACCEL_LONG(E_AXIS, E_INDEX_N(extruder)));
+     }
+     else {
+       LIMIT_ACCEL_FLOAT(A_AXIS, 0);
+       LIMIT_ACCEL_FLOAT(B_AXIS, 0);
+       LIMIT_ACCEL_FLOAT(C_AXIS, 0);
+-      LIMIT_ACCEL_FLOAT(E_AXIS, E_INDEX_N(extruder));
++      TERN_(HAS_EXTRUDERS, LIMIT_ACCEL_FLOAT(E_AXIS, E_INDEX_N(extruder)));
+     }
+   }
+   block->acceleration_steps_per_s2 = accel;
+@@ -2818,7 +2818,7 @@ bool Planner::buffer_segment(const_float_t a, const_float_t b, const_float_t c,
+     int32_t(LROUND(a * settings.axis_steps_per_mm[A_AXIS])),
+     int32_t(LROUND(b * settings.axis_steps_per_mm[B_AXIS])),
+     int32_t(LROUND(c * settings.axis_steps_per_mm[C_AXIS])),
+-    int32_t(LROUND(e * settings.axis_steps_per_mm[E_AXIS_N(extruder)]))
++    TERN(HAS_EXTRUDERS, int32_t(LROUND(e * settings.axis_steps_per_mm[E_AXIS_N(extruder)])), 0)
+   };
+ 
+   #if HAS_POSITION_FLOAT
+@@ -3014,7 +3014,7 @@ void Planner::set_machine_position_mm(const_float_t a, const_float_t b, const_fl
+   position.set(LROUND(a * settings.axis_steps_per_mm[A_AXIS]),
+                LROUND(b * settings.axis_steps_per_mm[B_AXIS]),
+                LROUND(c * settings.axis_steps_per_mm[C_AXIS]),
+-               LROUND(e * settings.axis_steps_per_mm[E_AXIS_N(active_extruder)]));
++               TERN(HAS_EXTRUDERS, LROUND(e * settings.axis_steps_per_mm[E_AXIS_N(active_extruder)]), 0));
+   if (has_blocks_queued()) {
+     //previous_nominal_speed_sqr = 0.0; // Reset planner junction speeds. Assume start from rest.
+     //previous_speed.reset();
+@@ -3042,6 +3042,7 @@ void Planner::set_position_mm(const_float_t rx, const_float_t ry, const_float_t
+  * Setters for planner position (also setting stepper position).
+  */
+ void Planner::set_e_position_mm(const_float_t e) {
++  #if HAS_EXTRUDERS
+   const uint8_t axis_index = E_AXIS_N(active_extruder);
+   TERN_(DISTINCT_E_FACTORS, last_extruder = active_extruder);
+ 
+@@ -3054,6 +3055,10 @@ void Planner::set_e_position_mm(const_float_t e) {
+     buffer_sync_block();
+   else
+     stepper.set_axis_position(E_AXIS, position.e);
++  #else
++    UNUSED(e);
++    position.e = 0;
++  #endif
+ }
+ 
+ // Recalculate the steps/s^2 acceleration rates, based on the mm/s^2
+diff --git a/Marlin/src/module/probe.cpp b/Marlin/src/module/probe.cpp
+index 102d4a4..0c71b29 100644
+--- a/Marlin/src/module/probe.cpp
++++ b/Marlin/src/module/probe.cpp
+@@ -88,6 +88,8 @@
+ #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
+ #include "../core/debug_out.h"
+ 
++#include "e3_material_height.h"
++
+ Probe probe;
+ 
+ xyz_pos_t Probe::offset; // Initialized by settings.load()
+@@ -589,7 +591,7 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
+  *
+  * @return The Z position of the bed at the current XY or NAN on error.
+  */
+-float Probe::run_z_probe(const bool sanity_check/*=true*/) {
++float Probe::run_z_probe(const bool sanity_check/*=true*/, const bool material/*=false*/) {
+   DEBUG_SECTION(log_probe, "Probe::run_z_probe", DEBUGGING(LEVELING));
+ 
+   auto try_to_probe = [&](PGM_P const plbl, const_float_t z_probe_low_point, const feedRate_t fr_mm_s, const bool scheck, const float clearance) -> bool {
+@@ -598,7 +600,8 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+ 
+     // Do a first probe at the fast speed
+     const bool probe_fail = probe_down_to_z(z_probe_low_point, fr_mm_s),            // No probe trigger?
+-               early_fail = (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
++               early_fail = material ? !e3_material::contact_ok(current_position.z, offset.z)
++                                     : (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
+     #if ENABLED(FIX_MOUNTED_PROBE)
+       Count_probe = 1;
+     #endif
+@@ -620,6 +623,18 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+   // If Z isn't known then probe to -10mm.
+   const float z_probe_low_point = axis_is_trusted(Z_AXIS) ? -offset.z + Z_PROBE_LOW_POINT : -10.0;
+ 
++  // Material measurement retains native fast/slow motion and pin handling,
++  // independent of the bed-leveling TOTAL_PROBING / EXTRA_PROBING selection.
++  if (material) {
++    const float low = -offset.z + _MAX(float(Z_PROBE_LOW_POINT), e3_material::minimum);
++    if (try_to_probe(PSTR("FAST"), low, z_probe_fast_mm_s, true, 0)) return NAN;
++    const float fast_z = current_position.z;
++    do_blocking_move_to_z(fast_z + Z_CLEARANCE_MULTI_PROBE, z_probe_fast_mm_s);
++    if (try_to_probe(PSTR("SLOW"), low, MMM_TO_MMS(Z_PROBE_FEEDRATE_SLOW), true, 0)) return NAN;
++    // Same weighted result as Marlin's native TOTAL_PROBING == 2 cycle.
++    return (current_position.z * 3.0f + fast_z * 2.0f) * 0.2f;
++  }
++
+   // Double-probing does a fast probe followed by a slow probe
+   #if TOTAL_PROBING == 2
+ 
+@@ -843,4 +858,6 @@ float Probe::probe_at_point(const_float_t rx, const_float_t ry, const ProbePtRai
+ 
+ #endif // HAS_Z_SERVO_PROBE
+ 
++#include "material_height.inc"
++
+ #endif // HAS_BED_PROBE
+diff --git a/Marlin/src/module/probe.h b/Marlin/src/module/probe.h
+index 7438a56..2e3e3c9 100644
+--- a/Marlin/src/module/probe.h
++++ b/Marlin/src/module/probe.h
+@@ -98,6 +98,8 @@ public:
+ 
+     #endif
+ 
++    static float material_height();
++
+     static void move_z_after_probing() {
+       #ifdef Z_AFTER_PROBING
+         do_z_clearance(Z_AFTER_PROBING, true); // Move down still permitted
+@@ -259,7 +261,7 @@ public:
+ private:
+   static bool probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s);
+   static void do_z_raise(const float z_raise);
+-  static float run_z_probe(const bool sanity_check=true);
++  static float run_z_probe(const bool sanity_check=true, const bool material=false);
+ };
+ 
+ extern Probe probe;
+diff --git a/Marlin/src/module/settings.cpp b/Marlin/src/module/settings.cpp
+index f5d6280..8d2ed08 100644
+--- a/Marlin/src/module/settings.cpp
++++ b/Marlin/src/module/settings.cpp
+@@ -36,7 +36,7 @@
+  */
+ 
+ // Change EEPROM version if the structure changes
+-#define EEPROM_VERSION "V83"
++#define EEPROM_VERSION "E31" // E3 compact XYZ/no-heater profile; reject stock EEPROM schema.
+ #define EEPROM_OFFSET 100
+ 
+ // Check the integrity of data offsets.
+@@ -1034,6 +1034,8 @@ void MarlinSettings::postprocess() {
+         const bool recovery_enabled = TERN(POWER_LOSS_RECOVERY, recovery.enabled, ENABLED(PLR_ENABLED_DEFAULT));
+       #elif ENABLED(CREALITY_POWER_LOSS)
+         const bool recovery_enabled = TERN(CREALITY_POWER_LOSS, pre01_power_loss.enabled, ENABLED(PLR_ENABLED_DEFAULT));
++      #else
++        const bool recovery_enabled = false;
+       #endif
+       EEPROM_WRITE(recovery_enabled);
+     }
+@@ -3187,7 +3189,7 @@ void MarlinSettings::reset() {
+         PSTR("  M203 X"), LINEAR_UNIT(planner.settings.max_feedrate_mm_s[X_AXIS])
+       , SP_Y_STR, LINEAR_UNIT(planner.settings.max_feedrate_mm_s[Y_AXIS])
+       , SP_Z_STR, LINEAR_UNIT(planner.settings.max_feedrate_mm_s[Z_AXIS])
+-      #if DISABLED(DISTINCT_E_FACTORS)
++      #if HAS_EXTRUDERS && DISABLED(DISTINCT_E_FACTORS)
+         , SP_E_STR, VOLUMETRIC_UNIT(planner.settings.max_feedrate_mm_s[E_AXIS])
+       #endif
+     );
+@@ -3207,7 +3209,7 @@ void MarlinSettings::reset() {
+         PSTR("  M201 X"), LINEAR_UNIT(planner.settings.max_acceleration_mm_per_s2[X_AXIS])
+       , SP_Y_STR, LINEAR_UNIT(planner.settings.max_acceleration_mm_per_s2[Y_AXIS])
+       , SP_Z_STR, LINEAR_UNIT(planner.settings.max_acceleration_mm_per_s2[Z_AXIS])
+-      #if DISABLED(DISTINCT_E_FACTORS)
++      #if HAS_EXTRUDERS && DISABLED(DISTINCT_E_FACTORS)
+         , SP_E_STR, VOLUMETRIC_UNIT(planner.settings.max_acceleration_mm_per_s2[E_AXIS])
+       #endif
+     );
+diff --git a/ini/stm32f4.ini b/ini/stm32f4.ini
+index 8f0dcc9..4da6fb7 100644
+--- a/ini/stm32f4.ini
++++ b/ini/stm32f4.ini
+@@ -453,12 +453,13 @@ build_flags       = ${stm_flash_drive.build_flags} ${stm32f4_I2C1.build_flags}
+ # 'creality' STM32F401RC board
+ #
+ [env:STM32F401RC_creality]
+-platform             = ${common_stm32.platform}
++platform             = ststm32@12.1.1
++board_upload.maximum_size = 262144
+ extends              = common_stm32
+ board                = marlin_CREALITY_STM32F401RC
+-board_build.offset   = 0x10000
++board_build.offset   = 0x20200
+ build_flags          = ${common_stm32.build_flags} 
+-  -DSTM32F401xC -DSTM32F4
++  -DSTM32F401xC -DSTM32F4 -Wl,--wrap=SystemInit
+ build_unflags        = -DUSBCON -DUSBD_USE_CDC
+ extra_scripts        = ${common.extra_scripts}
+   pre:buildroot/share/PlatformIO/scripts/generic_create_variant.py

@@ -1,5 +1,61 @@
 # Current repository state
 
+## Active: compact F401 installer with initial USB updates (2026-09-10)
+
+The restored working machine now boots stock 2.0.8.26F4 and responds to Pi M115
+at 115200 (operator report 09:27:25 UTC below). The installed chip capacity is
+still unknown. A separate compact candidate corrects two demonstrated old-build
+limitations: the previous 214,620-byte installer crossed the 256 KiB boundary,
+and its 512 KiB-only guard could become silently unresponsive on a mismatch;
+the original host also lacked native Marlin-to-updater entry. These findings
+are not proof of which limitation caused the installed machine's failure.
+
+The new [compact kit](firmware/marlin_mainboard_compact/README.md) is
+`dist/e3-mainboard-f401-usb-505a4551.zip`; its SD image is 147,300 bytes,
+SHA256 `505a455170c02b9a76541fe990fe361316c2f86d409a716d4c337476225e8cef`.
+The 81,252-byte application uses 6,740 bytes of static RAM. It accepts only the
+F401 ID/capacity pairs 0x423/256 KiB and 0x433/512 KiB, uses 64 KiB RAM and a
+fixed 256 KiB flash layout, and leaves the first 64 KiB factory loader outside
+all installer/update writes. Updater 0.3.0 occupies sector 4; application/header
+occupy sector 5 at 0x08020000, vectors at 0x08020200, ending 0x08033F64. Native
+M115 reports actual MCU ID and flash size. Mismatch diagnostics remain queryable.
+
+This headless profile retains FAN1/FAN2, native CR Touch/Z/G39, emergency parsing
+and idle-only M997 USB maintenance entry. It removes stock touchscreen/menu,
+SD job reading/resume, heaters, extrusion, filament handling and arcs. A splash
+screen is therefore not evidence of failed startup; USB capabilities establish
+application identity. EXTRUDERS=0 planner/readback assumptions were corrected.
+EEPROM schema E31 rejects stock settings and loads defaults without automatic
+EEPROM writes. Physical direction, current settings, probe behavior and offsets
+require attached-mechanism qualification before use.
+
+The first SD installation includes the USB updater. The target-specific host
+validates image/identity, enters M997 explicitly, holds and rechecks the updater,
+then verifies and commits without automatic boot. Ordinary serial traffic does
+not prevent its five-second auto-boot. The Pi companion installer accepts only
+known startup-reader hashes, backs up and atomically changes that one module
+while the service is inactive. No runtime configuration or dependency changes.
+The kit includes exact firmware source, ELFs, manifest and operator-proven stock
+recovery. Existing F401 BENCH/full-size and F103 artifacts remain separate.
+
+Offline verification includes compiled updater recovery, 58 platform cases for
+both silicon pairs/flash bounds, 457 compiled mismatch-diagnostic checks, three
+native G39 configurations, compiled output-off/M115 checks, 64 M997 admission
+cases and two actual Cortex-M4 stack-mode handoffs. Nine actual-ELF planner
+cases exercise XYZ/E-ignored/cleaning/acceleration paths with simulated edges
+and memory canaries; the physical stepper ISR is not exercised. Focused Windows
+Python tests: 239 passed, one symlink-privilege skip. Repository Ruff and
+compileall passed. A fresh source clone
+reproduces the pinned patched files. The dedicated CI workflow adds Windows
+firmware rebuilding and Linux startup/support tests.
+
+Implemented and tested offline, not physically accepted: this exact installer,
+normal cold start with USB/webcam attached, USB application updates on the working
+board, real fan/Z/probe behavior and measurement accuracy. Historical spare
+BENCH recovery does not qualify this native application. No assistant hardware
+operation was performed; the operator's Pi service remains stopped after the
+stock diagnostic. Prior entries below record earlier stages.
+
 ## Active: connected-startup correction, updater 0.2.0 (2026-09-09)
 
 The operator authorized fixing normal connected power-up. Updater 0.2.0 keeps

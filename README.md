@@ -8,6 +8,15 @@ firmware command/readback paths and now runs this image. See
 [validation](firmware/marlin_mainboard/VALIDATE.md). The working machine, Pi and
 webcam have not been changed. Earlier prototype/BENCH notes below are historical.
 
+The working Ender has been restored to stock **2.0.8.26F4**, with its normal
+screen and Pi USB M115 response verified by the operator. A new
+[compact F401 SD/USB installer](firmware/marlin_mainboard_compact/README.md)
+fits either supported 256/512 KiB F401 and includes USB updating in its first
+installation. It retains both fans, native probe/Z and material-height commands.
+The stock touchscreen menu, heaters, extrusion and SD jobs are disabled; check
+startup through USB. The package includes stock recovery and needs physical
+acceptance before attached-hardware use. Earlier development notes follow.
+
 
 For the intermittent Ender connection investigation, see the bounded
 [operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer

@@ -1,5 +1,13 @@
 # Roadmap
 
+The stock F401 baseline is restored and its Pi USB identity works. Next,
+operator-test the [compact F401 kit](firmware/marlin_mainboard_compact/README.md):
+confirm live MCU/capacity and all capabilities, cold start with normal Pi/webcam
+wiring, then explicit USB update/boot and attached fan/Z/probe qualification.
+The initial installer already includes USB updating. The headless profile
+intentionally omits the stock menu; future display support is separate.
+Earlier milestones below are historical.
+
 Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
 handshake. Ordinary traffic cannot hold the updater; incomplete images still
 remain in recovery. A new SD install and companion Pi source update are required.
