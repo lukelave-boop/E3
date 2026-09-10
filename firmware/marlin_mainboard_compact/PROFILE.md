@@ -33,9 +33,11 @@ PA0 / M106 P0. Their kill behavior and GPIO/PWM state clearing are retained.
 
 EEPROM settings remain supported but use distinct schema `E31`. Stock `V83`
 settings are rejected and defaults loaded, preventing accidental use of stock
-arrays with the extrusion-free layout. Automatic EEPROM initialization/writes
+arrays with the extrusion-free layout. Automatic settings initialization/writes
 remain disabled. Calibration and attached mechanics are not qualified by a
 successful firmware build or by the spare's earlier tests.
+The vendor EEPROM presence check remains: it may write the reserved test byte
+at address 0x00. This is separate from the settings payload at offset 100.
 
 The source is pinned by `prepare.py`, the complete `compact.patch`, and
 `source-files.json`. Preparation rejects an unexpected source revision, changed

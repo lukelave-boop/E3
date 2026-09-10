@@ -104,7 +104,7 @@ jobs:
         run: |
           python firmware/marlin_mainboard_compact/package.py build/marlin-mainboard-compact --objdump build/platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-objdump.exe --updater build/ender_aux_f401compact/updater.bin --stock build/stock-f401-2.0.8.26.bin
       - name: Test host control and packaging
-        run: python -m pytest -q tests/test_ender_aux_f401compact.py tests/test_compact_f401_package.py tests/test_compact_pi_support.py tests/test_diagnose_ender_startup.py tests/test_marlin_mainboard.py tests/test_mainboard_rpc.py tests/test_mainboard_package.py tests/test_secondary_controller.py tests/test_secondary_startup.py tests/test_ender_aux_host.py tests/test_native_height.py tests/test_marlin_material.py
+        run: python -m pytest -q tests/test_ender_aux_f401compact.py tests/test_compact_f401_package.py tests/test_compact_pi_support.py tests/test_compact_prepare.py tests/test_diagnose_ender_startup.py tests/test_marlin_mainboard.py tests/test_mainboard_rpc.py tests/test_mainboard_package.py tests/test_secondary_controller.py tests/test_secondary_startup.py tests/test_ender_aux_host.py tests/test_native_height.py tests/test_marlin_material.py
       - name: Lint and compile
         shell: pwsh
         run: |
@@ -128,4 +128,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt pytest
-      - run: python -m pytest -q tests/test_secondary_startup.py tests/test_secondary_controller.py tests/test_compact_pi_support.py tests/test_diagnose_ender_startup.py
+      - run: python -m pytest -q tests/test_secondary_startup.py tests/test_secondary_controller.py tests/test_compact_pi_support.py tests/test_compact_prepare.py tests/test_diagnose_ender_startup.py

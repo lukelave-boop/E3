@@ -42,8 +42,17 @@ def prepare(source: Path) -> None:
         return
     if untracked:
         raise ValueError("Preserving untracked source files; use a clean isolated checkout")
-    subprocess.run(["git", "-C", str(source), "apply", "--check", str(HERE / "compact.patch")], check=True)
-    subprocess.run(["git", "-C", str(source), "apply", "--whitespace=nowarn", str(HERE / "compact.patch")], check=True)
+    # Windows checkout may turn the patch itself into CRLF while the pinned
+    # source's .gitattributes requires LF for C/C++ and native endings for INI.
+    # Pass a canonical patch over stdin; let Git honor each source file's
+    # attributes rather than changing checkout settings or rewriting the tree.
+    patch = (HERE / "compact.patch").read_bytes().replace(b"\r\n", b"\n")
+    # Some upstream blobs may store literal CRLF without a text clean filter.
+    # Ignore context-line whitespace for matching only; the pinned-clean-tree
+    # checks above and exact resulting hashes below still reject source edits.
+    apply = ["git", "-C", str(source), "apply", "--ignore-space-change"]
+    subprocess.run([*apply, "--check", "-"], input=patch, check=True)
+    subprocess.run([*apply, "--whitespace=nowarn", "-"], input=patch, check=True)
     for relative, origin in OVERLAYS.items():
         (source / relative).write_bytes(origin.read_bytes())
     verify(source)

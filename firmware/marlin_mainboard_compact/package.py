@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from firmware.ender_aux_f401compact.host import MAX_PAYLOAD, validate_image  # noqa: E402
-from firmware.marlin_mainboard_compact.audit_layout import audit  # noqa: E402
 from firmware.marlin_mainboard_compact.prepare import verify  # noqa: E402
 
 STOCK_SHA = "9a81f7564d62b2b131dcc96f0bf47725e3ee78c3b68b198bb54680f431e02710"
@@ -78,6 +77,10 @@ def assemble(updater, application):
 
 
 def main():
+    # Offline ELF tooling is only required for a firmware build, not imports of
+    # the pure image validators by desktop/host tests.
+    from firmware.marlin_mainboard_compact.audit_layout import audit
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--objdump", type=Path, required=True)
@@ -126,6 +129,7 @@ def main():
                     archive.write(path, "E3/" + path.relative_to(ROOT).as_posix())
         for name in ("tests/marlin_material_harness.cpp", "tests/test_ender_aux_f401compact.py",
                      "tests/test_compact_f401_package.py", "tests/test_compact_pi_support.py",
+                     "tests/test_compact_prepare.py",
                      "scripts/diagnose_ender_startup.py", "laser_aligner/machine/secondary_startup.py"):
             archive.write(ROOT / name, "E3/" + name)
     manifest = {

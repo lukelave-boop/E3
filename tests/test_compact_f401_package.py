@@ -1,7 +1,10 @@
 """Offline compact installer assembly boundaries; no firmware or device writes."""
 
 import struct
+import subprocess
+import sys
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +17,13 @@ CAPABILITIES = (
     b"Cap:E3_USB_UPDATER_F401_V1:1",
     b"E3HW:1 MCU:",
 )
+
+
+def test_image_packaging_imports_without_optional_build_dependencies():
+    subprocess.run(
+        [sys.executable, "-S", "-c", "from firmware.marlin_mainboard_compact.package import assemble; assert callable(assemble)"],
+        cwd=Path(__file__).resolve().parents[1], check=True, capture_output=True,
+    )
 
 
 def application(length=1024, omit=None):

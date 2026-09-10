@@ -26,7 +26,7 @@ SD job reading/resume, heaters, extrusion, filament handling and arcs. A splash
 screen is therefore not evidence of failed startup; USB capabilities establish
 application identity. EXTRUDERS=0 planner/readback assumptions were corrected.
 EEPROM schema E31 rejects stock settings and loads defaults without automatic
-EEPROM writes. Physical direction, current settings, probe behavior and offsets
+settings writes. Physical direction, current settings, probe behavior and offsets
 require attached-mechanism qualification before use.
 
 The first SD installation includes the USB updater. The target-specific host
@@ -44,9 +44,11 @@ native G39 configurations, compiled output-off/M115 checks, 64 M997 admission
 cases and two actual Cortex-M4 stack-mode handoffs. Nine actual-ELF planner
 cases exercise XYZ/E-ignored/cleaning/acceleration paths with simulated edges
 and memory canaries; the physical stepper ISR is not exercised. Focused Windows
-Python tests: 239 passed, one symlink-privilege skip. Repository Ruff and
+Python tests: 251 passed, one symlink-privilege skip. Repository Ruff and
 compileall passed. A fresh source clone
-reproduces the pinned patched files. The dedicated CI workflow adds Windows
+reproduces the pinned patched files. Eleven real-Git preparation cases cover
+LF/CRLF patch transport and source preservation; the CI-style Windows checkout
+now prepares the same reviewed source. The dedicated CI workflow adds Windows
 firmware rebuilding and Linux startup/support tests.
 
 Implemented and tested offline, not physically accepted: this exact installer,

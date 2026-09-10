@@ -23,7 +23,7 @@ this is recovery, not automatic rollback to a previous application.
   E3_USB_UPDATER_F401_V1 and EMERGENCY_PARSER capabilities, plus
   `E3HW:1 MCU:<hex ID> FLASH_KIB:<capacity>`.
 - EEPROM settings retain a distinct E31 schema. Incompatible stock settings use
-  compiled defaults, without automatic EEPROM initialization/writes.
+  compiled defaults, without automatically initializing or saving settings.
 
 **The stock touchscreen/menu is disabled in this build.** Its display may remain
 on its own startup screen. Judge installation using the USB identity report,
