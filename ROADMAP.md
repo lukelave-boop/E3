@@ -2,9 +2,10 @@
 
 ## Desktop Ender Z controls
 
-Implemented Machine-tab jogging, live idle readback and persistent host maximum;
-Windows feature-build and Pi-companion operator verification are pending. The
-30 mm material probing extension remains separate and unimplemented.
+Machine-tab jogging, live idle readback and persistent host maximum are built
+in E3 DEV TEST 0.7.61. Full Windows and focused POSIX CI passed. Pi-companion
+installation and physical operator verification remain pending. The 30 mm
+material probing extension remains separate and unimplemented.
 
 Compact firmware's native Z cycle and approximately 7 mm material measurement
 have operator evidence. Automatic FAN1 CPU cooling is implemented; thermal

@@ -16,8 +16,8 @@ configuration-adjacent sidecar bound to the Ender port. It refuses invalid saved
 limits instead of silently restoring Z80. The configured ceiling also bounds
 normal service probing clearance and initial native lifts; G39's fixed range
 is unchanged. Remote desktop requires pi-mainboard-z-v1, and reports whether
-firmware advertises E3_Z_LIMIT_80_V1. Copying the separate 934ef4b3 firmware kit
-has been confirmed by the operator; installation has not been reported.
+firmware advertises E3_Z_LIMIT_80_V1. The separate 934ef4b3 firmware kit
+provides the fixed Z80 ceiling; connection status reports whether it is present.
 
 Verification: 210 focused Windows/offscreen desktop checks passed, including
 real worker/timer responsiveness, Machine Setup serialization, STOP and session
@@ -29,10 +29,24 @@ of the operator's known Pi source, which then imported successfully. A rendered
 400 px Machine panel was visually inspected with mock status. Local Python is
 3.14.4; Windows Python 3.12 full-suite and focused POSIX checks run in Fast CI.
 
-No live GUI, camera, serial, motion, Pi installation or firmware upload was
-performed. An exact frozen Windows feature build and permanent E3 DEV TEST
-pointer are the remaining packaging steps. Operator verification is pending.
-See docs/MAINBOARD_Z_CONTROLS.md.
+Fast CI for 4b209f0164f0d6522dbd4e321897c83e358ef7b6 passed: Windows
+Python 3.12 full desktop suite 4861 passed/25 skipped; focused POSIX suite 493
+passed; Ruff, dependency and bytecode checks passed. Mainboard SD and compact
+F401 firmware workflows also passed for that revision.
+
+Frozen Windows feature 0.7.61 was produced with packaging/build_windows.ps1
+from isolated checkout .codex-worktrees/z-controls-dev at that exact revision.
+The bundled-library guard passed; build metadata was stamped with the documented
+E3_BUILD_VERSION override after the sanitized build PATH lacked Git. The direct
+feature EXE is dist/E3/E3.exe within that checkout; SHA-256
+fe29fdb0a979628a27f459bf330ac051158b40723a7d53f8ae3001751ea5805f.
+The permanent E3 DEV TEST current-feature.json was updated with the validated
+packaging helper and read back successfully. This handoff selects the isolated
+EXE. No ordinary installer was retained or installed.
+
+No live GUI, camera, serial, motion, real Pi installation or firmware upload
+was performed. The Pi companion and new desktop workflow require operator
+verification. The normal launcher was not modified. See docs/MAINBOARD_Z_CONTROLS.md.
 
 ## Compact Z endpoint and Pi CPU cooling (2026-09-10)
 
