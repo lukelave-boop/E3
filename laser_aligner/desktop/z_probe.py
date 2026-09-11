@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .controls import NumericDoubleSpinBox
 from .qt import require_qt
 
 _, _, QtWidgets = require_qt()
@@ -23,11 +24,11 @@ class ZProbePanel(QtWidgets.QGroupBox):
         guidance.setWordWrap(True)
         layout.addWidget(guidance)
         fields = QtWidgets.QHBoxLayout()
-        self.clearance = QtWidgets.QDoubleSpinBox()
+        self.clearance = NumericDoubleSpinBox()
         self.clearance.setRange(20, 80)
         self.clearance.setValue(20)
         self.clearance.setSuffix(" mm")
-        self.support = QtWidgets.QDoubleSpinBox()
+        self.support = NumericDoubleSpinBox()
         self.support.setRange(-20, 20)
         self.support.setDecimals(3)
         self.support.setSuffix(" mm")
@@ -55,7 +56,7 @@ class ZProbePanel(QtWidgets.QGroupBox):
         layout.addLayout(controls)
         jog = QtWidgets.QHBoxLayout()
         jog.addWidget(QtWidgets.QLabel("Laser-off Jog:"))
-        self.step = QtWidgets.QDoubleSpinBox()
+        self.step = NumericDoubleSpinBox()
         self.step.setRange(0.1, 20)
         self.step.setValue(1)
         self.step.setSuffix(" mm")

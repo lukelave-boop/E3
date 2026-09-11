@@ -14,6 +14,7 @@ from ..machine.profiles import (
     builtin_machine_profiles,
     builtin_tool_head_profiles,
 )
+from .controls import NumericDoubleSpinBox, NumericSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -248,10 +249,10 @@ class _ConnectionPage(QtWidgets.QWizardPage):
         layout = QtWidgets.QFormLayout(self)
         self.host = QtWidgets.QLineEdit()
         self.host.setPlaceholderText("Example: 192.168.1.50 or e3.local")
-        self.controller_port = QtWidgets.QSpinBox()
+        self.controller_port = NumericSpinBox()
         self.controller_port.setRange(1, 65535)
         self.controller_port.setValue(8765)
-        self.camera_port = QtWidgets.QSpinBox()
+        self.camera_port = NumericSpinBox()
         self.camera_port.setRange(1, 65535)
         self.camera_port.setValue(8766)
         self.token = QtWidgets.QLineEdit()
@@ -359,11 +360,11 @@ class _MachinePage(QtWidgets.QWizardPage):
         )
         self._initialized_profile_id: str | None = None
         layout = QtWidgets.QFormLayout(self)
-        self.width = QtWidgets.QDoubleSpinBox()
+        self.width = NumericDoubleSpinBox()
         self.width.setRange(1.0, 5000.0)
         self.width.setDecimals(2)
         self.width.setSuffix(" mm")
-        self.height = QtWidgets.QDoubleSpinBox()
+        self.height = NumericDoubleSpinBox()
         self.height.setRange(1.0, 5000.0)
         self.height.setDecimals(2)
         self.height.setSuffix(" mm")
@@ -399,15 +400,15 @@ class _CameraPage(QtWidgets.QWizardPage):
             "These values configure the camera endpoint; calibration remains a separate review."
         )
         layout = QtWidgets.QFormLayout(self)
-        self.width = QtWidgets.QSpinBox()
+        self.width = NumericSpinBox()
         self.width.setRange(320, 7680)
         self.width.setValue(1920)
-        self.height = QtWidgets.QSpinBox()
+        self.height = NumericSpinBox()
         self.height.setRange(240, 4320)
         self.height.setValue(1080)
         self.autofocus = QtWidgets.QCheckBox("Start with camera autofocus")
         self.autofocus.setChecked(False)
-        self.focus = QtWidgets.QSpinBox()
+        self.focus = NumericSpinBox()
         self.focus.setRange(0, 250)
         self.focus.setValue(40)
         layout.addRow("Camera width", self.width)

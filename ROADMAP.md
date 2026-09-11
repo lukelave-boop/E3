@@ -1,5 +1,12 @@
 # Roadmap
 
+## Numeric editing consistency
+
+Shared draft-friendly numeric controls now cover desktop tabs and dialogs,
+including Z maximum editing and live refresh. Automated keyboard/focus checks
+cover accepted and rejected edits. Operator verification in the next frozen
+E3 DEV TEST build remains pending; no Pi or firmware change is needed.
+
 ## Desktop Ender Z controls
 
 Machine-tab jogging, live idle readback and persistent host maximum are built

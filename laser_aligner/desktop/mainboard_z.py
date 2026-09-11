@@ -118,17 +118,35 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         self.confirm.toggled.connect(self._sync)
         self.step.currentIndexChanged.connect(self._sync)
         self.maximum.valueChanged.connect(self._edit_maximum)
+        self.maximum.lineEdit().textEdited.connect(self._edit_maximum)
         self._sync()
 
-    def _edit_maximum(self) -> None:
+    def _edit_maximum(self, *_args: object) -> None:
         self._maximum_edited = True
         self._sync()
+
+    def _draft_maximum(self) -> float | None:
+        if not self.maximum.hasAcceptableInput():
+            return None
+        try:
+            value = _number(self.maximum.valueFromText(self.maximum.text()))
+        except ValueError:
+            return None
+        return value if value is not None and 20.0 <= value <= 80.0 else None
 
     def set_machine_status(self, status: Mapping[str, Any]) -> None:
         changed_session = _session(status) != _session(self._machine_status)
         self._machine_status = dict(status)
+        if changed_session:
+            # Discard the old session's draft before disabling its editor.
+            # Otherwise focus loss can commit it and mark it dirty again.
+            blocker = QtCore.QSignalBlocker(self.maximum)
+            self.maximum.setValue(self.maximum.value())
+            del blocker
         if changed_session or not _read_allowed(status):
             self.invalidate("Z readback unavailable", clear_confirmation=changed_session)
+        if changed_session:
+            self._maximum_edited = False
         self._sync()
 
     def set_busy(self, busy: bool) -> None:
@@ -219,9 +237,10 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         self.confirm.setEnabled(ready)
         self.step.setEnabled(ready)
         self.maximum.setEnabled(ready and fresh)
+        draft = self._draft_maximum()
         self.apply.setEnabled(bool(ready and fresh and self._maximum_edited
                                    and self._result.get("max_z_persistent") is True
-                                   and self.maximum.value() != maximum))
+                                   and draft is not None and draft != maximum))
         self.apply.setToolTip(
             "Save the maximum for this machine"
             if self._result.get("max_z_persistent") is True
@@ -237,7 +256,8 @@ class MainboardZPanel(QtWidgets.QGroupBox):
 
     def _apply(self) -> None:
         self.expire()
-        if self.apply.isEnabled():
+        if self.apply.isEnabled() and self._draft_maximum() is not None:
+            self.maximum.interpretText()
             self.maximumRequested.emit(float(self.maximum.value()))
 
 

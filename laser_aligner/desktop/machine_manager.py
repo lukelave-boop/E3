@@ -14,6 +14,7 @@ from ..errors import MachineError
 from ..machine.controller_dialects import CONTROLLER_DIALECT_REGISTRY
 from ..machine.network_transport import is_bridge_uri, parse_bridge_uri
 from ..machine.profiles import MachineInstance, MachineRegistryError
+from .controls import NumericDoubleSpinBox, NumericSpinBox
 from .machine_state import (
     format_running_controller_diagnostics,
     project_machine_state,
@@ -29,7 +30,7 @@ def _double_spin(
     decimals: int = 3,
     step: float = 1.0,
 ) -> QtWidgets.QDoubleSpinBox:
-    field = QtWidgets.QDoubleSpinBox()
+    field = NumericDoubleSpinBox()
     field.setRange(minimum, maximum)
     field.setDecimals(decimals)
     field.setSingleStep(step)
@@ -486,12 +487,12 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.protocol.addItem(dialect.display_name, dialect.id)
         self.port = QtWidgets.QLineEdit()
         self.port.setPlaceholderText("e3bridge://host:8765, COM4, or serial device")
-        self.baudrate = QtWidgets.QSpinBox()
+        self.baudrate = NumericSpinBox()
         self.baudrate.setRange(1, 4_000_000)
         self.baudrate.setKeyboardTracking(False)
         self.read_timeout = _double_spin(0.01, 120.0, decimals=2, step=0.25)
         self.startup_delay = _double_spin(0.0, 120.0, decimals=2, step=0.25)
-        self.grbl_idle_delay = QtWidgets.QSpinBox()
+        self.grbl_idle_delay = NumericSpinBox()
         self.grbl_idle_delay.setRange(0, 254)
         self.grbl_idle_delay.setSuffix(" ms")
         self.grbl_idle_delay.setToolTip(
@@ -556,7 +557,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             "The configured output always runs at 100%; recipes cannot select a "
             "percentage. Saved changes apply on the next E3 launch."
         )
-        self.air_assist_fan_index = QtWidgets.QSpinBox()
+        self.air_assist_fan_index = NumericSpinBox()
         self.air_assist_fan_index.setRange(MIN_FAN_INDEX, MAX_FAN_INDEX)
         self.air_assist_fan_index.setToolTip(
             "Marlin fan index used by M106 Pn S255 and M107 Pn."
@@ -571,7 +572,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             "opens this secondary device directly."
         )
         self.air_assist_port_label = QtWidgets.QLabel("Pi serial endpoint")
-        self.air_assist_baudrate = QtWidgets.QSpinBox()
+        self.air_assist_baudrate = NumericSpinBox()
         self.air_assist_baudrate.setRange(1, 4_000_000)
         self.air_assist_baudrate.setKeyboardTracking(False)
         self.air_assist_baudrate.setToolTip(
@@ -706,11 +707,11 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.power_mode = QtWidgets.QComboBox()
         self.power_mode.addItem("M4 dynamic power", "M4")
         self.power_mode.addItem("M3 constant power", "M3")
-        self.power_max = QtWidgets.QSpinBox()
+        self.power_max = NumericSpinBox()
         self.power_max.setRange(1, 1_000_000)
-        self.default_power = QtWidgets.QSpinBox()
+        self.default_power = NumericSpinBox()
         self.default_power.setRange(0, 1_000_000)
-        self.frame_power = QtWidgets.QSpinBox()
+        self.frame_power = NumericSpinBox()
         self.frame_power.setRange(0, 1_000_000)
         self.travel_feed = _double_spin(0.01, 1_000_000.0, decimals=1, step=100.0)
         self.engrave_feed = _double_spin(0.01, 1_000_000.0, decimals=1, step=100.0)
@@ -718,7 +719,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.boundary_margin = _double_spin(0.0, 100_000.0, decimals=3, step=0.25)
         self.spot_offset_x = _double_spin(-100_000.0, 100_000.0)
         self.spot_offset_y = _double_spin(-100_000.0, 100_000.0)
-        self.arm_timeout = QtWidgets.QSpinBox()
+        self.arm_timeout = NumericSpinBox()
         self.arm_timeout.setRange(1, 600)
         self.arm_timeout.setSuffix(" s")
         self.allow_low_power_frame = QtWidgets.QCheckBox("Allow low-power framing")

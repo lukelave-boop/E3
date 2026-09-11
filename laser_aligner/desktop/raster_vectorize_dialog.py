@@ -20,6 +20,7 @@ from ..project.raster_vectorize import (
     quick_preview_prepared_raster,
     vectorize_prepared_raster,
 )
+from .controls import NumericDoubleSpinBox, NumericSpinBox
 from .qt import require_qt
 from .tasks import FunctionTask
 
@@ -214,7 +215,7 @@ def _slider_row(
     slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
     slider.setRange(minimum, maximum)
     slider.setValue(value)
-    spin = QtWidgets.QSpinBox()
+    spin = NumericSpinBox()
     spin.setRange(minimum, maximum)
     spin.setValue(value)
     spin.setMaximumWidth(78)
@@ -458,7 +459,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         )
         form.addRow("Alpha cutoff", self.alpha_row)
 
-        self.minimum_feature_spin = QtWidgets.QDoubleSpinBox()
+        self.minimum_feature_spin = NumericDoubleSpinBox()
         self.minimum_feature_spin.setRange(0.0, 100_000.0)
         self.minimum_feature_spin.setDecimals(3)
         self.minimum_feature_spin.setSingleStep(0.05)
@@ -469,7 +470,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         )
         form.addRow("Minimum feature / speck area", self.minimum_feature_spin)
 
-        self.smoothing_spin = QtWidgets.QDoubleSpinBox()
+        self.smoothing_spin = NumericDoubleSpinBox()
         self.smoothing_spin.setRange(0.0, 25.0)
         self.smoothing_spin.setDecimals(3)
         self.smoothing_spin.setSingleStep(0.05)
@@ -480,7 +481,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         )
         form.addRow("Smoothing", self.smoothing_spin)
 
-        self.simplification_spin = QtWidgets.QDoubleSpinBox()
+        self.simplification_spin = NumericDoubleSpinBox()
         self.simplification_spin.setRange(0.001, 25.0)
         self.simplification_spin.setDecimals(3)
         self.simplification_spin.setSingleStep(0.025)

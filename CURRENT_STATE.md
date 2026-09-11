@@ -1,5 +1,34 @@
 # Current repository state
 
+## Active: natural numeric editing across desktop controls (2026-09-10)
+
+The operator reported blocked deletion/replacement and decimal entry across
+E3, including the new Z maximum field. Shared numeric controls now permit
+incomplete drafts and defer valueChanged until commit. All desktop numeric
+spinboxes and the stock-margin dialog use this behavior; explicit measurement
+units and canonical speed semantics remain. Unrounded final values must pass
+existing bounds before precision rounding. Invalid drafts restore the prior
+value without publishing a clamped replacement. Z maximum live polling preserves
+pending text and Apply validates the draft; a new controller session discards
+old edits. Browser scalar submission rejects empty/non-finite input.
+
+Verification: 168 focused Windows offscreen Qt/unit/browser checks and 10
+full-window action/queue checks passed, including actual keyboard, focus and
+mouse events. An additional 243 desktop migration checks passed. Repository Ruff and compileall passed. Local Python is 3.14.4.
+Full Windows Python 3.12 CI and the frozen feature build are pending. No live GUI, camera, serial or motion tests were run
+for this change. No Pi or firmware update is required. See docs/NUMERIC_INPUT.md.
+
+Operator context: the preceding e3-pi-z-controls-a1c79819 companion applied
+successfully on the Pi, border referencing returned Z20 and the operator
+reported completion of the initial small Z-jog check. Firmware capability
+E3_Z_LIMIT_80_V1 remains unconfirmed on the installed compact build. The numeric
+editing defect prevented the maximum-setting UI test from completing.
+
+Toolbar mirroring, aspect lock, stock layout and template nudges commit the
+focused number before acting. Save/Generate and layer changes also commit
+project numeric edits and flush only the deferred layer data queue before
+capturing a document snapshot; tree rebuilds remain outside native item signals.
+
 ## Active: desktop Ender Z controls and saved maximum (2026-09-10)
 
 The Machine tab now provides independent Ender Z-/Z+ controls, steps 0.1/1/5 mm,

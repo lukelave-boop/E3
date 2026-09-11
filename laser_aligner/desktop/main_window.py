@@ -124,7 +124,7 @@ from .controller import (
     DesktopController,
     image_to_qimage,
 )
-from .controls import InspectorTabs, WheelGuard
+from .controls import InspectorTabs, MeasurementSpinBox, WheelGuard
 from .icons import action_icon, apply_action_icons
 from .import_review import review_import_manifest
 from .job_preflight import JobPreflightDialog
@@ -231,6 +231,38 @@ LAYER_PALETTE_COLORS = (
     "#B9B35D", "#C88A56", "#5EAFB5", "#B065A8", "#D0D0D0",
     "#7184DC", "#DA7D8A", "#83CB91", "#D6CD77", "#DD9B68",
 )
+
+
+class _StockMarginDialog(QtWidgets.QDialog):
+    """Use the same editable measurement control as the rest of the editor."""
+
+    def __init__(self, value: float, parent: QtWidgets.QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Fit to stock margin")
+        layout = QtWidgets.QFormLayout(self)
+        self.margin = MeasurementSpinBox()
+        self.margin.setRange(0.0, 1000.0)
+        self.margin.setDecimals(2)
+        self.margin.setSuffix(" mm")
+        self.margin.setValue(value)
+        layout.addRow("Uncut edge margin:", self.margin)
+        self.buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+        )
+        self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setFocusPolicy(
+            QtCore.Qt.FocusPolicy.NoFocus,
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addRow(self.buttons)
+
+    def accept(self) -> None:
+        if not self.margin.hasAcceptableInput():
+            self.margin.setFocus()
+            return
+        self.margin.interpretText()
+        super().accept()
 
 
 class LayerPaletteBar(QtWidgets.QWidget):
@@ -394,6 +426,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._new_project_defaults_notice: str | None = None
         self._new_project_defaults_source: str | None = None
         self.document = self._new_document()
+        self._pending_layer_edits: list[tuple[ProjectDocument, str, dict[str, Any]]] = []
         self.history = CommandStack(max_depth=300)
         self.project_path: Path | None = None
         self.active_layer_id = self.document.active_layer_id
@@ -1132,10 +1165,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         # Layer table checkbox edits originate inside QTreeWidget::itemChanged.
         # Updating the project synchronously rebuilds that same tree, so defer
         # the edit until Qt has returned from the native itemChanged signal.
-        self.layer_panel.layerEdited.connect(
-            self._layer_edited,
-            QtCore.Qt.ConnectionType.QueuedConnection,
-        )
+        self.layer_panel.layerEdited.connect(self._queue_layer_edit)
         self.layer_panel.addLayerRequested.connect(self.add_layer)
         self.layer_panel.removeLayerRequested.connect(self.remove_layer)
         self.layer_panel.moveLayerRequested.connect(self.move_layer)
@@ -1498,6 +1528,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layerChoiceRequested.emit(self.workspace.selected_object_ids(), layer_id)
 
     def _apply_layer_choice(self, selected: list[str], layer_id: str) -> None:
+        self._commit_project_numeric_edit()
         if layer_id not in {layer.id for layer in self.document.layers}:
             return
         known = {item.id: item for item in self.document.objects}
@@ -1600,6 +1631,31 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.history.execute(command)
         self.active_layer_id = command.fallback_id
         self._refresh_document()
+
+    def _queue_layer_edit(self, layer_id: str, changes: dict[str, Any]) -> None:
+        self._pending_layer_edits.append((self.document, layer_id, dict(changes)))
+        QtCore.QTimer.singleShot(0, self._flush_layer_edits)
+
+    def _flush_layer_edits(self) -> None:
+        pending, self._pending_layer_edits = self._pending_layer_edits, []
+        for document, layer_id, changes in pending:
+            if document is self.document and layer_id in {layer.id for layer in document.layers}:
+                self._layer_edited(layer_id, changes)
+
+    def _commit_project_numeric_edit(self) -> None:
+        # Toolbar clicks and shortcuts need not move keyboard focus. Finish the
+        # active project editor before saving or capturing a toolpath snapshot.
+        focused = QtWidgets.QApplication.focusWidget()
+        while focused is not None and not isinstance(focused, QtWidgets.QAbstractSpinBox):
+            focused = focused.parentWidget()
+        if focused is not None and any(
+            panel.isAncestorOf(focused)
+            for panel in (self.layer_panel, self.context_bar, self.transform_panel)
+        ):
+            focused.clearFocus()
+        # Drain only our data queue, without re-entering unrelated Qt events or
+        # rebuilding a tree from inside its native itemChanged signal frame.
+        self._flush_layer_edits()
 
     def _layer_edited(self, layer_id: str, changes: dict[str, Any]) -> None:
         layer = self.document.get_layer(layer_id)
@@ -1964,17 +2020,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _set_custom_stock_margin(self) -> None:
-        margin, accepted = QtWidgets.QInputDialog.getDouble(
-            self,
-            "Fit to stock margin",
-            "Uncut edge margin:",
-            self.stock_layout_toolbar.fit_margin_mm,
-            0.0,
-            1000.0,
-            2,
-        )
-        if not accepted:
+        dialog = _StockMarginDialog(self.stock_layout_toolbar.fit_margin_mm, self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
+        margin = dialog.margin.value()
         self.stock_layout_toolbar.set_fit_margin(margin)
         self._fit_selection_to_stock(margin)
 
@@ -2615,6 +2664,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._refresh_document()
 
     def save_project(self, save_as: bool = False) -> bool:
+        self._commit_project_numeric_edit()
         destination = self.project_path
         if save_as or destination is None:
             filename, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -2652,6 +2702,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.show_notice("A job preparation is already in progress")
             return
 
+        self._commit_project_numeric_edit()
         source_document = self.document
         revision = self.document.revision
         try:
@@ -6611,6 +6662,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _confirm_discard_changes(self) -> bool:
+        self._commit_project_numeric_edit()
         if self.history.is_clean:
             return True
         answer = QtWidgets.QMessageBox.question(

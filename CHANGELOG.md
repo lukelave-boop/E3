@@ -1,6 +1,17 @@
 # Changelog
 ## Mainboard SD firmware and typed controls
 
+## Unreleased: numeric field editing
+
+- Allow clearing, digit replacement and incomplete decimals throughout desktop
+  numeric fields; validate on commit while retaining existing ranges and units.
+- Preserve unfinished Z maximum edits during live refresh and validate the
+  typed draft before Apply.
+- Reject empty browser scalar input at submission instead of coercing it to zero.
+
+- Commit the current number before related toolbar actions, project saves and
+  job generation, including deferred layer property edits.
+
 ## Unreleased: Machine-tab Z controls
 
 - Add Ender Z-/Z+ and reported Z height with asynchronous freshness handling.

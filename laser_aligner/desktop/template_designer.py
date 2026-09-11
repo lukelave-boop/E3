@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..templates import MAX_GRID_OBJECTS, ShapeKind, shape_polylines
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, NumericSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -321,10 +321,10 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self.shape_combo.setCurrentIndex(self.shape_combo.findData(ShapeKind.ROUNDED_RECTANGLE.value))
         self.corner_radius_spin = _spin(0.0, 12.5, value=3.0)
         self.corner_radius_spin.setToolTip("0 mm makes square corners; the maximum makes pill-shaped ends.")
-        self.polygon_sides_spin = QtWidgets.QSpinBox()
+        self.polygon_sides_spin = NumericSpinBox()
         self.polygon_sides_spin.setRange(3, 12)
         self.polygon_sides_spin.setValue(6)
-        self.star_points_spin = QtWidgets.QSpinBox()
+        self.star_points_spin = NumericSpinBox()
         self.star_points_spin.setRange(3, 12)
         self.star_points_spin.setValue(5)
         self.star_inner_ratio_spin = _spin(5.0, 95.0, value=50.0, suffix=" %")
@@ -350,11 +350,11 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         grid_form = QtWidgets.QFormLayout(grid_group)
         grid_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         grid_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
-        self.columns_spin = QtWidgets.QSpinBox()
+        self.columns_spin = NumericSpinBox()
         self.columns_spin.setRange(1, 999)
         self.columns_spin.setValue(3)
         self.columns_spin.setKeyboardTracking(False)
-        self.rows_spin = QtWidgets.QSpinBox()
+        self.rows_spin = NumericSpinBox()
         self.rows_spin.setRange(1, 999)
         self.rows_spin.setValue(4)
         self.rows_spin.setKeyboardTracking(False)

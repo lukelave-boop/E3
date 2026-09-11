@@ -1,5 +1,22 @@
 # Architecture
 
+## Numeric input drafts
+
+Desktop NumericDoubleSpinBox and NumericSpinBox share deferred keyboard
+tracking and an Intermediate validator state for incomplete numeric drafts.
+MeasurementSpinBox extends that behavior with existing unit parsing, while
+PercentageSpeedSpinBox retains canonical feed precision. Only valid committed
+values emit model changes; raw bounds are checked before display rounding.
+The Z maximum panel separately tracks text edits so idle status results cannot
+overwrite drafts, and validates pending text before its typed service request.
+Browser scalar inputs validate complete finite values at payload construction.
+Configuration/backend bounds and hardware authority remain unchanged.
+
+Project action boundaries finish a focused numeric editor before Save/Generate
+or layer selection. Layer edits are captured with their document identity and
+deferred through a data queue; explicit action flushes never pump unrelated Qt
+events. Late entries for another document or removed layer are discarded.
+
 ## Ender Z controls and persistence
 
 The desktop mainboard_z coordinator schedules typed read/jog/maximum requests

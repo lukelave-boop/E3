@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 
+from .controls import NumericDoubleSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -53,7 +54,7 @@ def speed_tooltip(
     return text
 
 
-class PercentageSpeedSpinBox(QtWidgets.QDoubleSpinBox):
+class PercentageSpeedSpinBox(NumericDoubleSpinBox):
     """Show/edit percent while setValue()/value() retain canonical feed semantics.
 
     Loading a value and changing its reference retain the exact source float.
@@ -189,6 +190,8 @@ class PercentageSpeedSpinBox(QtWidgets.QDoubleSpinBox):
     def stepBy(self, steps: int) -> None:
         if not _valid_limit(self._maximum_feed_mm_min):
             return
+        if self.hasPendingEdit():
+            self.interpretText()
         limit = float(self._maximum_feed_mm_min)
         feed = self._canonical_value + steps * limit / 100.0
         self.setValue(min(limit, max(1.0, feed)))

@@ -20,7 +20,7 @@ from ..core import CoreRuntime
 from ..machine.profiles import MachineRegistryError
 from ..units import parse_to_mm
 from .columns import configure_resizable_columns
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, NumericDoubleSpinBox
 from .coordinate_audit import CoordinateAuditPanel
 from .machine_state import (
     ControllerUiState,
@@ -2007,7 +2007,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.base_grid_status.setWordWrap(True)
         automatic_layout.addWidget(self.base_grid_status)
         automatic_form = QtWidgets.QHBoxLayout()
-        self.base_grid_power = QtWidgets.QDoubleSpinBox()
+        self.base_grid_power = NumericDoubleSpinBox()
         self.base_grid_power.setRange(0.0, 100.0)
         self.base_grid_power.setDecimals(1)
         self.base_grid_power.setSuffix(" %")
@@ -2282,10 +2282,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         explanation.setWordWrap(True)
         manual_layout.addWidget(explanation)
         form = QtWidgets.QFormLayout()
-        self.image_x = QtWidgets.QDoubleSpinBox()
+        self.image_x = NumericDoubleSpinBox()
         self.image_x.setRange(0, 10000)
         self.image_x.setDecimals(2)
-        self.image_y = QtWidgets.QDoubleSpinBox()
+        self.image_y = NumericDoubleSpinBox()
         self.image_y.setRange(0, 10000)
         self.image_y.setDecimals(2)
         self.machine_x = MeasurementSpinBox()
@@ -2437,7 +2437,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         instructions.setWordWrap(True)
         right.addWidget(instructions)
         form = QtWidgets.QFormLayout()
-        self.registration_power = QtWidgets.QDoubleSpinBox()
+        self.registration_power = NumericDoubleSpinBox()
         self.registration_power.setRange(0.0, 100.0)
         self.registration_power.setDecimals(1)
         self.registration_power.setSuffix(" %")
@@ -2600,7 +2600,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addWidget(text)
 
         form = QtWidgets.QFormLayout()
-        self.validation_power = QtWidgets.QDoubleSpinBox()
+        self.validation_power = NumericDoubleSpinBox()
         self.validation_power.setRange(0.0, 100.0)
         self.validation_power.setDecimals(1)
         self.validation_power.setSuffix(" %")

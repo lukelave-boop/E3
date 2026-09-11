@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..project import ObjectKind, ProjectDocument, SceneObject, Transform
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, NumericDoubleSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -163,6 +163,7 @@ class ContextPropertyBar(QtWidgets.QWidget):
         editor_layout.addWidget(self.scale_y_field, 1, 2)
 
         self.aspect_lock = QtWidgets.QToolButton()
+        self.aspect_lock.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.aspect_lock.setObjectName("contextAspectLock")
         self.aspect_lock.setText("Lock")
         self.aspect_lock.setCheckable(True)
@@ -327,7 +328,7 @@ class ContextPropertyBar(QtWidgets.QWidget):
         spin = (
             MeasurementSpinBox(storage="display")
             if suffix == " mm"
-            else QtWidgets.QDoubleSpinBox()
+            else NumericDoubleSpinBox()
         )
         spin.setObjectName("context" + accessible_name.replace(" ", "") + "Spin")
         spin.setRange(minimum, maximum)
@@ -375,6 +376,7 @@ class ContextPropertyBar(QtWidgets.QWidget):
         tooltip: str,
     ) -> QtWidgets.QToolButton:
         button = QtWidgets.QToolButton()
+        button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         button.setText(text)
         button.setCheckable(True)
         button.setAutoRaise(True)

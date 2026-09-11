@@ -12,7 +12,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.mainboard_z import (
@@ -153,6 +153,72 @@ def test_editing_limit_is_not_active_until_saved_and_polls_preserve_edit(panel):
     panel.set_result(result(max_z_mm=60, max_z_persistent=False, z_mm=30))
     assert not panel.apply.isEnabled()
     assert "support update" in panel.apply.toolTip()
+
+
+def test_clear_and_type_maximum_survives_live_poll_before_apply(panel, app):
+    panel.set_result(result())
+    editor = panel.maximum.lineEdit()
+    editor.setFocus()
+    panel.maximum.selectAll()
+    QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backspace)
+    assert panel.maximum.cleanText() == ""
+    panel.set_result(result(z_mm=20.1))
+    assert panel.maximum.cleanText() == ""
+    QtTest.QTest.keyClicks(editor, "4")
+    assert panel.maximum.cleanText() == "4"
+    assert not panel.apply.isEnabled()
+    panel.set_result(result(z_mm=20.2))
+    QtTest.QTest.keyClicks(editor, "0")
+    assert panel.maximum.cleanText() == "40"
+    assert panel.maximum.value() == 80  # Draft has not been committed.
+    assert panel.apply.isEnabled()
+    assert panel.active_maximum.text() == "Active maximum: 80 mm"
+    calls = []
+    panel.maximumRequested.connect(calls.append)
+    QtTest.QTest.mouseClick(panel.apply, QtCore.Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert calls == [40.0]
+
+
+@pytest.mark.parametrize("draft", ["", "4", "81", "-1"])
+def test_invalid_maximum_draft_cannot_be_applied(panel, draft):
+    panel.set_result(result())
+    editor = panel.maximum.lineEdit()
+    editor.setFocus()
+    panel.maximum.selectAll()
+    QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backspace)
+    QtTest.QTest.keyClicks(editor, draft)
+    calls = []
+    panel.maximumRequested.connect(calls.append)
+    assert not panel.apply.isEnabled()
+    panel._apply()
+    assert calls == []
+    assert panel.maximum.value() == 80
+
+
+@pytest.mark.parametrize("draft", ["40", "4"])
+def test_new_session_replaces_old_maximum_draft_without_focus_out_commit(panel, app, draft):
+    panel.set_result(result())
+    editor = panel.maximum.lineEdit()
+    editor.setFocus()
+    app.processEvents()
+    assert editor.hasFocus()
+    panel.maximum.selectAll()
+    QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backspace)
+    QtTest.QTest.keyClicks(editor, draft)
+    assert panel.maximum.value() == 80
+    assert panel.maximum.hasPendingEdit()
+    requests = []
+    panel.maximumRequested.connect(requests.append)
+    panel.set_machine_status(status(controller_session_generation=9))
+    app.processEvents()
+    assert not panel.maximum.hasPendingEdit()
+    assert not panel._maximum_edited
+    assert panel.maximum.value() == 80
+    panel.set_result(result(max_z_mm=60))
+    assert panel.maximum.value() == 60
+    assert not panel.apply.isEnabled()
+    assert requests == []
 
 
 @pytest.mark.parametrize("changes", [

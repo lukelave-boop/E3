@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, NumericDoubleSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -204,6 +204,8 @@ class TemplatePanel(QtWidgets.QWidget):
         ):
             button = QtWidgets.QToolButton()
             button.setText(label)
+            # Mouse nudges first commit (or reject) the focused numeric draft.
+            button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
             button.clicked.connect(
                 lambda checked=False, axis=axis, direction=direction: self._nudge(
                     axis, direction
@@ -308,7 +310,7 @@ class TemplatePanel(QtWidgets.QWidget):
         maximum: float,
         step: float,
     ) -> QtWidgets.QDoubleSpinBox:
-        spin = MeasurementSpinBox() if suffix == " mm" else QtWidgets.QDoubleSpinBox()
+        spin = MeasurementSpinBox() if suffix == " mm" else NumericDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setDecimals(3)
         spin.setSingleStep(step)

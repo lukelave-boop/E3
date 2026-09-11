@@ -37,6 +37,16 @@ function measurementMm(id) {
   return parseMeasurementMm($(id).value);
 }
 
+function numericValue(id) {
+  const text = String($(id).value).trim();
+  if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?$/i.test(text)) {
+    throw new Error('Finish entering a number before applying this change.');
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value)) throw new Error('Number must be finite.');
+  return value;
+}
+
 function csvMeasurementMm(value, defaultUnit) {
   const text = String(value).trim();
   return parseMeasurementMm(/[a-z\"]/i.test(text) ? text : `${text} ${defaultUnit}`);
@@ -426,15 +436,16 @@ function renderDesignOverlay() {
   let y;
   let width;
   let height;
+  let rotation;
   try {
     x = measurementMm('designX');
     y = measurementMm('designY');
     width = measurementMm('designWidth');
     height = measurementMm('designHeight');
+    rotation = numericValue('designRotation');
   } catch {
     return;
   }
-  const rotation = Number($('designRotation').value);
   const xPercent = (x - area.x_min) / (area.x_max - area.x_min) * 100;
   const yPercent = (area.y_max - y) / (area.y_max - area.y_min) * 100;
   overlay.style.display = 'block';
@@ -619,13 +630,13 @@ function placementPayload() {
     center_y_mm: measurementMm('designY'),
     width_mm: measurementMm('designWidth'),
     height_mm: measurementMm('designHeight'),
-    rotation_deg: Number($('designRotation').value),
+    rotation_deg: numericValue('designRotation'),
   };
 }
 
 function toolpathPayload() {
   return {
-    power: Number($('designPower').value),
+    power: numericValue('designPower'),
     engrave_feed_mm_min: measurementMm('designFeed'),
     travel_feed_mm_min: measurementMm('travelFeed'),
     optimize_order: true,
@@ -804,7 +815,7 @@ $('connectMachineButton').addEventListener('click', async () => {
   try {
     await api('/api/machine/connect', 'POST', {
       port: $('serialPort').value,
-      baudrate: Number($('serialBaud').value),
+      baudrate: numericValue('serialBaud'),
       protocol: $('serialProtocol').value,
     });
     await refreshStatus();

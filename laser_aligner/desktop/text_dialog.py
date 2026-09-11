@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .controls import NumericDoubleSpinBox
 from .qt import require_qt
 from .text_geometry import (
     TextVectorOptions,
@@ -39,7 +40,7 @@ class VectorTextDialog(QtWidgets.QDialog):
         self.mode_combo = QtWidgets.QComboBox()
         self.mode_combo.addItem("Outline cut", "outline")
         self.mode_combo.addItem("Stencil-safe cut", "stencil")
-        self.height_spin = QtWidgets.QDoubleSpinBox()
+        self.height_spin = NumericDoubleSpinBox()
         self.height_spin.setRange(2.0, 1000.0)
         self.height_spin.setDecimals(2)
         self.height_spin.setValue(25.0)
@@ -51,7 +52,7 @@ class VectorTextDialog(QtWidgets.QDialog):
         bridge_layout.setContentsMargins(0, 0, 0, 0)
         self.auto_bridge = QtWidgets.QCheckBox("Auto")
         self.auto_bridge.setChecked(True)
-        self.bridge_spin = QtWidgets.QDoubleSpinBox()
+        self.bridge_spin = NumericDoubleSpinBox()
         self.bridge_spin.setRange(0.2, 50.0)
         self.bridge_spin.setDecimals(2)
         self.bridge_spin.setSingleStep(0.25)

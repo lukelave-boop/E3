@@ -101,6 +101,7 @@ class StockLayoutToolBar(QtWidgets.QToolBar):
         self.addWidget(self.center_vertical_button)
 
         self.rotate_button = QtWidgets.QToolButton()
+        self.rotate_button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.rotate_button.setIcon(_layout_icon("rotate"))
         self.rotate_button.setIconSize(QtCore.QSize(22, 22))
         self.rotate_button.setToolTip(
@@ -131,6 +132,7 @@ class StockLayoutToolBar(QtWidgets.QToolBar):
         self.addWidget(self.rotate_button)
 
         self.fit_button = QtWidgets.QToolButton()
+        self.fit_button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.fit_button.setIcon(_layout_icon("fit"))
         self.fit_button.setIconSize(QtCore.QSize(22, 22))
         self.fit_button.setToolTip(
@@ -159,6 +161,7 @@ class StockLayoutToolBar(QtWidgets.QToolBar):
 
         self.addSeparator()
         self.more_button = QtWidgets.QToolButton()
+        self.more_button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.more_button.setText("Align")
         self.more_button.setIcon(_layout_icon("fit"))
         self.more_button.setIconSize(QtCore.QSize(20, 20))
@@ -198,6 +201,7 @@ class StockLayoutToolBar(QtWidgets.QToolBar):
         callback: Any,
     ) -> QtWidgets.QToolButton:
         button = QtWidgets.QToolButton()
+        button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         button.setIcon(_layout_icon(icon_kind))
         button.setIconSize(QtCore.QSize(22, 22))
         button.setToolTip(tooltip)

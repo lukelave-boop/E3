@@ -14,7 +14,7 @@ from ..project import (
 )
 from ..units import parse_to_mm
 from .columns import configure_resizable_columns
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, NumericDoubleSpinBox, NumericSpinBox
 from .machine_state import ControllerUiState, project_machine_state
 from .mainboard_z import MainboardZPanel
 from .qt import require_qt
@@ -175,7 +175,7 @@ class LayerPanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.power_spin = QtWidgets.QDoubleSpinBox()
+        self.power_spin = NumericDoubleSpinBox()
         self.power_spin.setRange(0.0, 100.0)
         self.power_spin.setDecimals(1)
         self.power_spin.setSuffix(" %")
@@ -184,7 +184,7 @@ class LayerPanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.passes_spin = QtWidgets.QSpinBox()
+        self.passes_spin = NumericSpinBox()
         self.passes_spin.setRange(1, 999)
         self.passes_spin.setToolTip("Number of passes")
         self.passes_spin.setSizePolicy(
@@ -219,12 +219,12 @@ class LayerPanel(QtWidgets.QWidget):
         self.interval_spin.setDecimals(3)
         self.interval_spin.setSuffix(" mm")
         self.interval_spin.setToolTip("Distance between fill/raster scan lines")
-        self.angle_spin = QtWidgets.QDoubleSpinBox()
+        self.angle_spin = NumericDoubleSpinBox()
         self.angle_spin.setRange(-180.0, 180.0)
         self.angle_spin.setDecimals(1)
         self.angle_spin.setSuffix("°")
         self.angle_spin.setToolTip("Fill/raster scan angle")
-        self.overscan_spin = QtWidgets.QDoubleSpinBox()
+        self.overscan_spin = NumericDoubleSpinBox()
         self.overscan_spin.setRange(0.0, 100.0)
         self.overscan_spin.setDecimals(1)
         self.overscan_spin.setSuffix(" %")
@@ -245,7 +245,7 @@ class LayerPanel(QtWidgets.QWidget):
         correction_layout.setContentsMargins(6, 8, 6, 6)
         correction_layout.setHorizontalSpacing(4)
         correction_layout.setVerticalSpacing(2)
-        self.vector_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.vector_correction_spin = NumericDoubleSpinBox()
         self.vector_correction_spin.setRange(-100.0, 100.0)
         self.vector_correction_spin.setDecimals(1)
         self.vector_correction_spin.setSuffix(" %")
@@ -254,7 +254,7 @@ class LayerPanel(QtWidgets.QWidget):
             "changes. 0 uses normal GRBL M4 dynamic power only. Negative values "
             "reduce power further; positive values increase it."
         )
-        self.raster_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.raster_correction_spin = NumericDoubleSpinBox()
         self.raster_correction_spin.setRange(-100.0, 100.0)
         self.raster_correction_spin.setDecimals(1)
         self.raster_correction_spin.setSuffix(" %")
@@ -745,7 +745,7 @@ class TransformPanel(QtWidgets.QWidget):
 
     @staticmethod
     def _spin(minimum: float, maximum: float, suffix: str) -> QtWidgets.QDoubleSpinBox:
-        spin = MeasurementSpinBox() if suffix == " mm" else QtWidgets.QDoubleSpinBox()
+        spin = MeasurementSpinBox() if suffix == " mm" else NumericDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setDecimals(3)
         spin.setSingleStep(1.0)
@@ -1073,7 +1073,7 @@ class CameraPanel(QtWidgets.QWidget):
         self.focus_slider.setRange(0, 250)
         self.focus_slider.setSingleStep(5)
         self.focus_slider.setPageStep(10)
-        self.focus_spin = QtWidgets.QSpinBox()
+        self.focus_spin = NumericSpinBox()
         self.focus_spin.setRange(0, 250)
         self.focus_spin.setSingleStep(5)
         self.focus_spin.setSuffix(" focus")
@@ -1314,9 +1314,9 @@ class CameraPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(dialog)
         form = _form_layout()
         current = self.focus_spin.value()
-        start = QtWidgets.QSpinBox()
-        end = QtWidgets.QSpinBox()
-        step = QtWidgets.QSpinBox()
+        start = NumericSpinBox()
+        end = NumericSpinBox()
+        step = NumericSpinBox()
         for widget in (start, end):
             widget.setRange(0, 250)
             widget.setSingleStep(5)
@@ -1400,16 +1400,16 @@ class TracePanel(QtWidgets.QWidget):
             "Choose automatic, color-based, or contrast-based candidate detection. "
             "Detected candidates are selected directly on the camera image."
         )
-        self.target_hue = QtWidgets.QDoubleSpinBox()
+        self.target_hue = NumericDoubleSpinBox()
         self.target_hue.setRange(-1.0, 179.0)
         self.target_hue.setDecimals(0)
         self.target_hue.setSpecialValueText("Automatic")
         self.target_hue.setValue(-1.0)
-        self.hue_tolerance = QtWidgets.QDoubleSpinBox()
+        self.hue_tolerance = NumericDoubleSpinBox()
         self.hue_tolerance.setRange(1.0, 90.0)
         self.hue_tolerance.setValue(14.0)
         self.hue_tolerance.setSuffix(" hue")
-        self.min_saturation = QtWidgets.QSpinBox()
+        self.min_saturation = NumericSpinBox()
         self.min_saturation.setRange(0, 255)
         self.min_saturation.setValue(45)
         self.contrast_threshold_mode = QtWidgets.QComboBox()
@@ -1421,7 +1421,7 @@ class TracePanel(QtWidgets.QWidget):
             "Manual applies the selected value to that same normalized local-contrast "
             "raster."
         )
-        self.contrast_threshold = QtWidgets.QSpinBox()
+        self.contrast_threshold = NumericSpinBox()
         self.contrast_threshold.setRange(0, 255)
         self.contrast_threshold.setValue(128)
         self.contrast_threshold.setToolTip(
@@ -1515,7 +1515,7 @@ class TracePanel(QtWidgets.QWidget):
         self.min_height.setRange(0.1, 1000.0)
         self.min_height.setValue(3.0)
         self.min_height.setSuffix(" mm")
-        self.confidence = QtWidgets.QDoubleSpinBox()
+        self.confidence = NumericDoubleSpinBox()
         self.confidence.setRange(0.0, 100.0)
         self.confidence.setValue(55.0)
         self.confidence.setSuffix(" %")
@@ -3584,31 +3584,31 @@ class MaterialPanel(QtWidgets.QWidget):
         for mode in LayerMode:
             self.mode_combo.addItem(mode.value.title(), mode.value)
         self.speed_spin = PercentageSpeedSpinBox(max_work_feed_mm_min)
-        self.power_spin = QtWidgets.QDoubleSpinBox()
+        self.power_spin = NumericDoubleSpinBox()
         self.power_spin.setRange(0.0, 100.0)
         self.power_spin.setSuffix(" %")
-        self.passes_spin = QtWidgets.QSpinBox()
+        self.passes_spin = NumericSpinBox()
         self.passes_spin.setRange(1, 999)
         self.interval_spin = MeasurementSpinBox()
         self.interval_spin.setRange(0.001, 100.0)
         self.interval_spin.setDecimals(3)
         self.interval_spin.setSuffix(" mm")
-        self.scan_angle_spin = QtWidgets.QDoubleSpinBox()
+        self.scan_angle_spin = NumericDoubleSpinBox()
         self.scan_angle_spin.setRange(-360.0, 360.0)
         self.scan_angle_spin.setDecimals(1)
         self.scan_angle_spin.setSuffix("\N{DEGREE SIGN}")
-        self.overscan_spin = QtWidgets.QDoubleSpinBox()
+        self.overscan_spin = NumericDoubleSpinBox()
         self.overscan_spin.setRange(0.0, 100.0)
         self.overscan_spin.setDecimals(2)
         self.overscan_spin.setSuffix(" %")
         self.air_assist_check = QtWidgets.QCheckBox("Use air assist")
-        self.vector_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.vector_correction_spin = NumericDoubleSpinBox()
         self.vector_correction_spin.setRange(-100.0, 100.0)
         self.vector_correction_spin.setSuffix(" %")
         self.vector_correction_spin.setToolTip(
             "Material-specific commanded-power bias near vector direction changes"
         )
-        self.raster_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.raster_correction_spin = NumericDoubleSpinBox()
         self.raster_correction_spin.setRange(-100.0, 100.0)
         self.raster_correction_spin.setSuffix(" %")
         self.raster_correction_spin.setToolTip(
