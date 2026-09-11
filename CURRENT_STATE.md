@@ -1,5 +1,31 @@
 # Current repository state
 
+## Verified focus feature handoff (2026-09-10)
+
+E3 DEV TEST now selects Gauge focus and raised surfaces, version 0.7.65,
+exact code revision e69550b79ccd3e7a24e559dc2fe6185272143b19, from
+`.codex-worktrees/laser-focus-dev/dist/E3/E3.exe`. The frozen executable and
+adjacent build-info match; all 312 packaged E3 modules matched that checkout.
+The required Windows build script and native-library guard passed. The normal
+launcher was not changed. Offscreen UI rendering/tests were performed; the
+frozen application was not interactively connected to hardware.
+
+Fast Development CI 34550282514 passed on that exact revision: Windows Python
+3.12 full suite 5,082 passed/25 skipped; POSIX transport/session recovery 493
+passed; Ruff, dependency and compile checks passed. CI:
+https://github.com/lukelave-boop/E3/actions/runs/34550282514
+
+The actual a43df3a1 Pi installer was also applied to a local reconstruction of
+the operator-installed a1c79819 baseline: all 11 target hashes matched,
+configuration/Z-limit/cooling files were preserved, and reapplication was
+idempotent. Only the service-state check was stubbed; no Pi was accessed.
+The staged handoff is `dist/laser-focus-0.7.65/START_HERE.md`; artifact hashes
+and exact build metadata are in its adjacent `verification.json`. Application
+USB update, new native V2 probing, teaching and physical gauge acceptance are
+still operator work. No hardware qualification or automatic job focus is
+claimed. This development branch remains active for that qualification and
+subsequent job integration.
+
 ## Active: gauge-taught laser focus and raised-surface setup (2026-09-10)
 
 A new explicit laser-off focus workflow teaches the operator's 7 mm gauge
