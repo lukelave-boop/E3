@@ -2,10 +2,11 @@
 
 ## Numeric editing consistency
 
-Shared draft-friendly numeric controls now cover desktop tabs and dialogs,
-including Z maximum editing and live refresh. Automated keyboard/focus checks
-cover accepted and rejected edits. Operator verification in the next frozen
-E3 DEV TEST build remains pending; no Pi or firmware change is needed.
+Shared numeric controls cover desktop tabs and dialogs, including Z maximum
+editing and live refresh. E3 DEV TEST 0.7.63 is selected at revision 11db1bc;
+full Windows and focused POSIX CI passed. Automated keyboard/focus/action
+checks cover accepted and rejected edits, Save/Generate and layer selection.
+Operator verification remains pending; no Pi or firmware change is needed.
 
 ## Desktop Ender Z controls
 

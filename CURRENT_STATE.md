@@ -15,7 +15,7 @@ old edits. Browser scalar submission rejects empty/non-finite input.
 Verification: 168 focused Windows offscreen Qt/unit/browser checks and 10
 full-window action/queue checks passed, including actual keyboard, focus and
 mouse events. An additional 243 desktop migration checks passed. Repository Ruff and compileall passed. Local Python is 3.14.4.
-Full Windows Python 3.12 CI and the frozen feature build are pending. No live GUI, camera, serial or motion tests were run
+Full Windows Python 3.12 CI passed and the frozen feature EXE is selected. No live GUI, camera, serial or motion tests were run
 for this change. No Pi or firmware update is required. See docs/NUMERIC_INPUT.md.
 
 Operator context: the preceding e3-pi-z-controls-a1c79819 companion applied
@@ -28,6 +28,22 @@ Toolbar mirroring, aspect lock, stock layout and template nudges commit the
 focused number before acting. Save/Generate and layer changes also commit
 project numeric edits and flush only the deferred layer data queue before
 capturing a document snapshot; tree rebuilds remain outside native item signals.
+
+Fast CI for 11db1bc5b980ebac6294ddca73f63c3e0dd49687 passed: Windows
+Python 3.12 full desktop suite 4964 passed/25 skipped, focused POSIX suite
+493 passed, Ruff, dependency and bytecode validation passed. The additional
+local layer-panel/Z/job-preparation regression group passed 155 checks.
+CI: https://github.com/lukelave-boop/E3/actions/runs/34547013092
+
+Frozen E3 DEV TEST 0.7.63 was produced with packaging/build_windows.ps1
+and E3_BUILD_VERSION=0.7.63 from .codex-worktrees/numeric-entry-dev at that
+exact revision. Build metadata matches; all 154 packaged E3 Python modules
+were traced to the isolated checkout and the bundled-library guard passed.
+EXE SHA-256: 2dea29b1d66a3540e01cfc76df1ea91545b7f53b89b7d4c17297c5e264b6f6e2.
+The permanent current-feature.json was selected with the validated helper and
+read back successfully. A mock-status Z panel was rendered offscreen and
+visually inspected with a pending40 draft and active80 maximum. This is not
+operator or hardware verification. The ordinary E3 launcher is unchanged.
 
 ## Active: desktop Ender Z controls and saved maximum (2026-09-10)
 
