@@ -1,5 +1,14 @@
 # Roadmap
 
+## Gauge focus calibration
+
+Implemented for operator testing: native border reference and surface probing,
+7 mm gauge teaching, 5/3 mm derived gaps, persistent mounting offset, explicit
+preview/position/clearance, and raised-surface V2 firmware. Next: verify actual
+gauge fit at multiple elevations, then bind the accepted surface/calibration to
+job preparation and coordinate a final Z lift before post-job XY homing. Camera
+projection correction for raised work remains an independent calibration task.
+
 ## Numeric editing consistency
 
 Shared numeric controls cover desktop tabs and dialogs, including Z maximum

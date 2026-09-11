@@ -1,5 +1,39 @@
 # Current repository state
 
+## Active: gauge-taught laser focus and raised-surface setup (2026-09-10)
+
+A new explicit laser-off focus workflow teaches the operator's 7 mm gauge
+setting from a measured surface and acknowledged Ender Z. The 5 and 3 mm
+selections lower the target by 2 and 4 mm. Surface elevation is not called
+material thickness. A machine-bound, validated calibration sidecar survives
+restart; border references, measured surfaces and movement previews do not.
+New G39 C/H V2 probing retains native fast/slow handling and constrains contact
+by selected clearance, actual probe geometry and the firmware Z80 ceiling.
+The old parameterless G39 V1 path remains available.
+
+The desktop provides native reference/measure, small teaching jogs, save,
+preview, move and return-to-clearance from Machine and Machine Setup. Ordinary
+XY/Home/arming/job starts are blocked while the focus path requires clearance.
+This is calibration and position validation, not automatic job focus, per-layer
+focus, or camera height correction. Actual gauge fit, accuracy within the
+operator's 0.6 mm tolerance, raised-surface behavior and recovery require new
+physical validation. Earlier operator fan/probe/Z observations remain evidence
+for their exact older builds only. No hardware, service or firmware upload was
+operated by the assistant. The Pi companion is e3-pi-laser-focus-a43df3a1 and the compact F401 V2
+firmware candidate is e3-mainboard-f401-usb-9518b83f. See docs/LASER_FOCUS.md.
+
+Verification: 114 combined new focus/backend/RPC/installer/AppContext/Qt
+tests passed; 138 desktop focus/Z/setup tests passed. Existing backend
+regression groups passed (271 service/RPC and 383 probe/session/job/desktop
+tests), as did the 128-test installation/cooling/Z group. These groups
+overlap. Repository Ruff and compileall passed. The offscreen dialog was
+rendered and visually checked; no interactive or physical controller test
+was run. Firmware: 111 focused tests, compiled ARM probing in three
+configurations, planner/output/M997 audits, and three pristine source
+profile reproductions passed. The Windows frozen build and CI results are
+recorded in the subsequent handoff; this branch remains experimental until
+operator validation and job-integration work are complete.
+
 ## Active: natural numeric editing across desktop controls (2026-09-10)
 
 The operator reported blocked deletion/replacement and decimal entry across

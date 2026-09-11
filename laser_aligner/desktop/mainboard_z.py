@@ -48,6 +48,7 @@ class MainboardZPanel(QtWidgets.QGroupBox):
     jogRequested = QtCore.Signal(float)
     maximumRequested = QtCore.Signal(float)
     refreshRequested = QtCore.Signal()
+    focusRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__("Z axis · Ender", parent)
@@ -110,11 +111,15 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         layout.addWidget(self.message, 6, 0, 1, 3)
         self.refresh = QtWidgets.QPushButton("Refresh")
         layout.addWidget(self.refresh, 6, 3)
+        self.focus = QtWidgets.QPushButton("Surface / laser focus…")
+        self.focus.setToolTip("Measure surface elevation and teach or apply the laser's gauge offset.")
+        layout.addWidget(self.focus, 7, 0, 1, 4)
         layout.setColumnStretch(2, 1)
         self.down.clicked.connect(lambda: self._jog(-1))
         self.up.clicked.connect(lambda: self._jog(1))
         self.apply.clicked.connect(self._apply)
         self.refresh.clicked.connect(self.refreshRequested)
+        self.focus.clicked.connect(self.focusRequested)
         self.confirm.toggled.connect(self._sync)
         self.step.currentIndexChanged.connect(self._sync)
         self.maximum.valueChanged.connect(self._edit_maximum)

@@ -1,4 +1,18 @@
 # Changelog
+
+## Gauge-taught focus setup (2026-09-10)
+
+- Added a shared Machine/Machine Setup surface and laser-focus workflow with
+  persistent 7 mm gauge teaching, 5/3 mm derived gaps, target previews and
+  explicit laser-off positioning/clearance return.
+- Added bounded G39 C/H V2 probing for raised surfaces, runtime probe-geometry
+  reporting and the compact firmware Z80 guard; retained parameterless V1.
+- Kept surface elevation distinct from material thickness, invalidated stale
+  measurement/preview authority, and blocked XY/Home/arming/jobs while a
+  calibration descent still requires a clearance lift.
+- Added a hash-checked Pi companion. Hardware calibration and job-bound focus
+  integration remain pending physical acceptance.
+
 ## Mainboard SD firmware and typed controls
 
 ## Unreleased: numeric field editing

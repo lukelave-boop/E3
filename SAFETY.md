@@ -1,4 +1,18 @@
 # Safety requirements
+
+The new [gauge-focus setup](docs/LASER_FOCUS.md) is an explicit laser-off
+calibration/positioning workflow. It requires surface-height V2 firmware and
+the matching Pi service; it does not enable the suspended legacy probe path.
+Its taught offset and expanded native probe envelope are implemented for
+operator validation, not physically qualified by earlier firmware tests.
+Measured top-surface elevation includes supports and is not material thickness.
+Preview is read-only; movement requires current measurement/session/geometry
+and bounds checks. A clearance restriction blocks ordinary XY/Home/arming/job
+starts after a focus descent until an acknowledged clearance lift. The operator
+must still confirm the actual path, flat patch, gauge fit and changed workpiece.
+No focus actions fire the laser or provide safety-rated stopping or collision
+detection. Job-bound focus and a coordinated post-job lift remain separate work.
+
 The current [mainboard firmware](firmware/marlin_mainboard/README.md) is ready
 for operator physical validation. It adds independent real fan outputs; these
 are no longer BENCH simulation. MachineService admits only typed idle controls,

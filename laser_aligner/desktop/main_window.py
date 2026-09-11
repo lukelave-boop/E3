@@ -134,6 +134,7 @@ from .job_preview import (
     PreparedJobPreview,
     prepare_job_preview,
 )
+from .laser_focus import LaserFocusDialog
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
 from .machine_state import ControllerUiState, project_machine_state
@@ -442,6 +443,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._job_preview_dialog: JobPreviewDialog | None = None
         self._machine_manager_dialog: MachineManagerDialog | None = None
         self._machine_setup_dialog: MachineSetupDialog | None = None
+        self._laser_focus_dialog: LaserFocusDialog | None = None
         self._pending_calibration_capture: dict[str, Any] | None = None
         self._busy = False
         self._controller_busy = False
@@ -1298,6 +1300,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.mainboard_z = MainboardZCoordinator(
             self.machine_panel.z_control, self.controller, self,
         )
+        self.machine_panel.z_control.focusRequested.connect(self.open_laser_focus)
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
         self.material_panel.applyPresetRequested.connect(self.apply_material_preset)
         self.material_panel.notice.connect(self.show_notice)
@@ -6339,6 +6342,27 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._machine_manager_dialog = None
             self._refresh_machine_selector()
 
+    def open_laser_focus(self) -> None:
+        existing = self._laser_focus_dialog
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+        setup = self._machine_setup_dialog
+        if setup is not None and setup.operation_busy:
+            return
+        dialog = LaserFocusDialog(self.controller, setup or self)
+        self._laser_focus_dialog = dialog
+        dialog.set_machine_status(self._machine_status)
+        try:
+            dialog.exec()
+        finally:
+            if not dialog.coordinator._closed:
+                dialog.coordinator.close()
+            self._laser_focus_dialog = None
+            dialog.deleteLater()
+            self.controller.poll_status()
+
     def open_machine_setup(
         self,
         tab_index: int = 0,
@@ -6370,6 +6394,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             controller_operation_scope=self.controller.controller_worker_scope,
         )
         self._machine_setup_dialog = dialog
+        dialog.laserFocusRequested.connect(self.open_laser_focus)
         if self._machine_status:
             dialog.set_machine_status(self._machine_status)
         dialog.tabs.setCurrentIndex(tab_index)
@@ -6921,6 +6946,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._cancel_job_preparation("Application is closing")
         self._cancel_job_render()
         self._invalidate_generated_job(cancel_preparation=False)
+        focus_dialog = getattr(self, "_laser_focus_dialog", None)
+        if focus_dialog is not None:
+            focus_dialog.coordinator.close()
+            QtWidgets.QDialog.done(focus_dialog, 0)
         machine_setup_dialog = getattr(self, "_machine_setup_dialog", None)
         if machine_setup_dialog is not None:
             try:

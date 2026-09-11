@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import struct
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
@@ -73,10 +74,11 @@ def audit_profile(path: Path) -> None:
     if any(name in symbols for name in forbidden):
         raise ValueError("A removed heater/filament command is still linked")
 
-    for device, capacity in ((0x423, 256), (0x433, 512), (0x999, 123)):
+    for device, capacity, offset in ((0x423, 256, 0.0), (0x433, 512, -2.375), (0x999, 123, -10.0)):
         emulator, names = load(path)
         emulator.mem_write(0xE0042000, (0x10000000 | device).to_bytes(4, "little"))
         emulator.mem_write(0x1FFF7A22, capacity.to_bytes(2, "little"))
+        emulator.mem_write(names["_ZN5Probe6offsetE"] + 8, struct.pack("<f", offset))
         output = bytearray()
 
         def write_byte(emulator, _address, _size, _data, output=output):
@@ -93,6 +95,8 @@ def audit_profile(path: Path) -> None:
                     "Cap:E3_MAINBOARD_V1:1", "Cap:E3_MATERIAL_HEIGHT_V1:1",
                     "Cap:E3_USB_UPDATER_F401_V1:1", "Cap:E3_COMPACT_F401_V1:1",
                     "Cap:E3_Z_LIMIT_80_V1:1",
+                    "Cap:E3_SURFACE_HEIGHT_V2:1",
+                    f"E3SG:2 PROBE_Z:{offset:.6f} RETRACT:5.000000 MIN:-2 MAX:65 CEILING:80",
                     "Cap:SDCARD:0", f"E3HW:1 MCU:{device:X} FLASH_KIB:{capacity}")
         if any(part not in text for part in expected):
             raise ValueError(f"Native M115 reported wrong capabilities/hardware: {text}")

@@ -1483,6 +1483,20 @@ class PiJobService:
             expected_session_generation=expected_session_generation,
         )
 
+    def focus_control(
+        self, action: str, *, confirmed=False, value=None, clearance_z_mm=30.0,
+        gap_mm=7.0, measurement_id=None, preview_id=None,
+        expected_session_generation=None, connection_alive=None,
+    ):
+        return self._run_idle_machine_operation(
+            "position laser focus",
+            lambda: self.machine.focus_control(
+                action, confirmed=confirmed, value=value, clearance_z_mm=clearance_z_mm,
+                gap_mm=gap_mm, measurement_id=measurement_id, preview_id=preview_id,
+                _connection_alive=connection_alive,
+            ), expected_session_generation=expected_session_generation,
+        )
+
     def mainboard_control(
         self, action: str, value: int | float | None, *, confirmed: bool,
         expected_session_generation: int | None = None, connection_alive: Any = None,

@@ -75,6 +75,7 @@ ACTION_MACHINE_JOG = "machine.jog"
 ACTION_MACHINE_PROBE_Z = "machine.probe_z"
 ACTION_MACHINE_PROBE_PIN = "machine.probe_pin"
 ACTION_MACHINE_MAINBOARD = "machine.mainboard"
+ACTION_MACHINE_FOCUS = "machine.focus_control"
 ACTION_MACHINE_COMMAND = "machine.command"
 ACTION_MACHINE_REALTIME_POSITION = "machine.realtime_position"
 ACTION_MACHINE_STEPPER_HOLD = "machine.stepper_hold"
@@ -92,6 +93,7 @@ MACHINE_ACTIONS = frozenset(
         ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_PROBE_PIN,
         ACTION_MACHINE_MAINBOARD,
+        ACTION_MACHINE_FOCUS,
         ACTION_MACHINE_COMMAND,
         ACTION_MACHINE_REALTIME_POSITION,
         ACTION_MACHINE_STEPPER_HOLD,
@@ -101,6 +103,7 @@ MACHINE_ACTIONS = frozenset(
 
 SERVER_CAPABILITIES = (
     "pi-mainboard-z-v1",
+    "pi-laser-focus-v1",
     "pi-creality-z-probe-v1",
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
@@ -115,6 +118,11 @@ SERVER_CAPABILITIES = (
 # `action` and canonical UUID `request_id` are required on every request in
 # addition to the per-action fields below.
 SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    ACTION_MACHINE_FOCUS: {
+        "required": ("control", "confirmed", "value", "clearance_z_mm", "gap_mm", "measurement_id", "preview_id"),
+        "optional": (),
+        "response": ("result",),
+    },
     ACTION_MACHINE_MAINBOARD: {
         "required": ("control", "value", "confirmed"),
         "optional": (),
@@ -295,6 +303,7 @@ _SHUTDOWN_JOIN_SECONDS = 2.0
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
         ACTION_MACHINE_MAINBOARD,
+        ACTION_MACHINE_FOCUS,
         ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_PROBE_PIN,
         ACTION_MACHINE_CONNECT,
@@ -670,6 +679,15 @@ class PiMachineServer:
                     expected_session_generation=expected_generation,
                 )
             }
+        if action == ACTION_MACHINE_FOCUS:
+            return {"result": self.service.focus_control(
+                request.get("control"), confirmed=_exact_bool(request.get("confirmed"), "confirmed"),
+                value=request.get("value"), clearance_z_mm=_number(request.get("clearance_z_mm"), "clearance_z_mm"),
+                gap_mm=_number(request.get("gap_mm"), "gap_mm"),
+                measurement_id=request.get("measurement_id"), preview_id=request.get("preview_id"),
+                expected_session_generation=expected_generation,
+                connection_alive=getattr(self._probe_connection, "alive", None),
+            )}
         if action == ACTION_MACHINE_MAINBOARD:
             return {"result": self.service.mainboard_control(
                 request.get("control"), request.get("value"),

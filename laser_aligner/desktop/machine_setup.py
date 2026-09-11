@@ -783,6 +783,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
     calibrationChanged = QtCore.Signal()
     registrationJobPrepared = QtCore.Signal(object)
     validationJobPrepared = QtCore.Signal(object)
+    laserFocusRequested = QtCore.Signal()
 
     def __init__(
         self,
@@ -909,16 +910,22 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._build_registration_tab()
         self._build_check_tab()
         self._build_coordinate_audit_tab()
-        from .z_probe import ZProbePanel
-
         probe_tab = QtWidgets.QWidget()
         probe_layout = QtWidgets.QVBoxLayout(probe_tab)
-        self.z_probe_panel = ZProbePanel(self.context, self._start_operation, probe_tab)
-        for button in self.z_probe_panel.motion_buttons:
-            self._register_motion_action(button)
-        probe_layout.addWidget(self.z_probe_panel)
+        focus_note = QtWidgets.QLabel(
+            "Use Surface / laser focus to establish the border reference, measure a flat "
+            "surface (including raised work), and teach the laser's 7 mm gauge offset. "
+            "Then preview and move to a 7, 5 or 3 mm gap.\n\n"
+            "The taught gauge offset is saved for future surfaces. Focus positioning "
+            "is an explicit laser-off setup step before a job."
+        )
+        focus_note.setWordWrap(True)
+        probe_layout.addWidget(focus_note)
+        self.laser_focus_button = QtWidgets.QPushButton("Surface / laser focus…")
+        self.laser_focus_button.clicked.connect(self.laserFocusRequested)
+        probe_layout.addWidget(self.laser_focus_button)
         probe_layout.addStretch()
-        self._add_scrollable_tab(probe_tab, "7 · Material height")
+        self._add_scrollable_tab(probe_tab, "7 · Z / laser focus")
         self._restore_preferences()
         footer = QtWidgets.QHBoxLayout()
         self.operation_status = QtWidgets.QLabel(self._operation_outcome)

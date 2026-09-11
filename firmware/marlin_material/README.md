@@ -44,6 +44,36 @@ G39 never falls back to G30. Both the border check and material use the same
 method. No desktop controls are unblocked and no camera correction is applied.
 The software is not safety-rated. This baseline still reports no emergency parser.
 
+## Raised-surface V2 contract
+
+The exact `Cap:E3_SURFACE_HEIGHT_V2:1` capability adds
+`G39 C<clearance> H<maximum_contact>` without changing bare G39/V1. Both
+parameters are required exactly once, in either order. Values use finite decimal
+syntax; unknown/duplicate parameters, exponents, missing values and trailing junk
+are rejected. Clearance is 20..80 mm and maximum contact is -2..65 mm, both
+in the border-homed native frame. Minimum contact remains -2 mm.
+
+V2 requires current Z within 0.05 mm of the requested clearance, never above Z80,
+plus the same trusted, absolute-mm, stowed-probe, zero-Z-workspace-offset and
+leveling-off preconditions. The requested upper contact, runtime probe Z offset
+and native retract must fit at or below the current clearance. Native deployment
+headroom is checked independently. A maximum contact is a limit, not a promise
+that a surface is clear of the tool or the raised pin.
+
+The temporary envelope exists only inside that one native fast/retract/slow/stow
+cycle. Both touches must lie inside it. Every ordinary return, including deploy,
+contact and stow failure, restores V1 defaults; a nested call rejects. Neither
+version homes, moves XY, changes coordinates, nor performs a fixed final lift.
+The caller verifies success, raises to clearance through its guarded normal
+controller path and verifies that position.
+
+V2 returns `E3MH:2 Z:<contact to three decimal places>` or
+`Error:E3MH:2 ARGUMENTS`, `PRECONDITION`, or `PROBE_FAILED`. M115 also reports
+`E3SG:2 PROBE_Z:<runtime offset to six decimals> RETRACT:<native retract to six decimals> MIN:-2 MAX:65 CEILING:80`.
+The host can bind calibration to that geometry; the compact profile additionally
+advertises and enforces `E3_Z_LIMIT_80_V1` in the actual planner. Software tests
+do not establish attached-mechanics behavior or measurement accuracy.
+
 ## Source and loader layout
 
 `baseline.json` pins Creality `s1_pro_plus` at

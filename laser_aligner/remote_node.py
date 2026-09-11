@@ -17,6 +17,7 @@ from .camera.service import CameraService
 from .config import Settings, load_settings
 from .errors import MachineError
 from .machine.controller_dialects import resolve_air_assist_commands
+from .machine.laser_focus import focus_calibration_path
 from .machine.network_transport import is_bridge_uri
 from .machine.pi_job_service import PiJobService
 from .machine.pi_job_store import PiJobStore
@@ -240,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             secondary_air_assist=secondary_air_assist,
             cpu_cooling_enabled=cpu_cooling_enabled,
             mainboard_limits_path=mainboard_limits_path(settings.source_path),
+            focus_calibration_path=focus_calibration_path(settings.source_path),
         )
         job_service = PiJobService(
             machine,

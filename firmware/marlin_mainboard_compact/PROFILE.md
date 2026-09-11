@@ -10,7 +10,11 @@ must establish the border frame; this software limit cannot establish an
 unknown physical position or protect against lost steps. The operator measured
 about 75 mm upward collision clearance from Z20 and selected 60 mm usable
 travel (Z80). That is a measured clearance estimate, not a powered limit test.
-The G39 contact range and Z20 starting clearance are unchanged.
+Bare G39 retains its V1 contact range and Z20 starting clearance. Parameterized
+G39 C<clearance> H<maximum_contact> adds the separately advertised V2 cycle:
+clearance 20..80, contact -2..65, and native offset/retract/deploy headroom checks.
+Its envelope is scoped to that call, including probe failures; it does not change
+ordinary homing, leveling or subsequent V1 calls.
 
 Compact V1 native G28 ends at Z0 (Z_AFTER_HOMING=0). The Pi must recognize
 its exact E3_COMPACT_F401_V1:1 capability, verify known Z and the expected
@@ -39,7 +43,10 @@ check. Native probe initialization is retained, but its physical timing and
 attached behavior require operator verification.
 
 `M115` advertises the existing E3 mainboard/material capabilities, emergency
-parser, `E3_USB_UPDATER_F401_V1` and `E3_COMPACT_F401_V1`. Its `E3HW:1` line reads
+parser, `E3_USB_UPDATER_F401_V1`, `E3_COMPACT_F401_V1`, `E3_Z_LIMIT_80_V1` and
+`E3_SURFACE_HEIGHT_V2`. Its `E3SG:2` line reports the runtime probe Z offset,
+native retract and fixed V2 bounds so the host can bind calibration to the actual
+geometry. Its `E3HW:1` line reads
 the MCU device ID and flash-size register at query time. These values are not
 inferred from the selected image. An unknown ID is still reported by this query;
 the updater and M997 impose their own supported-target checks.
@@ -76,3 +83,5 @@ python firmware/marlin_mainboard_compact/run_transition_tests.py
 The native audits execute compiled ARM code with fake GPIO/UART/flash or probe
 I/O. They establish software behavior only. They are not physical validation or
 a safety rating.
+The V2 harness covers strict argument rejection, contact bounds, native headroom,
+fast/slow touches, stow and failure cleanup, and a following unchanged V1 cycle.

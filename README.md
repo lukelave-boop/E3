@@ -1,4 +1,15 @@
 # Laser Camera Aligner / E3 Positioning System
+
+## Laser focus setup
+
+The Machine tab's **Surface / laser focus…** workflow can teach a 7 mm focus
+gauge, measure a work surface, and preview/reproduce 7, 5 or 3 mm head gaps.
+Raised supports contribute to surface elevation without being mistaken for
+material thickness. It requires the matching Pi companion and surface-height
+V2 firmware. This is explicit laser-off calibration/position validation;
+automatic job focus and raised-work camera correction remain separate.
+See [the calibration and installation guide](docs/LASER_FOCUS.md).
+
 The [mainboard SD firmware](firmware/marlin_mainboard/README.md) now supports
 independent FAN1/FAN2, native probe deployment/stow, Z motion and bounded native
 material-height measurement. The complete SD installer and stock rollback kit

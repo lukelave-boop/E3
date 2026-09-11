@@ -16,6 +16,8 @@ CAPABILITIES = (
     b"Cap:E3_MATERIAL_HEIGHT_V1:1",
     b"Cap:E3_USB_UPDATER_F401_V1:1",
     b"Cap:E3_Z_LIMIT_80_V1:1",
+    b"Cap:E3_SURFACE_HEIGHT_V2:1",
+    b"E3SG:2 PROBE_Z:",
     b"E3HW:1 MCU:",
 )
 

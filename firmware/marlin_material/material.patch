@@ -1,92 +1,8 @@
---- a/Marlin/src/module/probe.cpp
-+++ b/Marlin/src/module/probe.cpp
-@@ -87,6 +87,8 @@
- 
- #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
- #include "../core/debug_out.h"
-+
-+#include "e3_material_height.h"
- 
- Probe probe;
- 
-@@ -589,7 +591,7 @@
-  *
-  * @return The Z position of the bed at the current XY or NAN on error.
-  */
--float Probe::run_z_probe(const bool sanity_check/*=true*/) {
-+float Probe::run_z_probe(const bool sanity_check/*=true*/, const bool material/*=false*/) {
-   DEBUG_SECTION(log_probe, "Probe::run_z_probe", DEBUGGING(LEVELING));
- 
-   auto try_to_probe = [&](PGM_P const plbl, const_float_t z_probe_low_point, const feedRate_t fr_mm_s, const bool scheck, const float clearance) -> bool {
-@@ -598,7 +600,8 @@
- 
-     // Do a first probe at the fast speed
-     const bool probe_fail = probe_down_to_z(z_probe_low_point, fr_mm_s),            // No probe trigger?
--               early_fail = (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
-+               early_fail = material ? !e3_material::contact_ok(current_position.z, offset.z)
-+                                     : (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
-     #if ENABLED(FIX_MOUNTED_PROBE)
-       Count_probe = 1;
-     #endif
-@@ -619,6 +622,18 @@
-   // Stop the probe before it goes too low to prevent damage.
-   // If Z isn't known then probe to -10mm.
-   const float z_probe_low_point = axis_is_trusted(Z_AXIS) ? -offset.z + Z_PROBE_LOW_POINT : -10.0;
-+
-+  // Material measurement retains native fast/slow motion and pin handling,
-+  // independent of the bed-leveling TOTAL_PROBING / EXTRA_PROBING selection.
-+  if (material) {
-+    const float low = -offset.z + _MAX(float(Z_PROBE_LOW_POINT), e3_material::minimum);
-+    if (try_to_probe(PSTR("FAST"), low, z_probe_fast_mm_s, true, 0)) return NAN;
-+    const float fast_z = current_position.z;
-+    do_blocking_move_to_z(fast_z + Z_CLEARANCE_MULTI_PROBE, z_probe_fast_mm_s);
-+    if (try_to_probe(PSTR("SLOW"), low, MMM_TO_MMS(Z_PROBE_FEEDRATE_SLOW), true, 0)) return NAN;
-+    // Same weighted result as Marlin's native TOTAL_PROBING == 2 cycle.
-+    return (current_position.z * 3.0f + fast_z * 2.0f) * 0.2f;
-+  }
- 
-   // Double-probing does a fast probe followed by a slow probe
-   #if TOTAL_PROBING == 2
-@@ -843,4 +858,6 @@
- 
- #endif // HAS_Z_SERVO_PROBE
- 
-+#include "material_height.inc"
-+
- #endif // HAS_BED_PROBE
---- a/Marlin/src/module/probe.h
-+++ b/Marlin/src/module/probe.h
-@@ -97,6 +97,8 @@
-       }
- 
-     #endif
-+
-+    static float material_height();
- 
-     static void move_z_after_probing() {
-       #ifdef Z_AFTER_PROBING
-@@ -259,7 +261,7 @@
- private:
-   static bool probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s);
-   static void do_z_raise(const float z_raise);
--  static float run_z_probe(const bool sanity_check=true);
-+  static float run_z_probe(const bool sanity_check=true, const bool material=false);
- };
- 
- extern Probe probe;
---- a/Marlin/src/gcode/gcode.h
-+++ b/Marlin/src/gcode/gcode.h
-@@ -485,6 +485,7 @@
- 
-   #if HAS_BED_PROBE
-     static void G30();
-+    static void G39();
-     #if ENABLED(Z_PROBE_SLED)
-       static void G31();
-       static void G32();
+diff --git a/Marlin/src/gcode/gcode.cpp b/Marlin/src/gcode/gcode.cpp
+index 7fda7cf..056b8ec 100644
 --- a/Marlin/src/gcode/gcode.cpp
 +++ b/Marlin/src/gcode/gcode.cpp
-@@ -384,6 +384,7 @@
+@@ -384,6 +384,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
        #endif
  
        #if HAS_BED_PROBE
@@ -94,26 +10,45 @@
          case 30: G30(); break;                                    // G30: Single Z probe
          #if ENABLED(Z_PROBE_SLED)
            case 31: G31(); break;                                  // G31: dock the sled
---- a/Marlin/src/gcode/probe/G30.cpp
-+++ b/Marlin/src/gcode/probe/G30.cpp
-@@ -63,4 +63,6 @@
-   report_current_position();
- }
+diff --git a/Marlin/src/gcode/gcode.h b/Marlin/src/gcode/gcode.h
+index 16fc47a..39c9890 100644
+--- a/Marlin/src/gcode/gcode.h
++++ b/Marlin/src/gcode/gcode.h
+@@ -485,6 +485,7 @@ private:
  
-+#include "G39.inc"
-+
- #endif // HAS_BED_PROBE
+   #if HAS_BED_PROBE
+     static void G30();
++    static void G39();
+     #if ENABLED(Z_PROBE_SLED)
+       static void G31();
+       static void G32();
+diff --git a/Marlin/src/gcode/host/M115.cpp b/Marlin/src/gcode/host/M115.cpp
+index f095445..d35baae 100644
 --- a/Marlin/src/gcode/host/M115.cpp
 +++ b/Marlin/src/gcode/host/M115.cpp
-@@ -73,6 +73,8 @@
+@@ -21,6 +21,7 @@
+  */
+ 
+ #include "../gcode.h"
++#include "../../module/probe.h"
+ #include "../../inc/MarlinConfig.h"
+ #include "../queue.h"           // for getting the command port
+ 
+@@ -73,6 +74,12 @@ void GcodeSuite::M115() {
    //   SERIAL_ECHOLNPGM(STR_M115_DISABLE_REPORT);
    // }
    
 +  SERIAL_ECHOLNPGM("Cap:E3_MATERIAL_HEIGHT_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_SURFACE_HEIGHT_V2:1");
++  SERIAL_ECHOPAIR_F("E3SG:2 PROBE_Z:", probe.offset.z, 6);
++  SERIAL_ECHOPAIR_F(" RETRACT:", float(Z_CLEARANCE_MULTI_PROBE), 6);
++  SERIAL_ECHOLNPGM(" MIN:-2 MAX:65 CEILING:80");
 +
    #if ENABLED(EXTENDED_CAPABILITIES_REPORT)
  
      // The port that sent M115
+diff --git a/Marlin/src/gcode/host/M119.cpp b/Marlin/src/gcode/host/M119.cpp
+index f0066bd..216e0da 100644
 --- a/Marlin/src/gcode/host/M119.cpp
 +++ b/Marlin/src/gcode/host/M119.cpp
 @@ -22,6 +22,7 @@
@@ -124,7 +59,7 @@
  
  /**
   * M119: Output endstop states to serial output
-@@ -30,4 +31,11 @@
+@@ -30,4 +31,11 @@ void GcodeSuite::M119() {
  
    endstops.report_states();
  
@@ -136,3 +71,94 @@
 +  else SERIAL_ECHOLNPGM("test_axis_known_z_flag = false");
 +
  }
+diff --git a/Marlin/src/gcode/probe/G30.cpp b/Marlin/src/gcode/probe/G30.cpp
+index 4347f55..3465ef4 100644
+--- a/Marlin/src/gcode/probe/G30.cpp
++++ b/Marlin/src/gcode/probe/G30.cpp
+@@ -63,4 +63,6 @@ void GcodeSuite::G30() {
+   report_current_position();
+ }
+ 
++#include "G39.inc"
++
+ #endif // HAS_BED_PROBE
+diff --git a/Marlin/src/module/probe.cpp b/Marlin/src/module/probe.cpp
+index 102d4a4..fb3c2f9 100644
+--- a/Marlin/src/module/probe.cpp
++++ b/Marlin/src/module/probe.cpp
+@@ -88,6 +88,8 @@
+ #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
+ #include "../core/debug_out.h"
+ 
++#include "e3_material_height.h"
++
+ Probe probe;
+ 
+ xyz_pos_t Probe::offset; // Initialized by settings.load()
+@@ -589,7 +591,7 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
+  *
+  * @return The Z position of the bed at the current XY or NAN on error.
+  */
+-float Probe::run_z_probe(const bool sanity_check/*=true*/) {
++float Probe::run_z_probe(const bool sanity_check/*=true*/, const bool material/*=false*/) {
+   DEBUG_SECTION(log_probe, "Probe::run_z_probe", DEBUGGING(LEVELING));
+ 
+   auto try_to_probe = [&](PGM_P const plbl, const_float_t z_probe_low_point, const feedRate_t fr_mm_s, const bool scheck, const float clearance) -> bool {
+@@ -598,7 +600,8 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+ 
+     // Do a first probe at the fast speed
+     const bool probe_fail = probe_down_to_z(z_probe_low_point, fr_mm_s),            // No probe trigger?
+-               early_fail = (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
++               early_fail = material ? !e3_material::contact_ok(current_position.z, offset.z, e3_material::active_envelope.maximum)
++                                     : (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
+     #if ENABLED(FIX_MOUNTED_PROBE)
+       Count_probe = 1;
+     #endif
+@@ -620,6 +623,18 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+   // If Z isn't known then probe to -10mm.
+   const float z_probe_low_point = axis_is_trusted(Z_AXIS) ? -offset.z + Z_PROBE_LOW_POINT : -10.0;
+ 
++  // Material measurement retains native fast/slow motion and pin handling,
++  // independent of the bed-leveling TOTAL_PROBING / EXTRA_PROBING selection.
++  if (material) {
++    const float low = -offset.z + _MAX(float(Z_PROBE_LOW_POINT), e3_material::minimum);
++    if (try_to_probe(PSTR("FAST"), low, z_probe_fast_mm_s, true, 0)) return NAN;
++    const float fast_z = current_position.z;
++    do_blocking_move_to_z(fast_z + Z_CLEARANCE_MULTI_PROBE, z_probe_fast_mm_s);
++    if (try_to_probe(PSTR("SLOW"), low, MMM_TO_MMS(Z_PROBE_FEEDRATE_SLOW), true, 0)) return NAN;
++    // Same weighted result as Marlin's native TOTAL_PROBING == 2 cycle.
++    return (current_position.z * 3.0f + fast_z * 2.0f) * 0.2f;
++  }
++
+   // Double-probing does a fast probe followed by a slow probe
+   #if TOTAL_PROBING == 2
+ 
+@@ -843,4 +858,6 @@ float Probe::probe_at_point(const_float_t rx, const_float_t ry, const ProbePtRai
+ 
+ #endif // HAS_Z_SERVO_PROBE
+ 
++#include "material_height.inc"
++
+ #endif // HAS_BED_PROBE
+diff --git a/Marlin/src/module/probe.h b/Marlin/src/module/probe.h
+index 7438a56..31b65d6 100644
+--- a/Marlin/src/module/probe.h
++++ b/Marlin/src/module/probe.h
+@@ -98,6 +98,8 @@ public:
+ 
+     #endif
+ 
++    static float material_height(const float clearance=20.0f, const float upper=10.5f);
++
+     static void move_z_after_probing() {
+       #ifdef Z_AFTER_PROBING
+         do_z_clearance(Z_AFTER_PROBING, true); // Move down still permitted
+@@ -259,7 +261,7 @@ public:
+ private:
+   static bool probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s);
+   static void do_z_raise(const float z_raise);
+-  static float run_z_probe(const bool sanity_check=true);
++  static float run_z_probe(const bool sanity_check=true, const bool material=false);
+ };
+ 
+ extern Probe probe;

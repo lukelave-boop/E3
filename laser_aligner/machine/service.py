@@ -54,6 +54,8 @@ from .controller_session import (
     ControllerState,
 )
 from .io_diagnostics import thread_snapshot
+from .laser_focus import LaserFocus
+from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
 from .mainboard import validate_control
 from .probe_pin import ProbePinDiagnosticError, run_pin_diagnostic
@@ -719,6 +721,7 @@ class MachineService:
         secondary_air_assist: SecondaryMarlinFanController | None = None,
         cpu_cooling_enabled: bool = False,
         mainboard_limits_path: Path | None = None,
+        focus_calibration_path: Path | None = None,
     ):
         if type(laser_lockout) is not bool:
             raise TypeError("laser_lockout must be an exact boolean")
@@ -729,6 +732,7 @@ class MachineService:
         self.cpu_cooling_enabled = cpu_cooling_enabled
         self._cpu_cooling_session: tuple[int, int] | None = None
         self.settings = settings
+        self._laser_focus = LaserFocus(focus_calibration_path, settings.air_assist.port)
         self._mainboard_z_limits = MainboardZLimits(mainboard_limits_path, settings.air_assist.port)
         settings.mainboard_max_z_mm = self._mainboard_z_limits.load(settings.mainboard_max_z_mm)
         self.laser_settings = laser_settings
@@ -1115,6 +1119,7 @@ class MachineService:
         self._armed_program_digest = None
 
     def _invalidate_coordinate_reference(self) -> None:
+        self._laser_focus.invalidate()
         if self._z_probe is not None:
             self._z_probe.invalidate()
             self._z_probe_result = None
@@ -2238,6 +2243,8 @@ class MachineService:
             # controller operation to finish.
             self._clear_arm_authorization()
         with self._command_lock:
+            if self._laser_focus.requires_clearance:
+                raise SafetyError("Return Z to focus clearance before arming; taught focus is setup-only")
             return self._arm_locked(
                 phrase,
                 program_digest=program_digest,
@@ -3819,6 +3826,8 @@ class MachineService:
             if self._stop_epoch != operation_stop_epoch:
                 raise MachineError("Home / park was cancelled by software STOP")
         self._require_safety_configuration()
+        if self._laser_focus.requires_clearance:
+            raise SafetyError("Return Z to the selected focus clearance before Home / park")
         if self._job.running:
             raise MachineError("Cannot move to the photography position while a job is running")
         controller_session = self._require_session()
@@ -4059,6 +4068,80 @@ class MachineService:
         finally:
             owner._lock.release()
 
+    def focus_control(
+        self, action: str, *, confirmed: bool = False, value=None,
+        clearance_z_mm: float = 30.0, gap_mm: float = 7.0,
+        measurement_id: str | None = None, preview_id: str | None = None,
+        _connection_alive: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Explicit gauge teaching and positioning, never job or laser authority."""
+        validate_focus_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
+        epoch = self._operation_stop_epoch()
+        with self._manual_home_command_scope():
+            self._require_safety_configuration()
+            if self.hardware_enabled is not True:
+                raise SafetyError("Laser focus requires hardware authority")
+            if action != "status" and self.settings.allow_motion is not True:
+                raise SafetyError("Laser focus requires machine.allow_motion")
+            session = self._require_session()
+            if self._job.running or self.armed:
+                raise SafetyError("Laser focus requires an idle machine and disarmed laser")
+            probe = self._z_probe
+            if probe is None or not probe.owner.ready:
+                raise MachineError("Connect the shared Ender controller before laser focus")
+            if action not in {"status", "forget", "clear_surface"}:
+                if (self._controller_state is not ControllerState.READY_MOTION
+                    or not self._coordinate_reference_ready
+                    or self._coordinate_reference_session_generation != session.generation
+                    or self._jog_position_mm is None):
+                    raise SafetyError("Home / park must establish primary XY before laser focus")
+                if not self.settings.work_area.contains(*self._jog_position_mm):
+                    raise SafetyError("The focus setup point is outside the work area")
+                if action == "reference" and any(abs(a-b) > .01 for a,b in zip(
+                    self._jog_position_mm, (self.settings.photo_x, self.settings.photo_y), strict=True)):
+                    raise SafetyError("Position over the border before referencing focus Z")
+                if self._uses_grbl_coordinate_state():
+                    self._verify_grbl_coordinate_state()
+            deadline = time.monotonic() + 120
+
+            @contextmanager
+            def guard():
+                with self._secondary_write_gate, self._stop_epoch_lock:
+                    if self._stop_epoch != epoch or not self._same_controller_session(self._session, session):
+                        raise MachineError("Focus operation cancelled or session changed")
+                    if time.monotonic() >= deadline:
+                        raise MachineError("Focus operation exceeded its time limit")
+                    if _connection_alive is not None and not _connection_alive():
+                        raise MachineError("Focus monitoring connection was lost")
+                    yield
+
+            def motion_start():
+                self._z_probe_active = True
+                probe.invalidate()
+                self._z_probe_result = None
+
+            if action != "status":
+                self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+            try:
+                with probe.owner._lock:
+                    return self._laser_focus.execute(
+                        probe.owner, probe, action, confirmed=confirmed, value=value,
+                        clearance_z_mm=clearance_z_mm, gap_mm=gap_mm,
+                        measurement_id=measurement_id, preview_id=preview_id,
+                        maximum=validate_max_z(self.settings.mainboard_max_z_mm),
+                        primary_generation=session.generation, stop_epoch=epoch,
+                        xy=self._jog_position_mm or (0., 0.), guard=guard,
+                        on_motion_start=motion_start,
+                        on_failure=lambda: self.request_stop(_recover=False),
+                    )
+            except BaseException:
+                self._laser_focus.invalidate()
+                if self._z_probe_active and self.operation_generation() == epoch:
+                    self.request_stop(_recover=False)
+                raise
+            finally:
+                self._z_probe_active = False
+
     def mainboard_control(
         self, action: str, value: int | float | None = None, *, confirmed: bool = False,
         _connection_alive: Callable[[], bool] | None = None,
@@ -4104,6 +4187,7 @@ class MachineService:
             if action in {"z", "z_jog", "fan1", "fan2"}:
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
             if moving:
+                self._laser_focus.invalidate()
                 if self._z_probe is not None:
                     self._z_probe.invalidate()
                 self._z_probe_result = None
@@ -4178,6 +4262,7 @@ class MachineService:
                         raise MachineError("Pin diagnostic monitoring connection was lost")
                     yield
 
+            self._laser_focus.invalidate()
             if self._z_probe is not None:
                 self._z_probe.invalidate()
             self._z_probe_result = None
@@ -4230,6 +4315,7 @@ class MachineService:
             raise SafetyError("The native cycle test uses a 5 mm initial lift and fixed Z 20 mm final clearance")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
+            self._laser_focus.invalidate()
             self._require_safety_configuration()
             if self.hardware_enabled is not True or self.settings.allow_motion is not True:
                 raise SafetyError("Probe motion requires hardware authority and machine.allow_motion")
@@ -4421,6 +4507,9 @@ class MachineService:
             if self._uses_grbl_coordinate_state():
                 self._verify_grbl_coordinate_state()
 
+            if self._laser_focus.requires_clearance:
+                raise SafetyError("Return Z to the selected focus clearance before XY jogging")
+            self._laser_focus.clear_surface()
             current_x, current_y = self._jog_position_mm
             target_x = round(current_x + dx, 3)
             target_y = round(current_y + dy, 3)
@@ -5170,6 +5259,9 @@ class MachineService:
         start_stop_epoch: int,
     ) -> dict[str, Any]:
         with self._lock:
+            if self._laser_focus.requires_clearance:
+                raise SafetyError("Return Z to focus clearance before starting a job; taught focus is setup-only")
+            self._laser_focus.invalidate()
             requires_laser_authorization = program.requires_laser_authorization
             requires_motion = program.requires_motion
             start_authorization_epoch: int | None = None
@@ -5829,6 +5921,7 @@ class MachineService:
         # The primary path above is authoritative and complete before this
         # independent bounded cleanup is even dispatched.  Never wait here for
         # the secondary exchange lock or its acknowledgement.
+        self._laser_focus.invalidate()
         if self._z_probe is not None:
             self._z_probe.invalidate()
             self._z_probe_result = None

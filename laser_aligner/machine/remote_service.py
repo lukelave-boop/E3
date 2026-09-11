@@ -24,6 +24,8 @@ from typing import Any
 from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
+from .laser_focus import validate_request as validate_focus_request
 from .mainboard import validate_control
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
@@ -61,6 +63,7 @@ from .pi_machine_server import (
     ACTION_MACHINE_COMMAND,
     ACTION_MACHINE_CONNECT,
     ACTION_MACHINE_DISCONNECT,
+    ACTION_MACHINE_FOCUS,
     ACTION_MACHINE_JOG,
     ACTION_MACHINE_MAINBOARD,
     ACTION_MACHINE_PREPARE_JOB_START,
@@ -123,6 +126,7 @@ _SESSION_MUTATING_ACTIONS = frozenset(
     {
         ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_MAINBOARD,
+        ACTION_MACHINE_FOCUS,
         ACTION_MACHINE_CONNECT,
         ACTION_MACHINE_DISCONNECT,
         ACTION_MACHINE_JOG,
@@ -1662,6 +1666,43 @@ class RemoteMachineService:
             response,
             action=ACTION_MACHINE_PREPARE_JOB_START,
         )
+        return result
+
+    def focus_control(
+        self, action: str, *, confirmed=False, value=None, clearance_z_mm=30.0,
+        gap_mm=7.0, measurement_id=None, preview_id=None,
+    ) -> dict[str, Any]:
+        validate_focus_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
+        self._require_hardware_authority()
+        generation = self._operation_stop_epoch()
+        self._require_operation_current(generation)
+        self._require_capabilities()
+        self._require_controller_session_capability()
+        if FOCUS_CAPABILITY not in (self._node_capabilities or ()):
+            raise MachineError("Update the E3 Pi service to use taught laser focus")
+        if action != "status" and self.settings.allow_motion is not True:
+            raise SafetyError("Laser focus requires machine.allow_motion")
+        if self.armed or self.pi_owned_job_active:
+            raise SafetyError("Laser focus requires an idle machine and disarmed laser")
+        response = self._rpc(ACTION_MACHINE_FOCUS, {
+            "control": action, "confirmed": confirmed, "value": value,
+            "clearance_z_mm": clearance_z_mm, "gap_mm": gap_mm,
+            "measurement_id": measurement_id, "preview_id": preview_id,
+        }, timeout=125.0)
+        result = self._response_mapping(response, "result")
+        readback = result.get("current_readback")
+        if (result.get("action") != action or result.get("available") is not True
+            or type(readback) is not dict or readback.get("fresh") is not True
+            or type(readback.get("z_known")) is not bool
+            or type(result.get("reference_ready")) is not bool):
+            raise PiJobProtocolError("The Pi did not return a fresh laser focus result")
+        try:
+            finite_number(readback.get("z_mm"), "Focus readback", -1000, 1000)
+            validate_max_z(result.get("max_z_mm"))
+        except SafetyError as exc:
+            raise PiJobProtocolError(str(exc)) from exc
+        self._require_operation_current(generation)
+        self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
         return result
 
     def mainboard_control(

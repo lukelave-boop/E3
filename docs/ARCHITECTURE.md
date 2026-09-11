@@ -1,5 +1,22 @@
 # Architecture
 
+## Laser focus setup boundary
+
+MachineService admits typed focus_control actions through the existing shared
+Creality owner. LaserFocus separates durable machine/firmware/probe-bound gauge
+calibration from session-only reference, surface and single-use preview state.
+The desktop computes no authoritative motion target. The backend recomputes and
+checks target/clearance/geometry/session before Ender movement. Ordinary manual
+Z/probe actions invalidate the focus observation; dedicated teaching jogs retain
+it at the same primary XY. A separate clearance restriction survives clearing
+observations and prevents ordinary XY/Home/arming/job entry while lowered.
+
+G39 C/H V2 provides a bounded native contact envelope and E3SG runtime geometry;
+parameterless G39 remains V1. The workflow is explicit laser-off setup, with no
+laser emission, camera correction, persistent live authority or automatic job
+focus. See [LASER_FOCUS.md](LASER_FOCUS.md) for the operator and persistence
+contracts.
+
 ## Numeric input drafts
 
 Desktop NumericDoubleSpinBox and NumericSpinBox share deferred keyboard

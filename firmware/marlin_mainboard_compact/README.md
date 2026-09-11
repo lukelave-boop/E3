@@ -11,9 +11,25 @@ may clamp a request to Z80; E3 rejects targets above Z80 before sending them.
 The cap depends on a valid border-homed coordinate frame, not physical position
 feedback. Do not home on material and treat that new zero as the border.
 
-M115 must advertise `Cap:E3_Z_LIMIT_80_V1:1` to identify this update. Earlier
-08beaf0d firmware lacks this planner ceiling. G39 remains limited to contact
--2..10.5 mm and starts at Z20; this is not the 30 mm probing-range update.
+M115 must advertise `Cap:E3_Z_LIMIT_80_V1:1` to identify this planner ceiling.
+Earlier 08beaf0d firmware lacks it. Bare G39 retains its V1 contact interval
+-2..10.5 mm and Z20 start.
+
+## Raised-surface probing update
+
+This application additionally advertises `Cap:E3_SURFACE_HEIGHT_V2:1` and
+accepts `G39 C<clearance> H<maximum_contact>`. The requested clearance is
+20..80 mm; upper contact is at most 65 mm above the border. Both are required;
+the entire native retract/deploy envelope must fit after runtime probe-offset
+conversion. V2 never homes or moves XY and does not alter the V1 command.
+M115 reports `E3SG:2 PROBE_Z:<six decimals> RETRACT:<six decimals> MIN:-2 MAX:65 CEILING:80`.
+These fields identify the geometry to which the host binds its calibration.
+The exact firmware contract is in the source archive's material README.
+
+Use the matching E3 focus workflow for calibration and measurement. Flashing
+this application alone does not calibrate the machine, prove physical clearance,
+or verify raised-surface probing. This package has offline software verification;
+attached-hardware V2 probing remains pending.
 
 For an already working 08beaf0d installation with the Pi startup, probe and
 CPU-cooling patches applied, use **Later application-only USB update** below.
@@ -44,7 +60,8 @@ this is recovery, not automatic rollback to a previous application.
 - Native CR Touch handling, Z homing/movement and bounded G39 material measurement.
 - M123 fan command/Z trust report and the emergency parser.
 - M115 reports E3_MAINBOARD_V1, E3_MATERIAL_HEIGHT_V1,
-  E3_USB_UPDATER_F401_V1 and EMERGENCY_PARSER capabilities, plus
+  E3_SURFACE_HEIGHT_V2, E3_Z_LIMIT_80_V1, E3_USB_UPDATER_F401_V1 and
+  EMERGENCY_PARSER capabilities, plus the E3SG geometry line and
   `E3HW:1 MCU:<hex ID> FLASH_KIB:<capacity>`.
 - EEPROM settings retain a distinct E31 schema. Incompatible stock settings use
   compiled defaults, without automatically initializing or saving settings.
@@ -103,7 +120,7 @@ The stopped service's camera stream is temporarily unavailable during maintenanc
 Keep all USB wiring attached after SD programming.
 
 The diagnostic listens 35 seconds, then queries M115. Require reported_role
-`e3_marlin`, all four capabilities above with value 1, the E3HW line and final
+`e3_marlin`, all capabilities above with value 1, the E3HW/E3SG lines and final
 `ok`. Expected hardware pairs are MCU 423 / FLASH_KIB 256 or MCU 433 / FLASH_KIB
 512 (leading hexadecimal zeroes may vary). The reported version base is
 2.0.8.24F4; capabilities and hardware line identify this compact build.

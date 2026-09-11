@@ -347,14 +347,26 @@ index 16fc47a..10e0fc8 100644
    #if HAS_STATUS_MESSAGE
      static void M117();
 diff --git a/Marlin/src/gcode/host/M115.cpp b/Marlin/src/gcode/host/M115.cpp
-index f095445..6058f0d 100644
+index f095445..08b0e14 100644
 --- a/Marlin/src/gcode/host/M115.cpp
 +++ b/Marlin/src/gcode/host/M115.cpp
-@@ -73,6 +73,16 @@ void GcodeSuite::M115() {
+@@ -21,6 +21,7 @@
+  */
+ 
+ #include "../gcode.h"
++#include "../../module/probe.h"
+ #include "../../inc/MarlinConfig.h"
+ #include "../queue.h"           // for getting the command port
+ 
+@@ -73,6 +74,20 @@ void GcodeSuite::M115() {
    //   SERIAL_ECHOLNPGM(STR_M115_DISABLE_REPORT);
    // }
    
 +  SERIAL_ECHOLNPGM("Cap:E3_MATERIAL_HEIGHT_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_SURFACE_HEIGHT_V2:1");
++  SERIAL_ECHOPAIR_F("E3SG:2 PROBE_Z:", probe.offset.z, 6);
++  SERIAL_ECHOPAIR_F(" RETRACT:", float(Z_CLEARANCE_MULTI_PROBE), 6);
++  SERIAL_ECHOLNPGM(" MIN:-2 MAX:65 CEILING:80");
 +  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_USB_UPDATER_F401_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_COMPACT_F401_V1:1");
@@ -499,7 +511,7 @@ index 5439420..90edd1a 100644
  
  // Recalculate the steps/s^2 acceleration rates, based on the mm/s^2
 diff --git a/Marlin/src/module/probe.cpp b/Marlin/src/module/probe.cpp
-index 102d4a4..0c71b29 100644
+index 102d4a4..fb3c2f9 100644
 --- a/Marlin/src/module/probe.cpp
 +++ b/Marlin/src/module/probe.cpp
 @@ -88,6 +88,8 @@
@@ -525,7 +537,7 @@ index 102d4a4..0c71b29 100644
      // Do a first probe at the fast speed
      const bool probe_fail = probe_down_to_z(z_probe_low_point, fr_mm_s),            // No probe trigger?
 -               early_fail = (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
-+               early_fail = material ? !e3_material::contact_ok(current_position.z, offset.z)
++               early_fail = material ? !e3_material::contact_ok(current_position.z, offset.z, e3_material::active_envelope.maximum)
 +                                     : (scheck && current_position.z > -offset.z + clearance); // Probe triggered too high?
      #if ENABLED(FIX_MOUNTED_PROBE)
        Count_probe = 1;
@@ -557,14 +569,14 @@ index 102d4a4..0c71b29 100644
 +
  #endif // HAS_BED_PROBE
 diff --git a/Marlin/src/module/probe.h b/Marlin/src/module/probe.h
-index 7438a56..2e3e3c9 100644
+index 7438a56..31b65d6 100644
 --- a/Marlin/src/module/probe.h
 +++ b/Marlin/src/module/probe.h
 @@ -98,6 +98,8 @@ public:
  
      #endif
  
-+    static float material_height();
++    static float material_height(const float clearance=20.0f, const float upper=10.5f);
 +
      static void move_z_after_probing() {
        #ifdef Z_AFTER_PROBING

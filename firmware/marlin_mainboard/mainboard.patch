@@ -63,10 +63,10 @@
      static void M117();
 --- a/Marlin/src/gcode/host/M115.cpp
 +++ b/Marlin/src/gcode/host/M115.cpp
-@@ -74,6 +74,7 @@
-   // }
-   
-   SERIAL_ECHOLNPGM("Cap:E3_MATERIAL_HEIGHT_V1:1");
+@@ -79,6 +79,7 @@
+   SERIAL_ECHOPAIR_F("E3SG:2 PROBE_Z:", probe.offset.z, 6);
+   SERIAL_ECHOPAIR_F(" RETRACT:", float(Z_CLEARANCE_MULTI_PROBE), 6);
+   SERIAL_ECHOLNPGM(" MIN:-2 MAX:65 CEILING:80");
 +  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
  
    #if ENABLED(EXTENDED_CAPABILITIES_REPORT)
