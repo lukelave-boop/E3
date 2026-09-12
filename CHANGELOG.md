@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased - visible focus preview readiness
+
+- Keep a measured-surface Z preview when the camera view briefly becomes stale.
+- Explain why Move to focus is disabled beside its controls; camera positioning
+  still requires a fresh, unchanged selection and an explicit move request.
+
 ## Unreleased - restore complete Z focus workflow
 
 - Normalize a freshly known Z below20 at the confirmed border before a new

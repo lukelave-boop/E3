@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Focus preview readiness
+
+Preview target calculates a Z destination; Move to focus is the separate motion
+action. The focus window explains any missing prerequisite above that button.
+A camera interruption does not invalidate the already measured surface's Z
+preview. See [surface / laser focus](docs/LASER_FOCUS.md).
+
 ## Z focus workflow compatibility
 
 Camera-selected honeycomb positioning and2/5mm teaching jogs require the matching

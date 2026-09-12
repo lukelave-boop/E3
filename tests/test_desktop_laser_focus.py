@@ -57,6 +57,7 @@ def result(**changes):
 
 def preview(**changes):
     payload = {"id": "preview-1", "measurement_id": "surface-1", "gap_mm": 7.0,
+               "calibration_id": "calibration-1",
                "target_z_mm": 16.0, "current_z_mm": 30.0, "clearance_z_mm": 30.0}
     payload.update(changes)
     return payload
@@ -124,6 +125,7 @@ def test_required_confirmations_are_above_their_focus_actions(panel, app):
     ):
         assert checkbox.parentWidget() is action.parentWidget()
         assert checkbox.geometry().bottom() < action.geometry().top()
+    assert panel.move_note.geometry().bottom() < panel.move.geometry().top()
 
 
 def test_recovery_prompt_does_not_invite_another_camera_move(panel):
@@ -252,7 +254,8 @@ def test_preview_must_be_explicit_current_and_gauge_removed_before_move(panel):
     assert not panel.gauge_removed.isChecked()
 
 
-@pytest.mark.parametrize("changed", ["gap", "clearance", "surface", "age", "preview_id", "position", "limit"])
+@pytest.mark.parametrize("changed", ["gap", "clearance", "surface", "age", "preview_id", "position", "limit",
+                                     "calibration", "missing_calibration_id", "incompatible", "floor"])
 def test_edited_or_stale_preview_cannot_authorize_move(panel, changed):
     confirm(panel)
     panel.set_result(result(action="preview", preview=preview()))
@@ -271,6 +274,16 @@ def test_edited_or_stale_preview_cannot_authorize_move(panel, changed):
                                 current_readback={"z_mm": 31.0, "z_known": True, "fresh": True}))
     elif changed == "limit":
         panel.set_result(result(preview=preview(target_z_mm=70)))
+    elif changed == "floor":
+        panel.set_result(result(preview=preview(target_z_mm=-.1)))
+    elif changed == "calibration":
+        panel.set_result(result(calibration={**result()["calibration"], "id": "calibration-2"}, preview=preview()))
+    elif changed == "missing_calibration_id":
+        without_calibration = preview()
+        without_calibration.pop("calibration_id")
+        panel.set_result(result(preview=without_calibration))
+    elif changed == "incompatible":
+        panel.set_result(result(calibration_compatible=False, preview=preview()))
     else:
         panel._received_at = time.monotonic() - FRESH_SECONDS - 1
     calls = []
@@ -278,6 +291,66 @@ def test_edited_or_stale_preview_cannot_authorize_move(panel, changed):
     panel.request("move")
     assert calls == []
     assert not panel.move.isEnabled()
+    assert panel.move_note.text().startswith("Move unavailable:")
+
+
+def test_move_explains_each_confirmation_and_explicit_preview(panel):
+    panel.set_result(result(preview=preview()))
+    assert "Choose Preview target" in panel.move_note.text()
+    panel.set_result(result(action="preview", preview=preview()))
+    assert "Headroom and Z path clear" in panel.move_note.text()
+    panel.path_clear.setChecked(True)
+    assert "Gauge removed; path to target clear" in panel.move_note.text()
+    assert "Gauge removed; path to target clear" in panel.next_step.text()
+    panel.gauge_removed.setChecked(True)
+    assert panel.move.isEnabled()
+    assert "move Z to 16.000 mm" in panel.move_note.text()
+    assert panel.next_step.text() == "Next: Choose Move to focus to position the laser."
+
+
+@pytest.mark.parametrize("cause, reason", [
+    ("busy", "Wait for the current operation"),
+    ("stale", "Refresh focus status"),
+    ("unknown_z", "Reference the border"),
+    ("reference", "Reference the border"),
+    ("surface", "Measure the surface"),
+    ("probe_phase", "Return the laser"),
+    ("calibration", "Teach and save"),
+    ("clearance", "Set Clearance Z"),
+    ("position", "Z moved after the preview"),
+    ("target", "outside the allowed"),
+    ("armed", "laser disarmed"),
+])
+def test_move_blocking_reason_tracks_current_prerequisite(panel, cause, reason):
+    confirm(panel)
+    panel.set_result(result(action="preview", preview=preview()))
+    panel.gauge_removed.setChecked(True)
+    assert panel.move.isEnabled()
+    if cause == "busy":
+        panel._busy = True
+    elif cause == "stale":
+        panel._received_at -= FRESH_SECONDS + 1
+    elif cause == "unknown_z":
+        panel._result["current_readback"]["z_known"] = False
+    elif cause == "reference":
+        panel._result["reference_ready"] = False
+    elif cause == "surface":
+        panel._result["surface"] = None
+    elif cause == "probe_phase":
+        panel._result["xy_sequence"] = {"phase": "probe"}
+    elif cause == "calibration":
+        panel._result["calibration_compatible"] = False
+    elif cause == "clearance":
+        panel.clearance.setValue(65)
+    elif cause == "position":
+        panel._result["current_readback"]["z_mm"] = 31
+    elif cause == "target":
+        panel._result["preview"]["target_z_mm"] = -1
+    else:
+        panel._status = status(armed=True)
+    panel._sync()
+    assert not panel.move.isEnabled()
+    assert reason in panel.move_note.text()
 
 
 def test_clearance_numeric_draft_survives_poll_and_enter_cannot_move(panel, app):
@@ -411,6 +484,140 @@ class FakeController(QtCore.QObject):
     def emergency_stop(self):
         self.stop_calls += 1
         self.stopInitiated.emit()
+
+
+@pytest.fixture
+def taught_dialog(app, monkeypatch):
+    from laser_aligner.desktop import focus_bed_view
+    from tests.test_desktop_focus_bed_view import Worker, publish
+
+    controller = FakeController()
+    controller.runtime.context.camera = SimpleNamespace(monitor_frames=lambda **kwargs: iter(()))
+    monkeypatch.setattr(focus_bed_view, "_MonitorThread", Worker)
+    controller.machine.payload = result(
+        max_z_mm=40, focus_travel_min_z_mm=0, max_teaching_step_mm=5,
+        surface={**result()["surface"], "contact_z_mm": 5.234, "elevation_mm": 5.233},
+        calibration={**result()["calibration"], "focus_offset_mm": -2.434,
+                     "taught_z_mm": 2.8, "taught_contact_z_mm": 5.234},
+        preview=preview(target_z_mm=2.8), xy_sequence={"phase": "laser"},
+    )
+    dialog = LaserFocusDialog(controller)
+    dialog.coordinator._timer.stop()
+    dialog._camera_timer.stop()
+    dialog.show()
+    app.processEvents()
+    dialog.set_machine_status(status())
+    dialog.panel.set_result(copy.deepcopy(controller.machine.payload))
+    publish(dialog.bed_view)
+    dialog._camera_tick()
+    confirm(dialog.panel)
+    yield dialog, controller
+    assert not dialog.coordinator._mutation
+    dialog.reject()
+    dialog.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize("camera_loss", ["stale", "offline"])
+def test_measured_focus_preview_survives_camera_loss_poll_and_explicit_move(taught_dialog, camera_loss):
+    dialog, controller = taught_dialog
+    panel, coordinator = dialog.panel, dialog.coordinator
+    panel.gauge_removed.setChecked(True)
+    assert panel._preview_id is None and not panel.move.isEnabled()
+    panel.preview.click()
+    assert coordinator._busy and not panel.clearance.isEnabled()
+    assert panel.clearance.hasAcceptableInput() and panel._clearance_value() == 30
+    parameter_epoch, camera_epoch = coordinator._parameter_epoch, coordinator._camera_epoch
+    if camera_loss == "stale":
+        dialog.bed_view._received_at -= 4
+        dialog.bed_view._update_status()
+    else:
+        dialog.bed_view._worker.failed.emit("Camera disconnected")
+    dialog._camera_tick()
+    assert not panel._camera_live
+    assert coordinator._parameter_epoch == parameter_epoch
+    assert coordinator._camera_epoch > camera_epoch
+    controller.complete()
+    assert controller.machine.calls == [("preview", {
+        "confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0,
+        "measurement_id": "surface-1",
+    })]
+    assert panel.target.text() == "Target Z: 2.800 mm · 7 mm gap"
+    assert panel._preview_id == "preview-1" and panel.move.isEnabled()
+    assert "no movement sent" in panel.message.text()
+    coordinator._last_request = -float("inf")
+    coordinator.tick()
+    controller.complete()
+    assert panel._preview_id == "preview-1" and panel.move.isEnabled()
+    assert panel.target.text() == "Target Z: 2.800 mm · 7 mm gap"
+    assert [action for action, _ in controller.machine.calls] == ["preview", "status"]
+    # Only this separate click requests motion; the camera has stayed offline.
+    panel.move.click()
+    controller.machine.payload = result(
+        current_readback={"z_mm": 2.8, "z_known": True, "fresh": True}, preview=None,
+    )
+    controller.complete()
+    assert controller.machine.calls[-1] == ("move", {
+        "confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0, "preview_id": "preview-1",
+    })
+    assert not panel.gauge_removed.isChecked() and panel._preview_id is None
+
+
+@pytest.mark.parametrize("change", ["gap", "clearance", "stop", "session"])
+def test_focus_preview_still_rejects_late_reply_after_authority_changes(taught_dialog, change):
+    dialog, controller = taught_dialog
+    panel, coordinator = dialog.panel, dialog.coordinator
+    panel.gauge_removed.setChecked(True)
+    panel.preview.click()
+    operation, callbacks = controller.work.pop()
+    response = operation()
+    if change == "gap":
+        panel.gap.setCurrentIndex(1)
+    elif change == "clearance":
+        panel.clearance.setValue(35)
+    elif change == "stop":
+        controller.emergency_stop()
+    else:
+        controller.machine.snapshot = status(controller_session_generation=9)
+        controller.statusChanged.emit(controller.machine.snapshot)
+    callbacks["on_success"](response)
+    controller.busyChanged.emit(False)
+    callbacks["on_finished"]()
+    assert not panel.move.isEnabled() and panel._preview_id is None
+    assert panel.move_note.text().startswith("Move unavailable:")
+    assert "Target previewed" not in panel.message.text()
+    # A later status observation never creates local Preview-click authority.
+    panel.set_result(copy.deepcopy(controller.machine.payload))
+    assert not panel.move.isEnabled() and panel._preview_id is None
+    panel.move.click()
+    assert [action for action, _ in controller.machine.calls] == ["preview"]
+    assert coordinator._queued is None and not controller.work
+
+
+@pytest.mark.parametrize("queued", [False, True])
+def test_dialog_camera_loss_cancels_selected_xy_request_before_dispatch(taught_dialog, queued):
+    from tests.test_desktop_focus_bed_view import select
+
+    dialog, controller = taught_dialog
+    panel, coordinator = dialog.panel, dialog.coordinator
+    controller.runtime.context.focus_probe_target = lambda *args, **kwargs: camera_target()
+    panel.set_result(camera_result(surface=None))
+    panel.position_probe.click()
+    select(dialog.bed_view)
+    panel.xy_clear.setChecked(True)
+    assert panel.move_probe.isEnabled()
+    if queued:
+        coordinator.tick()
+        assert len(controller.work) == 1
+    panel.move_probe.click()
+    dialog.bed_view._received_at -= 4
+    dialog.bed_view._update_status()
+    dialog._camera_tick()
+    while controller.work:
+        controller.complete()
+    assert not any(action == "position_probe" for action, _ in controller.machine.calls)
+    assert "Camera target changed" in panel.message.text()
+    assert not panel.move_probe.isEnabled()
 
 
 @pytest.fixture
@@ -818,7 +1025,7 @@ def test_camera_click_mapping_and_separate_move_are_integrated(app, monkeypatch)
     app.processEvents()
 
 
-@pytest.mark.parametrize("cause", ["age", "mapping", "stop", "camera"])
+@pytest.mark.parametrize("cause", ["age", "mapping", "stop", "camera", "camera_during_mapping"])
 def test_queued_camera_move_is_revalidated_before_controller(coordinator, cause):
     item, controller = coordinator
     item.panel.set_result(camera_result())
@@ -828,6 +1035,8 @@ def test_queued_camera_move_is_revalidated_before_controller(coordinator, cause)
             raise ValueError("Camera calibration changed after selection")
         if kwargs["frame_age_seconds"] > 2:
             raise ValueError("Camera frame is stale")
+        if cause == "camera_during_mapping":
+            item.camera_selection_changed()
         return mapped
     controller.runtime.context.focus_probe_target = mapper
     selection = camera_selection()
@@ -838,7 +1047,7 @@ def test_queued_camera_move_is_revalidated_before_controller(coordinator, cause)
     if cause == "stop":
         controller.emergency_stop()
     elif cause == "camera":
-        item.parameters_edited()
+        item.camera_selection_changed()
     controller.complete()
     assert controller.machine.calls == []
     assert not item.panel.fresh()

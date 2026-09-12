@@ -237,10 +237,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.move = QtWidgets.QPushButton("Move to focus")
         self.target = QtWidgets.QLabel("Target Z: preview required")
         self.target.setWordWrap(True)
+        self.move_note = QtWidgets.QLabel()
+        self.move_note.setWordWrap(True)
+        self.move_note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.gauge_removed = QtWidgets.QCheckBox("Gauge removed; path to target clear")
         focus_layout.addWidget(self.gap, 0, 0)
         focus_layout.addWidget(self.preview, 0, 1, 1, 2)
-        focus_layout.addWidget(self.move, 3, 0, 1, 3)
+        focus_layout.addWidget(self.move_note, 3, 0, 1, 3)
+        focus_layout.addWidget(self.move, 4, 0, 1, 3)
         focus_layout.addWidget(self.target, 1, 0, 1, 3)
         focus_layout.addWidget(self.gauge_removed, 2, 0, 1, 3)
         layout.addWidget(focus)
@@ -520,7 +524,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "measure": "Surface measured. Teach with the gauge, or preview using the saved offset.",
             "jog": "Z jog finished. Check the 7 mm gauge fit before saving.",
             "teach": "Taught offset saved. Remove the gauge before moving.",
-            "preview": "Target previewed; no movement sent.",
+            "preview": ("Target previewed; no movement sent." if self._preview_id else
+                        "Preview is no longer current; choose Preview target again."),
             "move": "Focus position reached. Return to clearance before moving XY or changing the workpiece.",
             "clearance": "At clearance. XY positioning and workpiece changes can resume.",
             "clear_surface": "Surface measurement cleared.",
@@ -535,6 +540,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
     def _preview_matches(self, preview: Any) -> bool:
         surface = self._result.get("surface")
+        calibration = self._result.get("calibration")
         current = _number((self._result.get("current_readback") or {}).get("z_mm"))
         target = _number(preview.get("target_z_mm")) if isinstance(preview, Mapping) else None
         previous_z = _number(preview.get("current_z_mm")) if isinstance(preview, Mapping) else None
@@ -543,11 +549,63 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self._preview_id and isinstance(preview, Mapping) and surface
             and str(preview.get("id")) == self._preview_id
             and preview.get("measurement_id") == surface.get("id")
+            and isinstance(calibration, Mapping) and bool(calibration.get("id"))
+            and preview.get("calibration_id") == calibration.get("id")
             and preview.get("gap_mm") == self.gap.currentData()
             and preview.get("clearance_z_mm") == self._clearance_value()
             and target is not None and maximum is not None and 0 <= target <= maximum
             and current is not None and previous_z is not None and abs(current - previous_z) <= .05
         )
+
+    def _move_block_reason(self) -> str | None:
+        """Explain the same prerequisites that enable the explicit Z move."""
+        if self._busy or self._pending:
+            return "Wait for the current operation to finish."
+        if not _read_allowed(self._status):
+            return "Wait for an idle, connected controller with the laser disarmed."
+        if self._result.get("available") is False:
+            return "Choose Reconnect Ender to restore its position readback."
+        if not self.fresh():
+            return "Refresh focus status to obtain a current Z position."
+        if not project_machine_state(self._status).can_jog:
+            return "Home / park XY and enable motion before positioning Z."
+        readback = self._result.get("current_readback") or {}
+        if self._result.get("reference_ready") is not True or readback.get("z_known") is not True:
+            return "Reference the border to establish the Z position."
+        surface = self._result.get("surface")
+        if not surface:
+            return "Measure the surface before previewing its focus position."
+        if (self._result.get("xy_sequence") or {}).get("phase") == "probe":
+            return "Return the laser to the measured spot at clearance."
+        if self._result.get("calibration_compatible") is not True:
+            return "Teach and save the 7 mm gauge fit for this setup."
+        clearance = self._clearance_value()
+        if clearance is None:
+            return "Set Clearance Z between 20 mm and the active maximum."
+        preview = self._result.get("preview")
+        if isinstance(preview, Mapping):
+            target = _number(preview.get("target_z_mm"))
+            maximum = _number(self._result.get("max_z_mm"))
+            if target is not None and maximum is not None and not 0 <= target <= maximum:
+                return f"Target Z {target:.3f} mm is outside the allowed 0 to {maximum:g} mm range."
+            if preview.get("measurement_id") != surface.get("id"):
+                return "The measured surface changed; choose Preview target again."
+            if preview.get("calibration_id") != (self._result.get("calibration") or {}).get("id"):
+                return "The taught offset changed; choose Preview target again."
+            if preview.get("gap_mm") != self.gap.currentData():
+                return "The selected gap changed; choose Preview target again."
+            if preview.get("clearance_z_mm") != clearance:
+                return "Clearance Z changed; choose Preview target again."
+            current, previous = _number(readback.get("z_mm")), _number(preview.get("current_z_mm"))
+            if current is not None and previous is not None and abs(current - previous) > .05:
+                return "Z moved after the preview; choose Preview target again."
+        if not self._preview_matches(preview):
+            return "Choose Preview target for the selected gap."
+        if not self.path_clear.isChecked():
+            return "Confirm ‘Headroom and Z path clear to the selected clearance’ above."
+        if not self.gauge_removed.isChecked():
+            return "Remove the gauge, then confirm ‘Gauge removed; path to target clear’ above."
+        return None
 
     def observe_z_status(self, status: Mapping[str, Any]) -> None:
         self._live_z.update(status)
@@ -651,8 +709,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                   and self._result.get("calibration_persistent") is True))
         self.preview.setEnabled(bool(ready and known and reference and surface and not probe_phase and clearance is not None
                                     and self._result.get("calibration_compatible") is True))
-        self.move.setEnabled(bool(moving and self._preview_matches(self._result.get("preview"))
-                                 and self.gauge_removed.isChecked()))
+        move_block = self._move_block_reason()
+        self.move.setEnabled(move_block is None)
+        self.move_note.setText(
+            f"Move unavailable: {move_block}" if move_block else
+            f"Choose Move to focus to move Z to {self._result['preview']['target_z_mm']:.3f} mm."
+        )
         for control in (self.clearance, self.gap, self.path_clear, self.flat_patch,
                         self.gauge, self.gauge_removed, self.z_step):
             control.setEnabled(idle)
@@ -674,7 +736,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Next: Choose Position probe and click a flat target in the camera view." if not surface and offset_valid else
             "Next: Position over a wide, flat patch and measure its surface." if not surface else
             "Next: Fit the 7 mm gauge with small Z steps, then save the setting." if not self._result.get("calibration_compatible") else
-            "Next: Remove the gauge, preview a gap, then move to focus."
+            f"Next: {move_block}" if move_block else
+            "Next: Choose Move to focus to position the laser."
         )
         self.range_note.setText(
             f"Contact elevation range: −2 to {clearance - 15:g} mm; higher work needs more clearance."
@@ -745,6 +808,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         self._status: dict[str, Any] = {}
         self._epoch = 0
         self._parameter_epoch = 0
+        self._camera_epoch = 0
         self._pending = False
         self._mutation = False
         self._busy = bool(getattr(controller, "_active_tasks", 0))
@@ -831,6 +895,12 @@ class LaserFocusCoordinator(QtCore.QObject):
 
     def parameters_edited(self) -> None:
         self._parameter_epoch += 1
+        self._camera_epoch += 1
+
+    def camera_selection_changed(self) -> None:
+        # Camera freshness/selection only authorizes XY positioning. A focus
+        # preview uses the already measured surface, independently of the view.
+        self._camera_epoch += 1
 
     def stopped(self) -> None:
         self._epoch += 1
@@ -891,7 +961,7 @@ class LaserFocusCoordinator(QtCore.QObject):
                                      or not self.panel.reconnect_ender.isEnabled()):
             return
         if action == "position_probe":
-            arguments = dict(arguments, _camera_parameter_epoch=self._parameter_epoch)
+            arguments = dict(arguments, _camera_epoch=self._camera_epoch)
         if self._pending:
             if action != "status" and not self._mutation and self._queued is None:
                 self._epoch += 1
@@ -904,7 +974,7 @@ class LaserFocusCoordinator(QtCore.QObject):
     def _start_request(self, action: str, arguments: dict[str, Any]) -> None:
         arguments = dict(arguments)
         camera_selection = arguments.pop("_camera_selection", None)
-        camera_parameter_epoch = arguments.pop("_camera_parameter_epoch", None)
+        camera_epoch = arguments.pop("_camera_epoch", None)
         self._pending = True
         self._mutation = action != "status"
         # Background reads keep controls responsive. A clicked action takes
@@ -933,7 +1003,7 @@ class LaserFocusCoordinator(QtCore.QObject):
             if not callable(method):
                 raise RuntimeError("Install the matching Pi support and surface-height V2 firmware for focus setup.")
             if action == "position_probe":
-                if (not isinstance(camera_selection, dict) or camera_parameter_epoch != self._parameter_epoch
+                if (not isinstance(camera_selection, dict) or camera_epoch != self._camera_epoch
                         or parameter_epoch != self._parameter_epoch):
                     raise RuntimeError("Camera target changed; select the probe point again.")
                 age = camera_selection["frame_age_seconds"] + max(
@@ -946,7 +1016,8 @@ class LaserFocusCoordinator(QtCore.QObject):
                     mapping_signature=camera_selection["mapping_signature"],
                 )
                 if (target["target_machine_xy_mm"] != arguments.get("value")
-                        or epoch != self._epoch or parameter_epoch != self._parameter_epoch):
+                        or epoch != self._epoch or parameter_epoch != self._parameter_epoch
+                        or camera_epoch != self._camera_epoch):
                     raise RuntimeError("Camera target changed; select the probe point again.")
             result = method(action, **arguments)
             if _session(machine.status()) != session:
@@ -1049,7 +1120,7 @@ class LaserFocusDialog(QtWidgets.QDialog):
     def _camera_point_selected(self, selection: dict[str, Any]) -> None:
         if not self.panel.position_probe.isEnabled() or not self.panel.position_probe.isChecked():
             return
-        self.coordinator.parameters_edited()
+        self.coordinator.camera_selection_changed()
         try:
             self.panel.set_camera_target(self._map_camera_selection(selection))
         except (CalibrationError, ValueError, RuntimeError, KeyError, TypeError) as exc:
@@ -1057,13 +1128,13 @@ class LaserFocusDialog(QtWidgets.QDialog):
             self.bed_view.reject_selection()
 
     def _camera_selection_invalidated(self, message: str) -> None:
-        self.coordinator.parameters_edited()
+        self.coordinator.camera_selection_changed()
         self.panel.clear_camera_target(message)
 
     def _camera_tick(self) -> None:
         camera_live = self.bed_view.current_frame_fresh()
         if self.panel._camera_live and not camera_live:
-            self.coordinator.parameters_edited()
+            self.coordinator.camera_selection_changed()
         self.panel._camera_live = camera_live
         target = self.panel._camera_target
         if target is not None:

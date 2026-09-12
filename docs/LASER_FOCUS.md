@@ -244,6 +244,12 @@ no live homing, surface or motion authority.
 
 ## Position above work, including raised surfaces
 
+**Preview target** calculates and displays a destination; it does not move Z.
+When **Move to focus** is disabled, the line immediately above it explains the
+missing prerequisite. A brief camera interruption does not discard a Z preview
+for an already measured surface. Camera point selection still requires a fresh
+view, and changed focus parameters or machine state still invalidate previews.
+
 1. Establish the border reference in the current controller session. Raise to
    sufficient clearance **before** placing tall work under the head or moving
    XY over it. A maximum setting alone does not make a path clear.

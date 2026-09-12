@@ -1,5 +1,12 @@
 # Roadmap
 
+## Focus preview usability
+
+Separate camera-selection freshness from measured-surface Z preview validity,
+and display the reason for unavailable focus movement. Keep explicit preview
+and movement requests plus the existing session, bounds and confirmation gates.
+Physical gauge reproduction and raised-surface accuracy remain operator checks.
+
 ## Z workflow repair verification
 
 The current focus repair keeps the existing surface-V2 firmware for positioning

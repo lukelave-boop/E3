@@ -1,5 +1,24 @@
 # Current repository state
 
+## Focus preview availability correction (2026-09-12)
+
+The operator reports Preview followed by a disabled Move to focus after saving
+the 7 mm gauge fit. Read-only Pi status confirms the taught Z2.8 setting,
+compatible offset -2.434 mm and valid calculated Z2.8 preview. Normal full-dialog
+replay succeeds. A separate reproduced failure occurs when camera freshness
+drops during Preview: the shared parameter generation discards the Z result,
+despite the calculation depending on the already measured surface. The exact
+operator UI state was not captured, so this cause is reproduced but not proven
+to explain that particular click.
+
+Desktop camera-selection invalidation is now separate from focus-parameter
+invalidation. Camera loss still blocks/cancels camera positioning; it does not
+discard a measured-surface Z preview. Changed gap/clearance, STOP, session and
+readback rules remain. Move to focus explains its missing prerequisite directly
+above the button. No Pi restart, firmware change or saved-calibration mutation
+is part of this correction. Focused tests and the frozen handoff are recorded
+separately; the remote diagnostic did not command motion.
+
 ## Z workflow repair installed and real motion verified (2026-09-12)
 
 This supersedes the staged-only handoff below. Matching Pi companion 34f11e95

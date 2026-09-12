@@ -1,5 +1,14 @@
 # Architecture
 
+## Focus and camera request generations
+
+The desktop coordinator tracks camera-selection changes separately from focus
+parameters. A camera request binds both generations; a Z preview binds gap and
+clearance plus existing measurement/session/readback authority. Losing the camera
+therefore cancels camera positioning without dropping an unrelated Z preview.
+Status polling cannot grant local preview authority. Explicit Preview and Move
+remain separate, and the Pi revalidates the supplied preview before motion.
+
 ## Focus reference start normalization
 
 MachineService admits reference only at the configured border with current XY,
