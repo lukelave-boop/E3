@@ -144,8 +144,9 @@ offset explicitly; an unset offset never silently becomes zero.
 4. Confirm a solid flat target under the probe and **Measure surface**.
 5. At clearance, confirm the transfer path and choose **Return laser to measured
    spot**. It reverses the offset and retains only that point's measurement.
-6. Fit the 7 mm gauge on that same spot, use the small Z teaching steps, and save
-   the gauge setting as described below. Remove the gauge before focus moves.
+6. Put the 7 mm gauge **on top of the surface that was just measured**, so it
+   spaces the laser face 7 mm above that surface. Use the small Z teaching steps
+   and save the fit as described below. Remove the gauge before focus moves.
 
 Each movement is separately requested; no button silently continues into probing
 or lowering Z. Both endpoints and the entire transfer path must be inside the
@@ -204,23 +205,43 @@ a tilted or curved surface over an entire job.
 
 ## Teach the gauge once
 
+The workpiece surface and the gauge have different jobs. Probe the flat
+workpiece's top **without the gauge present**. After measurement, the gauge
+sits on that top and establishes a 7 mm gap from the measured surface to the
+laser's reference face. The workpiece's own thickness is not that gap.
+
 1. Home / park the primary controller over the solid black border. Confirm the
    stowed probe and space for the initial 5 mm lift. **Reference border** uses
    the native homing cycle, checks a border contact, and returns to the chosen
    clearance. If Z is already known above Z20, this action first lowers to Z20
    over the confirmed bare border. It needs an active maximum of at least Z25.
    Do not home over a workpiece or into a honeycomb cell.
-2. Position over the flat teaching workpiece while at clearance, then **Measure
-   surface**. Observe the native fast/slow contacts and final retract. E3 stores
-   the measured contact and the current machine/session identity.
-3. Place the gauge on that same surface. Use the dedicated small Z teaching
-   jogs to bring the laser's usual gauge-contact edge just onto the **7 mm**
-   step. Keep the probe mounting and laser mounting fixed. These teaching jogs
-   retain the measured surface; unrelated Z commands invalidate it.
-4. **Save current Z as 7 mm gap** saves the difference between the acknowledged
+2. Position over a solid, flat teaching workpiece at clearance, with the gauge
+   removed. **Measure surface** probes the workpiece's exposed top. Observe the
+   native fast/slow contacts and final retract. E3 stores that top's contact
+   coordinate and the current machine/session identity. With the offset-transfer
+   workflow, confirm the clear XY path and choose **Return laser to measured
+   spot** before teaching. Leave the workpiece in place.
+3. Place the gauge's bottom flat on that same measured workpiece surface, with
+   its **7 mm step** under the laser's usual gauge-contact face. This step must
+   be 7 mm above the surface that the probe measured. Remove the gauge before
+   each Z jog, then reinsert it to check the fit. Switch to 0.1 mm steps near
+   the fit; stop when it fits gently between the workpiece and laser face,
+   without pressing on or moving the workpiece. Keep both mountings fixed.
+   These dedicated teaching jogs retain the measured surface; unrelated Z
+   commands invalidate it.
+4. Check **7 mm gauge fits at this Z** only after that physical fit is correct.
+   **Save current Z as 7 mm gap** saves the difference between the acknowledged
    focused Z and the raw probe contact. Teaching reads the position and saves
    calibration; it does not move or enable the laser. Remove the gauge and
    return to clearance before changing workpieces or jogging XY.
+
+Do not probe the gauge's 7 mm top, then touch the laser face to that same top
+and save it as a 7 mm gap. That teaches a zero gap as 7 mm. Backing off a small
+amount before saving teaches only that small gap; the step's thickness below
+the already measured top does not count. If that happened, use **Forget taught
+offset** and repeat the workpiece-then-spacer sequence. An approximate remembered
+backoff is not an exact correction for a saved calibration.
 
 The relation saved is:
 
@@ -234,6 +255,14 @@ the installed probe-to-laser mounting relationship. The 5 mm and 3 mm selections
 place the laser 2 mm and 4 mm lower than the taught 7 mm baseline respectively.
 Those selections reproduce the operator's gauge; they do not certify cutting
 parameters or cut quality for a material.
+
+A spacer measured at 7.01 mm, saved with the current nominal 7 mm setting,
+introduces a 0.01 mm increase in the reproduced nominal gaps. That difference
+is within the operator's requested 0.6 mm acceptance; it does not replace the
+physical fit checks. The measured workpiece top may be below the border zero:
+the probe accepts contact from Z-2 up to clearance minus 15 mm. It must still be
+a solid patch, and all commanded laser Z positions remain between Z0 and the
+active maximum.
 
 Calibration is stored in a strict, versioned JSON sidecar beside the active
 machine configuration, bound to the Ender connection and firmware/probe

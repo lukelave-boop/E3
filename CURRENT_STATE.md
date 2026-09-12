@@ -1,5 +1,33 @@
 # Current repository state
 
+## Incorrect gauge teaching revoked (2026-09-12)
+
+The operator clarified the physical teaching setup: the probe measured the
+top of the 7 mm step, then the laser face touched that same top and was raised
+about 0.3 mm before Save as 7 mm gap. This is approximately 0.3 mm above the
+measured surface, not 7 mm. Calibration c296de5e-b66d-43f4-937c-7ab06874cb11
+(taught Z2.8, contact Z5.234, offset -2.434) therefore commands focus roughly
+6.7 mm too low. Earlier software checks verified arithmetic and persistence,
+not the physical spacing premise; the retained-calibration handoff below is
+superseded. Do not reuse its Z2.800 preview as a valid 7 mm physical gap.
+
+Backed up that exact calibration and cleared it using the existing authenticated
+MachineService focus `forget` action. A following status confirms calibration
+and preview are null, compatibility false, and Z remains known at 30 mm.
+The 40 mm maximum and probe XY offset +3.302/+38.608 are unchanged. No movement,
+homing, probe deployment, recovery, firmware update or service restart was
+requested. Forget's Ender transcript contains only M115, M123 and M114.
+Records are local under `dist/focus-calibration-correction/` and not committed.
+
+Reteach by probing the exposed flat workpiece without the spacer, returning
+the laser to the measured spot, and then using the 7 mm spacer on that surface
+to set the physical gap. Remove it before each jog and reinsert only while
+stationary to check a gentle fit. The measured 7.01 mm step contributes 0.01 mm
+relative to the nominal 7 mm selection. An approximate 0.3 mm backoff does not
+justify silently installing an exact numerical correction. Correct teaching
+and physical gap verification remain operator work. Existing desktop 0.7.89
+and Pi software support this sequence; no new executable was built here.
+
 ## Focus preview availability correction (2026-09-12)
 
 The operator reports Preview followed by a disabled Move to focus after saving
