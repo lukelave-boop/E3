@@ -1,5 +1,28 @@
 # Current repository state
 
+## Verified camera work-area fix handoff (2026-09-12)
+
+E3 DEV TEST selects Camera probe work-area correction, version 0.7.72,
+exact revision dfb0179a4ab9ffc2906f2463da7b61d67f1a4bb7, at
+`.codex-worktrees/focus-camera-area-dev/dist/E3/E3.exe`. The Windows executable
+was produced by packaging/build_windows.ps1 and passed its native-library
+guard. All 157 packaged source modules match the isolated checkout. The EXE
+hash and adjacent build-info match the atomically updated permanent pointer.
+The normal launcher is unchanged.
+
+Fast Development CI 34690667883 passed for that exact revision: Windows
+Python 3.12 5,251 passed/25 skipped; POSIX transport/recovery 493 passed;
+Ruff and dependency/compile validation passed. Local focused validation was
+240 passing mapping, offscreen Qt and simulated movement tests. An offscreen
+render verified the informational original-grid note and target preview.
+https://github.com/lukelave-boop/E3/actions/runs/34690667883
+
+The handoff and hash record are in dist/focus-camera-area-0.7.72. No Pi or
+firmware update is required for this correction. Current max40 and saved
+probe offset are preserved. No interactive frozen GUI, live-camera alignment,
+physical movement or gauge accuracy was newly verified; operator qualification
+remains active on this branch.
+
 ## Camera probe work-area correction (2026-09-12)
 
 The operator's 0.7.69 live-camera screenshot rejected a solid gauge spot as
