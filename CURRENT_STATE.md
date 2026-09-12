@@ -16,8 +16,30 @@ invalidation. Camera loss still blocks/cancels camera positioning; it does not
 discard a measured-surface Z preview. Changed gap/clearance, STOP, session and
 readback rules remain. Move to focus explains its missing prerequisite directly
 above the button. No Pi restart, firmware change or saved-calibration mutation
-is part of this correction. Focused tests and the frozen handoff are recorded
-separately; the remote diagnostic did not command motion.
+is part of this correction; the remote diagnostic did not command motion.
+
+Verified source 31e40fb5059fa84ebf82a751cc99e3d1007a4b39: 414 focused local
+tests passed, including full-dialog negative-offset Preview/Move simulation,
+camera-loss handling and rejection after edits/STOP/session changes. Ruff and
+compileall passed. An offscreen replay using the actual saved values retains
+Target Z2.800 through Preview and status refresh; an unchecked gauge-removal
+confirmation displays its reason, and checking it enables the explicit Move.
+Blocked and ready dark-theme widgets were visually inspected offscreen.
+
+Exact-source Fast Development CI 34708325725 passed: Windows Python 3.12
+5599 passed / 25 skipped, POSIX serial/recovery 500 passed, Ruff and dependency/
+bytecode checks passed. Frozen Windows 0.7.89 has all 159 E3 source modules
+verified in its 318 compiled/source entries. The permanent E3 DEV TEST pointer
+selects **Focus preview and move readiness**, exact source revision above,
+at `.codex-worktrees/focus-preview-ready/dist/E3/E3.exe`. The running app was
+not closed; reopening E3 DEV TEST loads the fix. Evidence and the operator
+handoff are under `dist/focus-preview-ready-0.7.89/` (not committed).
+
+This correction has automated/offscreen Windows verification and read-only
+confirmation of the persistent taught setting. It has no new physical movement,
+live-camera interaction or optical-focus accuracy test. The operator's saved
+7 mm fit is retained; an application reconnect can require a fresh border
+reference and surface measurement, but does not require reteaching the offset.
 
 ## Z workflow repair installed and real motion verified (2026-09-12)
 
