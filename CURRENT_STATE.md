@@ -25,7 +25,16 @@ needed the added focus_plan=None field and both focused STOP checks then passed.
 Earlier unchanged focus coverage also passed. Ruff and compileall passed.
 The Pi-owned loopback upload test completed and lifted after client detach.
 All controller tests use simulated peers; no new physical motion/cut was run.
-Windows 0.7.93 packaging, Pi installation and CI results are pending. The saved
+Windows 0.7.93 is packaged and selected through E3 DEV TEST at exact revision
+12dbb3d247271627139d648252d3660c9dde5f2a. The window opened as PID20032; all 160
+frozen modules match the clean source checkout. The four-file Pi update passed
+its predecessor-hash check, installed with backups and reverified already-current;
+service PID75639 is active with NRestarts=0. Firmware/configuration were unchanged.
+216 Linux tests passed in an isolated Pi environment using simulated controllers.
+Fast Development CI run 34720376278 passed all jobs, including the full Windows
+Python 3.12 desktop suite. Physical focus/cut/lift qualification is still pending
+operator testing; restart requires a fresh reference and surface measurement,
+not re-teaching. Evidence and build hashes: dist/job-focus-0.7.93/. The saved
 7 mm calibration hash remains 3923a856b1fe4fd315f5d2ebf1648e6b25e2c0479d24aa07368e0d2b72014ac6.
 
 ## Focus preview completion cache fix (2026-09-12)

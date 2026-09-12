@@ -4,8 +4,9 @@
 
 Implemented explicit one-use selection and Pi-owned clearance/approach/focus/
 cut/lift sequencing, including automatic clearance before manual Home / park.
-Automated acceptance passes; Windows/Pi delivery and operator physical sequence
-verification are pending. Multi-height/layer focus and raised-surface camera
+Windows 0.7.93 and the matching Pi companion are delivered. Automated acceptance,
+216 isolated Linux/Pi tests and full Windows development CI pass. Operator
+physical sequence verification remains pending. Multi-height/layer focus and raised-surface camera
 correction remain separate work.
 
 ## Completed focus preview handoff
