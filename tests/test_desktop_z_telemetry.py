@@ -20,6 +20,13 @@ from tests.test_desktop_laser_focus import result as focus_result
 from tests.test_desktop_mainboard_z import result as z_result
 
 
+def _assert_z_jogs_unavailable(panel):
+    if isinstance(panel, LaserFocusPanel) and not panel.calibration_mode:
+        assert panel.up is None and panel.down is None
+    else:
+        assert not panel.up.isEnabled() and not panel.down.isEnabled()
+
+
 def sample(**changes):
     value = {
         "supported": True, "valid": True, "z_mm": 25.5, "known": True,
@@ -106,10 +113,10 @@ def test_ender_reset_discards_old_idle_number_until_new_typed_readback(clock):
     assert observation.readout(active=False, readback_at=clock.now) is None
 
 
-@pytest.mark.parametrize("panel_kind", ["focus", "machine"])
+@pytest.mark.parametrize("panel_kind", ["focus", "focus_setup", "machine"])
 def test_busy_panels_display_actual_samples_without_changing_authority(app, clock, panel_kind):
-    if panel_kind == "focus":
-        panel = LaserFocusPanel()
+    if panel_kind.startswith("focus"):
+        panel = LaserFocusPanel(calibration_mode=panel_kind == "focus_setup")
         controller = FakeController()
         coordinator = LaserFocusCoordinator(panel, controller)
         coordinator._timer.stop()
@@ -138,9 +145,10 @@ def test_busy_panels_display_actual_samples_without_changing_authority(app, cloc
         assert panel._result == old_result
         assert panel._received_at == received_at
         assert getattr(panel, "_preview_id", None) == old_preview
-        assert not panel.up.isEnabled() and not panel.down.isEnabled()
-        if panel_kind == "focus":
-            assert not panel.move.isEnabled() and not panel.teach.isEnabled()
+        _assert_z_jogs_unavailable(panel)
+        if panel_kind.startswith("focus"):
+            assert not panel.move.isEnabled()
+            assert panel.teach is None if panel_kind == "focus" else not panel.teach.isEnabled()
             assert controller.machine.calls == [] and controller.work == []
         else:
             assert not panel.apply.isEnabled()
@@ -152,11 +160,11 @@ def test_busy_panels_display_actual_samples_without_changing_authority(app, cloc
         assert "-0.375" in panel.height.text()
         assert "homing / unreferenced" in panel.height.text()
         assert "above border" not in panel.height.text() + note.text() + panel.height.toolTip()
-        assert not panel.up.isEnabled() and not panel.down.isEnabled()
+        _assert_z_jogs_unavailable(panel)
         emit(status(ender_z_telemetry=sample(valid=False, z_mm=-.375, known=False, homing=True)))
         assert panel.height.text() == "Z — mm"
         # Only the separately completed typed result restores ordinary idle display.
-        if panel_kind == "focus":
+        if panel_kind.startswith("focus"):
             controller.busyChanged.emit(False)
             panel.set_result(focus_result(current_readback={"z_mm": 20., "z_known": True, "fresh": True}))
         else:
@@ -171,11 +179,12 @@ def test_busy_panels_display_actual_samples_without_changing_authority(app, cloc
         app.processEvents()
 
 
-@pytest.mark.parametrize("kind", ["focus", "machine"])
+@pytest.mark.parametrize("kind", ["focus", "focus_setup", "machine"])
 def test_legacy_firmware_movement_explicitly_reports_live_unavailable(app, kind):
-    panel = LaserFocusPanel() if kind == "focus" else MainboardZPanel()
+    panel = (LaserFocusPanel(calibration_mode=kind == "focus_setup")
+             if kind.startswith("focus") else MainboardZPanel())
     try:
-        if kind == "focus":
+        if kind.startswith("focus"):
             panel._status = status()
             panel._busy = True
             panel.observe_z_status(status())
@@ -186,22 +195,23 @@ def test_legacy_firmware_movement_explicitly_reports_live_unavailable(app, kind)
             note = panel.readback_note
         assert panel.height.text() == "Z — mm"
         assert "Live Z unavailable" in note.text()
-        assert not panel.up.isEnabled() and not panel.down.isEnabled()
+        _assert_z_jogs_unavailable(panel)
     finally:
         panel.close()
         panel.deleteLater()
         app.processEvents()
 
 
-@pytest.mark.parametrize("kind", ["focus", "machine"])
+@pytest.mark.parametrize("kind", ["focus", "focus_setup", "machine"])
 def test_display_timer_reads_new_cached_sample_without_authority_status_event(app, kind):
-    panel = LaserFocusPanel() if kind == "focus" else MainboardZPanel()
+    panel = (LaserFocusPanel(calibration_mode=kind == "focus_setup")
+             if kind.startswith("focus") else MainboardZPanel())
     controller = FakeController()
-    coordinator = (LaserFocusCoordinator if kind == "focus" else MainboardZCoordinator)(panel, controller)
+    coordinator = (LaserFocusCoordinator if kind.startswith("focus") else MainboardZCoordinator)(panel, controller)
     coordinator._timer.stop()
     panel._display_timer.stop()
     controller.statusChanged.emit(status())
-    panel.set_result(focus_result() if kind == "focus" else z_result())
+    panel.set_result(focus_result() if kind.startswith("focus") else z_result())
     panel.show()
     controller.busyChanged.emit(True)
     try:
@@ -218,7 +228,7 @@ def test_display_timer_reads_new_cached_sample_without_authority_status_event(ap
         assert coordinator._status == authority
         assert coordinator._epoch == generation
         assert panel._result == result and panel._received_at == received_at
-        assert not panel.up.isEnabled() and not panel.down.isEnabled()
+        _assert_z_jogs_unavailable(panel)
         assert controller.machine.calls == [] and controller.work == []
         # Cache loss clears the display immediately; no reconnect or command is attempted.
         controller.machine.snapshot = status(connected=False, ender_z_telemetry=sample())
@@ -227,7 +237,7 @@ def test_display_timer_reads_new_cached_sample_without_authority_status_event(ap
         assert coordinator._status == authority
         assert controller.machine.calls == [] and controller.work == []
     finally:
-        if kind == "focus":
+        if kind.startswith("focus"):
             coordinator.close()
         coordinator.deleteLater()
         panel.close()
@@ -235,15 +245,16 @@ def test_display_timer_reads_new_cached_sample_without_authority_status_event(ap
         app.processEvents()
 
 
-@pytest.mark.parametrize("kind", ["focus", "machine"])
+@pytest.mark.parametrize("kind", ["focus", "focus_setup", "machine"])
 def test_fast_cache_observation_is_paused_when_idle_or_hidden(app, kind):
-    panel = LaserFocusPanel() if kind == "focus" else MainboardZPanel()
+    panel = (LaserFocusPanel(calibration_mode=kind == "focus_setup")
+             if kind.startswith("focus") else MainboardZPanel())
     controller = FakeController()
-    coordinator = (LaserFocusCoordinator if kind == "focus" else MainboardZCoordinator)(panel, controller)
+    coordinator = (LaserFocusCoordinator if kind.startswith("focus") else MainboardZCoordinator)(panel, controller)
     coordinator._timer.stop()
     panel._display_timer.stop()
     controller.statusChanged.emit(status())
-    panel.set_result(focus_result() if kind == "focus" else z_result())
+    panel.set_result(focus_result() if kind.startswith("focus") else z_result())
     reads = []
     controller.machine.status = lambda: reads.append(True) or status(ender_z_telemetry=sample())
     panel.show()
@@ -258,7 +269,7 @@ def test_fast_cache_observation_is_paused_when_idle_or_hidden(app, kind):
         panel._display_timer.timeout.emit()
         assert reads == [True]
     finally:
-        if kind == "focus":
+        if kind.startswith("focus"):
             coordinator.close()
         coordinator.deleteLater()
         panel.close()

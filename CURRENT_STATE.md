@@ -31,7 +31,12 @@ desktop/setup behavior. Follow-up real RemoteMachineService/FakePi regression
 checks cover the post-Home cache refresh: 114 controls/remote tests and 192
 desktop/setup tests passed after that correction. Ruff and compileall passed. The daily
 layout and embedded calibration layout were visually inspected from offscreen
-renders. Fast Development CI and frozen-build validation remain pending. No interactive GUI, real camera, controller,
+renders. First Fast CI 34725845234 passed all non-Windows jobs, then reported
+5,815 passed, 25 skipped and three obsolete telemetry tests expecting teaching
+buttons in the daily panel. Those tests now cover daily, setup and Machine-tab
+telemetry independently. Application code is unchanged from frozen 7402dec.
+The frozen EXE verifies all 160 bundled source/compiled modules at that revision;
+version 0.7.110. The corrected full Windows CI run and launcher handoff are pending. No interactive GUI, real camera, controller,
 laser or new physical accuracy test has been performed. The prior operator
 verification below applies to its named build, not these combined controls.
 The feature is isolated on codex/marlin-material-focus-controls so unrelated
