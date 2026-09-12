@@ -1,5 +1,13 @@
 # Roadmap
 
+## Probe-failure recovery verification
+
+The explicit current-height XY recovery path repairs the reproduced software
+deadlock while retaining clearance and a separate border-reference requirement.
+Automated cancellation and invalid-state tests do not establish probe deployment,
+contact, stow, physical headroom or the cause of PROBE_FAILED. Matching desktop
+and Pi deployment plus an operator-observed recovery/reference remain required.
+
 ## Focus preview usability
 
 Separate camera-selection freshness from measured-surface Z preview validity,

@@ -71,6 +71,48 @@ but cannot be restarted by this protocol if it is already halted. It must be
 made responsive before the recovery firmware can be installed. See
 [Ender recovery](ENDER_RECOVERY.md) for the protocol and verification limits.
 
+## Recover XY after a failed probe
+
+A failed native surface probe deliberately stops and disconnects the controllers.
+The retained clearance restriction can then leave ordinary Home waiting for Z
+clearance while Z clearance and border reference wait for Home. A fake-backed
+MachineService sequence reproduced this deadlock. The separate **Recover XY at
+current height** action resolves that recovery path for split GRBL XY / Ender Z
+machines; it does not diagnose or repeat the failed probe.
+
+1. Restore the primary connection. Use **Reconnect Ender** separately if needed;
+   a firmware restart can initialize the probe pin, so first check its physical
+   path. Reconnection only restores communications and acknowledges outputs off.
+2. With both connections ready, freshly inspect and confirm that the probe is
+   physically retracted and the **entire XY homing, search and parking path** is
+   clear at the actual current height. A triggered M119 input does not prove
+   physical stow. Earlier clearance confirmations are not reused.
+3. Choose **Recover XY at current height**. This homes and parks the primary XY
+   controller with the laser off and issues no Ender Z travel. It preflights
+   fresh Ender state, checks both controller sessions and STOP throughout the
+   operation, and verifies the final XY position and unchanged Ender Z state.
+   The action does not reset the Ender or establish a Z reference.
+4. At the border, separately confirm the reference setup, including physical
+   headroom for the initial 5 mm lift, and choose **Reference border**. Only a
+   successful reference and acknowledged clearance lift release the restriction.
+   Ordinary Home, XY jogging, jobs and arming remain blocked until then.
+
+Recovery preflight accepts a known Z within the active bounds, or the existing
+explicit unknown reset state near Z0. Unknown nonzero Z, inconsistent known-axis
+reports, unsupported firmware, an unstowed probe input or insufficient configured
+reference travel are rejected before XY motion. Reset Z0 is not physical height:
+headroom for the later reference lift relies on the fresh physical confirmation,
+not a proven absolute ceiling. This recovery requires the matching Pi companion
+with `pi-laser-focus-xy-recovery-v1`; it has no new firmware requirement beyond the
+existing focus/reference contracts.
+
+The reported `G39 C30.000 H15.000` / `Error:E3MH:2 PROBE_FAILED` incident does not
+establish whether either probe touch happened. The observed service stayed in
+the same process and the kernel recorded no USB disconnect/reset. The generic
+firmware error does not identify deployment, trigger, contact, stow or Z-trust
+failure, and the lack of a hole in the paper does not establish its cause. No
+physical cause or physical recovery success is established by this software fix.
+
 ## Choose a probe point in the camera image
 
 After referencing the border and reaching the selected clearance, choose

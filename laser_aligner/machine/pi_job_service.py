@@ -1489,7 +1489,7 @@ class PiJobService:
         expected_session_generation=None, connection_alive=None,
     ):
         return self._run_idle_machine_operation(
-            "position laser focus",
+            "recover XY at the current height" if action == "recover_xy" else "position laser focus",
             lambda: self.machine.focus_control(
                 action, confirmed=confirmed, value=value, clearance_z_mm=clearance_z_mm,
                 gap_mm=gap_mm, measurement_id=measurement_id, preview_id=preview_id,

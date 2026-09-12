@@ -136,6 +136,162 @@ def test_recovery_prompt_does_not_invite_another_camera_move(panel):
     assert not panel.position_probe.isEnabled() and not panel.move_probe.isEnabled()
 
 
+def home_required_status(**changes):
+    return status(controller_state="READY_HOME_REQUIRED", coordinate_reference_ready=False,
+                  jog_ready=False, **changes)
+
+
+def xy_recovery_result(**changes):
+    return result(
+        requires_clearance=True, reference_ready=False, surface=None, preview=None,
+        xy_sequence=None, xy_recovery_available=True, recovery_available=True,
+        current_readback={"fresh": True, "z_known": False, "z_mm": 0.0},
+        ender={"ready": True, "fault": None, "generation": 5, "recovery_required": False},
+        **changes,
+    )
+
+
+def test_xy_recovery_has_separate_fresh_confirmation_and_never_reuses_other_paths(panel, app):
+    panel._status = home_required_status()
+    panel.set_result(xy_recovery_result())
+    for checkbox in (panel.path_clear, panel.xy_clear, panel.flat_patch, panel.gauge_removed):
+        checkbox.setChecked(True)
+    assert panel.xy_recovery_group.isVisible()
+    assert not panel.home.isEnabled() and not panel.reference.isEnabled()
+    assert not panel.recover_xy.isEnabled()
+    calls = []
+    panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
+    panel.request("recover_xy")
+    assert not calls
+    panel.xy_recovery_clear.setChecked(True)
+    assert panel.recover_xy.isEnabled()
+    panel.recover_xy.click()
+    assert calls == [("recover_xy", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0})]
+    assert not panel.xy_recovery_clear.isChecked() and not panel.path_clear.isChecked()
+    assert not panel.xy_clear.isChecked() and not panel.flat_patch.isChecked()
+    assert not panel.gauge_removed.isChecked()
+    app.processEvents()
+    assert panel.xy_recovery_clear.geometry().bottom() < panel.recover_xy.geometry().top()
+    assert "ENTIRE XY homing/search/parking path" in panel.xy_recovery_clear.text()
+    assert "physically retracted" in panel.xy_recovery_clear.text()
+
+
+@pytest.mark.parametrize("change", ["old_pi", "no_clearance", "already_homed", "ender", "stale", "motion", "armed"])
+def test_xy_recovery_unavailable_without_complete_prerequisites(panel, change):
+    panel._status = home_required_status()
+    payload = xy_recovery_result()
+    if change == "old_pi":
+        payload.pop("xy_recovery_available")
+    elif change == "no_clearance":
+        payload["requires_clearance"] = False
+    elif change == "already_homed":
+        panel._status = status()
+    elif change == "ender":
+        payload = unavailable_result(requires_clearance=True, xy_recovery_available=True)
+    elif change in {"motion", "armed"}:
+        panel._status = home_required_status(**{"allow_motion": False} if change == "motion" else {"armed": True})
+    panel.set_result(payload)
+    if change == "stale":
+        panel._received_at = time.monotonic() - FRESH_SECONDS - 1
+    panel.xy_recovery_clear.setChecked(True)
+    panel._sync()
+    calls = []
+    panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
+    panel.request("recover_xy")
+    assert not panel.recover_xy.isEnabled() and not calls
+    if change in {"already_homed", "no_clearance"}:
+        assert not panel.xy_recovery_group.isVisible()
+
+
+@pytest.mark.parametrize("change", ["failure", "expiry", "ender_generation", "action"])
+def test_xy_recovery_confirmation_clears_on_invalidating_events(panel, change):
+    panel._status = home_required_status()
+    panel.set_result(xy_recovery_result())
+    panel.xy_recovery_clear.setChecked(True)
+    if change == "failure":
+        panel.set_failure("Home failed")
+    elif change == "expiry":
+        panel.invalidate("Readback expired")
+    elif change == "action":
+        panel.reconnect_ender.click()
+    else:
+        payload = xy_recovery_result()
+        payload["ender"]["generation"] += 1
+        panel.set_result(payload)
+    assert not panel.xy_recovery_clear.isChecked()
+
+
+def test_xy_recovery_success_still_requires_separate_reference_confirmation(coordinator):
+    item, controller = coordinator
+    controller.machine.snapshot = home_required_status()
+    item.set_status(controller.machine.snapshot)
+    item.panel.set_result(xy_recovery_result())
+    item.panel.path_clear.setChecked(True)
+    item.panel.xy_recovery_clear.setChecked(True)
+    controller.machine.payload = xy_recovery_result()
+    controller.machine.payload["xy_recovery_available"] = False
+    item.panel.recover_xy.click()
+    assert len(controller.work) == 1
+    controller.complete()
+    controller.machine.snapshot = status()
+    item.set_status(controller.machine.snapshot)
+    assert [action for action, _ in controller.machine.calls] == ["recover_xy"]
+    assert item.panel._result["requires_clearance"]
+    assert not item.panel.reference.isEnabled()
+    assert not item.panel.home.isEnabled() and not item.panel.move.isEnabled()
+    assert not item.panel.up.isEnabled() and not any(b.isEnabled() for b in item.panel.xy_buttons)
+    assert not item.panel.xy_recovery_clear.isChecked()
+    item.panel.path_clear.setChecked(True)
+    assert item.panel.reference.isEnabled()
+    assert "then reference the border" in item.panel.next_step.text()
+
+
+def test_known_z_after_xy_recovery_cannot_use_clearance_instead_of_reference(panel):
+    panel.set_result(result(
+        requires_clearance=True, xy_recovery_pending_reference=True,
+        reference_ready=False, surface=None,
+        current_readback={"fresh": True, "z_known": True, "z_mm": 20.0},
+    ))
+    confirm(panel)
+    panel.gauge_removed.setChecked(True)
+    assert panel.reference.isEnabled()
+    assert not panel.return_clearance.isEnabled()
+    assert not panel.up.isEnabled() and not panel.down.isEnabled()
+    assert not panel.home.isEnabled() and not panel.move.isEnabled()
+    assert not any(button.isEnabled() for button in panel.xy_buttons)
+    assert "then reference the border" in panel.next_step.text()
+
+
+def test_unknown_reset_z_does_not_claim_the_physical_travel_minimum_was_reached(panel):
+    panel.set_result(xy_recovery_result(focus_travel_min_z_mm=0, xy_recovery_pending_reference=True))
+    assert "Z unknown" in panel.height.text()
+    assert "minimum reached" not in panel.teaching_limits.text()
+
+
+@pytest.mark.parametrize("change", ["stop", "session"])
+def test_xy_recovery_late_result_cannot_restore_authority(coordinator, change):
+    item, controller = coordinator
+    controller.machine.snapshot = home_required_status()
+    item.set_status(controller.machine.snapshot)
+    item.panel.set_result(xy_recovery_result())
+    controller.machine.payload = xy_recovery_result()
+    item.panel.xy_recovery_clear.setChecked(True)
+    item.panel.recover_xy.click()
+    operation, callbacks = controller.work.pop()
+    response = operation()
+    if change == "stop":
+        item.stopped()
+    else:
+        item.set_status(home_required_status(controller_session_generation=9))
+    callbacks["on_success"](response)
+    controller.busyChanged.emit(False)
+    callbacks["on_finished"]()
+    assert not item.panel.fresh()
+    assert not item.panel.xy_recovery_clear.isChecked()
+    assert not item.panel.recover_xy.isEnabled()
+    assert [action for action, _ in controller.machine.calls] == ["recover_xy"]
+
+
 def test_offset_transfer_is_explicit_and_requires_fresh_clearance(panel):
     panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3], surface=None))
     confirm(panel)

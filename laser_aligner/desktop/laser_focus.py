@@ -105,6 +105,26 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.next_step.setStyleSheet("font-weight: bold; padding: 6px;")
         layout.addWidget(self.next_step)
 
+        self.xy_recovery_group = QtWidgets.QGroupBox("Recover after interrupted probing")
+        recovery_layout = QtWidgets.QVBoxLayout(self.xy_recovery_group)
+        self.xy_recovery_clear = QtWidgets.QCheckBox(
+            "Probe is physically retracted; the ENTIRE XY homing/search/parking path\n"
+            "is clear at the actual current height"
+        )
+        recovery_layout.addWidget(self.xy_recovery_clear)
+        self.recover_xy = QtWidgets.QPushButton("Recover XY at current height")
+        self.recover_xy.setToolTip(
+            "Home and park the primary XY controller without moving Ender Z. "
+            "The retained clearance restriction remains until a separate border reference."
+        )
+        recovery_layout.addWidget(self.recover_xy)
+        self.xy_recovery_note = QtWidgets.QLabel(
+            "Z stays at its current height. Then separately confirm headroom and reference the border."
+        )
+        self.xy_recovery_note.setWordWrap(True)
+        recovery_layout.addWidget(self.xy_recovery_note)
+        layout.addWidget(self.xy_recovery_group)
+
         prepare = QtWidgets.QGroupBox("1 · Reference and measure")
         grid = QtWidgets.QGridLayout(prepare)
         self.clearance = MeasurementSpinBox()
@@ -269,11 +289,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.up.clicked.connect(lambda: self.request("jog", float(self.z_step.currentData())))
         self.home.clicked.connect(self._home)
         self.reconnect_ender.clicked.connect(lambda: self.request("recover"))
+        self.recover_xy.clicked.connect(lambda: self.request("recover_xy"))
         self.refresh.clicked.connect(self.refreshRequested)
         self.clearance.valueChanged.connect(self._edit_clearance)
         self.clearance.lineEdit().textEdited.connect(self._edit_clearance)
         self.gap.currentIndexChanged.connect(self._parameters_edited)
-        for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed, self.xy_clear):
+        for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed,
+                         self.xy_clear, self.xy_recovery_clear):
             checkbox.toggled.connect(self._sync)
         self.z_step.currentIndexChanged.connect(self._sync)
         # Enter commits an editor; it must never activate a motion button.
@@ -338,6 +360,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
     def invalidate(self, message: str, *, clear_surface: bool = False,
                    clear_confirmation: bool = False) -> None:
+        self.xy_recovery_clear.setChecked(False)
         self.clear_camera_target()
         self._received_at = None
         self._preview_id = None
@@ -452,6 +475,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                      or _number(item.get(number_key)) is None):
                 raise ValueError(f"Invalid focus {key} readback.")
         previous_readback = self._result.get("current_readback") or {}
+        previous_ender = self._result.get("ender") or {}
+        if (result.get("action") != "status"
+                or previous_ender.get("generation") != (ender or {}).get("generation")
+                or any(self._result.get(key) != result.get(key) for key in (
+                    "xy_recovery_available", "requires_clearance", "max_z_mm"
+                ))
+                or any(previous_readback.get(key) != readback.get(key) for key in ("z_known", "z_mm"))):
+            self.xy_recovery_clear.setChecked(False)
         if (self._camera_target is not None or self._camera_point_rejected) and (
             any(self._result.get(key) != result.get(key) for key in (
                 "probe_xy_offset_mm", "laser_spot_offset_mm", "current_carriage_xy_mm", "reference_ready", "max_z_mm"
@@ -535,6 +566,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "position_probe": "Probe positioned at the camera target. Check alignment and the solid target, then measure.",
             "align_laser": "Laser returned to the measured spot at clearance. Fit the gauge using small Z steps.",
             "recover": "Ender connection verified. Establish the border reference before Z positioning.",
+            "recover_xy": "XY recovered at the current height. Separately confirm headroom and reference the border.",
         }.get(str(result.get("action")), "Reported position is refreshed while idle."))
         self._sync()
 
@@ -569,6 +601,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             return "Refresh focus status to obtain a current Z position."
         if not project_machine_state(self._status).can_jog:
             return "Home / park XY and enable motion before positioning Z."
+        if self._result.get("xy_recovery_pending_reference") is True:
+            return "Separately confirm headroom and reference the border after XY recovery."
         readback = self._result.get("current_readback") or {}
         if self._result.get("reference_ready") is not True or readback.get("z_known") is not True:
             return "Reference the border to establish the Z position."
@@ -641,6 +675,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         z = _number((self._result.get("current_readback") or {}).get("z_mm"))
         maximum = _number(self._result.get("max_z_mm"))
         requires_clearance = self._result.get("requires_clearance") is True
+        recovery_reference_only = self._result.get("xy_recovery_pending_reference") is True
         sequence = self._result.get("xy_sequence") or {}
         probe_phase = sequence.get("phase") == "probe"
         self.flat_patch.setText("Solid, flat target under probe; deployment path clear" if probe_phase
@@ -648,9 +683,28 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                if sequence.get("phase") == "laser"
                                else "Solid, flat patch spans probe and laser at the same height")
         self.home.setEnabled(idle and projection.can_home and self.path_clear.isChecked()
-                             and not requires_clearance)
+                             and not requires_clearance and not recovery_reference_only)
         self.reconnect_ender.setEnabled(bool(idle and self._result.get("recovery_available") is True))
+        recovery_needed = requires_clearance and projection.controller_state == "READY_HOME_REQUIRED"
+        self.xy_recovery_group.setVisible(recovery_needed)
+        ender = self._result.get("ender") or {}
+        recovery_ready = bool(
+            ready and recovery_needed and projection.can_home and clearance is not None
+            and self._result.get("xy_recovery_available") is True
+            and self._result.get("available") is True and ender.get("ready") is True
+            and ender.get("recovery_required") is False
+        )
+        self.xy_recovery_clear.setEnabled(recovery_ready)
+        self.recover_xy.setEnabled(recovery_ready and self.xy_recovery_clear.isChecked())
+        self.xy_recovery_note.setText(
+            "Update the matching Pi companion to recover XY at the current height."
+            if self._result.get("xy_recovery_available") is not True else
+            "Choose Reconnect Ender first, then freshly check the physical probe and entire XY path."
+            if self._result.get("available") is not True or ender.get("ready") is not True else
+            "Z stays at its current height. Then separately confirm headroom and reference the border."
+        )
         self.reference.setEnabled(bool(moving))
+        moving = moving and not recovery_reference_only
         self.measure.setEnabled(bool(moving and known and reference and self.flat_patch.isChecked()
                                      and sequence.get("phase") != "laser"))
         return_minimum = _number(self._result.get("return_clearance_mm"))
@@ -699,8 +753,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
                  max(0.0, contact - probe_z) if contact is not None and probe_z is not None else None)
         self.teaching_limits.setText(
             f"Teaching Z range: {floor:g} to {maximum:g} mm. Z is the controller position, not the laser gap."
-            + (" Select a smaller step to descend further." if z is not None and z > floor and z-step < floor else
-               " Z travel minimum reached." if z is not None and z <= floor else "")
+            + (" Select a smaller step to descend further." if known and z is not None and z > floor and z-step < floor else
+               " Z travel minimum reached." if known and z is not None and z <= floor else "")
             if floor is not None and maximum is not None else "Teaching Z range: waiting for controller readback."
         )
         self.down.setEnabled(bool(teach_ready and z is not None and floor is not None and z - step >= floor))
@@ -726,6 +780,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Waiting for the current operation to finish." if self._busy or self._pending else
             "Next: Reconnect Ender to restore its readback." if self._result.get("available") is False else
             "Next: Refresh focus status before positioning." if not self.fresh() else
+            "Next: Check the physical probe and entire XY path, then Recover XY at current height."
+            if recovery_needed and self._result.get("xy_recovery_available") is True else
+            "Next: Update the matching Pi companion for XY recovery at the current height."
+            if recovery_needed else
+            "Next: Confirm headroom and the Z path, then reference the border before further positioning."
+            if recovery_reference_only else
             "Next: Confirm the Z path, then reference the border." if not reference and projection.can_jog else
             "Next: Home / park XY, then reference the border." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
@@ -753,7 +813,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "preview": self.preview, "move": self.move, "clearance": self.return_clearance,
             "clear_surface": self.clear_surface, "forget": self.forget,
             "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
-            "recover": self.reconnect_ender,
+            "recover": self.reconnect_ender, "recover_xy": self.recover_xy,
         }.get(action)
         if button is None or not button.isEnabled():
             return
@@ -770,6 +830,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             arguments["value"] = value
         if action == "set_xy_offset":
             arguments["value"] = self._offset_value()
+        if action != "recover_xy":
+            self.xy_recovery_clear.setChecked(False)
+        if action in {"recover", "recover_xy"}:
+            for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed, self.xy_clear):
+                checkbox.setChecked(False)
         if action in {"jog", "reference", "measure", "move", "clearance"}:
             self.gauge.setChecked(False)
             self.gauge_removed.setChecked(False)
@@ -782,16 +847,19 @@ class LaserFocusPanel(QtWidgets.QWidget):
             if action != "align_laser":
                 self.flat_patch.setChecked(False)
         self.actionRequested.emit(action, arguments)
+        self.xy_recovery_clear.setChecked(False)
 
     def _home(self) -> None:
         self._sync()
         if self.home.isEnabled():
+            self.xy_recovery_clear.setChecked(False)
             self.xy_clear.setChecked(False)
             self.homeRequested.emit()
 
     def _xy(self, dx: float, dy: float) -> None:
         self._sync()
         if all(button.isEnabled() for button in self.xy_buttons):
+            self.xy_recovery_clear.setChecked(False)
             self.flat_patch.setChecked(False)
             self.xy_clear.setChecked(False)
             self.xyRequested.emit(dx * float(self.xy_step.currentData()), dy * float(self.xy_step.currentData()))
@@ -959,6 +1027,9 @@ class LaserFocusCoordinator(QtCore.QObject):
             return
         if action == "recover" and (arguments.get("confirmed") is not True
                                      or not self.panel.reconnect_ender.isEnabled()):
+            return
+        if action == "recover_xy" and (arguments.get("confirmed") is not True
+                                        or not self.panel.recover_xy.isEnabled()):
             return
         if action == "position_probe":
             arguments = dict(arguments, _camera_epoch=self._camera_epoch)

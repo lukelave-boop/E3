@@ -1,5 +1,15 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Recovery after a failed surface probe
+
+Surface / laser focus provides a separate **Recover XY at current height**
+action when a retained Z-clearance restriction prevents ordinary Home. After
+reconnecting the controllers, freshly confirm that the probe is physically
+retracted and the entire XY homing/search/parking path is clear at its current
+height. This moves only XY and still requires a separate border reference.
+Install the matching Pi companion first; see [the focus guide](docs/LASER_FOCUS.md).
+The physical cause of a generic PROBE_FAILED remains undetermined.
+
 ## Focus preview readiness
 
 Preview target calculates a Z destination; Move to focus is the separate motion

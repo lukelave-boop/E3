@@ -1,5 +1,21 @@
 # Architecture
 
+## Retained-clearance XY recovery
+
+MachineService admits typed recover_xy only for a retained focus-clearance
+restriction, a GRBL session requiring Home and a separate ready Ender owner.
+Read-only Ender preflight accepts bounded known Z or explicit unknown reset
+Z approximately zero, consistent known/stow flags and compatible native firmware.
+The existing Home/park helper receives a bound guard only from this action;
+ordinary Home and job startup never receive the clearance exception. The guard
+checks both sessions, STOP, monitor connection and configuration through homing,
+parking and final XY/Ender readbacks. Ender Z travel is never part of recover_xy.
+LaserFocus preserves a pending-reference latch across invalidation and clears
+it only after successful explicit reference, preventing known-Z clearance or
+manual-Z actions from bypassing the required next step. These changes affect
+the desktop/Pi focus workflow and shared Home guard plumbing, not job geometry
+or either browser/desktop toolpath generation pipeline.
+
 ## Focus and camera request generations
 
 The desktop coordinator tracks camera-selection changes separately from focus

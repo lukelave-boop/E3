@@ -6,7 +6,13 @@ import uuid
 import pytest
 
 from laser_aligner.errors import MachineError, SafetyError
-from laser_aligner.machine.laser_focus import CLICK_CAPABILITY, PI_CAPABILITY, RECOVERY_CAPABILITY, XY_CAPABILITY
+from laser_aligner.machine.laser_focus import (
+    CLICK_CAPABILITY,
+    PI_CAPABILITY,
+    RECOVERY_CAPABILITY,
+    XY_CAPABILITY,
+    XY_RECOVERY_CAPABILITY,
+)
 from laser_aligner.machine.pi_machine_server import ACTION_MACHINE_FOCUS, SERVER_CAPABILITIES
 from tests import test_laser_focus as focus_helpers
 from tests import test_pi_machine_server as helpers
@@ -27,6 +33,7 @@ def remote_focus(monkeypatch):
         if request["action"] != ACTION_MACHINE_FOCUS:
             return pi(host, port, token, request, **kwargs)
         pi.requests.append(copy.deepcopy(request))
+        pi.timeouts.append(kwargs["timeout"])
         if pi.before_request:
             pi.before_request(request["action"], request)
         return pi._response(request, result=copy.deepcopy(result))
@@ -39,6 +46,7 @@ def test_focus_capability_advertised():
     assert XY_CAPABILITY in SERVER_CAPABILITIES
     assert CLICK_CAPABILITY in SERVER_CAPABILITIES
     assert RECOVERY_CAPABILITY in SERVER_CAPABILITIES
+    assert XY_RECOVERY_CAPABILITY in SERVER_CAPABILITIES
 
 
 @pytest.mark.parametrize("action", ["status", "reference", "measure", "clearance", "forget", "clear_surface"])
@@ -397,3 +405,128 @@ def test_authenticated_recovery_reconnects_without_replaying_motion(focus_server
     assert "M115" in replacement.writes and "M106 S0" in replacement.writes
     assert all(command in {"M115", "M106 S0", "M106 P1 S0", "M123", "M114"}
                for command in replacement.writes)
+
+
+def xy_recovery_result(result):
+    result.update(action="recover_xy", requires_clearance=True, reference_ready=False,
+                  xy_recovery_pending_reference=True,
+                  reference=None, surface=None, preview=None, xy_sequence=None,
+                  xy_recovery_available=False,
+                  ender={"ready": True, "generation": 5, "recovery_required": False})
+
+
+def test_remote_xy_recovery_is_capability_gated_and_keeps_full_operation_timeout(remote_focus):
+    service, pi, result = remote_focus
+    pi.capabilities.extend([XY_CAPABILITY, RECOVERY_CAPABILITY])
+    with pytest.raises(MachineError, match="Update"):
+        service.focus_control("recover_xy", confirmed=True)
+    assert not any(r["action"] == ACTION_MACHINE_FOCUS for r in pi.requests)
+    # Invalidate the cached capabilities only to model a new companion connection.
+    pi.capabilities.append(XY_RECOVERY_CAPABILITY)
+    service._node_capabilities = tuple(pi.capabilities)
+    xy_recovery_result(result)
+    response = service.focus_control("recover_xy", confirmed=True)
+    assert response["requires_clearance"] and not response["reference_ready"]
+    assert pi.timeouts[-1] >= 360.0
+    assert pi.requests[-1]["expected_session_generation"] == pi.session_generation
+    assert pi.requests[-1]["expected_boot_id"] == pi.boot_id
+
+
+@pytest.mark.parametrize("change", ["confirmation", "motion", "armed", "stop", "restart"])
+def test_remote_xy_recovery_rejects_missing_or_changed_authority(remote_focus, change):
+    service, pi, result = remote_focus
+    pi.capabilities.append(XY_RECOVERY_CAPABILITY)
+    xy_recovery_result(result)
+    service._require_capabilities()
+    if change == "motion":
+        service.settings.allow_motion = False
+    elif change == "armed":
+        service._armed_program_digest = "armed-program"
+        service._armed_until = 1e20
+        service._armed_until_monotonic = 1e20
+    elif change in {"stop", "restart"}:
+        def invalidate(*args):
+            if change == "stop":
+                with service._stop_epoch_lock:
+                    service._stop_epoch += 1
+            else:
+                pi.boot_id = str(uuid.uuid4())
+        pi.before_request = invalidate
+    with pytest.raises(MachineError):
+        service.focus_control("recover_xy", confirmed=change != "confirmation")
+    if change in {"confirmation", "motion", "armed"}:
+        assert not any(r["action"] == ACTION_MACHINE_FOCUS for r in pi.requests)
+
+
+@pytest.mark.parametrize("bad", ["clearance", "reference", "surface", "ender", "pending_reference"])
+def test_remote_xy_recovery_rejects_result_granting_focus_authority(remote_focus, bad):
+    service, pi, result = remote_focus
+    pi.capabilities.append(XY_RECOVERY_CAPABILITY)
+    xy_recovery_result(result)
+    if bad == "clearance":
+        result["requires_clearance"] = False
+    elif bad == "reference":
+        result["reference_ready"] = True
+    elif bad == "surface":
+        result["surface"] = {"id": "stale-measurement"}
+    elif bad == "pending_reference":
+        result["xy_recovery_pending_reference"] = False
+    else:
+        result["ender"]["ready"] = False
+    with pytest.raises(MachineError, match="invalid XY recovery"):
+        service.focus_control("recover_xy", confirmed=True)
+
+
+def test_old_pi_status_cannot_offer_xy_recovery(remote_focus):
+    service, _, result = remote_focus
+    result["xy_recovery_available"] = True
+    assert service.focus_control("status")["xy_recovery_available"] is False
+
+
+@pytest.mark.parametrize("change", ["confirmation", "stale_session", "not_needed"])
+def test_authenticated_xy_recovery_rejects_before_serial(focus_server, change):
+    harness, focus = focus_server
+    before = list(focus.serial.writes)
+    kwargs = {}
+    if change == "confirmation":
+        kwargs["confirmed"] = False
+    elif change == "stale_session":
+        kwargs["expected_session_generation"] = harness.machine.status()["controller_session_generation"] + 1
+    response = rpc(harness, "recover_xy", **kwargs)
+    assert not response["ok"]
+    assert focus.serial.writes == before
+
+
+def test_authenticated_probe_failure_reconnect_xy_recovery_then_separate_reference(focus_server):
+    harness, focus = focus_server
+    assert rpc(harness, "reference")["ok"]
+    focus.serial.overrides["G39 C30.000 H15.000"] = ["Error:E3MH:2 PROBE_FAILED"]
+    failed = rpc(harness, "measure")
+    assert not failed["ok"] and "PROBE_FAILED" in str(failed)
+    assert "M112" in focus.serial.writes
+    assert focus.state.requires_clearance
+
+    replacement = type(focus.serial)()
+    focus.owner._serial_factory = lambda _path, _baud: replacement
+    harness.service.connect()
+    assert rpc(harness, "recover")["ok"]
+    with pytest.raises(MachineError, match="clearance"):
+        harness.service.prepare_photo_position()
+    assert not rpc(harness, "reference")["ok"]
+    replacement.writes.clear()
+    before_xy = len(harness.transport.commands)
+    before_z = replacement.z
+    recovered = rpc(harness, "recover_xy")
+    assert recovered["ok"], recovered
+    result = recovered["result"]
+    assert result["requires_clearance"] and not result["reference_ready"]
+    assert result["surface"] is None and result["preview"] is None
+    assert replacement.z == before_z
+    assert set(replacement.writes) <= {"M115", "M123", "M114", "M119", "M106 S0", "M106 P1 S0"}
+    assert "$H" in harness.transport.commands[before_xy:]
+    assert not rpc(harness, "reference", confirmed=False)["ok"]
+    referenced = rpc(harness, "reference")
+    assert referenced["ok"], referenced
+    assert referenced["result"]["reference_ready"]
+    assert not referenced["result"]["requires_clearance"]
+    assert replacement.z == 30

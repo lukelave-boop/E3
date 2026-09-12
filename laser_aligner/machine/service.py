@@ -65,7 +65,7 @@ from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
 from .transport_factory import create_machine_transport
 from .z_limits import MainboardZLimits, validate_max_z
-from .z_probe import CrealityZProbe, finite_number, parse_position
+from .z_probe import CrealityZProbe, finite_number, native_homing_endpoint, parse_position
 
 LOGGER = logging.getLogger(__name__)
 # Withdrawn after an operator observed descent with the CR Touch pin retracted.
@@ -82,6 +82,7 @@ _STREAM_M_CODES = {3, 4, 5}
 _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
 _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
 _FOCUS_OPERATION_TIMEOUT_SECONDS = 120.0
+_FOCUS_XY_RECOVERY_TIMEOUT_SECONDS = 350.0
 _FOCUS_XY_FEED_CEILING_MM_MIN = 1200.0
 _INITIAL_CONNECT_RETRY_DELAY_SECONDS = 0.2
 _CONTROLLER_CONNECT_ATTEMPTS = 3
@@ -3399,18 +3400,27 @@ class MachineService:
         *,
         timeout: float,
         expected_stop_epoch: int,
+        write_guard=None,
     ) -> list[str]:
         """Run ``$H`` while an ordinary operation owns the command lock."""
 
         session = self._require_session()
 
         def is_cancelled() -> bool:
+            if write_guard is not None:
+                try:
+                    with write_guard():
+                        pass
+                except MachineError:
+                    return True
             with self._stop_epoch_lock:
                 return self._stop_epoch != expected_stop_epoch
 
         def write_homing_command() -> None:
-            with self._transport_write_lock:
-                if is_cancelled():
+            with self._transport_write_lock, write_guard() if write_guard is not None else nullcontext():
+                # The supplied guard already owns the STOP/write gates. Do not
+                # recursively enter those non-reentrant locks here.
+                if self._stop_epoch != expected_stop_epoch:
                     raise MachineError("Home / park was cancelled by software STOP")
                 self._check_line_safety(GRBL_DIALECT.homing.command)
                 with self._lock:
@@ -3493,6 +3503,7 @@ class MachineService:
         timeout: float = 1.5,
         *,
         coordinate_state: dict[str, Any] | None = None,
+        _write_guard=None,
     ) -> dict[str, Any]:
         """Read one diagnostic GRBL position snapshot using only ``?``."""
 
@@ -3516,7 +3527,7 @@ class MachineService:
             sequence: int | None = None
             write_failed = False
             try:
-                with self._transport_write_lock:
+                with self._transport_write_lock, _write_guard() if _write_guard is not None else nullcontext():
                     transaction_started = time.monotonic()
                     sequence = controller_session.diagnostics.next_command("?")
                     try:
@@ -3532,9 +3543,13 @@ class MachineService:
                     self._append_log("TX", "? (realtime position snapshot)")
                 deadline = time.monotonic() + timeout_seconds
                 while time.monotonic() < deadline:
+                    with _write_guard() if _write_guard is not None else nullcontext():
+                        pass
                     response = self._read_session_line(controller_session,
                         timeout=min(0.2, max(0.0, deadline - time.monotonic()))
                     )
+                    with _write_guard() if _write_guard is not None else nullcontext():
+                        pass
                     if not response:
                         continue
                     response_kind = self._classify_and_record_rx(
@@ -3582,7 +3597,8 @@ class MachineService:
                             started_monotonic=transaction_started,
                             terminal_classification=CommandResponseKind.REALTIME_STATUS.value,
                         )
-                        return snapshot
+                        with _write_guard() if _write_guard is not None else nullcontext():
+                            return snapshot
                     if response_kind in {
                         CommandResponseKind.ALARM,
                         CommandResponseKind.ERROR,
@@ -3846,13 +3862,21 @@ class MachineService:
         park_at_photo_position: bool,
         capture_home_position: bool,
         allow_rehome: bool = False,
+        focus_recovery_guard=None,
     ) -> dict[str, Any]:
         with self._stop_epoch_lock:
             if self._stop_epoch != operation_stop_epoch:
                 raise MachineError("Home / park was cancelled by software STOP")
         self._require_safety_configuration()
-        if self._laser_focus.requires_clearance:
+        if self._laser_focus.requires_clearance and focus_recovery_guard is None:
             raise SafetyError("Return Z to the selected focus clearance before Home / park")
+        if focus_recovery_guard is not None:
+            # Only the separately confirmed split-controller recovery supplies
+            # this bound guard. Ordinary Home and job startup keep their gate.
+            if not park_at_photo_position or capture_home_position or allow_rehome:
+                raise SafetyError("Focus XY recovery requires the complete Home / park sequence")
+            with focus_recovery_guard():
+                pass
         if self._job.running:
             raise MachineError("Cannot move to the photography position while a job is running")
         controller_session = self._require_session()
@@ -3885,6 +3909,8 @@ class MachineService:
         home_position_snapshot: dict[str, Any] | None = None
 
         def require_not_stopped() -> None:
+            with focus_recovery_guard() if focus_recovery_guard is not None else nullcontext():
+                pass
             with self._stop_epoch_lock:
                 if self._stop_epoch != operation_stop_epoch:
                     raise MachineError("Home / park was cancelled by software STOP")
@@ -3900,9 +3926,16 @@ class MachineService:
                 timeout=acknowledgement_timeout,
                 _internal_motion=True,
                 _expected_stop_epoch=operation_stop_epoch,
+                _write_guard=focus_recovery_guard,
             )
             transcript.append({"command": command, "responses": responses})
             return responses
+
+        def read_coordinates():
+            if focus_recovery_guard is None:
+                return self._read_grbl_coordinate_state()
+            modal, offsets = GRBL_DIALECT.coordinate_state_query_commands
+            return self._parse_grbl_coordinate_state(execute(modal), execute(offsets))
 
         with self._lock:
             self._invalidate_coordinate_reference()
@@ -3929,6 +3962,7 @@ class MachineService:
                             self.settings.read_timeout,
                         ),
                         expected_stop_epoch=operation_stop_epoch,
+                        **({"write_guard": focus_recovery_guard} if focus_recovery_guard is not None else {}),
                     )
                     transcript.append(
                         {"command": dialect.homing.command, "responses": homing_responses}
@@ -3942,7 +3976,7 @@ class MachineService:
                         ),
                     )
             coordinate_state = (
-                self._read_grbl_coordinate_state()
+                read_coordinates()
                 if self._uses_grbl_coordinate_state()
                 else None
             )
@@ -3979,12 +4013,15 @@ class MachineService:
                         self.settings.read_timeout,
                     ),
                 )
-                idle_responses = self._wait_for_motion_complete(
-                    timeout=120.0,
-                    expected_stop_epoch=operation_stop_epoch,
+                idle_responses = (
+                    execute(dialect.motion_barrier_command, timeout=120.0)
+                    if focus_recovery_guard is not None else
+                    self._wait_for_motion_complete(
+                        timeout=120.0, expected_stop_epoch=operation_stop_epoch,
+                    )
                 )
                 parked_coordinate_state = (
-                    self._read_grbl_coordinate_state()
+                    read_coordinates()
                     if self._uses_grbl_coordinate_state()
                     else None
                 )
@@ -4004,7 +4041,7 @@ class MachineService:
             raise
         with self._stop_epoch_lock:
             stopped = self._stop_epoch != operation_stop_epoch
-        with self._lock:
+        with focus_recovery_guard() if focus_recovery_guard is not None else nullcontext(), self._lock:
             if (
                 stopped
                 or not self._same_controller_session(
@@ -4101,7 +4138,10 @@ class MachineService:
     ) -> dict[str, Any]:
         """Explicit gauge teaching and positioning, never job or laser authority."""
         validate_focus_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
-        deadline = time.monotonic() + _FOCUS_OPERATION_TIMEOUT_SECONDS
+        deadline = time.monotonic() + (
+            _FOCUS_XY_RECOVERY_TIMEOUT_SECONDS if action == "recover_xy"
+            else _FOCUS_OPERATION_TIMEOUT_SECONDS
+        )
         focus_bounds = FocusXYBounds(self.settings.work_area, self.laser_settings.guarded_output_polygon_mm)
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
@@ -4117,20 +4157,44 @@ class MachineService:
             if probe is None:
                 raise MachineError("Connect the shared Ender controller before laser focus")
 
+            def recovery_configuration_valid():
+                return (
+                    self.hardware_enabled is True and self.settings.allow_motion is True
+                    and self.settings.backend == "serial" and self.settings.home_before_photo is True
+                    and session.dialect is GRBL_DIALECT
+                    and self._secondary_air_assist is not None
+                    and self._secondary_air_assist.owner is probe.owner
+                    and Path(session.resolved_endpoint).resolve() != Path(probe.owner.session.port).resolve()
+                    and self._z_probe is probe
+                    and self._laser_focus.requires_clearance
+                )
+
+            def xy_recovery_available():
+                return (recovery_configuration_valid()
+                        and self._controller_state is ControllerState.READY_HOME_REQUIRED)
+
             def unavailable(error=None):
                 ender = probe.owner.recovery_status()
                 if error is not None:
                     ender.update(ready=False, fault=str(error)[:512], recovery_required=True)
-                return self._laser_focus.unavailable_status(
+                result = self._laser_focus.unavailable_status(
                     action=action, maximum=validate_max_z(self.settings.mainboard_max_z_mm),
                     clearance=clearance_z_mm, ender=ender,
                     laser_spot_offset=(self.laser_settings.spot_offset_x_mm, self.laser_settings.spot_offset_y_mm))
+                result["xy_recovery_available"] = xy_recovery_available()
+                return result
+
+            if action == "recover_xy" and not xy_recovery_available():
+                raise SafetyError(
+                    "Recover XY at current height requires retained focus clearance, "
+                    "a separate Ender Z controller and a GRBL connection requiring Home"
+                )
 
             if not probe.owner.recovery_status()["ready"] and action != "recover":
                 if action == "status":
                     return unavailable()
                 raise MachineError("Connect the shared Ender controller before laser focus")
-            if action not in {"status", "recover", "forget", "clear_surface", "set_xy_offset"}:
+            if action not in {"status", "recover", "recover_xy", "forget", "clear_surface", "set_xy_offset"}:
                 if (self._controller_state is not ControllerState.READY_MOTION
                     or not self._coordinate_reference_ready
                     or self._coordinate_reference_session_generation != session.generation
@@ -4145,6 +4209,10 @@ class MachineService:
                     self._verify_grbl_coordinate_state()
             secondary_generation = probe.owner.generation
             motion_started = False
+            recovery_configuration = (
+                self.settings.photo_x, self.settings.photo_y, self.settings.mainboard_max_z_mm,
+                self.laser_settings.travel_feed_mm_min,
+            )
 
             @contextmanager
             def guard(*, require_secondary=True):
@@ -4153,6 +4221,15 @@ class MachineService:
                         raise MachineError("Focus operation cancelled or session changed")
                     if require_secondary and action != "recover" and (not probe.owner.ready or probe.owner.generation != secondary_generation):
                         raise MachineError("Focus Ender connection changed")
+                    if action == "recover_xy" and (
+                        not recovery_configuration_valid()
+                        or recovery_configuration != (
+                            self.settings.photo_x, self.settings.photo_y, self.settings.mainboard_max_z_mm,
+                            self.laser_settings.travel_feed_mm_min,
+                        )
+                        or self._job.running or self.armed
+                    ):
+                        raise MachineError("Focus XY recovery authority or configuration changed")
                     if FocusXYBounds(self.settings.work_area, self.laser_settings.guarded_output_polygon_mm).polygons != focus_bounds.polygons:
                         raise MachineError("Focus positioning bounds changed during the operation")
                     if time.monotonic() >= deadline:
@@ -4179,8 +4256,21 @@ class MachineService:
                     raise SafetyError("Probe XY alignment requires verified GRBL coordinates")
                 with write_guard():
                     pass
-                coordinates = self._verify_grbl_coordinate_state()
-                reported = self.sample_realtime_position(coordinate_state=coordinates)
+                if action == "recover_xy":
+                    modal, offsets = GRBL_DIALECT.coordinate_state_query_commands
+                    def query(command):
+                        return self.send_command(
+                            command, timeout=max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout),
+                            _expected_stop_epoch=epoch, _write_guard=write_guard,
+                        )
+                    coordinates = self._parse_grbl_coordinate_state(query(modal), query(offsets))
+                    reference = self._coordinate_state_reference
+                    if reference is None or self._coordinate_state_difference(reference, coordinates) is not None:
+                        raise MachineError("XY recovery coordinate state changed after parking")
+                    reported = self.sample_realtime_position(coordinate_state=coordinates, _write_guard=write_guard)
+                else:
+                    coordinates = self._verify_grbl_coordinate_state()
+                    reported = self.sample_realtime_position(coordinate_state=coordinates)
                 if reported["state"].lower() != "idle" or any(abs(a-b) > .05 for a, b in zip(reported["wpos_mm"][:2], expected, strict=True)):
                     raise MachineError("Probe XY alignment position was not confirmed")
                 with write_guard():
@@ -4250,7 +4340,7 @@ class MachineService:
                 return {"transcript": entries}
 
             if action != "status":
-                self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+                self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch, _write_guard=guard)
             self._focus_operation_active = action != "status"
             try:
                 if action == "recover":
@@ -4262,21 +4352,79 @@ class MachineService:
                 with probe.owner._lock:
                     if self._laser_focus.xy_sequence and action in {"measure", "jog", "teach", "preview", "move"}:
                         check_focus_xy(self._jog_position_mm, guard)
-                    result = self._laser_focus.execute(
-                        probe.owner, probe, "status" if action == "recover" else action, confirmed=confirmed, value=value,
-                        clearance_z_mm=clearance_z_mm, gap_mm=gap_mm,
-                        measurement_id=measurement_id, preview_id=preview_id,
-                        maximum=validate_max_z(self.settings.mainboard_max_z_mm),
-                        primary_generation=session.generation, stop_epoch=epoch,
-                        xy=self._jog_position_mm or (0., 0.), guard=guard,
-                        on_motion_start=motion_start,
-                        on_failure=lambda: self.request_stop(_recover=False),
-                        move_xy=move_focus_xy,
-                        laser_spot_offset=(self.laser_settings.spot_offset_x_mm,
-                                           self.laser_settings.spot_offset_y_mm),
-                    )
+
+                    def execute_focus(focus_action):
+                        return self._laser_focus.execute(
+                            probe.owner, probe, focus_action, confirmed=confirmed, value=value,
+                            clearance_z_mm=clearance_z_mm, gap_mm=gap_mm,
+                            measurement_id=measurement_id, preview_id=preview_id,
+                            maximum=validate_max_z(self.settings.mainboard_max_z_mm),
+                            primary_generation=session.generation, stop_epoch=epoch,
+                            xy=self._jog_position_mm or (0., 0.), guard=guard,
+                            on_motion_start=motion_start,
+                            on_failure=lambda: self.request_stop(_recover=False),
+                            move_xy=move_focus_xy,
+                            laser_spot_offset=(self.laser_settings.spot_offset_x_mm,
+                                               self.laser_settings.spot_offset_y_mm),
+                        )
+
+                    def recovery_readback():
+                        # Queries only. M119 checks consistency; the separate
+                        # operator confirmation is the evidence of physical stow.
+                        result = execute_focus("status")
+                        maximum = validate_max_z(self.settings.mainboard_max_z_mm)
+                        finite_number(clearance_z_mm, "Focus clearance", 20, maximum)
+                        if maximum < 25 or maximum > result["firmware_geometry"]["ceiling_mm"]:
+                            raise SafetyError("Reference initial lift exceeds the configured ceiling")
+                        firmware = next(entry["responses"] for entry in result["transcript"] if entry["command"] == "M115")
+                        identity = " ".join(firmware)
+                        if "marlin" not in identity.lower() or "ender-3 s1 pro" not in identity.lower():
+                            raise SafetyError("XY recovery requires the separate Ender Marlin Z controller")
+                        native_homing_endpoint(identity)
+                        flags = probe.owner._execute_acknowledged("M119", allow_open=False,
+                                                                 timeout=10, write_guard=guard)
+                        result["transcript"].append({"command": "M119", "responses": list(flags)})
+                        flags = [line.strip().lower() for line in flags]
+                        known = result["current_readback"]["z_known"]
+                        if ([line for line in flags if line.startswith("z_min:")] != ["z_min: triggered"]
+                            or [line for line in flags if line.startswith("test_axis_known_z_flag")]
+                            != [f"test_axis_known_z_flag = {str(known).lower()}"]):
+                            raise SafetyError("Expected consistent Ender Z state and the physically confirmed stowed probe")
+                        current = result["current_readback"]["z_mm"]
+                        if known:
+                            finite_number(current, "Current Z", 0, maximum)
+                        elif not -.25 <= current <= .25:
+                            raise SafetyError("Unknown nonzero Z cannot enter border reference; reconnect the Ender first")
+                        with guard():
+                            pass
+                        return result, firmware
+
+                    if action == "recover_xy":
+                        self._laser_focus.invalidate()
+                        probe.invalidate()
+                        self._z_probe_result = None
+                        before, firmware = recovery_readback()
+                        with guard():
+                            self._laser_focus.xy_recovery_pending_reference = True
+                            primary_motion_start()
+                        home = self._prepare_photo_position_locked(
+                            operation_stop_epoch=epoch, park_at_photo_position=True,
+                            capture_home_position=False, focus_recovery_guard=guard,
+                        )
+                        check_focus_xy((self.settings.photo_x, self.settings.photo_y), guard)
+                        result, final_firmware = recovery_readback()
+                        if (firmware != final_firmware
+                            or before["current_readback"]["z_known"] != result["current_readback"]["z_known"]
+                            or abs(before["current_readback"]["z_mm"] - result["current_readback"]["z_mm"]) > .05):
+                            raise MachineError("Ender state changed during XY recovery; reference was not authorized")
+                        result["xy_recovery"] = home
+                        result["transcript"] = before["transcript"] + result["transcript"]
+                    else:
+                        result = execute_focus("status" if action == "recover" else action)
                     result["action"] = action
-                    return result
+                    result["xy_recovery_available"] = xy_recovery_available()
+                    with guard():
+                        return result
             except BaseException as exc:
                 self._laser_focus.invalidate()
                 if action in {"status", "recover"} and isinstance(exc, MachineError) and not motion_started:
@@ -4309,6 +4457,8 @@ class MachineService:
             raise MachineError("Persistent Z limits are unavailable in this process; update the E3 node")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
+            if moving and self._laser_focus.xy_recovery_pending_reference:
+                raise SafetyError("Reference the border after XY recovery before moving Z")
             self._require_safety_configuration()
             if self.hardware_enabled is not True:
                 raise SafetyError("Mainboard controls require hardware authority")

@@ -21,6 +21,21 @@ must still confirm the actual path, flat patch, gauge fit and changed workpiece.
 No focus actions fire the laser or provide safety-rated stopping or collision
 detection. Job-bound focus and a coordinated post-job lift remain separate work.
 
+For a retained focus-clearance restriction after a failure, the separate
+**Recover XY at current height** action is available only with split GRBL XY /
+Ender Z controllers and a primary connection requiring Home. Restore Ender
+communications separately, then freshly confirm physical probe retraction and
+clearance along the entire XY homing/search/parking path at the actual height.
+M119 is only an electrical consistency check. Recovery issues no Ender Z travel,
+retains the clearance restriction, and requires a separate confirmed border
+reference afterwards. STOP and both controller sessions remain guarded through
+final readback; normal jogging, Home, jobs and arming do not gain an exception.
+An unknown reset Z near zero is not physical height. The subsequent reference's
+initial 5 mm lift requires independently confirmed physical headroom; arbitrary
+unknown nonzero Z remains rejected. See the [recovery sequence](docs/LASER_FOCUS.md#recover-xy-after-a-failed-probe).
+A generic `PROBE_FAILED` report does not establish a physical failure mechanism,
+and automated recovery tests do not verify probe contact or physical clearance.
+
 The current [mainboard firmware](firmware/marlin_mainboard/README.md) is ready
 for operator physical validation. It adds independent real fan outputs; these
 are no longer BENCH simulation. MachineService admits only typed idle controls,

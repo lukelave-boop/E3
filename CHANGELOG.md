@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - explicit XY recovery after probe failure
+
+- Add separately confirmed XY Home/park recovery for retained focus clearance
+  with split GRBL XY / Ender Z controllers; it sends no Ender travel or reset.
+- Check fresh Ender state and bind both sessions, STOP and monitor connection
+  through final readback. Keep normal movement/output blocked until a separate
+  border reference, including known-Z clearance and manual-Z shortcuts.
+- Add matching Pi capability, operation timeout and dedicated desktop controls;
+  cover failure, reconnect, recovery, reference and cancellation with fakes.
+
 ## Unreleased - visible focus preview readiness
 
 - Keep a measured-surface Z preview when the camera view briefly becomes stale.

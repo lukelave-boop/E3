@@ -1,5 +1,37 @@
 # Current repository state
 
+## Probe-failure XY recovery repair (2026-09-12)
+
+Paper probing failed at G39 C30.000 H15.000 with E3MH:2 PROBE_FAILED.
+The firmware rejected the command; the host deliberately stopped/disconnected.
+The retained Pi process had no service restart or kernel USB disconnect/reset.
+The operator did not observe whether either probe touch occurred. There is no
+reported hole in the paper; deployment, contact and stow causes remain unknown.
+No speculative change was made to the native -2 mm probing minimum.
+
+The fake-backed failure reproduced a deadlock: retained Z-clearance restriction
+blocked XY Home, while reference/clearance required XY Home. The new explicit
+Recover XY at current height action is limited to retained-clearance recovery
+with separate GRBL XY and Ender Z controllers. It requires freshly checked
+Ender state and a new physical-stow/full-homing-path confirmation. Ender reads
+remain queries only; the existing guarded primary Home/park is reused. STOP,
+monitor connection and both controller generations are checked through final
+readback. No restriction is temporarily cleared. A retained pending-reference
+state blocks clearance/manual Z shortcuts until a separate successful border
+reference. The matching Pi advertises pi-laser-focus-xy-recovery-v1; its client
+uses a 360-second RPC timeout for the bounded 350-second recovery operation.
+
+Verification: 454 focused controller/native/focus tests and 272 recovery,
+desktop/remote/installer tests passed on Windows. Repository Ruff and compileall
+passed. Two full 1400x900 offscreen dialogs were visually checked. Offline Linux
+installer checks passed backups, preserved settings, idempotence and rejection
+before writes; read-only SSH matched all 13 installed Pi source hashes. CI and
+matched frozen artifact identities are recorded at handoff. Development has used
+fake controllers and offscreen widgets only. No new physical recovery/reference/probe test has been performed;
+the firmware error's physical cause remains unresolved. The incorrect earlier
+gauge calibration remains revoked, with no guessed replacement. The active
+development branch is not yet qualified for integration into main.
+
 ## Incorrect gauge teaching revoked (2026-09-12)
 
 The operator clarified the physical teaching setup: the probe measured the

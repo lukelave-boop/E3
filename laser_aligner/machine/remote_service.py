@@ -28,6 +28,7 @@ from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
+from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import validate_control
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
@@ -84,6 +85,7 @@ from .z_limits import HARD_MAX_Z_MM, MIN_Z_MM, PI_Z_CAPABILITY, validate_max_z
 from .z_probe import finite_number
 
 _DEFAULT_RPC_TIMEOUT_SECONDS = 130.0
+_FOCUS_XY_RECOVERY_RPC_TIMEOUT_SECONDS = 360.0
 _CONNECT_RPC_TIMEOUT_SECONDS = 20.0
 _MONITOR_RPC_TIMEOUT_SECONDS = 0.75
 _STOP_RPC_TIMEOUT_SECONDS = 1.0
@@ -1749,6 +1751,9 @@ class RemoteMachineService:
         recovery_supported = FOCUS_RECOVERY_CAPABILITY in (self._node_capabilities or ())
         if action == "recover" and not recovery_supported:
             raise MachineError("Update the E3 Pi service to reconnect the Ender from this window")
+        xy_recovery_supported = FOCUS_XY_RECOVERY_CAPABILITY in (self._node_capabilities or ())
+        if action == "recover_xy" and not xy_recovery_supported:
+            raise MachineError("Update the E3 Pi service to recover XY at the current height")
         if action not in {"status", "recover"} and self.settings.allow_motion is not True:
             raise SafetyError("Laser focus requires machine.allow_motion")
         if self.armed or self.pi_owned_job_active:
@@ -1758,8 +1763,10 @@ class RemoteMachineService:
                 "control": action, "confirmed": confirmed, "value": value,
                 "clearance_z_mm": clearance_z_mm, "gap_mm": gap_mm,
                 "measurement_id": measurement_id, "preview_id": preview_id,
-            }, timeout=125.0)
+            }, timeout=_FOCUS_XY_RECOVERY_RPC_TIMEOUT_SECONDS if action == "recover_xy" else 125.0)
         result = self._response_mapping(response, "result")
+        if not xy_recovery_supported:
+            result["xy_recovery_available"] = False
         readback = result.get("current_readback")
         if result.get("available") is False and recovery_supported and action in {"status", "recover"}:
             ender = result.get("ender")
@@ -1778,6 +1785,14 @@ class RemoteMachineService:
             or type(readback.get("z_known")) is not bool
             or type(result.get("reference_ready")) is not bool):
             raise PiJobProtocolError("The Pi did not return a fresh laser focus result")
+        if action == "recover_xy":
+            ender = result.get("ender")
+            if (result.get("requires_clearance") is not True or result.get("reference_ready") is not False
+                    or result.get("xy_recovery_pending_reference") is not True
+                    or any(result.get(key) is not None for key in ("reference", "surface", "preview", "xy_sequence"))
+                    or type(ender) is not dict or ender.get("ready") is not True
+                    or ender.get("recovery_required") is not False):
+                raise PiJobProtocolError("The Pi returned an invalid XY recovery result")
         try:
             if result.get("available") is True:
                 finite_number(readback.get("z_mm"), "Focus readback", -1000, 1000)

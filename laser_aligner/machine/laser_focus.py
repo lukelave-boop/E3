@@ -23,9 +23,10 @@ PI_CAPABILITY = "pi-laser-focus-v1"
 XY_CAPABILITY = "pi-laser-focus-xy-v1"
 CLICK_CAPABILITY = "pi-laser-focus-click-v1"
 RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
+XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover"}
+           "position_probe", "recover", "recover_xy"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -101,6 +102,7 @@ class LaserFocus:
         self.xy_path = None if path is None else path.with_name(path.stem + "-xy.json")
         self.probe_xy_offset_mm = self._load_xy_offset()
         self.requires_clearance = False
+        self.xy_recovery_pending_reference = False
         self.selected_clearance = 30.0
         self.invalidate()
 
@@ -131,6 +133,7 @@ class LaserFocus:
             "xy_offset_available": True, "position_probe_available": True,
             "current_carriage_xy_mm": None, "firmware_geometry": None,
             "requires_clearance": self.requires_clearance,
+            "xy_recovery_pending_reference": self.xy_recovery_pending_reference,
             "return_clearance_mm": self.selected_clearance,
             "ender": ender, "recovery_available": True,
             "transcript": [], "physical_feedback": False,
@@ -221,6 +224,8 @@ class LaserFocus:
                 stop_epoch, xy, guard, on_motion_start, on_failure, move_xy=None,
                 laser_spot_offset=(0.0, 0.0), _telemetry_scope):
         validate_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
+        if self.xy_recovery_pending_reference and action in {"jog", "move", "clearance"}:
+            raise SafetyError("Reference the border after XY recovery before moving Z")
         spot_offset = validate_probe_target(laser_spot_offset)
         clearance = finite_number(min(clearance_z_mm, maximum) if action in {"status", "forget", "clear_surface"} else clearance_z_mm,
                                   "Focus clearance", 20, maximum)
@@ -302,7 +307,7 @@ class LaserFocus:
             if not parse_status(send("M123"))["z_known"]:
                 raise MachineError("Focus move lost its Z reference")
             stowed()
-            self.requires_clearance = current < clearance - .05
+            self.requires_clearance = self.xy_recovery_pending_reference or current < clearance - .05
 
         def contact_at(start):
             maximum_contact = start - 15
@@ -472,6 +477,9 @@ class LaserFocus:
         with guard():
             if self.session != session or owner.generation != session[0]:
                 raise MachineError("Focus operation was cancelled")
+            if action == "reference":
+                self.xy_recovery_pending_reference = False
+                self.requires_clearance = False
         return copy.deepcopy({"action": action, "available": True, "reference_ready": self.reference is not None,
                               "ender": owner.recovery_status(), "recovery_available": True,
                               "current_readback": {"z_mm": current, "z_known": board["z_known"], "fresh": True},
@@ -481,6 +489,7 @@ class LaserFocus:
                               "contact_min_mm": -2, "contact_max_mm": clearance - 15,
                               "firmware_geometry": geometry, "transcript": transcript,
                               "requires_clearance": self.requires_clearance,
+                              "xy_recovery_pending_reference": self.xy_recovery_pending_reference,
                               "return_clearance_mm": self.selected_clearance,
                               "max_teaching_step_mm": 5,
                               "focus_travel_min_z_mm": 0.0,
