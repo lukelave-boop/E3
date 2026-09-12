@@ -1,5 +1,38 @@
 # Current repository state
 
+## Ender firmware installed and idle recovery verified (2026-09-12)
+
+The operator power-cycled the Ender with USB connected. A fresh synchronized
+M115 then identified MARLIN_F401. With the Pi service stopped, the audited
+0c719c71 package uploaded successfully through the retained 0.3.0 updater:
+fresh updater identity/HOLD preceded erase; all application blocks were
+verified and committed, then an explicit BOOT was acknowledged. Fresh startup
+and M115 identify Marlin 2.0.8.24F4 (Sep 12 2026 07:10:11), F401 0x423/256 KiB,
+E3_RECOVERY_V1, SURFACE_HEIGHT_V2 and Z_LIMIT_80_V1 with expected geometry.
+Application SHA256 is
+fe9b02087d37c2019cfc54b16141f1f755e730f87837d535a51566898d6a5b6f.
+
+The operator confirmed secure Z with motors unpowered and a clear probe pin
+path before one controlled idle halt/reconnect test. The authenticated
+job.stop emergency action was issued once. Restarting only the Pi service
+then produced the explicit firmware HALTED diagnosis during ordinary M115
+startup; it did not automatically recover. After a normal, unhomed primary
+connection, explicit focus recover returned fresh normal Ender identity and
+readback in 9.966 seconds with no further power cycle. The result was
+available=true, Ender ready=true/fault=null, z_known=false, reference=false,
+and no saved surface/preview. No homing, Z/XY travel or laser-fire command
+was issued. M112 removes holding torque and boot may cycle the CR Touch pin.
+
+Final real-board readback confirms active/persistent max40, firmware ceiling80,
+FAN1=255 under CPU cooling, FAN2=0, and probe offset [3.302,38.608]. All four
+configuration hashes remain unchanged; the Pi service is active. This verifies
+one idle HALTED-to-guarded-recovery cycle. The token/reset wire exchange was
+enforced by the audited reader but is not separately exposed in the RPC
+transcript. Physical pin travel, stopping under motion, gauge accuracy and
+raised-surface calibration are not newly qualified. Fresh Home/park and border
+reference remain required. The selected Windows build is unchanged at 0.7.76.
+See docs/ENDER_RECOVERY_HANDOFF.md; older preparation notes below are history.
+
 ## Ender recovery direct Pi deployment (2026-09-12)
 
 E3 DEV TEST now selects Ender connection recovery, version 0.7.76, frozen

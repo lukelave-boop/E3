@@ -35,7 +35,12 @@ uploaded into an older image that is already silent in its nonrecoverable
 kill loop: that image first needs a real MCU reset or complete power cycle.
 It also cannot recover a CPU that no longer executes code or whose clock or
 USB/serial hardware has failed. Compiled parser, fake UART/GPIO and final ELF
-kill-path tests exercise the software; physical recovery remains unverified.
+kill-path tests exercise the software. On September 12, application fe9b0208
+was installed on the F401RC/256 KiB rig and one idle HALTED-to-explicit-recovery
+cycle returned fresh normal identity in 9.966 seconds without another power
+cycle. Ordinary Pi startup left the firmware halted. This does not qualify
+physical stopping under motion or probe accuracy. See
+[the live test record](../../docs/ENDER_RECOVERY_HANDOFF.md).
 
 ## Z80 ceiling update
 

@@ -1,5 +1,38 @@
 # Ender recovery handoff — 2026-09-12
 
+## Ender firmware installed and idle recovery verified (2026-09-12)
+
+The operator power-cycled the Ender with USB connected. A fresh synchronized
+M115 then identified MARLIN_F401. With the Pi service stopped, the audited
+0c719c71 package uploaded successfully through the retained 0.3.0 updater:
+fresh updater identity/HOLD preceded erase; all application blocks were
+verified and committed, then an explicit BOOT was acknowledged. Fresh startup
+and M115 identify Marlin 2.0.8.24F4 (Sep 12 2026 07:10:11), F401 0x423/256 KiB,
+E3_RECOVERY_V1, SURFACE_HEIGHT_V2 and Z_LIMIT_80_V1 with expected geometry.
+Application SHA256 is
+fe9b02087d37c2019cfc54b16141f1f755e730f87837d535a51566898d6a5b6f.
+
+The operator confirmed secure Z with motors unpowered and a clear probe pin
+path before one controlled idle halt/reconnect test. The authenticated
+job.stop emergency action was issued once. Restarting only the Pi service
+then produced the explicit firmware HALTED diagnosis during ordinary M115
+startup; it did not automatically recover. After a normal, unhomed primary
+connection, explicit focus recover returned fresh normal Ender identity and
+readback in 9.966 seconds with no further power cycle. The result was
+available=true, Ender ready=true/fault=null, z_known=false, reference=false,
+and no saved surface/preview. No homing, Z/XY travel or laser-fire command
+was issued. M112 removes holding torque and boot may cycle the CR Touch pin.
+
+Final real-board readback confirms active/persistent max40, firmware ceiling80,
+FAN1=255 under CPU cooling, FAN2=0, and probe offset [3.302,38.608]. All four
+configuration hashes remain unchanged; the Pi service is active. This verifies
+one idle HALTED-to-guarded-recovery cycle. The token/reset wire exchange was
+enforced by the audited reader but is not separately exposed in the RPC
+transcript. Physical pin travel, stopping under motion, gauge accuracy and
+raised-surface calibration are not newly qualified. Fresh Home/park and border
+reference remain required. The selected Windows build is unchanged at 0.7.76.
+Older preparation notes below are retained as history.
+
 ## Selected Windows build
 
 Open the permanent **E3 DEV TEST** launcher. Its validated pointer selects:
@@ -51,7 +84,7 @@ Ender firmware, physical pin behavior, Z accuracy or a successful laser job.
 The Pi companion retains its older base version label; file hashes and the
 advertised capability identify this installed patch.
 
-## Firmware prepared, not uploaded
+## Firmware package and pre-install verification
 
 Local package: `dist/e3-mainboard-f401-usb-0c719c71` and its ZIP.
 It is also staged on the Pi at
@@ -69,13 +102,13 @@ match the audited native build. All 1,963 Marlin source files match the prepared
 tree, all 70 archived E3 source files match the frozen commit with canonical
 line endings, and all 26 pinned source hashes pass.
 
-The earlier installed 9518b83f firmware does not parse serial commands in its
-emergency kill loop. The observed silence is consistent with a halt but does
-not prove it. A USB adapter reset is not evidence of a processor reset. The
-operator confirmed that the Ender's 24 V supply is on. No firmware upload,
-processor reset, USB power switch, pin actuation or motion test has been
-performed during this deployment. A real processor reset may be needed before
-the replacement can be uploaded. Do not treat another connection timeout as
+At preparation time, the earlier installed 9518b83f firmware did not parse
+serial commands in its emergency kill loop. The observed silence was consistent
+with a halt but did not prove it. A USB adapter reset is not evidence of a
+processor reset. The operator confirmed that the Ender's 24 V supply was on.
+The initial preparation did not upload firmware or reset the processor.
+The later operator power cycle, upload and idle recovery test are recorded
+at the top of this handoff. Do not treat another connection timeout as
 permission to erase flash or replay an operation.
 
 ## Automated verification
