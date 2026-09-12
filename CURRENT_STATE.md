@@ -1,5 +1,28 @@
 # Current repository state
 
+## Rejected-click diagnostic build selected (2026-09-12)
+
+E3 DEV TEST now selects Camera probe selection diagnostics 0.7.86, frozen at
+4a72618cb946f8300ee614719b144aace5de307a. The required Windows build script
+produced the executable and passed its native-library guard; all 157 bundled
+source modules and adjacent build-info match the isolated checkout. The
+permanent pointer was atomically updated. Target:
+`.codex-worktrees/focus-click-diagnostics/dist/E3/E3.exe`.
+Executable SHA256: 6b32fb40b16f2200bc4bdef959b2b30474d27442407982f7737fe3b81ce7ea72.
+
+217 focused Windows tests passed, plus Ruff/compileall. Offscreen visual review
+at 1500x1050 shows the complete error, red marker and disabled Move button.
+No new physical positioning or gauge accuracy is claimed. The actual cause of
+the same-spot rejection remains open pending an actual retained selection.
+Pi service, firmware, configuration and running desktop were not modified or
+restarted. The new app must be opened through the existing permanent launcher.
+
+At this handoff, separate Inno installer compression and full Windows desktop
+CI 34701494835 are still running; the CI Ruff, dependency and POSIX/recovery
+jobs passed. Do not describe the full CI or installer as complete until checked.
+The required build process session is 52962; log: build/focus-click-diagnostics-build.log.
+See dist/focus-click-diagnostics-0.7.86/START_HERE.md and verification.json.
+
 ## Focus camera rejection diagnostics (2026-09-12)
 
 The operator reports rejection at a previously accepted physical gauge spot.
