@@ -32,6 +32,16 @@ only previews it; Move probe here remains a separate guarded request.
 
 ## Operator handoff
 
+The first full Windows CI run passed 5,420 cases and failed one existing
+auto-home test during teardown. The job-service and auto-home test sources were
+unchanged by this camera fix. The test saw a durable stopped record before its
+detached START handler released ownership, then immediately started shutdown.
+Its fixture now waits for handler completion before teardown, while retaining
+all cancellation and no-output assertions. This test-only synchronization does
+not alter the frozen application. A concurrent production shutdown while a
+terminal update is still finishing can attempt a terminal-state rewrite; that
+separate existing job-shutdown race remains open and is not fixed here.
+
 This is a Windows desktop correction. The installed Pi companion and Ender
 recovery firmware remain suitable; no service restart or firmware flash is needed.
 Once the frozen build is selected, reopen **E3 DEV TEST**, open Surface / laser

@@ -63,6 +63,11 @@ def test_pi_owns_auto_home_after_start_connection_disappears(tmp_path, monkeypat
             transport.release()
             _wait_until(lambda: harness.service.get(job_id)["state"] == "complete")
             assert harness.service.get(job_id)["program_digest"] == program.digest
+        # The durable terminal record is published before the detached START
+        # handler releases ownership. Finish this ownership/STOP scenario before
+        # teardown introduces a separate concurrent service-shutdown scenario.
+        _wait_until(lambda: harness.service._active_physical_operation is None
+                    and harness.service._active_job_id is None)
     finally:
         release.set()
         _close_harness(harness)
