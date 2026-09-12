@@ -1,5 +1,23 @@
 # Focus camera preview correction — September 12, 2026
 
+## Operator confirms camera-selected probe placement (2026-09-12)
+
+After the 0.7.80 handoff, the operator reported: "it successfully positioned
+the probe over the spot i chose". The permanent E3 DEV TEST pointer was checked
+again and still selects d20a379 (Camera probe preview scaling). This records
+one qualitatively successful physical camera-to-probe placement, not a measured
+XY error or whole-bed accuracy result. No point coordinates or movement
+transcript were supplied with this observation.
+
+The session uses the separate primary GRBL XY/laser controller and the Ender
+F401RC/256 KiB Z/probe controller. Previously verified installed support is
+a1710770 with recovery application fe9b0208 / package 0c719c71, Marlin
+2.0.8.24F4 (Sep 12 2026 07:10:11). Last verified settings are Z maximum 40 mm,
+probe offset X+3.302/Y+38.608 and selected clearance 30 mm; these were not reread
+from hardware during this confirmation. Surface contact, gauge teaching,
+quantitative accuracy and raised-surface qualification remain separate steps.
+The assistant issued no hardware commands during this follow-up.
+
 The Position probe error occurred before motion: E3 compared the transmitted
 preview dimensions directly with the original camera dimensions. A read-only
 sample from the actual Pi returned a fresh transcoded 1280×720 preview from a
@@ -28,7 +46,8 @@ only previews it; Move probe here remains a separate guarded request.
 - The combined mapping, focus view/dialog and raw monitor suites passed all
   194 cases on Windows. Focused Ruff and compileall passed.
 - No hardware travel, homing, probing or laser output was commanded to test this
-  correction. Physical placement and raised-surface accuracy remain unverified.
+  correction before handoff. The subsequent operator placement check is recorded
+  above; quantitative and raised-surface accuracy remain unverified.
 
 ## Verified Windows feature build
 
