@@ -25,7 +25,7 @@ Compact F401 CI34703820188 and mainboard SD CI34703820219 passed for exact
 2a240827. Fast Development CI34703820164 passed: Windows Python3.12/four workers
 5556 passed,25 skipped in477.57 seconds; POSIX serial/recovery 500 passed in
 74.83 seconds. Repository Ruff and dependency/bytecode checks also passed.
-The separate Inno installer is compressing; the frozen EXE is already verified.
+The separate Inno installer also completed successfully; the frozen EXE is verified.
 Physical live reporting and new probe positioning remain unverified. See
 `dist/live-z-focus-0.7.88/START_HERE.md` and its verification records. The active
 development branch is not yet ready for merge/release qualification.
