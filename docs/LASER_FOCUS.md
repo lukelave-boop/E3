@@ -6,6 +6,32 @@ clearance before Home/park and selection retention sequence. See CURRENT_STATE.m
 for controller, firmware and calibration context. This observation does not
 establish dimensional accuracy or qualify fault handling on physical hardware.
 
+## Daily focus and machine calibration
+
+Use **Machine → Z axis → Surface / laser focus…** for routine referencing,
+surface measurement, focus previews and next-job focus selection. Set the
+clearance and check the physical headroom and full XY/Z path before choosing
+**Home / park + reference**. This single action homes and parks XY, verifies
+completion and unchanged controller sessions, then references the border and
+returns to clearance. A failed Home, STOP or changed session prevents the
+reference stage. It does not retry automatically.
+
+Open **Tools → Machine Setup… → 7 · Z / laser focus** to edit **Probe / laser
+XY offset** or **Teach once with the 7 mm gauge**. The whole teaching section,
+including teaching jogs, gauge-fit confirmation, Save and Forget, lives only
+in this tab. The embedded page includes the same reference, measurement and
+live-camera helpers, so calibration can be completed there. The daily window
+displays and uses the saved offsets.
+
+The separate XY transfer-path and solid-flat-patch checkboxes have been removed.
+Check the actual clear path, remove the gauge before XY travel, and inspect
+the solid target before probing. The headroom/Z-path, gauge-fit, gauge-removal
+and flat-job confirmations remain, as do the backend bounds, clearance, session
+and STOP checks. These desktop changes do not require a Pi or firmware update
+or invalidate saved gauge teaching. Earlier protocol requirements below still
+apply to the installed services. The revised interface has no new physical
+verification; see [CURRENT_STATE.md](../CURRENT_STATE.md) for test evidence.
+
 ## Matching desktop and Pi support
 
 Install the matching Pi companion before selecting the desktop feature build.
@@ -128,8 +154,10 @@ does not reconstruct an earlier process's physical state.
    operation, and verifies the final XY position and unchanged Ender Z state.
    The action does not reset the Ender or establish a Z reference.
 4. At the border, separately confirm the reference setup, including physical
-   headroom for the initial 5 mm lift, and choose **Reference border**. Only a
-   successful reference and acknowledged clearance lift release the restriction.
+   headroom for the initial 5 mm lift, and choose **Reference border**. The
+   combined reference button uses this label in recovery and performs no
+   additional XY Home. Only a successful reference and acknowledged clearance
+   lift release the restriction.
    Ordinary Home, XY jogging, jobs and arming remain blocked until then.
 
 Recovery preflight accepts a known Z within the active bounds, or the existing
@@ -152,17 +180,18 @@ physical cause or physical recovery success is established by this software fix.
 
 After referencing the border and reaching the selected clearance, choose
 **Position probe** on the left, then click a solid spot in the live image.
-A crosshair and the proposed probe/head coordinates appear. Confirm the XY
-path is clear and the gauge removed, then choose **Move probe here**. This
-positions the probe at clearance; it does not deploy the pin or descend.
+A crosshair and the proposed probe/head coordinates appear. The same button
+changes to **Move probe here** after a valid selection. Check the XY path and
+remove the gauge, then press that button again to move at clearance. The camera
+click only previews the target; it does not move, deploy the pin or descend.
 Check the actual probe over the intended solid patch, then use **Measure
 surface**. A rejected camera click stays visible as a red crosshair; it is
 not a movement target. Work-area rejection reports the calculated machine XY,
 the exceeded limits and source-image pixel. Select a new point to replace it;
 source, machine or calibration changes still invalidate the marker. **Return laser to measured spot** brings the laser to that same
-physical point for gauge teaching or focus. The XY-path confirmation appears
-above the positioning buttons; the gauge-fit and gauge-removal confirmations
-also appear before the actions they enable.
+physical point for gauge teaching or focus. The physical path and solid-target
+instructions appear beside these actions. The gauge-fit confirmation remains
+in Machine Setup; gauge removal is still confirmed before Move to focus.
 
 XY positioning uses the configured travel speed, limited to 1,200 mm/min and
 the machine's travel/work feed ceilings. Its completion wait accounts for the
@@ -206,20 +235,21 @@ frame age, stale frames and a lost connection. Ordinary viewing is for visual
 alignment; the explicit Position probe mode adds calibrated selection as above.
 Closing the window ends this view's stream without stopping the shared camera.
 
-For a narrower teaching surface, expand **Probe / laser XY offset…** and enter
-the measured vector from laser center to probe, in machine axes. Positive X is
-right and positive Y is toward the back for the current operator's machine.
+For a narrower teaching surface, open **Machine Setup → 7 · Z / laser focus**
+and enter the measured vector in **Probe / laser XY offset**, from laser center
+to probe in machine axes. Positive X is right and positive Y is toward the
+back for the current operator's machine.
 The operator supplied X **+3.302 mm**, Y **+38.608 mm** from CAD and confirmed
 the physical directions. These are this machine's proposed calibration values,
 not global defaults or physically verified transfer accuracy. Save the measured
 offset explicitly; an unset offset never silently becomes zero.
 
-1. Home / park and reference the border, then remain at the selected clearance.
+1. Choose **Home / park + reference**, then remain at the selected clearance.
 2. Use the live view and XY jogs to align the laser over the chosen flat spot.
-3. Confirm the XY path is clear and the gauge removed, then choose **Put probe
+3. Check the XY path is clear and remove the gauge, then choose **Put probe
    over laser spot**. This shifts the carriage by minus the measured offset.
-4. Confirm a solid flat target under the probe and **Measure surface**.
-5. At clearance, confirm the transfer path and choose **Return laser to measured
+4. Inspect the solid flat target under the probe and choose **Measure surface**.
+5. At clearance, check the transfer path and choose **Return laser to measured
    spot**. It reverses the offset and retains only that point's measurement.
 6. Put the 7 mm gauge **on top of the surface that was just measured**, so it
    spaces the laser face 7 mm above that surface. Use the small Z teaching steps
@@ -253,9 +283,10 @@ surface. It never infers sheet thickness by subtracting an assumed bed height.
 ## Prepare the machine
 
 Open **E3 DEV TEST**, connect, and use **Machine → Z axis → Surface / laser
-focus…**. The same workflow is available from Machine Setup. Its status shows
-the reported Z, configured maximum, selected clearance, reference, calibration
-and measurement. A reported position is not an encoder measurement.
+focus…** for daily use, or **Tools → Machine Setup… → 7 · Z / laser focus**
+for probe-offset and gauge calibration. Both show the reported Z, configured
+maximum, selected clearance, reference, calibration and measurement. A reported
+position is not an encoder measurement.
 
 This workflow requires the new surface-height V2 mainboard firmware and the
 matching Pi companion. Older firmware continues to support its existing
@@ -282,22 +313,27 @@ a tilted or curved surface over an entire job.
 
 ## Teach the gauge once
 
+Open **Machine Setup → 7 · Z / laser focus**. All the controls in this sequence
+are embedded in that tab; the daily Surface / laser focus window uses the saved
+result and contains no teaching controls.
+
 The workpiece surface and the gauge have different jobs. Probe the flat
 workpiece's top **without the gauge present**. After measurement, the gauge
 sits on that top and establishes a 7 mm gap from the measured surface to the
 laser's reference face. The workpiece's own thickness is not that gap.
 
-1. Home / park the primary controller over the solid black border. Confirm the
-   stowed probe and space for the initial 5 mm lift. **Reference border** uses
-   the native homing cycle, checks a border contact, and returns to the chosen
-   clearance. If Z is already known above Z20, this action first lowers to Z20
+1. Check the stowed probe, full XY path, solid black border at the parking
+   position and space for the initial 5 mm lift. Choose **Home / park +
+   reference**. After verified XY parking, the reference stage uses the native
+   homing cycle, checks a border contact, and returns to the chosen clearance.
+   If Z is already known above Z20, the reference stage first lowers to Z20
    over the confirmed bare border. It needs an active maximum of at least Z25.
    Do not home over a workpiece or into a honeycomb cell.
 2. Position over a solid, flat teaching workpiece at clearance, with the gauge
    removed. **Measure surface** probes the workpiece's exposed top. Observe the
    native fast/slow contacts and final retract. E3 stores that top's contact
    coordinate and the current machine/session identity. With the offset-transfer
-   workflow, confirm the clear XY path and choose **Return laser to measured
+   workflow, check the clear XY path and choose **Return laser to measured
    spot** before teaching. Leave the workpiece in place.
 3. Place the gauge's bottom flat on that same measured workpiece surface, with
    its **7 mm step** under the laser's usual gauge-contact face. This step must
@@ -361,9 +397,9 @@ missing prerequisite. A brief camera interruption does not discard a Z preview
 for an already measured surface. Camera point selection still requires a fresh
 view, and changed focus parameters or machine state still invalidate previews.
 
-1. Establish the border reference in the current controller session. Raise to
-   sufficient clearance **before** placing tall work under the head or moving
-   XY over it. A maximum setting alone does not make a path clear.
+1. Choose **Home / park + reference** to establish the border reference in the
+   current controller session. Raise to sufficient clearance **before** placing
+   tall work under the head or moving XY over it. A maximum setting alone does not make a path clear.
 2. Position over the intended flat surface and **Measure surface**. Supports
    and spacers naturally contribute to this reading. Clear the surface result
    whenever the work changes; the machine cannot detect a manually moved piece.

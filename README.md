@@ -1,5 +1,17 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Consolidated Z controls
+
+**Surface / laser focus…** combines initial setup into **Home / park +
+reference**. **Position probe** becomes **Move probe here** after a valid camera
+selection; press that same button again to move. The probe XY offset editor and
+entire 7 mm gauge teaching workflow now live in **Tools → Machine Setup… →
+7 · Z / laser focus**. Daily focus uses the saved calibration. The separate XY
+transfer-path and flat-patch checkboxes are removed; physical path/placement
+instructions and the remaining clearance, gauge and job confirmations remain.
+This is a desktop change; installed firmware, Pi software and saved teaching
+are unchanged. See [the focus guide](docs/LASER_FOCUS.md).
+
 ## Focus selection and camera parking
 
 After selecting measured focus for the next job, successful Home / park now
@@ -77,8 +89,8 @@ camera mapping rejections inspectable without estimating clicks from screenshots
 
 ## Gauge teaching controls
 
-Surface / laser focus offers fine 0.1/0.5 mm steps and 1/2/5 mm approach steps
-with matching Pi support. Its displayed Z travel range is independent of the
+Machine Setup → **7 · Z / laser focus** offers fine 0.1/0.5 mm steps and
+1/2/5 mm approach steps with matching Pi support. Its displayed Z travel range is independent of the
 probe's contact coordinate; the taught laser offset may be negative. Use small
 steps near the gauge fit. See [laser focus](docs/LASER_FOCUS.md).
 
@@ -125,8 +137,9 @@ clearance, with the Pi checking positions and retaining only that measurement.
 See [the focus sequence](docs/LASER_FOCUS.md) for the matching Pi update and
 operator calibration; no additional mainboard flash is needed for this change.
 
-The Machine tab's **Surface / laser focus…** workflow can teach a 7 mm focus
-gauge, measure a work surface, and preview/reproduce 7, 5 or 3 mm head gaps.
+Teach the 7 mm gauge in **Machine Setup → 7 · Z / laser focus**. The Machine
+tab's **Surface / laser focus…** workflow measures a work surface and
+previews/reproduces 7, 5 or 3 mm head gaps using that saved teaching.
 Raised supports contribute to surface elevation without being mistaken for
 material thickness. It requires the matching Pi companion and surface-height
 V2 firmware. This is explicit laser-off calibration/position validation;
@@ -201,12 +214,11 @@ rejected pre-check no longer shuts down otherwise healthy connections.
 An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
 can preserve two measured-height base maps, check a third height independently,
 and preview a height-specific camera correction. It does not yet apply height
-compensation to tracing/jobs. Machine Setup also includes **7 · Material height**:
-reference the black border, jog over material and measure its Z offset with the
-existing CR Touch/Creality controller. Both E3 desktop and Pi need this feature
-revision. The first border reference returned a result in operator testing;
-the subsequent deployment failure remains unresolved, and the material-height
-range is unverified.
+compensation to tracing/jobs. Machine Setup's seventh tab is now **7 · Z / laser
+focus**, with the current surface-height V2 workflow, probe XY offset calibration
+and 7 mm gauge teaching. It replaces the earlier Material height page;
+[the focus guide](docs/LASER_FOCUS.md) and [current state](CURRENT_STATE.md) record
+the supported protocol and physical verification history.
 
 The development START flow displays acknowledged upload progress, verification,
 and starting while Pi status monitoring remains responsive during upload syncing

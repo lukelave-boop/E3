@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — consolidate Z controls
+
+- Combine Home/park and border referencing into one guarded action, with the
+  reference stage contingent on successful Home and unchanged sessions. Recovery
+  retains a reference-only action after the separate XY recovery.
+- Reuse one Position probe / Move probe here button: select and preview a camera
+  target, then explicitly press the same button again to move at clearance.
+- Move probe XY offset editing and the complete 7 mm gauge teaching section into
+  the embedded **7 · Z / laser focus** Machine Setup tab. Daily focus uses the
+  existing saved calibration.
+- Remove the separate XY transfer-path and flat-patch checkboxes while retaining
+  physical instructions, headroom/Z-path, gauge and job confirmations, and
+  backend motion safeguards. No Pi, firmware or calibration migration is needed.
+
 ## Unreleased — retain job focus through parking
 
 - Fix Home / park discarding the selected next-job focus height. Retain the

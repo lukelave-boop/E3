@@ -1436,6 +1436,12 @@ class RemoteMachineService:
             )
         return self.status()
 
+    def refresh_status(self) -> dict[str, Any]:
+        """Read one current Pi snapshot without changing the connection."""
+        return self._machine_status_action(
+            ACTION_MACHINE_STATUS, timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
+        )
+
     def connect(
         self,
         port: str | None = None,

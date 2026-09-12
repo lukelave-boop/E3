@@ -1,5 +1,17 @@
 # Roadmap
 
+## Consolidated Z workflow
+
+The daily focus window combines Home/park with guarded border referencing and
+uses one two-stage camera positioning button. Machine Setup tab 7 embeds the
+probe XY offset editor and complete 7 mm gauge teaching workflow with its
+reference, measurement and live-view helpers. The separate XY-path and
+flat-patch checkboxes are removed; remaining physical confirmations and backend
+safeguards are retained. This desktop change preserves installed Pi software,
+firmware and saved teaching. Windows verification is recorded in CURRENT_STATE;
+operator testing of the revised controls remains separate from historical
+physical results.
+
 ## Focus selection across camera parking
 
 Implemented and regression-tested retention of selected flat job height through

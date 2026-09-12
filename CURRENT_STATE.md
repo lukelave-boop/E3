@@ -1,5 +1,43 @@
 # Current repository state
 
+## Consolidated surface-focus controls and Machine Setup calibration (2026-09-12)
+
+The desktop daily Surface / laser focus window now combines Home / park XY
+and Reference border into Home / park + reference. One serialized desktop
+worker verifies parking, current controller readiness, unchanged primary/Ender
+sessions and focus parameters before referencing. Failures and STOP do not
+continue or retry. Recovery retains a reference-only action with fresh headroom
+confirmation, without another Home. Windows refreshes the remote status after
+parking so the Pi's changed state revision cannot leave a stale cache blocking
+the authorized second stage.
+
+Position probe and Move probe here are one two-stage button: select a camera
+point, inspect the target, then press the relabelled button to move. The camera
+click remains preview-only and dispatch still remaps/rechecks freshness and
+bounds. The requested XY-path and flat-patch checkboxes are removed; physical
+instructions and the remaining path, gauge-fit/removal and job-flat confirmations
+remain. MachineService motion, clearance, arming, STOP and job guards are unchanged.
+
+Machine Setup tab 7 now embeds the reference/measurement/camera workspace and
+owns the complete probe/laser XY-offset editor and 7 mm gauge teaching section.
+The daily window contains neither calibration editor nor teaching controls.
+Both use the same AppContext/controller and existing saved calibration. Setup
+and focus workers exclude one another; all exits stop observers and camera
+view ownership. No Pi files, firmware, machine configuration or saved teaching
+were changed. This affects the desktop pipeline, not browser generation.
+
+Verification: 628 focused Windows tests passed across focus, job, remote and
+desktop/setup behavior. Follow-up real RemoteMachineService/FakePi regression
+checks cover the post-Home cache refresh: 114 controls/remote tests and 192
+desktop/setup tests passed after that correction. Ruff and compileall passed. The daily
+layout and embedded calibration layout were visually inspected from offscreen
+renders. Fast Development CI and frozen-build validation remain pending. No interactive GUI, real camera, controller,
+laser or new physical accuracy test has been performed. The prior operator
+verification below applies to its named build, not these combined controls.
+The feature is isolated on codex/marlin-material-focus-controls so unrelated
+console/startup/F103 work in the main checkout remains preserved.
+
+
 ## Operator-confirmed focus workflow and branch integration (2026-09-12)
 
 The operator reports that the installed build completed all requested behavior:
