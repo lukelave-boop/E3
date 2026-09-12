@@ -16,7 +16,7 @@ https://github.com/lukelave-boop/E3/actions/runs/34662785230
 
 The handoff is `dist/focus-camera-probe-0.7.69/START_HERE.md`; artifact hashes and build
 metadata are in adjacent `verification.json`. The Pi companion is
-`e3-pi-laser-focus-170fa49a`, installed after 7602e2df; mainboard firmware stays
+`e3-pi-laser-focus-170fa49a`, for upgrading 7602e2df; mainboard firmware stays
 9518b83f. Offscreen widget/render tests were performed, not interactive frozen
 GUI, live camera or hardware alignment tests. The first operator test selects a solid
 camera target and checks the probe placement at clearance before probing.
