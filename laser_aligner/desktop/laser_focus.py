@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .controls import MeasurementSpinBox
+from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
 from .mainboard_z import _number, _read_allowed, _session
 from .qt import require_qt
@@ -34,6 +35,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._pending = False
         self._preview_id: str | None = None
         self._clearance_edited = False
+        self._offset_edited = False
+        self._offset_entered = [False, False]
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
@@ -56,6 +59,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
         readouts.addWidget(self.maximum, 1, 0)
         readouts.addWidget(self.calibration, 1, 1)
         layout.addLayout(readouts)
+        self.next_step = QtWidgets.QLabel("Next: Home / park XY, then reference the border.")
+        self.next_step.setObjectName("focusNextStep")
+        self.next_step.setWordWrap(True)
+        self.next_step.setStyleSheet("font-weight: bold; padding: 6px;")
+        layout.addWidget(self.next_step)
 
         prepare = QtWidgets.QGroupBox("1 · Reference and measure")
         grid = QtWidgets.QGridLayout(prepare)
@@ -92,12 +100,51 @@ class LaserFocusPanel(QtWidgets.QWidget):
             xy.addWidget(button)
             self.xy_buttons.append(button)
         grid.addLayout(xy, 3, 0, 1, 4)
+        self.offset_toggle = QtWidgets.QPushButton("Probe / laser XY offset…")
+        self.offset_toggle.setCheckable(True)
+        grid.addWidget(self.offset_toggle, 4, 0, 1, 4)
+        self.offset_editor = QtWidgets.QWidget()
+        offset_layout = QtWidgets.QGridLayout(self.offset_editor)
+        offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_note = QtWidgets.QLabel(
+            "Measured probe position relative to laser center, in machine axes: "
+            "probe = laser + offset. Leave unset until measured."
+        )
+        offset_note.setWordWrap(True)
+        offset_layout.addWidget(offset_note, 0, 0, 1, 4)
+        self.offset_x, self.offset_y = MeasurementSpinBox(), MeasurementSpinBox()
+        for column, name, editor in ((0, "X", self.offset_x), (2, "Y", self.offset_y)):
+            editor.setRange(-100.0, 100.0)
+            editor.setDecimals(3)
+            editor.setSuffix(" mm")
+            editor.lineEdit().clear()
+            editor.lineEdit().setPlaceholderText("Not set")
+            editor.lineEdit().textEdited.connect(lambda _text, i=column // 2: self._edit_offset(i))
+            editor.valueChanged.connect(lambda _value, i=column // 2: self._edit_offset(i))
+            offset_layout.addWidget(QtWidgets.QLabel(name), 1, column)
+            offset_layout.addWidget(editor, 1, column + 1)
+        self.apply_offset = QtWidgets.QPushButton("Save measured XY offset")
+        offset_layout.addWidget(self.apply_offset, 2, 0, 1, 4)
+        self.offset_editor.hide()
+        self.offset_toggle.toggled.connect(self.offset_editor.setVisible)
+        grid.addWidget(self.offset_editor, 5, 0, 1, 4)
+        self.offset_readout = QtWidgets.QLabel("Probe XY offset: not set · use a wide, flat patch")
+        self.offset_readout.setWordWrap(True)
+        grid.addWidget(self.offset_readout, 6, 0, 1, 4)
+        self.xy_clear = QtWidgets.QCheckBox("XY transfer path clear at clearance; gauge removed")
+        grid.addWidget(self.xy_clear, 7, 0, 1, 4)
+        self.align_probe = QtWidgets.QPushButton("Put probe over laser spot")
+        self.align_probe.setToolTip("At clearance, shift XY by minus the measured probe offset. Then measure.")
+        self.align_laser = QtWidgets.QPushButton("Return laser to measured spot")
+        self.align_laser.setToolTip("At clearance, return XY by the measured offset and retain this measurement.")
+        grid.addWidget(self.align_probe, 8, 0, 1, 2)
+        grid.addWidget(self.align_laser, 8, 2, 1, 2)
         self.flat_patch = QtWidgets.QCheckBox("Solid, flat patch spans probe and laser at the same height")
-        grid.addWidget(self.flat_patch, 4, 0, 1, 4)
+        grid.addWidget(self.flat_patch, 9, 0, 1, 4)
         self.measure = QtWidgets.QPushButton("Measure surface")
         self.clear_surface = QtWidgets.QPushButton("Clear measurement")
-        grid.addWidget(self.measure, 5, 0, 1, 2)
-        grid.addWidget(self.clear_surface, 5, 2, 1, 2)
+        grid.addWidget(self.measure, 10, 0, 1, 2)
+        grid.addWidget(self.clear_surface, 10, 2, 1, 2)
         layout.addWidget(prepare)
 
         teach = QtWidgets.QGroupBox("2 · Teach once with the 7 mm gauge")
@@ -154,7 +201,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         for button, action in ((self.reference, "reference"), (self.measure, "measure"),
                                (self.teach, "teach"), (self.preview, "preview"),
                                (self.move, "move"), (self.return_clearance, "clearance"),
-                               (self.clear_surface, "clear_surface"), (self.forget, "forget")):
+                               (self.clear_surface, "clear_surface"), (self.forget, "forget"),
+                               (self.apply_offset, "set_xy_offset"), (self.align_probe, "align_probe"),
+                               (self.align_laser, "align_laser")):
             button.clicked.connect(lambda _checked=False, a=action: self.request(a))
         self.down.clicked.connect(lambda: self.request("jog", -float(self.z_step.currentData())))
         self.up.clicked.connect(lambda: self.request("jog", float(self.z_step.currentData())))
@@ -163,7 +212,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.clearance.valueChanged.connect(self._edit_clearance)
         self.clearance.lineEdit().textEdited.connect(self._edit_clearance)
         self.gap.currentIndexChanged.connect(self._parameters_edited)
-        for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed):
+        for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed, self.xy_clear):
             checkbox.toggled.connect(self._sync)
         self.z_step.currentIndexChanged.connect(self._sync)
         # Enter commits an editor; it must never activate a motion button.
@@ -173,6 +222,25 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
     def fresh(self) -> bool:
         return self._received_at is not None and time.monotonic() - self._received_at <= FRESH_SECONDS
+
+    def _edit_offset(self, axis: int) -> None:
+        self._offset_edited = True
+        self._offset_entered[axis] = True
+        self.xy_clear.setChecked(False)
+        self._parameters_edited()
+
+    def _offset_value(self) -> list[float] | None:
+        if not all(self._offset_entered):
+            return None
+        values = []
+        for editor in (self.offset_x, self.offset_y):
+            if not editor.hasAcceptableInput():
+                return None
+            value = _number(editor.valueFromText(editor.text()))
+            if value is None or not -100 <= value <= 100:
+                return None
+            values.append(value)
+        return values
 
     def invalidate(self, message: str, *, clear_surface: bool = False,
                    clear_confirmation: bool = False) -> None:
@@ -184,7 +252,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self._result["surface"] = None
             self.surface.setText("Surface elevation: not measured")
         if clear_confirmation:
-            for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed):
+            for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed, self.xy_clear):
                 checkbox.setChecked(False)
         self.message.setText(message)
         self._sync()
@@ -224,6 +292,20 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                      or _number(item.get(number_key)) is None):
                 raise ValueError(f"Invalid focus {key} readback.")
         self._result = dict(result)
+        offset = result.get("probe_xy_offset_mm")
+        valid_offset = (isinstance(offset, (list, tuple)) and len(offset) == 2
+                        and all(_number(v) is not None and -100 <= v <= 100 for v in offset))
+        if valid_offset:
+            self.offset_readout.setText(f"Probe relative to laser: X {offset[0]:+.3f} mm · Y {offset[1]:+.3f} mm")
+            if not self._offset_edited or result.get("action") == "set_xy_offset":
+                for editor, value in zip((self.offset_x, self.offset_y), offset, strict=True):
+                    blocker = QtCore.QSignalBlocker(editor)
+                    editor.setValue(value)
+                    del blocker
+                self._offset_edited = False
+                self._offset_entered = [True, True]
+        else:
+            self.offset_readout.setText("Probe XY offset: not set · use a wide, flat patch")
         self._received_at = time.monotonic()
         required_return = _number(result.get("return_clearance_mm"))
         if required_return is not None and not self._clearance_edited:
@@ -266,6 +348,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "clearance": "At clearance. XY positioning and workpiece changes can resume.",
             "clear_surface": "Surface measurement cleared.",
             "forget": "Taught offset forgotten.",
+            "set_xy_offset": "Measured XY offset saved. Align the laser visually over your target, then put the probe there.",
+            "align_probe": "Probe is over the selected laser spot. Confirm the solid target, then measure.",
+            "align_laser": "Laser returned to the measured spot at clearance. Fit the gauge using small Z steps.",
         }.get(str(result.get("action")), "Reported position is refreshed while idle."))
         self._sync()
 
@@ -297,10 +382,17 @@ class LaserFocusPanel(QtWidgets.QWidget):
         z = _number((self._result.get("current_readback") or {}).get("z_mm"))
         maximum = _number(self._result.get("max_z_mm"))
         requires_clearance = self._result.get("requires_clearance") is True
+        sequence = self._result.get("xy_sequence") or {}
+        probe_phase = sequence.get("phase") == "probe"
+        self.flat_patch.setText("Solid, flat target under probe; deployment path clear" if probe_phase
+                               else "Same measured spot under laser; gauge-contact area is flat"
+                               if sequence.get("phase") == "laser"
+                               else "Solid, flat patch spans probe and laser at the same height")
         self.home.setEnabled(idle and projection.can_home and self.path_clear.isChecked()
                              and not requires_clearance)
         self.reference.setEnabled(bool(moving))
-        self.measure.setEnabled(bool(moving and known and reference and self.flat_patch.isChecked()))
+        self.measure.setEnabled(bool(moving and known and reference and self.flat_patch.isChecked()
+                                     and sequence.get("phase") != "laser"))
         return_minimum = _number(self._result.get("return_clearance_mm"))
         return_allowed = return_minimum is None or (clearance is not None and clearance >= return_minimum)
         self.return_clearance.setEnabled(bool(moving and known and z is not None and return_allowed
@@ -311,10 +403,24 @@ class LaserFocusPanel(QtWidgets.QWidget):
         at_clearance = not requires_clearance and (
             not reference or (z is not None and clearance is not None and z >= clearance - .05)
         )
+        offset = self._result.get("probe_xy_offset_mm")
+        offset_valid = (isinstance(offset, (list, tuple)) and len(offset) == 2
+                        and all(_number(v) is not None and -100 <= v <= 100 for v in offset))
+        xy_available = self._result.get("xy_offset_available") is True
+        transfer_ready = (moving and known and reference and at_clearance and self.xy_clear.isChecked()
+                          and xy_available and offset_valid and not self._offset_edited
+                          and z is not None and clearance is not None and abs(z - clearance) <= .05)
+        self.apply_offset.setEnabled(bool(ready and xy_available and not requires_clearance
+                                          and self._offset_edited and self._offset_value() is not None))
+        self.align_probe.setEnabled(bool(transfer_ready and not probe_phase))
+        self.align_laser.setEnabled(bool(transfer_ready and probe_phase and surface))
+        for editor in (self.offset_x, self.offset_y):
+            editor.setEnabled(bool(idle and xy_available))
+        self.xy_clear.setEnabled(bool(idle and xy_available))
         for button in self.xy_buttons:
             button.setEnabled(bool(moving and known and at_clearance))
         self.xy_step.setEnabled(idle)
-        teach_ready = moving and reference and surface and self.flat_patch.isChecked() and known
+        teach_ready = moving and reference and surface and self.flat_patch.isChecked() and known and not probe_phase
         step = float(self.z_step.currentData())
         measured = self._result.get("surface") or {}
         geometry = self._result.get("firmware_geometry") or {}
@@ -324,7 +430,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.up.setEnabled(bool(teach_ready and z is not None and maximum is not None and z + step <= maximum))
         self.teach.setEnabled(bool(teach_ready and self.gauge.isChecked()
                                   and self._result.get("calibration_persistent") is True))
-        self.preview.setEnabled(bool(ready and known and reference and surface and clearance is not None
+        self.preview.setEnabled(bool(ready and known and reference and surface and not probe_phase and clearance is not None
                                     and self._result.get("calibration_compatible") is True))
         self.move.setEnabled(bool(moving and self._preview_matches(self._result.get("preview"))
                                  and self.gauge_removed.isChecked()))
@@ -332,6 +438,16 @@ class LaserFocusPanel(QtWidgets.QWidget):
                         self.gauge, self.gauge_removed, self.z_step):
             control.setEnabled(idle)
         self.refresh.setEnabled(idle)
+        self.next_step.setText(
+            "Next: Home / park XY, then reference the border." if not reference else
+            "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
+            "Next: Return the laser to the measured spot at clearance." if probe_phase and surface else
+            "Next: Confirm the solid target under the probe, then measure surface." if probe_phase else
+            "Next: Align the laser over a flat target, then put the probe over that spot." if not surface and offset_valid else
+            "Next: Position over a wide, flat patch and measure its surface." if not surface else
+            "Next: Fit the 7 mm gauge with small Z steps, then save the setting." if not self._result.get("calibration_compatible") else
+            "Next: Remove the gauge, preview a gap, then move to focus."
+        )
         self.range_note.setText(
             f"Contact elevation range: −2 to {clearance - 15:g} mm; higher work needs more clearance."
             if clearance is not None else "Clearance must be 20 mm to the active maximum."
@@ -345,6 +461,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "reference": self.reference, "measure": self.measure, "teach": self.teach,
             "preview": self.preview, "move": self.move, "clearance": self.return_clearance,
             "clear_surface": self.clear_surface, "forget": self.forget,
+            "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
         }.get(action)
         if button is None or not button.isEnabled():
             return
@@ -353,28 +470,38 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "confirmed": True, "clearance_z_mm": float(self.clearance.value()),
             "gap_mm": 7.0 if action == "teach" else float(self.gap.currentData()),
         }
-        if action in {"teach", "jog", "preview"}:
+        if action in {"teach", "jog", "preview", "align_laser"}:
             arguments["measurement_id"] = self._result["surface"]["id"]
         if action == "move":
             arguments["preview_id"] = self._preview_id
         if action == "jog":
             arguments["value"] = value
+        if action == "set_xy_offset":
+            arguments["value"] = self._offset_value()
         if action in {"jog", "reference", "measure", "move", "clearance"}:
             self.gauge.setChecked(False)
             self.gauge_removed.setChecked(False)
         if action == "reference":
             self.flat_patch.setChecked(False)
+        if action in {"set_xy_offset", "align_probe", "align_laser"}:
+            self.xy_clear.setChecked(False)
+            self.gauge.setChecked(False)
+            self.gauge_removed.setChecked(False)
+            if action != "align_laser":
+                self.flat_patch.setChecked(False)
         self.actionRequested.emit(action, arguments)
 
     def _home(self) -> None:
         self._sync()
         if self.home.isEnabled():
+            self.xy_clear.setChecked(False)
             self.homeRequested.emit()
 
     def _xy(self, dx: float, dy: float) -> None:
         self._sync()
         if all(button.isEnabled() for button in self.xy_buttons):
             self.flat_patch.setChecked(False)
+            self.xy_clear.setChecked(False)
             self.xyRequested.emit(dx * float(self.xy_step.currentData()), dy * float(self.xy_step.currentData()))
 
 
@@ -566,13 +693,22 @@ class LaserFocusDialog(QtWidgets.QDialog):
     def __init__(self, controller: Any, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Surface / laser focus")
-        self.resize(780, 770)
+        self.resize(1400, 900)
         layout = QtWidgets.QVBoxLayout(self)
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(620)
         self.panel = LaserFocusPanel()
         scroll.setWidget(self.panel)
-        layout.addWidget(scroll, 1)
+        self.splitter.addWidget(scroll)
+        context = controller.runtime.context
+        self.bed_view = FocusBedView(getattr(context, "camera", None), self)
+        self.splitter.addWidget(self.bed_view)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 2)
+        self.splitter.setSizes([820, 540])
+        layout.addWidget(self.splitter, 1)
         self.coordinator = LaserFocusCoordinator(self.panel, controller, self)
         footer = QtWidgets.QHBoxLayout()
         self.stop = QtWidgets.QPushButton("Software STOP / laser off")
@@ -590,10 +726,15 @@ class LaserFocusDialog(QtWidgets.QDialog):
     def set_machine_status(self, status: Mapping[str, Any]) -> None:
         self.coordinator.set_status(status)
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.bed_view.begin()
+
     def done(self, result: int) -> None:
         if self.coordinator._mutation:
             self.panel.message.setText("Wait for the operation to finish, or use Software STOP.")
             return
         if not self.coordinator._closed:
             self.coordinator.close()
+        self.bed_view.end()
         super().done(result)

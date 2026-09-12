@@ -2,6 +2,12 @@
 
 ## Laser focus setup
 
+The focus window includes a live bed view and step guidance. A saved measured
+probe XY offset enables separate probe/laser transfers over the same spot at
+clearance, with the Pi checking positions and retaining only that measurement.
+See [the focus sequence](docs/LASER_FOCUS.md) for the matching Pi update and
+operator calibration; no additional mainboard flash is needed for this change.
+
 The Machine tab's **Surface / laser focus…** workflow can teach a 7 mm focus
 gauge, measure a work surface, and preview/reproduce 7, 5 or 3 mm head gaps.
 Raised supports contribute to surface elevation without being mistaken for

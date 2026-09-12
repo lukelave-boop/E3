@@ -2,6 +2,11 @@
 
 ## Gauge focus calibration
 
+Added for operator testing: a live observational bed view and explicit offset
+transfers to probe and then position the laser over one point. Physical transfer
+alignment and gauge fit remain next; camera-click positioning on raised work is
+separate from this raw live view.
+
 Implemented for operator testing: native border reference and surface probing,
 7 mm gauge teaching, 5/3 mm derived gaps, persistent mounting offset, explicit
 preview/position/clearance, and raised-surface V2 firmware. Next: verify actual

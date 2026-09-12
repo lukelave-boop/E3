@@ -6359,6 +6359,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         finally:
             if not dialog.coordinator._closed:
                 dialog.coordinator.close()
+            dialog.bed_view.end()
             self._laser_focus_dialog = None
             dialog.deleteLater()
             self.controller.poll_status()

@@ -1,5 +1,44 @@
 # Surface height and gauge-taught laser focus
 
+## Live view and the probe-to-laser transfer
+
+The focus window includes a live bed view alongside the controls and a next-step
+prompt. The image is the raw camera feed: it preserves aspect ratio and reports
+frame age, stale frames and a lost connection. It is for visual alignment; it
+does not turn pixels into motion coordinates or compensate for raised surfaces.
+Closing the window ends this view's stream without stopping the shared camera.
+
+For a narrower teaching surface, expand **Probe / laser XY offset…** and enter
+the measured vector from laser center to probe, in machine axes. Positive X is
+right and positive Y is toward the back for the current operator's machine.
+The operator supplied X **+3.302 mm**, Y **+38.608 mm** from CAD and confirmed
+the physical directions. These are this machine's proposed calibration values,
+not global defaults or physically verified transfer accuracy. Save the measured
+offset explicitly; an unset offset never silently becomes zero.
+
+1. Home / park and reference the border, then remain at the selected clearance.
+2. Use the live view and XY jogs to align the laser over the chosen flat spot.
+3. Confirm the XY path is clear and the gauge removed, then choose **Put probe
+   over laser spot**. This shifts the carriage by minus the measured offset.
+4. Confirm a solid flat target under the probe and **Measure surface**.
+5. At clearance, confirm the transfer path and choose **Return laser to measured
+   spot**. It reverses the offset and retains only that point's measurement.
+6. Fit the 7 mm gauge on that same spot, use the small Z teaching steps, and save
+   the gauge setting as described below. Remove the gauge before focus moves.
+
+Each movement is separately requested; no button silently continues into probing
+or lowering Z. Both transfer endpoints must be inside the configured work area.
+The Pi checks Z clearance, controller session and acknowledged XY before keeping
+the measurement. Ordinary XY jogging invalidates it. Teaching and focus are
+blocked while the laser has not yet returned from the probe position. Changing
+the measured XY offset clears the current measurement and transfer sequence.
+
+This requires the matching new Pi companion; the existing 9518b83f mainboard
+firmware supports it without another flash. The wide flat-patch method below
+continues to work when no XY offset is set. A flat 3–5 mm piece is a convenient
+teaching surface within the default Z30 contact envelope; its exact thickness
+is not used in the focus calculation because its top is probed directly.
+
 This feature positions the Ender Z axis from a probed top surface and a saved
 7 mm gauge setting. The primary controller retains XY and laser control.
 The focus actions are laser-off setup actions; they do not fire the laser,

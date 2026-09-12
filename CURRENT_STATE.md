@@ -1,5 +1,32 @@
 # Current repository state
 
+## Active: live focus view and measured XY transfer (2026-09-11)
+
+The focus window now includes an observational live camera pane,
+frame age/stale/offline indication, step guidance, and explicit probe/laser
+transfers at verified clearance. Probe XY values are unknown until saved;
+operator supplied +3.302 mm right and +38.608 mm back relative to laser center.
+Those CAD dimensions and directions are supplied evidence, not a physical XY
+transfer test. A matching Pi companion is required; no new firmware flash is
+needed. Camera pixels grant no motion coordinates or raised-surface correction.
+
+Operator evidence since the preceding handoff: the 9518b83f application was
+uploaded and committed over USB after an explicit M997/HOLD/identity handoff,
+then booted. M115 reported Sep 10 19:10:34, surface-height V2, Z80 and emergency
+parser capabilities, MCU423/256KiB. The desktop showed active max40 and confirmed
+firmware ceiling80. Operator then ran Home/park and Reference border; screenshot
+showed Z30.000 with max40. Gauge teaching and the new offset transfers remain
+physically unverified. Earlier USB-pending notes below are historical.
+
+Verification: 298 combined focused desktop/camera/focus/RPC/Z/service tests passed
+on Windows; repository Ruff and compileall passed. The window was rendered and
+visually reviewed offscreen with a labelled simulated bed image. No live camera,
+interactive frozen build or hardware transfer test has been performed. The new
+Pi kit is e3-pi-laser-focus-7602e2df. Its installer was tested against a local
+reconstruction of the installed a43df3a1 files: 4 updated, 7 current, all hashes
+matched, reapplication idempotent, config/max40/cooling/calibration preserved.
+Only the Linux service-inactive check was stubbed for that offline installation.
+
 ## Verified focus feature handoff (2026-09-10)
 
 E3 DEV TEST now selects Gauge focus and raised surfaces, version 0.7.65,

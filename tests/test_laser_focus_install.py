@@ -59,7 +59,7 @@ def test_unknown_local_edit_rejects_before_any_file_is_replaced(kit):
     with pytest.raises(ValueError, match="unknown local changes"):
         installer.install(project, bundle=bundle, apply=True)
     assert (project / "laser_aligner/config.py").read_bytes() == original
-    assert not (project / "laser_aligner/machine/laser_focus.py").exists()
+    assert (project / "laser_aligner/machine/laser_focus.py").read_bytes() == b"# previous installed source\r\n"
 
 
 def test_dry_run_and_active_service_leave_sources_untouched(kit, monkeypatch):
@@ -70,7 +70,7 @@ def test_dry_run_and_active_service_leave_sources_untouched(kit, monkeypatch):
     monkeypatch.setattr(installer, "inactive", reject)
     with pytest.raises(ValueError, match="service active"):
         installer.install(project, bundle=bundle, apply=True)
-    assert not (project / "laser_aligner/machine/laser_focus.py").exists()
+    assert (project / "laser_aligner/machine/laser_focus.py").read_bytes() == b"# previous installed source\r\n"
 
 
 @pytest.mark.parametrize("relative", ["manifest.json", "laser_aligner/machine/laser_focus.py"])
@@ -80,4 +80,4 @@ def test_tampered_bundle_is_rejected(kit, relative):
         stream.write(b" altered")
     with pytest.raises(ValueError, match="checksum"):
         installer.install(project, bundle=bundle, apply=True)
-    assert not (project / "laser_aligner/machine/laser_focus.py").exists()
+    assert (project / "laser_aligner/machine/laser_focus.py").read_bytes() == b"# previous installed source\r\n"

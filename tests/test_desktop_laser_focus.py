@@ -80,6 +80,75 @@ def confirm(panel):
     panel.flat_patch.setChecked(True)
 
 
+def test_offset_transfer_is_explicit_and_requires_fresh_clearance(panel):
+    panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3], surface=None))
+    confirm(panel)
+    calls = []
+    panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
+    assert not panel.align_probe.isEnabled()
+    panel.xy_clear.setChecked(True)
+    assert panel.align_probe.isEnabled()
+    panel.align_probe.click()
+    assert calls == [("align_probe", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0})]
+    assert not panel.xy_clear.isChecked() and not panel.flat_patch.isChecked()
+    panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3], requires_clearance=True))
+    panel.xy_clear.setChecked(True)
+    assert not panel.align_probe.isEnabled()
+
+
+def test_probe_phase_requires_measured_return_before_teaching(panel):
+    panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3],
+                            xy_sequence={"phase": "probe"}))
+    confirm(panel)
+    panel.gauge.setChecked(True)
+    panel.xy_clear.setChecked(True)
+    assert panel.align_laser.isEnabled()
+    assert not panel.align_probe.isEnabled()
+    assert not panel.down.isEnabled() and not panel.teach.isEnabled() and not panel.preview.isEnabled()
+    assert "Return the laser" in panel.next_step.text()
+    calls = []
+    panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
+    panel.align_laser.click()
+    assert calls[0][0] == "align_laser" and calls[0][1]["measurement_id"] == "surface-1"
+    panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3],
+                            xy_sequence={"phase": "laser"}))
+    assert panel.down.isEnabled() and "Same measured spot" in panel.flat_patch.text()
+    assert not panel.measure.isEnabled()
+
+
+def test_unset_offset_never_becomes_zero_and_drafts_block_transfer(panel):
+    panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=None))
+    confirm(panel)
+    panel.xy_clear.setChecked(True)
+    assert not panel.align_probe.isEnabled() and not panel.apply_offset.isEnabled()
+    panel.offset_x.setValue(-38.61)
+    panel.offset_y.setValue(-3.30)
+    assert panel.apply_offset.isEnabled()
+    panel.offset_x.lineEdit().selectAll()
+    QtTest.QTest.keyClick(panel.offset_x.lineEdit(), QtCore.Qt.Key.Key_Backspace)
+    assert not panel.apply_offset.isEnabled()
+    calls = []
+    panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
+    QtTest.QTest.keyClicks(panel.offset_x.lineEdit(), "-38.61")
+    panel.apply_offset.click()
+    assert calls[0][0] == "set_xy_offset" and calls[0][1]["value"] == [-38.61, -3.3]
+    assert not panel.align_probe.isEnabled()  # Saving must be acknowledged first.
+
+
+def test_showing_offset_editor_does_not_authorize_unentered_axis(panel, app):
+    panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=None))
+    panel.offset_toggle.click()
+    app.processEvents()
+    panel.offset_x.setValue(3.302)
+    panel.offset_y.setFocus()
+    panel.offset_x.setFocus()
+    app.processEvents()
+    assert not panel.apply_offset.isEnabled()
+    panel.offset_y.lineEdit().selectAll()
+    QtTest.QTest.keyClicks(panel.offset_y.lineEdit(), "38.608")
+    assert panel.apply_offset.isEnabled()
+
+
 def test_focus_controls_present_signed_elevation_separate_from_thickness(panel):
     assert panel.height.text() == "Z 30.000 mm"
     assert "encoder" in panel.height.toolTip()

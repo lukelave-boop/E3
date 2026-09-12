@@ -412,3 +412,167 @@ def test_lowering_clearance_after_forget_does_not_release_xy_latch(focus):
     with pytest.raises(SafetyError, match="at least"):
         focus.run("clearance", clearance_z_mm=20)
     assert focus.state.requires_clearance
+
+
+@pytest.mark.parametrize("value", [None, [1], [1, 2, 3], [True, 0], [float("nan"), 0], [101, 0], "1,2"])
+def test_xy_offset_requires_two_measured_finite_values(value):
+    with pytest.raises(SafetyError):
+        validate_request("set_xy_offset", confirmed=True, value=value)
+
+
+def test_xy_offset_persists_without_measurement_authority(focus):
+    result = focus.run("set_xy_offset", value=[-3.302, -38.608])
+    assert result["probe_xy_offset_mm"] == [-3.302, -38.608]
+    assert not any(s.startswith(("G1", "G28", "G39")) for s in focus.serial.writes)
+    restored = LaserFocus(focus.state.path, "ender")
+    assert restored.probe_xy_offset_mm == [-3.302, -38.608]
+    assert restored.xy_sequence is restored.surface is restored.reference is None
+    data = json.loads(focus.state.xy_path.read_text())
+    data["controller_port"] = "another"
+    focus.state.xy_path.write_text(json.dumps(data))
+    with pytest.raises(MachineError, match="XY offset"):
+        LaserFocus(focus.state.path, "ender")
+
+
+def align_for_measurement(machine):
+    machine.focus_control("reference", confirmed=True)
+    # The measured probe lies +3,-4 from laser; fixture starts at its park.
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3, -4])
+    return machine.focus_control("align_probe", confirmed=True)
+
+
+def test_offset_transfers_measure_same_physical_point_and_preserve_only_return(focus_machine):
+    machine, focus, primary = focus_machine
+    before = (primary.x, primary.y)
+    result = align_for_measurement(machine)
+    probe_xy = (before[0]-3, before[1]+4)
+    assert (primary.x, primary.y) == probe_xy
+    assert result["xy_sequence"]["phase"] == "probe"
+    result = machine.focus_control("measure", confirmed=True)
+    measurement_id = result["surface"]["id"]
+    with pytest.raises(SafetyError, match="Align the laser"):
+        focus.run("jog", measurement_id=measurement_id, value=-.1, xy=probe_xy,
+                  primary_generation=machine._session.generation)
+    result = machine.focus_control("align_laser", confirmed=True, measurement_id=measurement_id)
+    assert (primary.x, primary.y) == before
+    assert result["surface"]["id"] == measurement_id
+    assert result["surface"]["carriage_xy_mm"] == list(before)
+    assert result["xy_sequence"]["phase"] == "laser"
+    machine.focus_control("jog", confirmed=True, measurement_id=measurement_id, value=-.1)
+    assert focus.serial.z == 29.9
+    machine.focus_control("clearance", confirmed=True)
+    machine.jog(-1, -1, 300)
+    assert focus.state.surface is focus.state.xy_sequence is None
+
+
+@pytest.mark.parametrize("change", ["unknown", "low_z", "out_of_bounds", "position_mismatch", "network", "unreferenced"])
+def test_alignment_rejects_before_xy_motion(focus_machine, change):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3, -4])
+    kwargs = {}
+    if change == "unknown":
+        focus.state.probe_xy_offset_mm = None
+    elif change == "low_z":
+        focus.serial.z = 29
+    elif change == "out_of_bounds":
+        machine.settings.work_area.x_min = primary.x - 1
+    elif change == "position_mismatch":
+        primary.x += 1
+    elif change == "network":
+        kwargs["_connection_alive"] = lambda: False
+    else:
+        focus.state.reference = None
+    before = (primary.x, primary.y)
+    with pytest.raises(MachineError):
+        machine.focus_control("align_probe", confirmed=True, **kwargs)
+    assert (primary.x, primary.y) == before
+    assert focus.state.surface is focus.state.xy_sequence is None
+
+
+def test_laser_alignment_requires_current_measurement_and_session(focus_machine):
+    machine, focus, primary = focus_machine
+    align_for_measurement(machine)
+    result = machine.focus_control("measure", confirmed=True)
+    before = (primary.x, primary.y)
+    with pytest.raises(SafetyError, match="measurement"):
+        machine.focus_control("align_laser", confirmed=True, measurement_id="x"*36)
+    assert (primary.x, primary.y) == before
+    assert result["surface"]["id"] != "x"*36
+
+
+@pytest.mark.parametrize("failure", ["network", "position", "ender"])
+def test_alignment_failure_never_preserves_measurement_or_cached_xy(focus_machine, failure, monkeypatch):
+    machine, focus, primary = focus_machine
+    align_for_measurement(machine)
+    result = machine.focus_control("measure", confirmed=True)
+    alive = [True]
+    original = primary.write_line
+    commands = []
+    def write(line):
+        commands.append(line)
+        original(line)
+        if line.startswith("G1 X"):
+            if failure == "network":
+                alive[0] = False
+            elif failure == "position":
+                primary.x += .2
+            elif failure == "ender":
+                focus.owner._generation += 1
+    monkeypatch.setattr(primary, "write_line", write)
+    with pytest.raises(MachineError):
+        machine.focus_control("align_laser", confirmed=True,
+                              measurement_id=result["surface"]["id"],
+                              _connection_alive=lambda: alive[0])
+    assert commands.index("M5") < next(i for i, s in enumerate(commands) if s.startswith("G1 X"))
+    assert len([s for s in commands if s.startswith("G1 X")]) == 1
+    assert focus.state.surface is focus.state.xy_sequence is None
+    assert machine._jog_position_mm is None
+
+
+def test_stop_interrupts_unacknowledged_xy_alignment(focus_machine, monkeypatch):
+    machine, focus, primary = focus_machine
+    align_for_measurement(machine)
+    result = machine.focus_control("measure", confirmed=True)
+    entered = threading.Event()
+    original = primary.write_line
+    def write(line):
+        if line.startswith("G1 X"):
+            entered.set()
+            return  # Controller accepts no ACK; STOP must not wait for it.
+        original(line)
+    monkeypatch.setattr(primary, "write_line", write)
+    errors = []
+    def align():
+        try:
+            machine.focus_control("align_laser", confirmed=True, measurement_id=result["surface"]["id"])
+        except MachineError as exc:
+            errors.append(str(exc))
+    worker = threading.Thread(target=align)
+    worker.start()
+    assert entered.wait(3)
+    machine.request_stop(_recover=False)
+    worker.join(3)
+    assert errors and not worker.is_alive()
+    assert focus.state.surface is focus.state.xy_sequence is None
+    assert machine._jog_position_mm is None
+
+
+def test_network_cancellation_at_write_boundary_prevents_alignment_move(focus_machine, monkeypatch):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3, -4])
+    before = (primary.x, primary.y)
+    alive = [True]
+    original = machine._begin_session_transaction
+    def begin(session, sequence, write):
+        # Drop the monitoring connection after all coordinate checks, at the
+        # physical write boundary for the move (the cached pose was cleared).
+        if machine._jog_position_mm is None:
+            alive[0] = False
+        return original(session, sequence, write)
+    monkeypatch.setattr(machine, "_begin_session_transaction", begin)
+    with pytest.raises(MachineError):
+        machine.focus_control("align_probe", confirmed=True, _connection_alive=lambda: alive[0])
+    assert (primary.x, primary.y) == before
+    assert focus.state.xy_sequence is None

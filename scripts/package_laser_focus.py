@@ -6,19 +6,19 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# Operator-confirmed a1c79819 Z kit, with the earlier startup and native probe fixes.
+# Operator-installed a43df3a1 focus companion; preserve all unknown edits.
 PREVIOUS = {
-    "laser_aligner/config.py": "f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58",
-    "laser_aligner/machine/mainboard.py": "901f7fa7bd73af9727b90bbbf6963a322d04d53d81e92c0401ffdc05cd851195",
-    "laser_aligner/machine/service.py": "575d0aefeea447b6f07f9a25520f56c096436877bcf6054087f0581c13d8b728",
-    "laser_aligner/machine/remote_service.py": "e2e3011dfbb01f463b7eccbff215425d50e6e0e662e9b5552354ce6ca822daae",
-    "laser_aligner/machine/pi_job_service.py": "ba5fe7a86ffc5b0889fbb41cca7612f4f9cf98dcc01844ffdb0bb4f1af67c0fb",
-    "laser_aligner/machine/pi_machine_server.py": "51722904c43a2a09a3667be8ab5b5dfb8ed8788b59777f6b9b0579dee2f1c107",
-    "laser_aligner/remote_node.py": "a08f8235759b15ea614b855f1bcdc8d26a8fa727bf3003da17c711fb2735a8e7",
-    "laser_aligner/machine/z_limits.py": "c1ccb0ec6f82d7489d49dd50bdaf295a75a20b22117d3cad0ee56298c3b00310",
-    "laser_aligner/machine/z_probe.py": "393a2d2c5e791754fed2a14fd706548df4b57bb96cc7fc46ba71d31101c96ece",
-    "laser_aligner/machine/secondary_startup.py": "b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2",
-    "laser_aligner/machine/laser_focus.py": None,
+    'laser_aligner/config.py': 'f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58',
+    'laser_aligner/machine/mainboard.py': '901f7fa7bd73af9727b90bbbf6963a322d04d53d81e92c0401ffdc05cd851195',
+    'laser_aligner/machine/service.py': '35e9a7738485678a3c05c1b7cd2f6b9224913062649114ff5b22f9208e71d726',
+    'laser_aligner/machine/remote_service.py': 'f9e64b8b7aaa25ac218f071b1aefdeba4bfbe7857b778a8ea09460e2571cef74',
+    'laser_aligner/machine/pi_job_service.py': 'bf08f149d0754be5c430a243281406acdfab195716041c55593c8d145efac88f',
+    'laser_aligner/machine/pi_machine_server.py': '9aba978b9234b50ab50a59dfb93f9ee7731dd2c9fdfd32143ef5fa5fb82b0498',
+    'laser_aligner/remote_node.py': '81d993afee3e6058aee1895e27f114dc519745928fdf191dcc6aefd6e179ebf9',
+    'laser_aligner/machine/z_limits.py': 'c1ccb0ec6f82d7489d49dd50bdaf295a75a20b22117d3cad0ee56298c3b00310',
+    'laser_aligner/machine/z_probe.py': '393a2d2c5e791754fed2a14fd706548df4b57bb96cc7fc46ba71d31101c96ece',
+    'laser_aligner/machine/secondary_startup.py': 'b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2',
+    'laser_aligner/machine/laser_focus.py': '81976161630bd5cd94f9e4be819784ba0aede582cd57726bf46856240c4a2ff2',
 }
 
 

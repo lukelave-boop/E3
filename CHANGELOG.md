@@ -1,5 +1,12 @@
 # Changelog
 
+## Live focus view and probe XY transfer
+
+- Added a live bed camera pane and next-step guidance to Surface / laser focus.
+- Added saved measured probe XY offsets and separate clearance-height transfers
+  that place the probe and laser over the same spot. Teaching requires the
+  laser's acknowledged return; ordinary XY movement invalidates the measurement.
+
 ## Gauge-taught focus setup (2026-09-10)
 
 - Added a shared Machine/Machine Setup surface and laser-focus workflow with

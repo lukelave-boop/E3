@@ -2550,6 +2550,7 @@ class MachineService:
         *,
         _internal_motion: bool = False,
         _expected_stop_epoch: int | None = None,
+        _write_guard=None,
     ) -> list[str]:
         expected_stop_epoch = (
             self._operation_stop_epoch()
@@ -2562,6 +2563,7 @@ class MachineService:
                 timeout=timeout,
                 _internal_motion=_internal_motion,
                 _expected_stop_epoch=expected_stop_epoch,
+                _write_guard=_write_guard,
             )
 
     def _send_command_locked(
@@ -2573,6 +2575,7 @@ class MachineService:
         _internal_air_assist_off: bool = False,
         _expected_stop_epoch: int | None = None,
         _terminal_error_consumed: bool = False,
+        _write_guard=None,
     ) -> list[str]:
         if len(line) > 256:
             raise MachineError("Single controller command exceeds 256 characters")
@@ -2609,9 +2612,12 @@ class MachineService:
             session = self._require_session()
             transaction_started = time.monotonic()
             sequence = session.diagnostics.next_command(cleaned)
+            def write_command():
+                with _write_guard() if _write_guard is not None else nullcontext():
+                    session.transport.write_line(cleaned)
             try:
                 self._begin_session_transaction(
-                    session, sequence, lambda: session.transport.write_line(cleaned),
+                    session, sequence, write_command,
                 )
                 self._append_log("TX", cleaned)
             except Exception as exc:
@@ -4089,7 +4095,7 @@ class MachineService:
             probe = self._z_probe
             if probe is None or not probe.owner.ready:
                 raise MachineError("Connect the shared Ender controller before laser focus")
-            if action not in {"status", "forget", "clear_surface"}:
+            if action not in {"status", "forget", "clear_surface", "set_xy_offset"}:
                 if (self._controller_state is not ControllerState.READY_MOTION
                     or not self._coordinate_reference_ready
                     or self._coordinate_reference_session_generation != session.generation
@@ -4103,12 +4109,15 @@ class MachineService:
                 if self._uses_grbl_coordinate_state():
                     self._verify_grbl_coordinate_state()
             deadline = time.monotonic() + 120
+            secondary_generation = probe.owner.generation
 
             @contextmanager
             def guard():
                 with self._secondary_write_gate, self._stop_epoch_lock:
                     if self._stop_epoch != epoch or not self._same_controller_session(self._session, session):
                         raise MachineError("Focus operation cancelled or session changed")
+                    if not probe.owner.ready or probe.owner.generation != secondary_generation:
+                        raise MachineError("Focus Ender connection changed")
                     if time.monotonic() >= deadline:
                         raise MachineError("Focus operation exceeded its time limit")
                     if _connection_alive is not None and not _connection_alive():
@@ -4120,10 +4129,61 @@ class MachineService:
                 probe.invalidate()
                 self._z_probe_result = None
 
+            def check_focus_xy(expected, write_guard):
+                if expected is None or not self._uses_grbl_coordinate_state():
+                    raise SafetyError("Probe XY alignment requires verified GRBL coordinates")
+                with write_guard():
+                    pass
+                coordinates = self._verify_grbl_coordinate_state()
+                reported = self.sample_realtime_position(coordinate_state=coordinates)
+                if reported["state"].lower() != "idle" or any(abs(a-b) > .05 for a, b in zip(reported["wpos_mm"][:2], expected, strict=True)):
+                    raise MachineError("Probe XY alignment position was not confirmed")
+                with write_guard():
+                    pass
+
+            def move_focus_xy(target, write_guard):
+                """Only the measured offset transfer may retain surface authority."""
+                origin = self._jog_position_mm
+                if origin is None or not all(self.settings.work_area.contains(*point) for point in (origin, target)):
+                    raise SafetyError("Probe alignment endpoints must both be inside the configured work area")
+                if not self._uses_grbl_coordinate_state():
+                    raise SafetyError("Probe XY alignment requires verified GRBL coordinates")
+                feed = min(300., float(self.settings.max_travel_feed_mm_min))
+                if not math.isfinite(feed) or feed <= 0:
+                    raise SafetyError("Probe alignment needs a positive configured travel feed")
+                entries = []
+
+                def execute(command):
+                    with write_guard():
+                        pass
+                    responses = self.send_command(command, _internal_motion=True,
+                                                  _expected_stop_epoch=epoch, _write_guard=write_guard)
+                    entries.append({"command": command, "responses": responses})
+                    with write_guard():
+                        pass
+
+                check_focus_xy(origin, write_guard)
+                execute("M5")
+                execute("G21")
+                execute("G90")
+                with write_guard():
+                    self._jog_position_mm = None
+                    motion_start()
+                execute(f"G1 X{target[0]:.3f} Y{target[1]:.3f} F{feed:.3f}")
+                execute(self._require_resolved_dialect().motion_barrier_command)
+                check_focus_xy(target, write_guard)
+                with write_guard():
+                    if self._controller_state is not ControllerState.READY_MOTION or self._coordinate_reference_session_generation != session.generation:
+                        raise MachineError("Probe alignment lost its XY reference")
+                    self._jog_position_mm = target
+                return {"transcript": entries}
+
             if action != "status":
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
             try:
                 with probe.owner._lock:
+                    if self._laser_focus.xy_sequence and action in {"measure", "jog", "teach", "preview", "move"}:
+                        check_focus_xy(self._jog_position_mm, guard)
                     return self._laser_focus.execute(
                         probe.owner, probe, action, confirmed=confirmed, value=value,
                         clearance_z_mm=clearance_z_mm, gap_mm=gap_mm,
@@ -4133,6 +4193,7 @@ class MachineService:
                         xy=self._jog_position_mm or (0., 0.), guard=guard,
                         on_motion_start=motion_start,
                         on_failure=lambda: self.request_stop(_recover=False),
+                        move_xy=move_focus_xy,
                     )
             except BaseException:
                 self._laser_focus.invalidate()

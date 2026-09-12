@@ -2,6 +2,13 @@
 
 ## Laser focus setup boundary
 
+The focus dialog's observational camera pane reuses the bounded latest-frame
+monitor worker and cannot send motion. Typed focus XY actions run under the
+existing MachineService command/session scope, check Z clearance and both work
+area endpoints, and verify primary XY before reassigning a surface measurement
+to the laser-return pose. The measured XY offset is persisted separately from
+all session-only sequence and measurement authority. Ordinary XY invalidates it.
+
 MachineService admits typed focus_control actions through the existing shared
 Creality owner. LaserFocus separates durable machine/firmware/probe-bound gauge
 calibration from session-only reference, surface and single-use preview state.

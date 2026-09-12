@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from laser_aligner.errors import MachineError, SafetyError
-from laser_aligner.machine.laser_focus import PI_CAPABILITY
+from laser_aligner.machine.laser_focus import PI_CAPABILITY, XY_CAPABILITY
 from laser_aligner.machine.pi_machine_server import ACTION_MACHINE_FOCUS, SERVER_CAPABILITIES
 from tests import test_laser_focus as focus_helpers
 from tests import test_pi_machine_server as helpers
@@ -36,6 +36,7 @@ def remote_focus(monkeypatch):
 
 def test_focus_capability_advertised():
     assert PI_CAPABILITY in SERVER_CAPABILITIES
+    assert XY_CAPABILITY in SERVER_CAPABILITIES
 
 
 @pytest.mark.parametrize("action", ["status", "reference", "measure", "clearance", "forget", "clear_surface"])
@@ -57,6 +58,21 @@ def test_old_pi_cannot_receive_focus_motion(remote_focus):
     with pytest.raises(MachineError, match="Update"):
         service.focus_control("reference", confirmed=True)
     assert all(r["action"] != ACTION_MACHINE_FOCUS for r in pi.requests)
+
+
+def test_old_focus_pi_cannot_receive_xy_alignment(remote_focus):
+    service, pi, _ = remote_focus
+    with pytest.raises(MachineError, match="Update"):
+        service.focus_control("align_probe", confirmed=True)
+    assert all(r["action"] != ACTION_MACHINE_FOCUS for r in pi.requests)
+
+
+def test_remote_offset_vector_is_sent_exactly(remote_focus):
+    service, pi, result = remote_focus
+    pi.capabilities.append(XY_CAPABILITY)
+    result["action"] = "set_xy_offset"
+    service.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    assert pi.requests[-1]["value"] == [3.302, 38.608]
 
 
 @pytest.mark.parametrize("change", ["hardware", "motion", "confirmation", "delta"])
@@ -157,4 +173,26 @@ def test_authenticated_focus_rejects_unknown_field(focus_server):
     harness, focus = focus_server
     before = list(focus.serial.writes)
     result = rpc(harness, "reference", arbitrary=True)
+    assert not result["ok"] and focus.serial.writes == before
+
+
+def test_authenticated_xy_alignment_and_measured_return(focus_server):
+    harness, _ = focus_server
+    assert rpc(harness, "reference")["ok"]
+    assert rpc(harness, "set_xy_offset", value=[3.302, 38.608])["ok"]
+    assert rpc(harness, "align_probe")["ok"]
+    measured = rpc(harness, "measure")
+    assert measured["ok"]
+    measurement_id = measured["result"]["surface"]["id"]
+    aligned = rpc(harness, "align_laser", measurement_id=measurement_id)
+    assert aligned["ok"]
+    assert aligned["result"]["surface"]["id"] == measurement_id
+    assert aligned["result"]["xy_sequence"]["phase"] == "laser"
+
+
+@pytest.mark.parametrize("value", [[True, 0], [0], [1000, 0], "3,4"])
+def test_authenticated_xy_offset_rejects_bad_values(focus_server, value):
+    harness, focus = focus_server
+    before = list(focus.serial.writes)
+    result = rpc(harness, "set_xy_offset", value=value)
     assert not result["ok"] and focus.serial.writes == before

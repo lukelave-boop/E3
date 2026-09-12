@@ -1,7 +1,7 @@
 """Taught gauge focus, using the shared Ender owner and measured surface coordinates.
 
 Calibration survives restart; references, surfaces and movement previews never do.
-No laser output, XY motion or automatic job integration is provided here.
+XY transfers use the MachineService callback; no laser output or job integration.
 """
 from __future__ import annotations
 
@@ -19,8 +19,9 @@ from .z_probe import finite_number, parse_position
 
 CAPABILITY = "Cap:E3_SURFACE_HEIGHT_V2:1"
 PI_CAPABILITY = "pi-laser-focus-v1"
+XY_CAPABILITY = "pi-laser-focus-xy-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
-           "clearance", "clear_surface", "forget"}
+           "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -43,17 +44,25 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
     if action == "jog":
         if finite_number(value, "Focus jog", -1, 1) == 0:
             raise SafetyError("Focus jog must be nonzero")
+    elif action == "set_xy_offset":
+        validate_xy_offset(value)
     elif value is not None:
-        raise SafetyError("Only focus jog accepts a value")
+        raise SafetyError("Only focus jog and XY offset accept a value")
     for label, token in (("measurement", measurement_id), ("preview", preview_id)):
         if token is not None and (type(token) is not str or len(token) != 36):
             raise SafetyError(f"Invalid focus {label} ID")
-    if action in {"jog", "teach", "preview"} and measurement_id is None:
+    if action in {"jog", "teach", "preview", "align_laser"} and measurement_id is None:
         raise SafetyError("Measure this surface before teaching or positioning focus")
     if action == "move" and preview_id is None:
         raise SafetyError("Preview the focus target before moving")
     if action == "teach" and gap_mm != 7:
         raise SafetyError("Teach with the 7 mm gauge; 5 and 3 mm are derived offsets")
+
+
+def validate_xy_offset(value):
+    if type(value) not in {list, tuple} or len(value) != 2:
+        raise SafetyError("Provide both measured probe XY offsets")
+    return [round(finite_number(v, "Probe XY offset", -100, 100), 3) for v in value]
 
 
 def parse_geometry(lines):
@@ -75,16 +84,51 @@ class LaserFocus:
     def __init__(self, path: Path | None, controller_port: str):
         self.path, self.controller_port = path, controller_port
         self.calibration = self._load()
+        self.xy_path = None if path is None else path.with_name(path.stem + "-xy.json")
+        self.probe_xy_offset_mm = self._load_xy_offset()
         self.requires_clearance = False
         self.selected_clearance = 30.0
         self.invalidate()
 
     def invalidate(self):
         self.reference = self.surface = self.preview = None
+        self.xy_sequence = None
         self.session = None
 
-    def clear_surface(self):
+    def clear_surface(self, *, keep_alignment=False):
         self.surface = self.preview = None
+        if not keep_alignment:
+            self.xy_sequence = None
+
+    def _load_xy_offset(self):
+        if self.xy_path is None:
+            return None
+        try:
+            data = strict_json_loads(self.xy_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise MachineError(f"Cannot read probe XY offset: {exc}") from exc
+        try:
+            if (type(data) is not dict or set(data) != {"schema_version", "controller_port", "probe_xy_offset_mm"}
+                or type(data["schema_version"]) is not int or data["schema_version"] != 1
+                or data["controller_port"] != self.controller_port):
+                raise ValueError("Unknown XY offset format or controller binding")
+            return validate_xy_offset(data["probe_xy_offset_mm"])
+        except (ValueError, TypeError, MachineError) as exc:
+            raise MachineError(f"Invalid saved probe XY offset: {exc}") from exc
+
+    def persist_xy_offset(self, value):
+        offset = validate_xy_offset(value)
+        if self.xy_path is None:
+            raise MachineError("Persistent probe XY offset is unavailable; update the E3 node")
+        try:
+            atomic_write_json(self.xy_path, {"schema_version": 1, "controller_port": self.controller_port,
+                                             "probe_xy_offset_mm": offset})
+        except OSError as exc:
+            raise MachineError(f"Cannot save probe XY offset: {exc}") from exc
+        self.probe_xy_offset_mm = offset
+        self.clear_surface()
 
     def _load(self):
         if self.path is None:
@@ -134,7 +178,7 @@ class LaserFocus:
 
     def execute(self, owner, probe, action, *, confirmed, value, clearance_z_mm,
                 gap_mm, measurement_id, preview_id, maximum, primary_generation,
-                stop_epoch, xy, guard, on_motion_start, on_failure):
+                stop_epoch, xy, guard, on_motion_start, on_failure, move_xy=None):
         validate_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
         clearance = finite_number(min(clearance_z_mm, maximum) if action in {"status", "forget", "clear_surface"} else clearance_z_mm,
                                   "Focus clearance", 20, maximum)
@@ -177,6 +221,10 @@ class LaserFocus:
             self.session = session
         if self.surface and tuple(self.surface["carriage_xy_mm"]) != tuple(xy):
             self.clear_surface()
+        if self.xy_sequence:
+            expected_xy = self.xy_sequence["probe_carriage_xy_mm" if self.xy_sequence["phase"] == "probe" else "laser_target_xy_mm"]
+            if tuple(expected_xy) != tuple(xy):
+                self.clear_surface()
         compatible = self.calibration is not None and self.calibration["firmware"] == firmware and self.calibration["geometry"] == geometry
 
         def stowed():
@@ -235,6 +283,10 @@ class LaserFocus:
                 raise SafetyError("Selected clearance does not clear the measured surface envelope")
             return self.surface["contact_z_mm"]
 
+        def laser_aligned():
+            if self.xy_sequence and self.xy_sequence["phase"] != "laser":
+                raise SafetyError("Align the laser over the measured point before lowering or teaching Z")
+
         if action == "reference":
             self.invalidate()
             self.session = session
@@ -257,19 +309,54 @@ class LaserFocus:
                 raise MachineError("Border contact is not near homed zero")
             move_to(clearance)
             self.reference = {"border_z_mm": border, "firmware": firmware, "geometry": geometry}
+        elif action == "set_xy_offset":
+            self.persist_xy_offset(value)
+        elif action in {"align_probe", "align_laser"}:
+            known()
+            if self.reference is None:
+                raise SafetyError("Reference the border before probe XY alignment")
+            if self.requires_clearance or abs(current - clearance) > .05:
+                raise SafetyError("Return to the selected clearance before probe XY alignment")
+            if self.probe_xy_offset_mm is None:
+                raise SafetyError("Apply the measured probe XY offset before alignment")
+            if move_xy is None:
+                raise MachineError("Shared controller XY alignment is unavailable")
+            if action == "align_probe":
+                if self.xy_sequence and self.xy_sequence["phase"] == "probe":
+                    raise SafetyError("Probe is already aligned; measure before aligning the laser")
+                target = [round(a-b, 3) for a, b in zip(xy, self.probe_xy_offset_mm, strict=True)]
+                sequence = {"laser_target_xy_mm": list(xy), "probe_carriage_xy_mm": target, "phase": "probe"}
+                self.clear_surface()
+            else:
+                measured()
+                if self.xy_sequence is None or self.xy_sequence["phase"] != "probe":
+                    raise SafetyError("No measured probe alignment is available to return")
+                target = self.xy_sequence["laser_target_xy_mm"]
+                sequence = dict(self.xy_sequence, phase="laser")
+            result = move_xy(tuple(target), guard)
+            transcript.extend(result["transcript"])
+            xy = tuple(target)
+            self.xy_sequence = sequence
+            self.preview = None
+            if self.surface:
+                self.surface["carriage_xy_mm"] = list(xy)
         elif action == "measure":
             known()
+            if self.xy_sequence and self.xy_sequence["phase"] == "laser":
+                raise SafetyError("Align the probe again before remeasuring the laser target")
             if self.reference is None:
                 raise SafetyError("Reference the border before measuring")
             if abs(current - clearance) > .05:
                 raise SafetyError("Raise to the selected clearance before measuring this surface")
-            self.clear_surface()
+            # Only alignment created by the explicit action survives measurement.
+            self.clear_surface(keep_alignment=self.xy_sequence is not None and self.xy_sequence["phase"] == "probe")
             contact = contact_at(clearance)
             self.surface = {"id": str(uuid.uuid4()), "contact_z_mm": contact,
                             "elevation_mm": contact - self.reference["border_z_mm"],
                             "carriage_xy_mm": list(xy), "measured_at": time.time()}
         elif action in {"jog", "teach", "preview"}:
             known()
+            laser_aligned()
             contact = measured()
             floor = max(0.0, contact - geometry["probe_z_mm"])
             if action == "jog":
@@ -297,6 +384,7 @@ class LaserFocus:
                                 "clearance_z_mm": clearance}
         elif action == "move":
             known()
+            laser_aligned()
             preview = self.preview
             if not compatible or preview is None or preview_id != preview["id"] or self.surface is None or preview["measurement_id"] != self.surface["id"] or preview["calibration_id"] != self.calibration["id"] or preview["gap_mm"] != gap_mm or preview["clearance_z_mm"] != clearance or abs(preview["current_z_mm"] - current) > .05:
                 raise SafetyError("Focus preview is stale; preview the current surface again")
@@ -330,4 +418,8 @@ class LaserFocus:
                               "firmware_geometry": geometry, "transcript": transcript,
                               "requires_clearance": self.requires_clearance,
                               "return_clearance_mm": self.selected_clearance,
+                              "xy_offset_available": True,
+                              "probe_xy_offset_mm": self.probe_xy_offset_mm,
+                              "xy_sequence": self.xy_sequence,
+                              "current_carriage_xy_mm": list(xy),
                               "physical_feedback": False})
