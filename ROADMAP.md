@@ -5,8 +5,9 @@
 Implemented and regression-tested retention of selected flat job height through
 successful clearance/Home/park. Pi correction 59c31d7 is installed and hash-
 verified; 228 isolated Linux/Pi tests pass. Windows 0.7.93 and firmware are
-unchanged. Full Windows CI is running; physical qualification remains an operator
-test.
+unchanged. Full Windows development CI passed. The operator reports successful
+physical execution of the requested focus/job/clearance/parking sequence on
+2026-09-12; dimensional accuracy and failure-injection qualification remain separate.
 
 ## Measured job focus integration
 

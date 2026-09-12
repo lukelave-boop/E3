@@ -1,5 +1,11 @@
 # Surface height and gauge-taught laser focus
 
+Operator verification on 2026-09-12: Windows 0.7.93 plus Pi correction 59c31d7
+completed the requested measured-job focus, clearance approach, automatic
+clearance before Home/park and selection retention sequence. See CURRENT_STATE.md
+for controller, firmware and calibration context. This observation does not
+establish dimensional accuracy or qualify fault handling on physical hardware.
+
 ## Matching desktop and Pi support
 
 Install the matching Pi companion before selecting the desktop feature build.

@@ -1,5 +1,27 @@
 # Current repository state
 
+## Operator-confirmed focus workflow and branch integration (2026-09-12)
+
+The operator reports that the installed build completed all requested behavior:
+measured focus for the next job, clearance approach before focus/job execution,
+automatic lift before Home/park, and retention of the selected height through
+successful parking. This is operator-reported physical sequence verification,
+not an independently measured accuracy or failure-injection qualification.
+Test context: Windows E3 DEV TEST 0.7.93 at 12dbb3d; Pi correction 59c31d7;
+split GRBL XY / Ender Z, surface-height V2 minus-10 firmware 439b602b from
+d325105; saved maximum Z40, clearance Z30 and the existing 7 mm gauge calibration
+6e36c56e-bcc2-47b0-bce4-b863c600163f (Z2.600, contact -2.095, offset +4.695).
+The installed calibration/configuration were preserved. No further machine
+commands, firmware installation or laser output were issued for integration.
+
+Fast Development CI 34721997495 passed all jobs, including the full Windows
+Python 3.12 desktop suite. This supersedes the pending CI and physical-sequence
+statements in the historical entries below. Compatibility CI is the merge gate.
+The aux-firmware-bootstrap (eb6f1d4) and material-height-calibration (d69d916)
+branch tips are already ancestors of marlin-material-height; integrating its
+tip includes all three without replaying older implementations. Pre-existing
+uncommitted console/startup/F103 work remains separate and preserved.
+
 ## Preserve selected job focus through successful XY parking (2026-09-12)
 
 Operator report: the complete focus workflow was followed, but START rejected
