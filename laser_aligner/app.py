@@ -2066,6 +2066,125 @@ class AppContext:
         result["honeycomb_reference_state"] = support_status["state"]
         return result
 
+    def focus_probe_target(
+        self,
+        image_x: float,
+        image_y: float,
+        *,
+        source_image_size: tuple[int, int] | list[int],
+        frame_age_seconds: float,
+        frame_metadata: dict[str, Any],
+        mapping_signature: str | None = None,
+    ) -> dict[str, Any]:
+        """Preview a raw-camera point on the calibrated bed plane; never move.
+
+        The caller retains the source metadata and revalidates this signature
+        immediately before its separate, guarded positioning request. This is
+        not a surface-height correction or permission to descend and probe.
+        Camera status is cached, so this method performs no network or capture.
+        """
+
+        def finite_number(value: Any, label: str) -> float:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise CalibrationError(f"{label} must be a finite number")
+            result = float(value)
+            if not math.isfinite(result):
+                raise CalibrationError(f"{label} must be a finite number")
+            return result
+
+        x = finite_number(image_x, "Camera X")
+        y = finite_number(image_y, "Camera Y")
+        age = finite_number(frame_age_seconds, "Displayed frame age")
+        if not 0 <= age <= 2.0:
+            raise CalibrationError("The selected camera frame is stale; select a fresh point")
+        if (
+            not isinstance(source_image_size, (tuple, list))
+            or len(source_image_size) != 2
+            or any(type(value) is not int or value <= 0 for value in source_image_size)
+        ):
+            raise CalibrationError("Camera selection requires its original image dimensions")
+        width, height = source_image_size
+        if not 0 <= x < width or not 0 <= y < height:
+            raise CalibrationError("Select a point inside the camera image")
+        if not isinstance(frame_metadata, dict):
+            raise CalibrationError("Camera selection is missing its source metadata")
+        if any(
+            type(frame_metadata.get(key)) is not int or frame_metadata[key] != expected
+            for key, expected in (("source_width", width), ("source_height", height))
+        ):
+            raise CalibrationError("Camera source dimensions changed or the view was resized")
+        camera_settings = asdict(self.camera.settings)
+        if (
+            frame_metadata.get("camera_settings") != camera_settings
+            or camera_settings != asdict(self.settings.camera)
+        ):
+            raise CalibrationError("Camera settings changed; select a fresh point")
+        self._require_camera_calibration_ready()
+        camera_age = finite_number(self.camera.status().frame_age_seconds, "Camera frame age")
+        if not 0 <= camera_age <= 2.0:
+            raise CalibrationError("The live camera frame is stale; select a fresh point")
+        self._require_valid_bed_calibration()
+        lens, calibration = self.lens.model, self.bed.calibration
+        if lens is None or calibration is None:
+            raise CalibrationError("Lens and bed calibration are required for camera positioning")
+        if signature_from_camera_settings(self.settings.camera) != self.calibration_profiles.current:
+            raise CalibrationError("The active camera calibration profile changed; reopen its matching profile")
+        if (width, height) != lens.image_size or (width, height) != (
+            calibration.image_width, calibration.image_height,
+        ):
+            raise CalibrationError("Camera image dimensions do not match the active calibration")
+        # Include all mapping dependencies, including point coverage and camera
+        # settings, not merely the homography creation timestamp.
+        points = np.asarray([(point.image_x, point.image_y) for point in self.bed.points], dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 2 or len(points) < 4 or not np.isfinite(points).all():
+            raise CalibrationError("Bed calibration has no valid measured point coverage")
+        state = {
+            "bed_mapping": self.bed_mapping_digest(),
+            "lens_model": lens.model_id,
+            "calibration_profile": self.calibration_profiles.current.key,
+            "point_coverage": points.tolist(),
+            "camera_settings": camera_settings,
+            "provenance": self._bed_provenance(),
+        }
+        signature = hashlib.sha256(json.dumps(
+            state, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        if mapping_signature is not None and mapping_signature != signature:
+            raise CalibrationError("Camera calibration changed after selection; select the point again")
+        raw = np.asarray([[[x, y]]], dtype=np.float64)
+        corrected = cv2.undistortPoints(
+            raw, lens.camera_matrix, lens.distortion, P=lens.camera_matrix,
+        ).reshape(2)
+        if not np.isfinite(corrected).all():
+            raise CalibrationError("Lens correction produced an invalid camera point")
+        if np.max(np.abs(lens.distort_points(corrected.reshape(1, 2)) - raw.reshape(1, 2))) > 0.05:
+            raise CalibrationError("Lens correction did not converge at the selected point")
+        hull = cv2.convexHull(points.astype(np.float32))
+        if cv2.contourArea(hull) <= 0 or cv2.pointPolygonTest(
+            hull, (float(corrected[0]), float(corrected[1])), False,
+        ) < 0:
+            raise CalibrationError("Selected point is outside the measured camera-calibration area")
+        denominator = calibration.image_to_machine[2] @ np.append(corrected, 1.0)
+        if not math.isfinite(float(denominator)) or abs(float(denominator)) < 1e-9:
+            raise CalibrationError("Selected camera point has an undefined machine projection")
+        # BedMapper includes the active fine registration and residual mesh.
+        target = self.bed.image_to_mm(float(corrected[0]), float(corrected[1]))
+        if not self.settings.machine.work_area.contains(*target):
+            raise CalibrationError("Selected point is outside the configured machine work area")
+        if self.lens.model is not lens or self.bed.calibration is not calibration:
+            raise CalibrationError("Camera calibration changed during point selection")
+        if state["bed_mapping"] != self.bed_mapping_digest() or state["provenance"] != self._bed_provenance():
+            raise CalibrationError("Camera mapping changed during point selection")
+        return {
+            "target_machine_xy_mm": list(target),
+            "raw_image_xy": [x, y],
+            "corrected_image_xy": corrected.tolist(),
+            "source_image_size": [width, height],
+            "mapping_signature": signature,
+            "mapping_plane": "bed",
+            "height_corrected": False,
+        }
+
     def _current_honeycomb_support(self) -> HoneycombSupportReference | None:
         """Return support bound to this running machine's active optical profile."""
 

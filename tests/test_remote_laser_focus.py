@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from laser_aligner.errors import MachineError, SafetyError
-from laser_aligner.machine.laser_focus import PI_CAPABILITY, XY_CAPABILITY
+from laser_aligner.machine.laser_focus import CLICK_CAPABILITY, PI_CAPABILITY, XY_CAPABILITY
 from laser_aligner.machine.pi_machine_server import ACTION_MACHINE_FOCUS, SERVER_CAPABILITIES
 from tests import test_laser_focus as focus_helpers
 from tests import test_pi_machine_server as helpers
@@ -37,6 +37,7 @@ def remote_focus(monkeypatch):
 def test_focus_capability_advertised():
     assert PI_CAPABILITY in SERVER_CAPABILITIES
     assert XY_CAPABILITY in SERVER_CAPABILITIES
+    assert CLICK_CAPABILITY in SERVER_CAPABILITIES
 
 
 @pytest.mark.parametrize("action", ["status", "reference", "measure", "clearance", "forget", "clear_surface"])
@@ -73,6 +74,26 @@ def test_remote_offset_vector_is_sent_exactly(remote_focus):
     result["action"] = "set_xy_offset"
     service.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
     assert pi.requests[-1]["value"] == [3.302, 38.608]
+
+
+def test_previous_xy_pi_cannot_receive_selected_probe_target(remote_focus):
+    service, pi, _ = remote_focus
+    pi.capabilities.append(XY_CAPABILITY)
+    with pytest.raises(MachineError, match="Update"):
+        service.focus_control("position_probe", confirmed=True, value=[75., 150.])
+    assert all(r["action"] != ACTION_MACHINE_FOCUS for r in pi.requests)
+
+
+def test_remote_selected_probe_target_keeps_absolute_vector_and_session(remote_focus):
+    service, pi, result = remote_focus
+    pi.capabilities.extend([XY_CAPABILITY, CLICK_CAPABILITY])
+    result["action"] = "position_probe"
+    service.focus_control("position_probe", confirmed=True, value=[75.123, 150.456], clearance_z_mm=40)
+    request = pi.requests[-1]
+    assert request["value"] == [75.123, 150.456]
+    assert request["clearance_z_mm"] == 40
+    assert request["expected_boot_id"] == pi.boot_id
+    assert request["expected_session_generation"] == pi.session_generation
 
 
 @pytest.mark.parametrize("change", ["hardware", "motion", "confirmation", "delta"])
@@ -196,3 +217,35 @@ def test_authenticated_xy_offset_rejects_bad_values(focus_server, value):
     before = list(focus.serial.writes)
     result = rpc(harness, "set_xy_offset", value=value)
     assert not result["ok"] and focus.serial.writes == before
+
+
+def test_authenticated_selected_point_moves_probe_then_returns_laser(focus_server):
+    harness, focus = focus_server
+    assert rpc(harness, "reference")["ok"]
+    assert rpc(harness, "set_xy_offset", value=[3.302, 38.608])["ok"]
+    focus.serial.writes.clear()
+    positioned = rpc(harness, "position_probe", value=[75., 150.])
+    assert positioned["ok"]
+    assert positioned["result"]["current_carriage_xy_mm"] == [71.698, 111.392]
+    assert not any(s.startswith(("G1", "G28", "G39")) for s in focus.serial.writes)
+    measured = rpc(harness, "measure")
+    measurement_id = measured["result"]["surface"]["id"]
+    aligned = rpc(harness, "align_laser", measurement_id=measurement_id)
+    assert aligned["ok"]
+    assert aligned["result"]["current_carriage_xy_mm"] == [75., 150.]
+    assert aligned["result"]["surface"]["id"] == measurement_id
+
+
+@pytest.mark.parametrize("change", ["bad_vector", "stale_session", "confirmation"])
+def test_authenticated_selected_point_rejects_before_serial(focus_server, change):
+    harness, focus = focus_server
+    before = list(focus.serial.writes)
+    kwargs = dict(value=[75., 150.])
+    if change == "bad_vector":
+        kwargs["value"] = [True, 150.]
+    elif change == "confirmation":
+        kwargs["confirmed"] = False
+    else:
+        kwargs["expected_session_generation"] = harness.machine.status()["controller_session_generation"] + 1
+    assert not rpc(harness, "position_probe", **kwargs)["ok"]
+    assert focus.serial.writes == before

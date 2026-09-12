@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from ..errors import CalibrationError
 from .controls import MeasurementSpinBox
 from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
@@ -25,6 +26,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
     xyRequested = QtCore.Signal(float, float)
     refreshRequested = QtCore.Signal()
     previewInvalidated = QtCore.Signal()
+    cameraModeRequested = QtCore.Signal(bool)
+    cameraMoveRequested = QtCore.Signal()
+    cameraSelectionInvalidated = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -37,6 +41,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._clearance_edited = False
         self._offset_edited = False
         self._offset_entered = [False, False]
+        self._camera_target: dict[str, Any] | None = None
+        self._camera_live = False
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
@@ -100,9 +106,21 @@ class LaserFocusPanel(QtWidgets.QWidget):
             xy.addWidget(button)
             self.xy_buttons.append(button)
         grid.addLayout(xy, 3, 0, 1, 4)
+        self.position_probe = QtWidgets.QPushButton("Position probe")
+        self.position_probe.setCheckable(True)
+        self.position_probe.setStyleSheet("QPushButton:checked { border: 1px solid #ffcf40; color: #ffcf40; }")
+        self.position_probe.setToolTip("Select a probe target in the calibrated camera image.")
+        self.move_probe = QtWidgets.QPushButton("Move probe here")
+        self.camera_target = QtWidgets.QLabel("Choose Position probe, then click a solid spot in the live image.")
+        self.camera_target.setWordWrap(True)
+        grid.addWidget(self.position_probe, 4, 0, 1, 2)
+        grid.addWidget(self.move_probe, 4, 2, 1, 2)
+        grid.addWidget(self.camera_target, 5, 0, 1, 4)
+        self.position_probe.toggled.connect(self.cameraModeRequested)
+        self.move_probe.clicked.connect(self.cameraMoveRequested)
         self.offset_toggle = QtWidgets.QPushButton("Probe / laser XY offset…")
         self.offset_toggle.setCheckable(True)
-        grid.addWidget(self.offset_toggle, 4, 0, 1, 4)
+        grid.addWidget(self.offset_toggle, 6, 0, 1, 4)
         self.offset_editor = QtWidgets.QWidget()
         offset_layout = QtWidgets.QGridLayout(self.offset_editor)
         offset_layout.setContentsMargins(0, 0, 0, 0)
@@ -127,24 +145,24 @@ class LaserFocusPanel(QtWidgets.QWidget):
         offset_layout.addWidget(self.apply_offset, 2, 0, 1, 4)
         self.offset_editor.hide()
         self.offset_toggle.toggled.connect(self.offset_editor.setVisible)
-        grid.addWidget(self.offset_editor, 5, 0, 1, 4)
+        grid.addWidget(self.offset_editor, 7, 0, 1, 4)
         self.offset_readout = QtWidgets.QLabel("Probe XY offset: not set · use a wide, flat patch")
         self.offset_readout.setWordWrap(True)
-        grid.addWidget(self.offset_readout, 6, 0, 1, 4)
+        grid.addWidget(self.offset_readout, 8, 0, 1, 4)
         self.xy_clear = QtWidgets.QCheckBox("XY transfer path clear at clearance; gauge removed")
-        grid.addWidget(self.xy_clear, 7, 0, 1, 4)
+        grid.addWidget(self.xy_clear, 9, 0, 1, 4)
         self.align_probe = QtWidgets.QPushButton("Put probe over laser spot")
         self.align_probe.setToolTip("At clearance, shift XY by minus the measured probe offset. Then measure.")
         self.align_laser = QtWidgets.QPushButton("Return laser to measured spot")
         self.align_laser.setToolTip("At clearance, return XY by the measured offset and retain this measurement.")
-        grid.addWidget(self.align_probe, 8, 0, 1, 2)
-        grid.addWidget(self.align_laser, 8, 2, 1, 2)
+        grid.addWidget(self.align_probe, 10, 0, 1, 2)
+        grid.addWidget(self.align_laser, 10, 2, 1, 2)
         self.flat_patch = QtWidgets.QCheckBox("Solid, flat patch spans probe and laser at the same height")
-        grid.addWidget(self.flat_patch, 9, 0, 1, 4)
+        grid.addWidget(self.flat_patch, 11, 0, 1, 4)
         self.measure = QtWidgets.QPushButton("Measure surface")
         self.clear_surface = QtWidgets.QPushButton("Clear measurement")
-        grid.addWidget(self.measure, 10, 0, 1, 2)
-        grid.addWidget(self.clear_surface, 10, 2, 1, 2)
+        grid.addWidget(self.measure, 12, 0, 1, 2)
+        grid.addWidget(self.clear_surface, 12, 2, 1, 2)
         layout.addWidget(prepare)
 
         teach = QtWidgets.QGroupBox("2 · Teach once with the 7 mm gauge")
@@ -223,6 +241,23 @@ class LaserFocusPanel(QtWidgets.QWidget):
     def fresh(self) -> bool:
         return self._received_at is not None and time.monotonic() - self._received_at <= FRESH_SECONDS
 
+    def clear_camera_target(self, message: str = "Choose Position probe, then click a solid spot in the live image.") -> None:
+        self._camera_target = None
+        self.camera_target.setText(message)
+        self.cameraSelectionInvalidated.emit(message)
+        self._sync()
+
+    def set_camera_target(self, target: dict[str, Any]) -> None:
+        self._camera_target = dict(target)
+        x, y = target["target_machine_xy_mm"]
+        ox, oy = self._result["probe_xy_offset_mm"]
+        sx, sy = self._result.get("laser_spot_offset_mm", [0.0, 0.0])
+        self.camera_target.setText(
+            f"Probe target: X {x:.2f}, Y {y:.2f} mm · Head: X {x-ox-sx:.2f}, Y {y-oy-sy:.2f} mm. "
+            "Bed-plane estimate; check probe alignment before measuring raised work."
+        )
+        self._sync()
+
     def _edit_offset(self, axis: int) -> None:
         self._offset_edited = True
         self._offset_entered[axis] = True
@@ -244,6 +279,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
     def invalidate(self, message: str, *, clear_surface: bool = False,
                    clear_confirmation: bool = False) -> None:
+        self.clear_camera_target()
         self._received_at = None
         self._preview_id = None
         self.target.setText("Target Z: preview required")
@@ -258,6 +294,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._sync()
 
     def _parameters_edited(self, *_args: object) -> None:
+        self.clear_camera_target()
         self._preview_id = None
         self.target.setText("Target Z: preview required")
         self.previewInvalidated.emit()
@@ -291,6 +328,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
             if item is not None and (not isinstance(item, Mapping) or not item.get("id")
                                      or _number(item.get(number_key)) is None):
                 raise ValueError(f"Invalid focus {key} readback.")
+        previous_readback = self._result.get("current_readback") or {}
+        if self._camera_target is not None and (
+            any(self._result.get(key) != result.get(key) for key in (
+                "probe_xy_offset_mm", "laser_spot_offset_mm", "current_carriage_xy_mm", "reference_ready", "max_z_mm"
+            )) or any(previous_readback.get(key) != readback.get(key) for key in ("z_known", "z_mm"))
+        ):
+            self.clear_camera_target("Machine position or offset changed; select the probe point again.")
         self._result = dict(result)
         offset = result.get("probe_xy_offset_mm")
         valid_offset = (isinstance(offset, (list, tuple)) and len(offset) == 2
@@ -350,6 +394,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "forget": "Taught offset forgotten.",
             "set_xy_offset": "Measured XY offset saved. Align the laser visually over your target, then put the probe there.",
             "align_probe": "Probe is over the selected laser spot. Confirm the solid target, then measure.",
+            "position_probe": "Probe positioned at the camera target. Check alignment and the solid target, then measure.",
             "align_laser": "Laser returned to the measured spot at clearance. Fit the gauge using small Z steps.",
         }.get(str(result.get("action")), "Reported position is refreshed while idle."))
         self._sync()
@@ -414,6 +459,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                           and self._offset_edited and self._offset_value() is not None))
         self.align_probe.setEnabled(bool(transfer_ready and not probe_phase))
         self.align_laser.setEnabled(bool(transfer_ready and probe_phase and surface))
+        selection_ready = (moving and known and reference and not requires_clearance
+                           and offset_valid and not self._offset_edited and self._camera_live
+                           and self._result.get("position_probe_available") is True
+                           and z is not None and clearance is not None and abs(z-clearance) <= .05)
+        self.position_probe.setEnabled(bool(selection_ready))
+        self.move_probe.setEnabled(bool(selection_ready and self.xy_clear.isChecked() and self._camera_target))
+        if not selection_ready and self.position_probe.isChecked():
+            self.position_probe.setChecked(False)
         for editor in (self.offset_x, self.offset_y):
             editor.setEnabled(bool(idle and xy_available))
         self.xy_clear.setEnabled(bool(idle and xy_available))
@@ -441,9 +494,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.next_step.setText(
             "Next: Home / park XY, then reference the border." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
+            "Next: Confirm the XY path and choose Move probe here." if self._camera_target else
+            "Next: Click a solid probe spot in the live camera image." if self.position_probe.isChecked() else
             "Next: Return the laser to the measured spot at clearance." if probe_phase and surface else
             "Next: Confirm the solid target under the probe, then measure surface." if probe_phase else
-            "Next: Align the laser over a flat target, then put the probe over that spot." if not surface and offset_valid else
+            "Next: Choose Position probe and click a flat target in the camera view." if not surface and offset_valid else
             "Next: Position over a wide, flat patch and measure its surface." if not surface else
             "Next: Fit the 7 mm gauge with small Z steps, then save the setting." if not self._result.get("calibration_compatible") else
             "Next: Remove the gauge, preview a gap, then move to focus."
@@ -617,6 +672,8 @@ class LaserFocusCoordinator(QtCore.QObject):
             return
         if action != "status" and not self.panel.fresh():
             return
+        if action == "position_probe":
+            arguments = dict(arguments, _camera_parameter_epoch=self._parameter_epoch)
         if self._pending:
             if action != "status" and not self._mutation and self._queued is None:
                 self._epoch += 1
@@ -627,6 +684,9 @@ class LaserFocusCoordinator(QtCore.QObject):
         self._start_request(action, arguments)
 
     def _start_request(self, action: str, arguments: dict[str, Any]) -> None:
+        arguments = dict(arguments)
+        camera_selection = arguments.pop("_camera_selection", None)
+        camera_parameter_epoch = arguments.pop("_camera_parameter_epoch", None)
         self._pending = True
         self._mutation = action != "status"
         # Background reads keep controls responsive. A clicked action takes
@@ -653,6 +713,22 @@ class LaserFocusCoordinator(QtCore.QObject):
             method = getattr(machine, "focus_control", None)
             if not callable(method):
                 raise RuntimeError("Install the matching Pi support and surface-height V2 firmware for focus setup.")
+            if action == "position_probe":
+                if (not isinstance(camera_selection, dict) or camera_parameter_epoch != self._parameter_epoch
+                        or parameter_epoch != self._parameter_epoch):
+                    raise RuntimeError("Camera target changed; select the probe point again.")
+                age = camera_selection["frame_age_seconds"] + max(
+                    0.0, time.monotonic() - camera_selection["snapshot_monotonic"]
+                )
+                target = self.controller.runtime.context.focus_probe_target(
+                    camera_selection["image_x"], camera_selection["image_y"],
+                    source_image_size=[camera_selection["width"], camera_selection["height"]],
+                    frame_age_seconds=age, frame_metadata=camera_selection,
+                    mapping_signature=camera_selection["mapping_signature"],
+                )
+                if (target["target_machine_xy_mm"] != arguments.get("value")
+                        or epoch != self._epoch or parameter_epoch != self._parameter_epoch):
+                    raise RuntimeError("Camera target changed; select the probe point again.")
             result = method(action, **arguments)
             if _session(machine.status()) != session:
                 raise RuntimeError("Controller session changed during focus setup.")
@@ -710,6 +786,16 @@ class LaserFocusDialog(QtWidgets.QDialog):
         self.splitter.setSizes([820, 540])
         layout.addWidget(self.splitter, 1)
         self.coordinator = LaserFocusCoordinator(self.panel, controller, self)
+        self._context = context
+        self.panel.cameraModeRequested.connect(self.bed_view.set_selection_enabled)
+        self.panel.cameraSelectionInvalidated.connect(lambda _message: self.bed_view.clear_selection())
+        self.panel.cameraMoveRequested.connect(self._move_camera_probe)
+        self.bed_view.pointSelected.connect(self._camera_point_selected)
+        self.bed_view.selectionInvalidated.connect(self._camera_selection_invalidated)
+        self._camera_timer = QtCore.QTimer(self)
+        self._camera_timer.setInterval(500)
+        self._camera_timer.timeout.connect(self._camera_tick)
+        self._camera_timer.start()
         footer = QtWidgets.QHBoxLayout()
         self.stop = QtWidgets.QPushButton("Software STOP / laser off")
         self.stop.setObjectName("dangerButton")
@@ -722,6 +808,71 @@ class LaserFocusDialog(QtWidgets.QDialog):
         footer.addStretch()
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
+
+    def _map_camera_selection(self, selection: dict[str, Any], signature: str | None = None) -> dict[str, Any]:
+        if selection.get("fresh") is not True:
+            raise ValueError("Camera target expired; select a point from the live image again.")
+        mapper = getattr(self._context, "focus_probe_target", None)
+        if not callable(mapper):
+            raise ValueError("Camera calibration is unavailable for probe positioning.")
+        return mapper(
+            selection["image_x"], selection["image_y"],
+            source_image_size=[selection["width"], selection["height"]],
+            frame_age_seconds=selection["frame_age_seconds"], frame_metadata=selection,
+            mapping_signature=signature,
+        )
+
+    def _camera_point_selected(self, selection: dict[str, Any]) -> None:
+        if not self.panel.position_probe.isEnabled() or not self.panel.position_probe.isChecked():
+            return
+        try:
+            self.panel.set_camera_target(self._map_camera_selection(selection))
+        except (CalibrationError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            self.panel.clear_camera_target(f"Cannot position probe: {exc}")
+
+    def _camera_selection_invalidated(self, message: str) -> None:
+        self.coordinator.parameters_edited()
+        self.panel.clear_camera_target(message)
+
+    def _camera_tick(self) -> None:
+        camera_live = self.bed_view.current_frame_fresh()
+        if self.panel._camera_live and not camera_live:
+            self.coordinator.parameters_edited()
+        self.panel._camera_live = camera_live
+        target = self.panel._camera_target
+        if target is not None:
+            selection = self.bed_view.selection_snapshot()
+            try:
+                if selection is None:
+                    raise ValueError("Camera target expired; select a point from the live image again.")
+                self._map_camera_selection(selection, target["mapping_signature"])
+            except (CalibrationError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                self._camera_selection_invalidated(str(exc))
+        self.panel._sync()
+
+    def _move_camera_probe(self) -> None:
+        self._camera_tick()
+        if not self.panel.move_probe.isEnabled() or self.panel._camera_target is None:
+            return
+        selection = self.bed_view.selection_snapshot()
+        if selection is None:
+            return
+        try:
+            target = self._map_camera_selection(selection, self.panel._camera_target["mapping_signature"])
+        except (CalibrationError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            self._camera_selection_invalidated(str(exc))
+            return
+        selection["mapping_signature"] = target["mapping_signature"]
+        selection["snapshot_monotonic"] = time.monotonic()
+        arguments = {
+            "confirmed": True, "clearance_z_mm": self.panel._clearance_value(),
+            "value": target["target_machine_xy_mm"], "_camera_selection": selection,
+        }
+        self.panel.xy_clear.setChecked(False)
+        self.panel.flat_patch.setChecked(False)
+        self.panel.gauge.setChecked(False)
+        self.panel.gauge_removed.setChecked(False)
+        self.coordinator.request("position_probe", arguments)
 
     def set_machine_status(self, status: Mapping[str, Any]) -> None:
         self.coordinator.set_status(status)
@@ -736,5 +887,6 @@ class LaserFocusDialog(QtWidgets.QDialog):
             return
         if not self.coordinator._closed:
             self.coordinator.close()
+        self._camera_timer.stop()
         self.bed_view.end()
         super().done(result)

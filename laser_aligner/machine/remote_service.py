@@ -24,6 +24,7 @@ from typing import Any
 from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
@@ -1683,6 +1684,8 @@ class RemoteMachineService:
             raise MachineError("Update the E3 Pi service to use taught laser focus")
         if action in {"set_xy_offset", "align_probe", "align_laser"} and FOCUS_XY_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to use probe XY alignment")
+        if action == "position_probe" and FOCUS_CLICK_CAPABILITY not in (self._node_capabilities or ()):
+            raise MachineError("Update the E3 Pi service to position the probe at a selected point")
         if action != "status" and self.settings.allow_motion is not True:
             raise SafetyError("Laser focus requires machine.allow_motion")
         if self.armed or self.pi_owned_job_active:

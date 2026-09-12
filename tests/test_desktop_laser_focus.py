@@ -512,3 +512,170 @@ def test_machine_and_setup_open_same_focus_dialog_without_hardware(app, tmp_path
         assert not errors
     finally:
         _dispose(app, window)
+
+def camera_target():
+    return {"target_machine_xy_mm": [100.0, 120.0], "mapping_signature": "mapping-1"}
+
+
+def camera_selection():
+    return {"image_x": 900.0, "image_y": 550.0, "width": 1920, "height": 1080,
+            "source_width": 1920, "source_height": 1080, "frame_age_seconds": 0.1,
+            "snapshot_monotonic": time.monotonic(), "fresh": True, "mapping_signature": "mapping-1"}
+
+
+def camera_result(**changes):
+    return result(xy_offset_available=True, position_probe_available=True,
+                  probe_xy_offset_mm=[3.302, 38.608], **changes)
+
+
+def test_camera_selection_does_not_move_and_requires_path_confirmation(panel):
+    panel.set_result(camera_result(surface=None))
+    panel._camera_live = True
+    confirm(panel)
+    calls = []
+    panel.actionRequested.connect(lambda *args: calls.append(args))
+    panel.position_probe.click()
+    panel.set_camera_target(camera_target())
+    assert panel.position_probe.isChecked()
+    assert "96.70" in panel.camera_target.text() and "81.39" in panel.camera_target.text()
+    assert not panel.move_probe.isEnabled()
+    assert calls == []
+    panel.xy_clear.setChecked(True)
+    assert panel.move_probe.isEnabled()
+    panel.clearance.setValue(40)
+    assert panel._camera_target is None and not panel.move_probe.isEnabled()
+
+
+@pytest.mark.parametrize("reason", ["old_pi", "offline", "unknown_z", "low_z", "offset_draft", "stale"])
+def test_camera_position_rejects_unready_machine(panel, reason):
+    panel.set_result(camera_result(surface=None))
+    panel._camera_live = True
+    confirm(panel)
+    panel.xy_clear.setChecked(True)
+    panel.set_camera_target(camera_target())
+    assert panel.move_probe.isEnabled()
+    if reason == "old_pi":
+        panel._result.pop("position_probe_available")
+    elif reason == "offline":
+        panel._camera_live = False
+    elif reason == "unknown_z":
+        panel._result["current_readback"]["z_known"] = False
+    elif reason == "low_z":
+        panel._result["current_readback"]["z_mm"] = 29
+    elif reason == "offset_draft":
+        panel.offset_x.setValue(3.0)
+    else:
+        panel._received_at = time.monotonic() - FRESH_SECONDS - 1
+    panel._sync()
+    assert not panel.position_probe.isEnabled() and not panel.move_probe.isEnabled()
+
+
+def test_camera_click_mapping_and_separate_move_are_integrated(app, monkeypatch):
+    controller = FakeController()
+    controller.runtime.context.focus_probe_target = lambda *args, **kwargs: camera_target()
+    dialog = LaserFocusDialog(controller)
+    dialog.coordinator._timer.stop()
+    dialog._camera_timer.stop()
+    dialog.set_machine_status(status())
+    dialog.panel.set_result(camera_result(surface=None))
+    monkeypatch.setattr(dialog.bed_view, "current_frame_fresh", lambda: True)
+    monkeypatch.setattr(dialog.bed_view, "selection_snapshot", camera_selection)
+    dialog._camera_tick()
+    confirm(dialog.panel)
+    dialog.panel.position_probe.click()
+    dialog.bed_view.pointSelected.emit(camera_selection())
+    assert controller.work == [] and controller.machine.calls == []
+    dialog.panel.xy_clear.setChecked(True)
+    dialog.panel.move_probe.click()
+    assert len(controller.work) == 1
+    controller.complete()
+    assert controller.machine.calls == [("position_probe", {
+        "confirmed": True, "clearance_z_mm": 30.0, "value": [100.0, 120.0]})]
+    assert dialog.panel._camera_target is None
+    assert not dialog.panel.flat_patch.isChecked()
+    dialog.reject()
+    dialog.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize("cause", ["age", "mapping", "stop", "camera"])
+def test_queued_camera_move_is_revalidated_before_controller(coordinator, cause):
+    item, controller = coordinator
+    item.panel.set_result(camera_result())
+    mapped = camera_target()
+    def mapper(*args, **kwargs):
+        if cause == "mapping":
+            raise ValueError("Camera calibration changed after selection")
+        if kwargs["frame_age_seconds"] > 2:
+            raise ValueError("Camera frame is stale")
+        return mapped
+    controller.runtime.context.focus_probe_target = mapper
+    selection = camera_selection()
+    if cause == "age":
+        selection["snapshot_monotonic"] -= 3
+    item.request("position_probe", {"confirmed": True, "clearance_z_mm": 30.0,
+                                   "value": mapped["target_machine_xy_mm"], "_camera_selection": selection})
+    if cause == "stop":
+        controller.emergency_stop()
+    elif cause == "camera":
+        item.parameters_edited()
+    controller.complete()
+    assert controller.machine.calls == []
+    assert not item.panel.fresh()
+
+@pytest.mark.parametrize("phase", ["click", "refresh", "move"])
+def test_camera_calibration_errors_are_shown_inline_without_motion(app, monkeypatch, phase):
+    from laser_aligner.errors import CalibrationError
+    controller = FakeController()
+    dialog = LaserFocusDialog(controller)
+    dialog.coordinator._timer.stop()
+    dialog._camera_timer.stop()
+    dialog.set_machine_status(status())
+    dialog.panel.set_result(camera_result(surface=None))
+    monkeypatch.setattr(dialog.bed_view, "current_frame_fresh", lambda: True)
+    monkeypatch.setattr(dialog.bed_view, "selection_snapshot", camera_selection)
+    dialog._camera_tick()
+    confirm(dialog.panel)
+    dialog.panel.position_probe.click()
+    def fail(*args, **kwargs):
+        raise CalibrationError("Saved camera calibration is stale")
+    controller.runtime.context.focus_probe_target = fail
+    if phase == "click":
+        dialog.bed_view.pointSelected.emit(camera_selection())
+    else:
+        dialog.panel.set_camera_target(camera_target())
+        dialog.panel.xy_clear.setChecked(True)
+        if phase == "refresh":
+            dialog._camera_tick()
+        else:
+            dialog._move_camera_probe()
+    assert "calibration is stale" in dialog.panel.camera_target.text()
+    assert dialog.panel._camera_target is None
+    assert controller.machine.calls == [] and controller.work == []
+    dialog.reject()
+    dialog.deleteLater()
+    app.processEvents()
+
+def test_camera_selection_edit_while_polling_cancels_queued_move(coordinator):
+    item, controller = coordinator
+    item.panel.set_result(camera_result())
+    controller.runtime.context.focus_probe_target = lambda *args, **kwargs: camera_target()
+    item.tick()
+    item.request("position_probe", {"confirmed": True, "clearance_z_mm": 30.0,
+        "value": [100.0, 120.0], "_camera_selection": camera_selection()})
+    assert item._queued is not None
+    item.parameters_edited()
+    controller.complete()
+    controller.complete()
+    assert controller.machine.calls == []
+    assert "target changed" in item.panel.message.text()
+
+def test_camera_head_preview_uses_laser_center_correction_and_invalidates_changes(panel):
+    panel.set_result(camera_result(laser_spot_offset_mm=[2.0, -1.0]))
+    panel._camera_live = True
+    confirm(panel)
+    panel.set_camera_target(camera_target())
+    assert "94.70" in panel.camera_target.text() and "82.39" in panel.camera_target.text()
+    panel.set_result(camera_result(laser_spot_offset_mm=[3.0, -1.0]))
+    assert panel._camera_target is None
+    assert "offset changed" in panel.camera_target.text()

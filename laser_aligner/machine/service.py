@@ -4141,11 +4141,11 @@ class MachineService:
                 with write_guard():
                     pass
 
-            def move_focus_xy(target, write_guard):
+            def move_focus_xy(target, write_guard, *, surface_target, laser_target):
                 """Only the measured offset transfer may retain surface authority."""
                 origin = self._jog_position_mm
-                if origin is None or not all(self.settings.work_area.contains(*point) for point in (origin, target)):
-                    raise SafetyError("Probe alignment endpoints must both be inside the configured work area")
+                if origin is None or not all(self.settings.work_area.contains(*point) for point in (origin, target, surface_target, laser_target)):
+                    raise SafetyError("Probe target and carriage endpoints must be inside the configured work area")
                 if not self._uses_grbl_coordinate_state():
                     raise SafetyError("Probe XY alignment requires verified GRBL coordinates")
                 feed = min(300., float(self.settings.max_travel_feed_mm_min))
@@ -4194,6 +4194,8 @@ class MachineService:
                         on_motion_start=motion_start,
                         on_failure=lambda: self.request_stop(_recover=False),
                         move_xy=move_focus_xy,
+                        laser_spot_offset=(self.laser_settings.spot_offset_x_mm,
+                                           self.laser_settings.spot_offset_y_mm),
                     )
             except BaseException:
                 self._laser_focus.invalidate()

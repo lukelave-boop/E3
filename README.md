@@ -2,6 +2,12 @@
 
 ## Laser focus setup
 
+The focus window's **Position probe** mode lets you click the live camera,
+review the mapped target and move the probe there at clearance using its saved
+XY offset. It uses current lens/bed calibration and preserves a separate
+Measure surface action. Camera estimates remain on the bed plane; raised work
+requires a visual probe-placement check. See [laser focus](docs/LASER_FOCUS.md).
+
 The focus window includes a live bed view and step guidance. A saved measured
 probe XY offset enables separate probe/laser transfers over the same spot at
 clearance, with the Pi checking positions and retaining only that measurement.

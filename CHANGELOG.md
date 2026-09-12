@@ -1,5 +1,13 @@
 # Changelog
 
+## Camera-selected probe positioning (2026-09-11)
+
+Added Position probe in the focus window: select a spot in the live camera,
+review its calibrated coordinates, then move the offset probe there at
+clearance. Selection uses lens/bed calibration and rejects stale or incompatible
+frames and out-of-range targets. Contact probing stays a separate action;
+the measured point can be returned to the laser for teaching/focus.
+
 ## Live focus view and probe XY transfer
 
 - Added a live bed camera pane and next-step guidance to Surface / laser focus.

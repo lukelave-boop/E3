@@ -20,8 +20,10 @@ from .z_probe import finite_number, parse_position
 CAPABILITY = "Cap:E3_SURFACE_HEIGHT_V2:1"
 PI_CAPABILITY = "pi-laser-focus-v1"
 XY_CAPABILITY = "pi-laser-focus-xy-v1"
+CLICK_CAPABILITY = "pi-laser-focus-click-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
-           "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser"}
+           "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
+           "position_probe"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -46,8 +48,10 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
             raise SafetyError("Focus jog must be nonzero")
     elif action == "set_xy_offset":
         validate_xy_offset(value)
+    elif action == "position_probe":
+        validate_probe_target(value)
     elif value is not None:
-        raise SafetyError("Only focus jog and XY offset accept a value")
+        raise SafetyError("Only focus jog, XY offset and probe positioning accept a value")
     for label, token in (("measurement", measurement_id), ("preview", preview_id)):
         if token is not None and (type(token) is not str or len(token) != 36):
             raise SafetyError(f"Invalid focus {label} ID")
@@ -63,6 +67,14 @@ def validate_xy_offset(value):
     if type(value) not in {list, tuple} or len(value) != 2:
         raise SafetyError("Provide both measured probe XY offsets")
     return [round(finite_number(v, "Probe XY offset", -100, 100), 3) for v in value]
+
+
+def validate_probe_target(value):
+    if type(value) not in {list, tuple} or len(value) != 2:
+        raise SafetyError("Provide both selected probe target coordinates")
+    # The service independently checks the selected point and offset carriage
+    # target against its configured work area before any XY move.
+    return [finite_number(v, "Probe target XY", -1e6, 1e6) for v in value]
 
 
 def parse_geometry(lines):
@@ -178,8 +190,10 @@ class LaserFocus:
 
     def execute(self, owner, probe, action, *, confirmed, value, clearance_z_mm,
                 gap_mm, measurement_id, preview_id, maximum, primary_generation,
-                stop_epoch, xy, guard, on_motion_start, on_failure, move_xy=None):
+                stop_epoch, xy, guard, on_motion_start, on_failure, move_xy=None,
+                laser_spot_offset=(0.0, 0.0)):
         validate_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
+        spot_offset = validate_probe_target(laser_spot_offset)
         clearance = finite_number(min(clearance_z_mm, maximum) if action in {"status", "forget", "clear_surface"} else clearance_z_mm,
                                   "Focus clearance", 20, maximum)
         transcript = []
@@ -223,7 +237,7 @@ class LaserFocus:
             self.clear_surface()
         if self.xy_sequence:
             expected_xy = self.xy_sequence["probe_carriage_xy_mm" if self.xy_sequence["phase"] == "probe" else "laser_target_xy_mm"]
-            if tuple(expected_xy) != tuple(xy):
+            if tuple(expected_xy) != tuple(xy) or self.xy_sequence["laser_spot_offset_mm"] != spot_offset:
                 self.clear_surface()
         compatible = self.calibration is not None and self.calibration["firmware"] == firmware and self.calibration["geometry"] == geometry
 
@@ -311,7 +325,7 @@ class LaserFocus:
             self.reference = {"border_z_mm": border, "firmware": firmware, "geometry": geometry}
         elif action == "set_xy_offset":
             self.persist_xy_offset(value)
-        elif action in {"align_probe", "align_laser"}:
+        elif action in {"align_probe", "align_laser", "position_probe"}:
             known()
             if self.reference is None:
                 raise SafetyError("Reference the border before probe XY alignment")
@@ -321,11 +335,17 @@ class LaserFocus:
                 raise SafetyError("Apply the measured probe XY offset before alignment")
             if move_xy is None:
                 raise MachineError("Shared controller XY alignment is unavailable")
-            if action == "align_probe":
-                if self.xy_sequence and self.xy_sequence["phase"] == "probe":
+            if action in {"align_probe", "position_probe"}:
+                if action == "align_probe" and self.xy_sequence and self.xy_sequence["phase"] == "probe":
                     raise SafetyError("Probe is already aligned; measure before aligning the laser")
-                target = [round(a-b, 3) for a, b in zip(xy, self.probe_xy_offset_mm, strict=True)]
-                sequence = {"laser_target_xy_mm": list(xy), "probe_carriage_xy_mm": target, "phase": "probe"}
+                surface_target = (validate_probe_target(value) if action == "position_probe" else
+                                  [a+b for a, b in zip(xy, spot_offset, strict=True)])
+                laser_target = [a-b for a, b in zip(surface_target, spot_offset, strict=True)]
+                target = [round(a-b, 3) for a, b in zip(laser_target, self.probe_xy_offset_mm, strict=True)]
+                sequence = {"laser_target_xy_mm": [round(v, 3) for v in laser_target],
+                            "surface_target_xy_mm": surface_target,
+                            "laser_spot_offset_mm": spot_offset,
+                            "probe_carriage_xy_mm": target, "phase": "probe"}
                 self.clear_surface()
             else:
                 measured()
@@ -333,7 +353,10 @@ class LaserFocus:
                     raise SafetyError("No measured probe alignment is available to return")
                 target = self.xy_sequence["laser_target_xy_mm"]
                 sequence = dict(self.xy_sequence, phase="laser")
-            result = move_xy(tuple(target), guard)
+                laser_target = target
+                surface_target = sequence["surface_target_xy_mm"]
+            result = move_xy(tuple(target), guard, surface_target=tuple(surface_target),
+                             laser_target=tuple(laser_target))
             transcript.extend(result["transcript"])
             xy = tuple(target)
             self.xy_sequence = sequence
@@ -419,6 +442,8 @@ class LaserFocus:
                               "requires_clearance": self.requires_clearance,
                               "return_clearance_mm": self.selected_clearance,
                               "xy_offset_available": True,
+                              "position_probe_available": True,
+                              "laser_spot_offset_mm": spot_offset,
                               "probe_xy_offset_mm": self.probe_xy_offset_mm,
                               "xy_sequence": self.xy_sequence,
                               "current_carriage_xy_mm": list(xy),

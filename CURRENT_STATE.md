@@ -1,5 +1,24 @@
 # Current repository state
 
+## Active: camera-selected probe positioning (2026-09-11)
+
+The Surface / laser focus window now has Position probe, a live-image crosshair,
+calibrated target preview, and a separate Move probe here action. Raw pixels
+are corrected through the loaded lens model and active bed mapping. The typed
+Pi operation positions the probe at verified clearance, accounting for saved
+probe and configured laser-center offsets, and retains the same measured point
+for the laser return. It does not automatically probe or lower Z. Bed-plane
+selection does not correct raised surfaces. Frame/calibration/source/bounds,
+Z/reference, session, STOP and confirmation checks reject invalid selection.
+
+Operator installed the previous 7602e2df Pi companion; the supplied screenshot
+shows live1920x1080 camera, saved X+3.302/Y+38.608, Z30 and active max40.
+That is UI/live-feed evidence, not physical offset-transfer accuracy. The new
+click-positioning code has focused simulated transport/mapping and offscreen
+Qt acceptance/rejection tests. Frozen build, full CI and handoff verification
+will be recorded separately. Physical click placement and gauge acceptance
+remain unverified; this branch remains active for operator qualification.
+
 ## Verified live focus feature handoff (2026-09-11)
 
 E3 DEV TEST selects Live focus view and probe alignment, version 0.7.67,

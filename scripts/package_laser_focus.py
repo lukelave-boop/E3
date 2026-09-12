@@ -6,19 +6,19 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# Operator-installed a43df3a1 focus companion; preserve all unknown edits.
+# Operator-installed 7602e2df focus companion; preserve all unknown edits.
 PREVIOUS = {
     'laser_aligner/config.py': 'f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58',
     'laser_aligner/machine/mainboard.py': '901f7fa7bd73af9727b90bbbf6963a322d04d53d81e92c0401ffdc05cd851195',
-    'laser_aligner/machine/service.py': '35e9a7738485678a3c05c1b7cd2f6b9224913062649114ff5b22f9208e71d726',
-    'laser_aligner/machine/remote_service.py': 'f9e64b8b7aaa25ac218f071b1aefdeba4bfbe7857b778a8ea09460e2571cef74',
+    'laser_aligner/machine/service.py': '79d5d546de867f01d74f4d60575c7ddb82c9c464d41d6cf10031d58f903663e6',
+    'laser_aligner/machine/remote_service.py': '7f8e78998e51214eca9ec3529d24caec48e96a9d48f2952a997dfdf78060afa6',
     'laser_aligner/machine/pi_job_service.py': 'bf08f149d0754be5c430a243281406acdfab195716041c55593c8d145efac88f',
-    'laser_aligner/machine/pi_machine_server.py': '9aba978b9234b50ab50a59dfb93f9ee7731dd2c9fdfd32143ef5fa5fb82b0498',
+    'laser_aligner/machine/pi_machine_server.py': '11ded1c82b38f9b6a9f15ddf157117035f6183f21a73a8936d63bac3532ab2b9',
     'laser_aligner/remote_node.py': '81d993afee3e6058aee1895e27f114dc519745928fdf191dcc6aefd6e179ebf9',
     'laser_aligner/machine/z_limits.py': 'c1ccb0ec6f82d7489d49dd50bdaf295a75a20b22117d3cad0ee56298c3b00310',
     'laser_aligner/machine/z_probe.py': '393a2d2c5e791754fed2a14fd706548df4b57bb96cc7fc46ba71d31101c96ece',
     'laser_aligner/machine/secondary_startup.py': 'b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2',
-    'laser_aligner/machine/laser_focus.py': '81976161630bd5cd94f9e4be819784ba0aede582cd57726bf46856240c4a2ff2',
+    'laser_aligner/machine/laser_focus.py': '9588b4a35874e24e41bffefaa817aca1ce6c2ca6f16dafeae8759739de770d05',
 }
 
 

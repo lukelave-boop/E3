@@ -1,11 +1,38 @@
 # Surface height and gauge-taught laser focus
 
+## Choose a probe point in the camera image
+
+After referencing the border and reaching the selected clearance, choose
+**Position probe** on the left, then click a solid spot in the live image.
+A crosshair and the proposed probe/head coordinates appear. Confirm the XY
+path is clear and the gauge removed, then choose **Move probe here**. This
+positions the probe at clearance; it does not deploy the pin or descend.
+Check the actual probe over the intended solid patch, then use **Measure
+surface**. **Return laser to measured spot** brings the laser to that same
+physical point for gauge teaching or focus.
+
+The view remains raw, but click coordinates pass through the installed lens
+correction and active registered/meshed bed calibration. The service applies
+both the configured laser-center correction and saved probe-to-laser offset.
+The selected point, probe carriage and later laser-return carriage must all
+be in the machine work area. Missing/stale calibration, stale/offline frames,
+changed source settings or dimensions, unreferenced Z, insufficient clearance,
+or a missing probe offset prevents positioning. A changed calibration or
+controller session cancels a pending selection. Clicking the black margins
+outside the image does nothing.
+
+This is a bed-plane camera estimate. Raised surfaces are not height-corrected;
+verify the probe is over a solid patch before the separate contact cycle.
+Normal live viewing grants no motion action unless Position probe is selected
+and the separate move is requested. The matching updated Pi companion is
+required; the existing 9518b83f mainboard firmware remains installed.
+
 ## Live view and the probe-to-laser transfer
 
 The focus window includes a live bed view alongside the controls and a next-step
 prompt. The image is the raw camera feed: it preserves aspect ratio and reports
-frame age, stale frames and a lost connection. It is for visual alignment; it
-does not turn pixels into motion coordinates or compensate for raised surfaces.
+frame age, stale frames and a lost connection. Ordinary viewing is for visual
+alignment; the explicit Position probe mode adds calibrated selection as above.
 Closing the window ends this view's stream without stopping the shared camera.
 
 For a narrower teaching surface, expand **Probe / laser XY offset…** and enter

@@ -576,3 +576,187 @@ def test_network_cancellation_at_write_boundary_prevents_alignment_move(focus_ma
         machine.focus_control("align_probe", confirmed=True, _connection_alive=lambda: alive[0])
     assert (primary.x, primary.y) == before
     assert focus.state.xy_sequence is None
+
+
+def test_selected_probe_point_uses_offset_without_probing_and_returns_laser_to_same_point(focus_machine):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    focus.serial.writes.clear()
+    result = machine.focus_control("position_probe", confirmed=True, value=[75., 150.])
+    assert result["position_probe_available"]
+    assert (primary.x, primary.y) == (71.698, 111.392)
+    assert result["xy_sequence"] == {"laser_target_xy_mm": [75., 150.],
+                                     "surface_target_xy_mm": [75., 150.], "laser_spot_offset_mm": [0., 0.],
+                                     "probe_carriage_xy_mm": [71.698, 111.392], "phase": "probe"}
+    assert focus.serial.z == 30
+    assert result["surface"] is None
+    assert not any(s.startswith(("G1", "G28", "G39", "M280")) for s in focus.serial.writes)
+    measured = machine.focus_control("measure", confirmed=True)
+    measurement_id = measured["surface"]["id"]
+    result = machine.focus_control("align_laser", confirmed=True, measurement_id=measurement_id)
+    assert (primary.x, primary.y) == (75., 150.)
+    assert result["surface"]["id"] == measurement_id
+    assert result["surface"]["carriage_xy_mm"] == [75., 150.]
+    assert result["xy_sequence"]["phase"] == "laser"
+
+
+def test_new_selected_point_replaces_old_target_and_surface_only_at_clearance(focus_machine):
+    machine, focus, primary = focus_machine
+    align_for_measurement(machine)
+    machine.focus_control("measure", confirmed=True)
+    result = machine.focus_control("position_probe", confirmed=True, value=[100., 150.])
+    assert result["surface"] is None and result["preview"] is None
+    assert (primary.x, primary.y) == (97., 154.)
+    assert result["xy_sequence"]["laser_target_xy_mm"] == [100., 150.]
+    assert focus.serial.z == 30
+
+
+def test_camera_target_subtracts_configured_laser_spot_offset_before_probe_offset(focus_machine):
+    machine, focus, primary = focus_machine
+    machine.laser_settings.spot_offset_x_mm = 10.
+    machine.laser_settings.spot_offset_y_mm = -20.
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    result = machine.focus_control("position_probe", confirmed=True, value=[75., 150.])
+    assert result["laser_spot_offset_mm"] == [10., -20.]
+    assert (primary.x, primary.y) == (61.698, 131.392)
+    assert result["xy_sequence"]["laser_target_xy_mm"] == [65., 170.]
+    assert result["xy_sequence"]["surface_target_xy_mm"] == [75., 150.]
+    measured = machine.focus_control("measure", confirmed=True)
+    result = machine.focus_control("align_laser", confirmed=True, measurement_id=measured["surface"]["id"])
+    assert (primary.x, primary.y) == (65., 170.)
+    assert result["surface"]["id"] == measured["surface"]["id"]
+    assert result["surface"]["carriage_xy_mm"] == [65., 170.]
+    assert focus.serial.z == 30
+
+
+def test_legacy_probe_alignment_remains_relative_with_nonzero_laser_spot_offset(focus_machine):
+    machine, _focus, primary = focus_machine
+    machine.laser_settings.spot_offset_x_mm = 10.
+    machine.laser_settings.spot_offset_y_mm = -20.
+    before = (primary.x, primary.y)
+    result = align_for_measurement(machine)
+    assert (primary.x, primary.y) == (before[0]-3, before[1]+4)
+    assert result["xy_sequence"]["laser_target_xy_mm"] == list(before)
+    assert result["xy_sequence"]["surface_target_xy_mm"] == [before[0]+10, before[1]-20]
+
+
+def test_probe_target_rejects_future_laser_carriage_outside_bounds(focus_machine):
+    machine, _focus, primary = focus_machine
+    machine.laser_settings.spot_offset_x_mm = -2.
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    before = (primary.x, primary.y)
+    # Physical point and probe carriage both fit, but returning the laser would not.
+    target = [machine.settings.work_area.x_max-1., 150.]
+    with pytest.raises(SafetyError, match="work area"):
+        machine.focus_control("position_probe", confirmed=True, value=target)
+    assert (primary.x, primary.y) == before
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), True, "2"])
+def test_probe_position_rejects_nonfinite_or_malformed_laser_spot_offset(focus_machine, value):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.laser_settings.spot_offset_x_mm = value
+    before = (primary.x, primary.y)
+    focus.serial.writes.clear()
+    with pytest.raises(MachineError):
+        machine.focus_control("position_probe", confirmed=True, value=[75., 150.])
+    assert (primary.x, primary.y) == before
+    assert not any(s.startswith(("G1", "G28", "G39")) for s in focus.serial.writes)
+
+
+def test_changed_laser_spot_offset_invalidates_measurement_and_return(focus_machine):
+    machine, focus, primary = focus_machine
+    align_for_measurement(machine)
+    measured = machine.focus_control("measure", confirmed=True)
+    machine.laser_settings.spot_offset_x_mm = 1.
+    before = (primary.x, primary.y)
+    with pytest.raises(SafetyError, match="measurement changed"):
+        machine.focus_control("align_laser", confirmed=True, measurement_id=measured["surface"]["id"])
+    assert (primary.x, primary.y) == before
+    assert focus.state.xy_sequence is focus.state.surface is None
+
+
+@pytest.mark.parametrize("value", [None, [0], [0, 1, 2], [True, 0], [float("nan"), 0],
+                                   [0, float("inf")], [0, "2"], "1,2", [1e7, 0]])
+def test_selected_probe_point_rejects_malformed_coordinates_before_serial(focus_machine, value):
+    machine, focus, primary = focus_machine
+    before = list(focus.serial.writes)
+    position = (primary.x, primary.y)
+    with pytest.raises(SafetyError):
+        machine.focus_control("position_probe", confirmed=True, value=value)
+    assert focus.serial.writes == before
+    assert (primary.x, primary.y) == position
+
+
+@pytest.mark.parametrize("change", ["target_bounds", "carriage_bounds", "rounding_bounds", "offset",
+                                    "reference", "z", "clearance_latch", "confirmation", "primary_position",
+                                    "primary_reference", "network", "secondary_session"])
+def test_selected_probe_point_rejects_untrusted_or_unreachable_move(focus_machine, change):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    kwargs = dict(value=[75., 150.], confirmed=True)
+    if change == "target_bounds":
+        # Selected point is outside while its offset carriage lies inside.
+        kwargs["value"] = [machine.settings.work_area.x_max + 1., 150.]
+    elif change == "carriage_bounds":
+        kwargs["value"] = [machine.settings.work_area.x_min + 1., 150.]
+    elif change == "rounding_bounds":
+        kwargs["value"] = [machine.settings.work_area.x_max + .0001, 150.]
+    elif change == "offset":
+        focus.state.probe_xy_offset_mm = None
+    elif change == "reference":
+        focus.state.reference = None
+    elif change == "z":
+        focus.serial.z = 29.9
+    elif change == "clearance_latch":
+        focus.state.requires_clearance = True
+    elif change == "confirmation":
+        kwargs["confirmed"] = False
+    elif change == "primary_position":
+        primary.x += .1
+    elif change == "primary_reference":
+        machine._coordinate_reference_ready = False
+    elif change == "network":
+        kwargs["_connection_alive"] = lambda: False
+    else:
+        focus.owner._generation += 1
+    position = (primary.x, primary.y)
+    focus.serial.writes.clear()
+    with pytest.raises(MachineError):
+        machine.focus_control("position_probe", **kwargs)
+    assert (primary.x, primary.y) == position
+    assert not any(s.startswith(("G1", "G28", "G39")) for s in focus.serial.writes)
+
+
+def test_stop_interrupts_selected_probe_position_without_retaining_target(focus_machine, monkeypatch):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    entered = threading.Event()
+    original = primary.write_line
+    def write(line):
+        if line.startswith("G1 X"):
+            entered.set()
+            return
+        original(line)
+    monkeypatch.setattr(primary, "write_line", write)
+    errors = []
+    def position():
+        try:
+            machine.focus_control("position_probe", confirmed=True, value=[75., 150.])
+        except MachineError as exc:
+            errors.append(str(exc))
+    worker = threading.Thread(target=position)
+    worker.start()
+    assert entered.wait(3)
+    machine.request_stop(_recover=False)
+    worker.join(3)
+    assert errors and not worker.is_alive()
+    assert focus.state.surface is focus.state.xy_sequence is None
+    assert machine._jog_position_mm is None

@@ -2,6 +2,11 @@
 
 ## Gauge focus calibration
 
+Implemented for operator testing: camera-selected probe positioning with
+crosshair/coordinate preview, calibration and frame checks, offset-aware
+clearance transfer, and same-point return to the laser. Physical click-placement
+accuracy and raised-surface camera correction remain separate validation/work.
+
 Added for operator testing: a live observational bed view and explicit offset
 transfers to probe and then position the laser over one point. Physical transfer
 alignment and gauge fit remain next; camera-click positioning on raised work is

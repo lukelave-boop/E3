@@ -105,6 +105,7 @@ SERVER_CAPABILITIES = (
     "pi-mainboard-z-v1",
     "pi-laser-focus-v1",
     "pi-laser-focus-xy-v1",
+    "pi-laser-focus-click-v1",
     "pi-creality-z-probe-v1",
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,

@@ -2,6 +2,14 @@
 
 ## Laser focus setup boundary
 
+FocusBedView emits explicit raw-pixel selection metadata but owns no machine
+access. AppContext.focus_probe_target validates camera/lens/bed provenance and
+maps the selected point without motion. LaserFocusCoordinator binds the preview
+to parameter/session state, rechecks the mapping before dispatch, and calls the
+typed MachineService position_probe action. The Pi checks physical target and
+both offset carriage endpoints, confirmed Z clearance and normal write/STOP
+invariants. Camera selection never auto-starts a contact cycle or Z descent.
+
 The focus dialog's observational camera pane reuses the bounded latest-frame
 monitor worker and cannot send motion. Typed focus XY actions run under the
 existing MachineService command/session scope, check Z clearance and both work
