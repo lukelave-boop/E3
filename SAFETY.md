@@ -25,7 +25,10 @@ clear Z/XY paths. STOP, failed moves and unknown Z never initiate recovery motio
 The operator
 must still confirm the actual path, flat patch, gauge fit and changed workpiece.
 No focus actions fire the laser or provide safety-rated stopping or collision
-detection. Job-bound focus and a coordinated post-job lift remain separate work.
+detection. A selected flat job height may survive successful Home / park only
+with verified clearance and unchanged primary/Ender sessions, firmware and Z
+reference. Current probing/reference/preview authority is still cleared at Home.
+The complete physical job sequence and focus accuracy require operator qualification.
 
 For a retained focus-clearance restriction after a failure, the separate
 **Recover XY at current height** action is available only with split GRBL XY /

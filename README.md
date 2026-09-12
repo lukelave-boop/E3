@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Focus selection and camera parking
+
+After selecting measured focus for the next job, successful Home / park now
+retains that job height after verifying clearance and unchanged controller/Z
+authority. You can park for the camera view and then START without re-probing.
+Changing the work still requires a new measurement. The saved 7 mm teaching is
+unchanged; this correction needs only the matching Pi update.
+
 ## Measured focus for the next job
 
 In Surface / laser focus, preview the measured surface, confirm that the same

@@ -404,8 +404,12 @@ continuation. Clearing a measurement does not remove the clearance restriction.
 
 The Pi owns the complete accepted sequence even if Windows monitoring detaches.
 A controller/Pi reset, changed measurement/calibration/clearance, ordinary XY
-jog or Home invalidates selection; select again after establishing a fresh
-measurement. The UUID binding travels in the exact immutable job bytes and never
+jog or failed Home invalidates selection; select again after establishing a fresh
+measurement. Successful Home / park retains the selected flat job height only
+after a verified clearance lift, unchanged controller sessions and fresh Ender
+firmware, known-Z, position and stowed-probe checks. The job approaches from the
+newly verified parked XY position. This does not restore probing/reference/preview
+authority at the parked location. The UUID binding travels in the exact immutable job bytes and never
 reaches GRBL. Selections are consumed once and are not saved in project files.
 Jobs without a selected binding retain their existing behavior and do not focus
 automatically. This sequence supports one flat surface and one gap per job;

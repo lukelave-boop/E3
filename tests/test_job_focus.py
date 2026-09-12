@@ -154,6 +154,69 @@ def test_start_from_focus_automatically_lifts_before_travel_and_arming(focus_mac
     assert armed_z == [30]
 
 
+@pytest.mark.parametrize("lowered", [False, True])
+def test_selected_focus_survives_clearance_home_camera_park_then_start(focus_machine, lowered):
+    machine, focus, primary = focus_machine
+    plan = select(machine)
+    if lowered:
+        surface = focus.state.surface["id"]
+        machine.focus_control("jog", confirmed=True, value=-5, measurement_id=surface)
+        preview = machine.focus_control("preview", confirmed=True, measurement_id=surface)["preview"]
+        plan = machine.focus_control("use_job", confirmed=True, preview_id=preview["id"])["job_focus"]
+    program = machine.preflight_program(PROGRAM)
+    machine.prepare_photo_position()
+    status = machine.focus_control("status")
+    assert status["job_focus"]["id"] == plan["id"]
+    assert status["surface"] is None  # Parking must not invent a local probe measurement.
+    machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+    wait(machine)
+    assert machine._job.error is None
+    assert focus.serial.z == 30
+
+
+@pytest.mark.parametrize("change", ["stop", "secondary", "maximum", "calibration", "z_unknown", "z_position", "firmware", "home_rejected", "park_rejected"])
+def test_park_does_not_restore_focus_after_changed_authority(focus_machine, monkeypatch, change):
+    machine, focus, primary = focus_machine
+    select(machine)
+    original = primary.write_line
+    def write(line):
+        if ((change == "home_rejected" and line == "$H")
+            or (change == "park_rejected" and line.startswith("G0 "))):
+            raise MachineError("Injected Home / park controller failure")
+        result = original(line)
+        if line == "$H":
+            if change == "stop":
+                machine._stop_epoch += 1
+            elif change == "secondary":
+                focus.owner._generation += 1
+            elif change == "maximum":
+                machine.settings.mainboard_max_z_mm = 35
+            elif change == "calibration":
+                focus.state.calibration["focus_offset_mm"] += 1
+            elif change == "z_unknown":
+                focus.serial.homed = False
+            elif change == "z_position":
+                focus.serial.z = 20
+            else:
+                focus.serial.overrides["M115"] = ["changed firmware", "ok"]
+        return result
+    monkeypatch.setattr(primary, "write_line", write)
+    with pytest.raises(MachineError):
+        machine.prepare_photo_position()
+    assert focus.state.job_plan is None
+    assert not machine._coordinate_reference_ready
+
+
+def test_jog_after_park_still_invalidates_selected_job(focus_machine):
+    machine, focus, primary = focus_machine
+    select(machine)
+    program = machine.preflight_program(PROGRAM)
+    machine.prepare_photo_position()
+    machine.jog(1, 0, 300)
+    with pytest.raises(MachineError, match="stale"):
+        machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+
+
 @pytest.mark.parametrize("failure", ["unknown", "rejected", "stop"])
 def test_manual_home_failed_lift_never_homes(focus_machine, failure):
     machine, focus, primary = focus_machine
@@ -211,6 +274,7 @@ def test_pi_owned_upload_retains_exact_focus_binding(focus_machine, tmp_path, mo
     try:
         remote._refresh_once()
         plan = select(remote)
+        remote.prepare_photo_position()  # Normal camera/park operation before START.
         program = remote.preflight_program(PROGRAM)
         started = remote.start_preflighted_program(program, authorization_phrase=remote.ARM_PHRASE)
         remote.detach()

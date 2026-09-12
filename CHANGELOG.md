@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — retain job focus through parking
+
+- Fix Home / park discarding the selected next-job focus height. Retain the
+  selection only after verified clearance and successful XY parking in the same
+  controller sessions; keep clearing temporary probe/reference/preview state.
+- Failed movement/readback, STOP and changed authority discard the selection.
+  Windows 0.7.93 and saved gauge teaching remain unchanged.
+
 ## Unreleased — measured job focus and clearance
 
 - Bind an explicitly selected measured surface/gap to the next exact Pi-owned

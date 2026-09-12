@@ -1,5 +1,12 @@
 # Roadmap
 
+## Focus selection across camera parking
+
+Implemented and regression-tested retention of selected flat job height through
+successful clearance/Home/park. Pi delivery and Linux/CI verification are pending;
+no Windows rebuild or firmware change is needed. Physical qualification remains
+an operator test.
+
 ## Measured job focus integration
 
 Implemented explicit one-use selection and Pi-owned clearance/approach/focus/

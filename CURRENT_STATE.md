@@ -1,5 +1,27 @@
 # Current repository state
 
+## Preserve selected job focus through successful XY parking (2026-09-12)
+
+Operator report: the complete focus workflow was followed, but START rejected
+the next-job selection. Pi journal shows successful Home/park at 15:57:06 and
+stale-selection rejection at 15:57:20. Home invalidated the live focus object,
+discarding the job plan as well as probing authority. Reproduced with both
+lowered and clearance starting positions; both regressions failed before fix.
+
+An explicitly selected flat job height now survives only a successful confirmed
+clearance lift and XY Home/park under the same primary/Ender sessions. Fresh
+firmware, known-Z, clearance and stowed-probe checks precede/follow parking.
+The plan retains its UUID and measured height and binds its approach origin to
+verified parked XY. It does not restore a probe surface/reference/preview at
+the new location. STOP, failures or changed sessions/calibration/maximum discard
+the plan and revoke coordinate readiness. Ordinary jogging still invalidates it.
+
+338 focused Windows controller/job/remote tests pass; two additional rejected
+Home/park tests pass. Ruff and compileall pass. The real loopback RPC test now
+includes selecting focus, parking, uploading and START. Controllers are simulated;
+no physical motion or cutting was performed for this correction. Pi packaging,
+Linux verification, installation and CI are pending. Windows 0.7.93 is unchanged.
+
 ## Measured job focus and automatic clearance (2026-09-12)
 
 The next feature adds explicit Use measured focus for next job. The operator

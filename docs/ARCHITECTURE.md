@@ -1,5 +1,16 @@
 # Architecture
 
+## Retaining selected height through XY Home / park
+
+The job_focus.preserve_through_park context retains only an already validated
+flat-job height selection. It performs a clearance lift and secondary readback,
+guards primary Home/park with both sessions and STOP epoch, then rechecks Ender
+firmware, known Z, clearance and stow before publishing the same UUID with the
+verified parked approach position. Generic focus invalidation still clears the
+probing reference/surface/preview. A dedicated parked-plan marker permits job
+binding without inventing probing authority at the new XY location. Exceptions
+discard the plan and revoke primary coordinate readiness.
+
 ## Job-bound measured focus
 
 The focus panel selects an ephemeral Pi-owned job plan from a current preview

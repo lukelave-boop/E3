@@ -47,19 +47,7 @@ def selected_plan(machine, program):
     token = program_binding(program.lines)
     if token is None:
         return None
-    state, probe = machine._laser_focus, machine._z_probe
-    plan = state.job_plan
-    if (plan is None or plan["id"] != token or probe is None or machine._session is None
-        or plan["session"] != (probe.owner.generation, machine._session.generation, machine._operation_stop_epoch())
-        or state.session != plan["session"] or state.calibration != plan["calibration"]
-        or state.reference != plan["reference"] or state.surface is None
-        or state.surface["id"] != plan["measurement_id"]
-        or machine._jog_position_mm != tuple(plan["xy"])
-        or state.selected_clearance != plan["clearance_z_mm"]
-        or validate_max_z(machine.settings.mainboard_max_z_mm) != plan["maximum"]):
-        raise SafetyError("Job focus selection is stale; measure, preview and select it again")
-    if state.xy_recovery_pending_reference:
-        raise SafetyError("Reference the border before starting the measured-focus job")
+    plan = selection_snapshot(machine, token)
     # A first-move endpoint check alone cannot validate travel from the measured spot.
     from ..gcode.preview import parse_words
     for line in program.lines[1:]:
@@ -69,7 +57,98 @@ def selected_plan(machine, program):
             if not bounds.contains_segment(tuple(plan["xy"]), (words["X"], words["Y"])):
                 raise SafetyError("Travel from the measured spot to the job start leaves the positioning area")
             break
+    return plan
+
+
+def selection_snapshot(machine, token):
+    """Validate the selected height independently of a probing point after parking."""
+    state, probe = machine._laser_focus, machine._z_probe
+    plan = state.job_plan
+    measurement_current = plan is not None and (
+        (state.reference == plan["reference"] and state.surface is not None
+         and state.surface["id"] == plan["measurement_id"])
+        or (plan.get("parked_at_clearance") is True and state.reference is None and state.surface is None)
+    )
+    if (plan is None or plan["id"] != token or probe is None or machine._session is None
+        or plan["session"] != (probe.owner.generation, machine._session.generation, machine._operation_stop_epoch())
+        or state.session != plan["session"] or state.calibration != plan["calibration"]
+        or not measurement_current
+        or machine._jog_position_mm != tuple(plan["xy"])
+        or state.selected_clearance != plan["clearance_z_mm"]
+        or validate_max_z(machine.settings.mainboard_max_z_mm) != plan["maximum"]):
+        raise SafetyError("Job focus selection is stale; measure, preview and select it again")
+    if state.xy_recovery_pending_reference:
+        raise SafetyError("Reference the border before starting the measured-focus job")
     return copy.deepcopy(plan)
+
+
+@contextmanager
+def preserve_through_park(machine):
+    """Retain only the chosen flat job height across an explicitly requested XY park."""
+    state = machine._laser_focus
+    if state.job_plan is None:
+        yield None
+        return
+    plan = selection_snapshot(machine, state.job_plan["id"])
+    probe, session = machine._z_probe, machine._session
+    from .controller_dialects import GRBL_DIALECT
+    if session.dialect is not GRBL_DIALECT:
+        raise SafetyError("Retaining job focus through Home requires separate GRBL XY and Ender Z")
+
+    @contextmanager
+    def guard():
+        with machine._secondary_write_gate, machine._stop_epoch_lock:
+            if (machine._stop_epoch != plan["session"][2]
+                or not machine._same_controller_session(machine._session, session)
+                or machine._z_probe is not probe or not probe.owner.ready
+                or probe.owner.generation != plan["session"][0]
+                or state.calibration != plan["calibration"]
+                or validate_max_z(machine.settings.mainboard_max_z_mm) != plan["maximum"]):
+                raise MachineError("Job focus lost controller or configuration authority during Home / park")
+            yield
+
+    def verify_clearance():
+        def read(command):
+            return probe.owner._execute_acknowledged(command, allow_open=False, timeout=35, write_guard=guard)
+        with probe.owner._lock:
+            if "\n".join(read("M115")) != plan["firmware"]:
+                raise MachineError("Job focus firmware changed during Home / park")
+            if not parse_status(read("M123"))["z_known"]:
+                raise MachineError("Job focus lost its Z reference during Home / park")
+            if abs(parse_position(read("M114")) - plan["clearance_z_mm"]) > .05:
+                raise MachineError("Job focus clearance changed during Home / park")
+            states = [s.strip().lower() for s in read("M119") if s.strip().lower().startswith("z_min:")]
+            if states != ["z_min: triggered"]:
+                raise MachineError("Job focus probe state changed during Home / park")
+
+    try:
+        with guard():
+            pass
+        with machine.operation_scope(plan["session"][2]):
+            machine.focus_control("clearance", confirmed=True, clearance_z_mm=plan["clearance_z_mm"])
+        verify_clearance()
+        yield guard
+        verify_clearance()
+        with guard():
+            if machine._jog_position_mm is None or not machine._coordinate_reference_ready:
+                raise MachineError("Home / park did not establish a job approach position")
+            plan.setdefault("measurement_xy_mm", list(plan["xy"]))
+            plan.update(xy=list(machine._jog_position_mm), current_z_mm=plan["clearance_z_mm"],
+                        parked_at_clearance=True)
+            # Home still clears probing/reference/preview authority. Only the selected
+            # flat job height survives, after fresh secondary readback and unchanged sessions.
+            state.session = plan["session"]
+            state.job_plan = plan
+    except BaseException:
+        state.job_plan = None
+        state.requires_clearance = True
+        from .controller_session import ControllerState
+        with machine._lock:
+            machine._invalidate_coordinate_reference()
+            if (machine._same_controller_session(machine._session, session)
+                and machine._controller_state is ControllerState.READY_MOTION):
+                machine._set_controller_state_locked(ControllerState.READY_HOME_REQUIRED, session=session)
+        raise
 
 
 def check_context(machine, context):

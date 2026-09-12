@@ -58,7 +58,7 @@ from .io_diagnostics import thread_snapshot
 from .job_focus import binding_id as focus_binding_id
 from .job_focus import check_context as check_job_focus_context
 from .job_focus import move as move_job_focus
-from .job_focus import program_binding, selected_plan
+from .job_focus import preserve_through_park, program_binding, selected_plan
 from .laser_focus import LaserFocus
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
@@ -3755,12 +3755,14 @@ class MachineService:
             attempt_session = self._session
         with self._manual_home_command_scope():
             try:
-                result = self._prepare_photo_position_locked(
-                    operation_stop_epoch=operation_stop_epoch,
-                    park_at_photo_position=True,
-                    capture_home_position=capture_home_position,
-                    allow_rehome=True,
-                )
+                with preserve_through_park(self) as focus_park_guard:
+                    result = self._prepare_photo_position_locked(
+                        operation_stop_epoch=operation_stop_epoch,
+                        park_at_photo_position=True,
+                        capture_home_position=capture_home_position,
+                        allow_rehome=True,
+                        focus_park_guard=focus_park_guard,
+                    )
             except BaseException as exc:
                 self._log_home_outcome(
                     session=attempt_session,
@@ -3868,6 +3870,7 @@ class MachineService:
         capture_home_position: bool,
         allow_rehome: bool = False,
         focus_recovery_guard=None,
+        focus_park_guard=None,
     ) -> dict[str, Any]:
         with self._stop_epoch_lock:
             if self._stop_epoch != operation_stop_epoch:
@@ -3924,7 +3927,7 @@ class MachineService:
         home_position_snapshot: dict[str, Any] | None = None
 
         def require_not_stopped() -> None:
-            with focus_recovery_guard() if focus_recovery_guard is not None else nullcontext():
+            with write_guard() if write_guard is not None else nullcontext():
                 pass
             with self._stop_epoch_lock:
                 if self._stop_epoch != operation_stop_epoch:
@@ -3941,17 +3944,18 @@ class MachineService:
                 timeout=acknowledgement_timeout,
                 _internal_motion=True,
                 _expected_stop_epoch=operation_stop_epoch,
-                **({"_write_guard": focus_recovery_guard} if focus_recovery_guard is not None else {}),
+                **({"_write_guard": write_guard} if write_guard is not None else {}),
             )
             transcript.append({"command": command, "responses": responses})
             return responses
 
         def read_coordinates():
-            if focus_recovery_guard is None:
+            if write_guard is None:
                 return self._read_grbl_coordinate_state()
             modal, offsets = GRBL_DIALECT.coordinate_state_query_commands
             return self._parse_grbl_coordinate_state(execute(modal), execute(offsets))
 
+        write_guard = focus_recovery_guard or focus_park_guard
         with self._lock:
             self._invalidate_coordinate_reference()
             if self._controller_state is ControllerState.READY_MOTION:
@@ -3977,7 +3981,7 @@ class MachineService:
                             self.settings.read_timeout,
                         ),
                         expected_stop_epoch=operation_stop_epoch,
-                        **({"write_guard": focus_recovery_guard} if focus_recovery_guard is not None else {}),
+                        **({"write_guard": write_guard} if write_guard is not None else {}),
                     )
                     transcript.append(
                         {"command": dialect.homing.command, "responses": homing_responses}
@@ -4030,7 +4034,7 @@ class MachineService:
                 )
                 idle_responses = (
                     execute(dialect.motion_barrier_command, timeout=120.0)
-                    if focus_recovery_guard is not None else
+                    if write_guard is not None else
                     self._wait_for_motion_complete(
                         timeout=120.0, expected_stop_epoch=operation_stop_epoch,
                     )
