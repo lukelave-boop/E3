@@ -8,8 +8,9 @@ are tracked in [CURRENT_STATE.md](CURRENT_STATE.md).
 
 The probe-failure candidate corrects discarded CR Touch deployment/stow errors
 and adds first/second-touch failure evidence to the focus error. Native tests now
-execute the real descent and pin-control wrappers with fake hardware. The paper
-probing cause remains unverified; see [the focus guide](docs/LASER_FOCUS.md).
+execute the real descent and pin-control wrappers with fake hardware. The -10 mm
+candidate completed the previously failing paper measurement; repeatability and
+gauge-focus accuracy remain unverified. See [the focus guide](docs/LASER_FOCUS.md).
 
 ## Recovery after a failed surface probe
 

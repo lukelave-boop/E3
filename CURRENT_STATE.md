@@ -1,6 +1,6 @@
 # Current repository state
 
-## Requested V2 probe minimum -10 mm (2026-09-12)
+## V2 -10 mm installed; requested paper retry passed (2026-09-12)
 
 After the recorded paper first-descent NO_TRIGGER at -2, the operator explicitly
 requested changing the limit to -10 and then one retry. The V2 surface envelope
@@ -11,16 +11,56 @@ against the active firmware minimum, and the desktop displays that value.
 Unconnected status does not invent a minimum. Ordinary Z jog/focus floor0,
 configured maximum40, firmware ceiling80, retract/headroom checks, STOP and
 no-automatic-retry behavior are unchanged. Missing diagnostic samples print nan
-explicitly instead of misleading zeroes. The earlier diagnostic firmware remains
-installed while the matching 0.7.91 desktop/firmware/Pi build is prepared.
+explicitly instead of misleading zeroes.
 Verification: 417 focused host/RPC/offscreen desktop/legacy tests and five Pi
 installer tests pass; all five Cortex-M4 native variants pass with actual probe
 functions and fake hardware. These cover V2 contact at -10, rejection below it,
 missing triggers, V1/native -2 preservation and nonfinite diagnostic formatting.
 Ruff, compileall and exact compact source-pin checks pass. The F401 image builds
 with 6,812 bytes RAM. Compiled output-kill, recovery/profile and planner-ceiling
-audits pass with fake MMIO. CI, packaging and installation are being completed;
-no physical -10 test has run.
+audits pass with fake MMIO. Another 50 focused firmware preparation/package tests
+pass, and all three profiles apply to clean vendor baselines with exact pins.
+
+After explicit payload/destination approval and fresh operator confirmation of
+reset stability, physical pin/XY/reference/paper-path clearance and disabled
+laser, firmware 439b602b and Pi companion e57adbb5 were installed from d325105.
+The retained updater verified application SHA256
+19268cfe991ade5335bb9e2083b0a7754eae69a27d67c5775f42222e66f4ec33.
+M115 reports Marlin 2.0.8.24F4 (Sep 12 2026 14:14:00), V2 MIN:-10/MAX:65,
+probe offset0/retract5/ceiling80. M503 and saved configuration hashes are
+unchanged. One Pi source file was updated with a backup, and all thirteen
+installed hashes verified. Pi service PID55081 stayed active with NRestarts0.
+
+Through normal MachineService actions, one XY Home/park succeeded at X15/Y195;
+one border reference returned contact -0.002 and verified final Z30. The probe
+then returned to the same paper target X97.060784/Y131.798920 (carriage
+X93.759/Y93.191). The requested single G39 C30 H15 retry succeeded with
+E3MH:2 Z:-2.072 and ok. Surface elevation relative to that border reference is
+-2.070 mm. The accepted contact is 0.072 mm below the old lower endpoint.
+Final readbacks verify known Z30, reference valid, no clearance restriction,
+primary READY_MOTION and disarmed. No extra retry was issued. This records a
+successful cycle on the connected machine; repeated accuracy and gauge-taught
+laser positioning are not yet physically verified. No gauge calibration exists.
+The normal camera is available with a fresh 1920x1080 frame and saved controls.
+
+Evidence: dist/probe-minus10-0.7.91/installation-result.json,
+1789244408800673300-xy-home.json, 1789244424707152100-border-reference.json,
+1789244501887474900-paper-position.json, 1789244524055062600-paper-measurement.json,
+physical-test-service.log and camera-verification.json. Exact-source Fast CI
+34716579649 passed: Windows Python3.12 5734 passed/25 skipped, POSIX 503 passed,
+and Ruff/dependency/bytecode checks passed. All three firmware workflows passed.
+
+The frozen 0.7.91 bundle is built at d3251054b25ca2de08a6dd3ac27bfad76a9e8063;
+all 159 source and embedded compiled modules match the clean checkout. EXE
+SHA256 is 62b9010b051e8cbd7467eeb620f2849505ffeec6968a7b00b07a410529c2ab95.
+The permanent E3 DEV TEST pointer now selects Surface probing to -10 mm in
+`.codex-worktrees/probe-minus10-ready/dist/E3/E3.exe`, matching adjacent build
+metadata. The permanent launcher opened PID19200 at that exact EXE; its Windows
+title is E3 DEV TEST - Surface probing to -10 mm - v0.7.91 - Untitled. This is a
+startup check, alongside the offscreen focus tests; interactive gauge teaching
+was not automated. The installer completed and its SHA256 is
+8f3e6421c722f523a527b4d3f126bce096efa93b01b2cc67288739f2e11e6e81.
+Evidence: build-verification.json, handoff.json and ci-summary.json.
 
 ## Native probe diagnostic: paper first descent reaches -2 without trigger (2026-09-12)
 
