@@ -21,6 +21,13 @@ state blocks clearance/manual Z shortcuts until a separate successful border
 reference. The matching Pi advertises pi-laser-focus-xy-recovery-v1; its client
 uses a 360-second RPC timeout for the bounded 350-second recovery operation.
 
+The clearance restriction and pending-reference state survive STOP and
+controller reconnects within the same Pi service process. They are not persisted
+across a Pi service restart. Restarting must not be used to clear this incident's
+restriction or interpreted as physical clearance. The current incident still
+requires an operator-confirmed recovery and installation plan; the new action
+does not reconstruct an earlier process's physical state.
+
 Verification: 454 focused controller/native/focus tests and 272 recovery,
 desktop/remote/installer tests passed on Windows. Repository Ruff and compileall
 passed. Two full 1400x900 offscreen dialogs were visually checked. Offline Linux

@@ -3926,7 +3926,7 @@ class MachineService:
                 timeout=acknowledgement_timeout,
                 _internal_motion=True,
                 _expected_stop_epoch=operation_stop_epoch,
-                _write_guard=focus_recovery_guard,
+                **({"_write_guard": focus_recovery_guard} if focus_recovery_guard is not None else {}),
             )
             transcript.append({"command": command, "responses": responses})
             return responses

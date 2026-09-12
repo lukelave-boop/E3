@@ -80,6 +80,13 @@ MachineService sequence reproduced this deadlock. The separate **Recover XY at
 current height** action resolves that recovery path for split GRBL XY / Ender Z
 machines; it does not diagnose or repeat the failed probe.
 
+The clearance restriction and pending-reference state survive STOP and
+controller reconnects within the same Pi service process. They are not persisted
+across a Pi service restart. Restarting must not be used to clear this incident's
+restriction or interpreted as physical clearance. The current incident still
+requires an operator-confirmed recovery and installation plan; the new action
+does not reconstruct an earlier process's physical state.
+
 1. Restore the primary connection. Use **Reconnect Ender** separately if needed;
    a firmware restart can initialize the probe pin, so first check its physical
    path. Reconnection only restores communications and acknowledges outputs off.
