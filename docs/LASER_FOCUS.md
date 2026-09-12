@@ -40,6 +40,10 @@ position verification still invalidate the reference and stop the operation.
 The view remains raw, but click coordinates pass through the installed lens
 correction and active registered/meshed bed calibration. The service applies
 both the configured laser-center correction and saved probe-to-laser offset.
+When the Pi sends a smaller full-frame preview, E3 first converts the click
+back to the original camera coordinates. Resizing this window does not change
+the selected bed point. The original source must still match the calibration;
+unknown preview transformations and changed source settings remain blocked.
 The selected point, probe carriage and later laser-return carriage must all
 be in the machine work area. Missing/stale calibration, stale/offline frames,
 changed source settings or dimensions, unreferenced Z, insufficient clearance,

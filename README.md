@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Focus camera preview sizes
+
+Position probe supports the Pi's reduced full-frame live preview. Clicks are
+converted to original camera coordinates before lens and bed correction; window
+size does not change their target. Existing calibration and motion checks remain.
+See [laser focus](docs/LASER_FOCUS.md). This correction needs only a desktop update.
+
 ## Ender connection recovery
 
 Surface / laser focus shows Ender readiness separately from XY homing. An

@@ -1,5 +1,22 @@
 # Current repository state
 
+## Focus camera preview scaling correction (2026-09-12)
+
+The operator's Position probe rejection was reproduced by the actual Pi camera
+header: transcoded 1280x720 preview from a 1920x1080 source. The equal-dimension
+guard rejected that valid full-frame resize before any machine operation.
+Desktop mapping now restores continuous source-image coordinates before lens
+correction and bed mapping. Original calibration dimensions, stale-frame and
+source-setting checks remain required; unsupported modes, inconsistent metadata
+and nonuniform scaling are rejected. Stream geometry is bound to the selection
+signature; ordinary widget resizing and display DPI do not change the target.
+
+Real camera metadata was read without machine commands. Focused mapping and
+offscreen widget verification and the frozen build are recorded in the feature
+handoff. Physical camera-to-probe placement remains for operator testing. This
+is a desktop-only change; installed Pi software, firmware and calibration stay
+in place. Raised-surface parallax correction remains separate.
+
 ## Ender firmware installed and idle recovery verified (2026-09-12)
 
 The operator power-cycled the Ender with USB connected. A fresh synchronized

@@ -1,5 +1,12 @@
 # Roadmap
 
+## Reduced-preview probe positioning
+
+Implemented calibrated click mapping for the Pi's full-frame monitor resize.
+Acceptance/rejection and offscreen resize/DPI coverage accompany the correction;
+physical camera-selected placement remains an operator check before probing.
+Height-dependent camera correction remains outside this bed-plane workflow.
+
 ## Ender recovery qualification
 
 Implemented explicit secondary reconnect, persistent fault visibility, bounded

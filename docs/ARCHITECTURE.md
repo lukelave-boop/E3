@@ -1,5 +1,18 @@
 # Architecture
 
+## Focus preview and camera coordinate spaces
+
+FocusBedView converts label coordinates into transmitted-image coordinates,
+independently of widget size and display DPI. AppContext validates the monitor
+metadata and converts supported full-frame transcoded previews back to original
+camera coordinates before undistortPoints and the registered/meshed bed mapping.
+This preserves the existing continuous image-edge click convention. Direct and
+transcoded frames at the same relative point therefore map to the same target.
+The original source must match lens and bed calibration. Preview/source sizes
+and source mode join the mapping signature, while the view fingerprint cancels
+selections when the stream changes. Preview calculation remains read-only;
+the separate MachineService positioning request retains its existing guards.
+
 ## Ender recovery authority
 
 MachineService owns explicit focus recovery through the single Creality owner.

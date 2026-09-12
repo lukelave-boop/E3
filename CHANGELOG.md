@@ -1,5 +1,12 @@
 # Changelog
 
+## Focus camera preview scaling (2026-09-12)
+
+Fixed Position probe rejecting a valid 1280x720 monitor preview from the calibrated
+1920x1080 camera. Click coordinates now return to the source frame before lens
+correction. Changed stream geometry invalidates selections; genuine source or
+calibration mismatches remain blocked. No Pi or firmware update is required.
+
 ## Ender connection and halt recovery (2026-09-12)
 
 Added explicit Reconnect Ender, separate Ender fault/readiness display, retained

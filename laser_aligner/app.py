@@ -2081,6 +2081,8 @@ class AppContext:
         The caller retains the source metadata and revalidates this signature
         immediately before its separate, guarded positioning request. This is
         not a surface-height correction or permission to descend and probe.
+        Input pixels/dimensions describe the transmitted preview; source_width
+        and source_height identify the original calibrated camera frame.
         Camera status is cached, so this method performs no network or capture.
         """
 
@@ -2108,11 +2110,31 @@ class AppContext:
             raise CalibrationError("Select a point inside the camera image")
         if not isinstance(frame_metadata, dict):
             raise CalibrationError("Camera selection is missing its source metadata")
-        if any(
+        preview_size = (width, height)
+        preview_point = (x, y)
+        source_size = tuple(frame_metadata.get(key) for key in ("source_width", "source_height"))
+        if any(type(value) is not int or not 0 < value <= 30000 for value in source_size):
+            raise CalibrationError("Camera selection is missing valid original source dimensions")
+        if frame_metadata.get("source_mode") not in (None, "direct_mjpeg", "transcoded"):
+            raise CalibrationError("Camera preview source mode is not supported for positioning")
+        if any(key in frame_metadata for key in ("width", "height")) and any(
             type(frame_metadata.get(key)) is not int or frame_metadata[key] != expected
-            for key, expected in (("source_width", width), ("source_height", height))
+            for key, expected in (("width", width), ("height", height))
         ):
-            raise CalibrationError("Camera source dimensions changed or the view was resized")
+            raise CalibrationError("Camera preview dimensions changed; select a fresh point")
+        if source_size != preview_size:
+            # The Pi monitor's transcoded mode resizes the complete raw frame.
+            # Convert the view's continuous, image-edge coordinates back to the
+            # calibrated source plane before applying lens correction. Widget
+            # size and display DPI are already handled by FocusBedView.
+            if (
+                frame_metadata.get("source_mode") != "transcoded"
+                or preview_size not in {(1280, 720), (1920, 1080)}
+                or width * source_size[1] != height * source_size[0]
+            ):
+                raise CalibrationError("Camera preview is not a supported full-frame resize")
+            x, y = x * source_size[0] / width, y * source_size[1] / height
+        width, height = source_size
         camera_settings = asdict(self.camera.settings)
         if (
             frame_metadata.get("camera_settings") != camera_settings
@@ -2139,6 +2161,10 @@ class AppContext:
         if points.ndim != 2 or points.shape[1] != 2 or len(points) < 4 or not np.isfinite(points).all():
             raise CalibrationError("Bed calibration has no valid measured point coverage")
         state = {
+            "camera_preview": {
+                "image_size": preview_size, "source_size": source_size,
+                "source_mode": frame_metadata.get("source_mode"),
+            },
             "bed_mapping": self.bed_mapping_digest(),
             "lens_model": lens.model_id,
             "calibration_profile": self.calibration_profiles.current.key,
@@ -2184,6 +2210,8 @@ class AppContext:
             "raw_image_xy": [x, y],
             "corrected_image_xy": corrected.tolist(),
             "source_image_size": [width, height],
+            "preview_image_xy": list(preview_point),
+            "preview_image_size": list(preview_size),
             "mapping_signature": signature,
             "mapping_plane": "bed",
             "height_corrected": False,
