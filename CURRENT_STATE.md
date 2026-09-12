@@ -1,5 +1,35 @@
 # Current repository state
 
+## Live Z 0.7.88 build selected; matching updates staged (2026-09-12)
+
+E3 DEV TEST selects Live Z and honeycomb probe positioning, version 0.7.88,
+frozen at 2a240827b73283ff17ca994f1c4381c1b6cf84e1. The required Windows
+build script produced the bundle and passed the native-library guard. All 159
+bundled source modules and adjacent build-info match the clean isolated source.
+The permanent pointer was atomically updated to:
+`.codex-worktrees/live-z-focus/dist/E3/E3.exe`.
+Executable SHA256:
+2ecfb8dda5460df13d14a74036c2702f935afc580a33406907ddc49584ef3673.
+
+Matching Pi companion 7638fecd and firmware package e9730135 are staged in the
+Pi account's home directory. All package hashes and the actual installer dry
+run passed; no service restart, firmware flash, hardware command or installed
+source change has occurred. Application SHA256:
+0c0729b672a22dc8311bc671070179da027aa37f9d69c70cb27204a3c72facab.
+The installer passed offline Linux checks for backups, idempotence and
+pre-write rejection of unknown source or tampered payload/manifest. Installation
+awaits current operator confirmation of secure Z and a clear probe pin path.
+The live service remains active; saved configuration is untouched.
+
+Compact F401 CI34703820188 and mainboard SD CI34703820219 passed for exact
+2a240827. Fast Development CI34703820164 passed: Windows Python3.12/four workers
+5556 passed,25 skipped in477.57 seconds; POSIX serial/recovery 500 passed in
+74.83 seconds. Repository Ruff and dependency/bytecode checks also passed.
+The separate Inno installer is compressing; the frozen EXE is already verified.
+Physical live reporting and new probe positioning remain unverified. See
+`dist/live-z-focus-0.7.88/START_HERE.md` and its verification records. The active
+development branch is not yet ready for merge/release qualification.
+
 ## Live Z telemetry and full-honeycomb focus positioning (2026-09-12)
 
 The retained operator click maps source (476.13,770.42) at 1920x1080 to
