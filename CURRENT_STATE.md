@@ -1,5 +1,24 @@
 # Current repository state
 
+## Z workflow repair and matched deployment (2026-09-12)
+
+The operator reports regressions while only seeking teaching jogs larger than
+1 mm. Read-only verification found frozen desktop0.7.88/2a24082 running against
+installed Pi780412c3. The desktop accepts the saved honeycomb region while that
+older Pi still rejects Y213.031 against its rectangle. Selecting the desktop
+before installing the companion was an incomplete handoff. Existing surface-V2
+recovery firmware supports the entire positioning/2/5mm teaching workflow;
+the live-Z firmware update is optional and is not required for this repair.
+
+A separate reference bug left freshly known Z0/Z6 below the native routine's
+required Z20 start. Reference now normalizes a known, in-bounds Z to20 only at
+the service-admitted confirmed border, with stowed-pin/readback/STOP guards and
+headroom for the native5mm lift. Unknown/reset rules and Z0/max limits remain.
+Portable full-sequence tests cover the recorded honeycomb point, measurement,
+laser return, repeated2/5mm jogs, negative taught offset,7/5/3mm focus and return
+to clearance on firmware without live-Z capability. Deployment and real checks
+are recorded separately once completed; no calibration accuracy is inferred.
+
 ## Live Z 0.7.88 build selected; matching updates staged (2026-09-12)
 
 E3 DEV TEST selects Live Z and honeycomb probe positioning, version 0.7.88,

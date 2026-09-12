@@ -1,5 +1,13 @@
 # Roadmap
 
+## Z workflow repair verification
+
+The current focus repair keeps the existing surface-V2 firmware for positioning
+and larger teaching jogs. The known-Z re-reference path and full non-live-firmware
+focus sequence have regression coverage. Matched deployment and real movement
+checks are recorded in CURRENT_STATE before declaring the repair ready; gauge
+fit and quantitative raised-surface calibration remain operator measurements.
+
 ## Live Z and focus-area follow-up
 
 Executed-step Z telemetry and fixed-honeycomb focus bounds are implemented with

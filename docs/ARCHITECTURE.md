@@ -1,5 +1,16 @@
 # Architecture
 
+## Focus reference start normalization
+
+MachineService admits reference only at the configured border with current XY,
+idle/disarmed hardware and explicit path confirmation. LaserFocus then validates
+fresh known Z inside0..active maximum, stowed pin and headroom to25 before moving
+to the native Z20 start from either side. Acknowledged normalization precedes
+homing; failed position/STOP/session checks prevent further commands. Unknown
+coordinates retain the native reset-start rules. Matching Pi support is required
+for the expanded configured focus area; telemetry capability remains optional
+and contributes no motion authority.
+
 ## Observational Z telemetry and focus XY authority
 
 Compact F401 publishes E3Z:1 records from idle at a maximum of 5 Hz only after

@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Z focus workflow compatibility
+
+Camera-selected honeycomb positioning and2/5mm teaching jogs require the matching
+Pi companion. Existing surface-height V2 firmware supports these actions without
+a firmware update. Reference border also accepts a freshly verified homed Z below
+20mm by first positioning at the native cycle's checked starting height. See
+[Surface / laser focus](docs/LASER_FOCUS.md) for the complete sequence.
+
 ## Live Z and honeycomb focus positioning
 
 Surface / laser focus and the Machine-tab Z readout can display executed

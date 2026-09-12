@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - restore complete Z focus workflow
+
+- Normalize a freshly known Z below20 at the confirmed border before a new
+  reference cycle, using the existing clearance and position checks.
+- Document the matching Pi support required for honeycomb point positioning
+  and larger teaching jogs, independently of optional live-Z firmware.
+- Cover the complete measure, transfer, approach, teach, focus and clearance
+  sequence with portable regression tests on non-live surface-V2 firmware.
+
 ## Unreleased - live Z and honeycomb focus bounds
 
 - Display real controller step-counter Z during focus and manual Z movement;

@@ -132,6 +132,91 @@ def test_rereference_from_higher_clearance_returns_via_border20(focus):
     assert focus.serial.z == 30
 
 
+@pytest.mark.parametrize("initial_z", [0., 6., 20., 30.])
+def test_reference_from_known_teaching_z_normalizes_at_confirmed_border(focus_machine, initial_z):
+    machine, focus, primary = focus_machine
+    machine.settings.mainboard_max_z_mm = 40.
+    focus.serial.homed, focus.serial.z = True, initial_z
+    before_xy = (primary.x, primary.y)
+    result = machine.focus_control("reference", confirmed=True)
+    moves = [line for line in focus.serial.writes if line.startswith(("G1 ", "G28 "))]
+    if initial_z == 20:
+        assert moves[0] == "G1 Z5.000 F300"
+    else:
+        assert moves[:2] == ["G1 Z20.000 F300", "G1 Z5.000 F300"]
+    assert moves.count("G28 Z R0") == 1
+    assert result["reference_ready"] and result["current_readback"]["z_mm"] == 30.
+    assert not result["requires_clearance"]
+    assert focus.owner.ready and focus.serial.close_calls == 0
+    assert not any(line.startswith(("M112", "M999", "E3RECOVER")) for line in focus.serial.writes)
+    assert (primary.x, primary.y) == before_xy
+
+
+@pytest.mark.parametrize("change", ["unconfirmed", "wrong_border", "unknown_six", "unknown_twenty",
+                                   "negative_z", "above_maximum", "low_ceiling", "high_clearance",
+                                   "unstowed", "connection_lost"])
+def test_reference_normalization_rejects_invalid_authority_without_motion(focus_machine, change):
+    machine, focus, primary = focus_machine
+    machine.settings.mainboard_max_z_mm = 40.
+    focus.serial.homed, focus.serial.z = True, 6.
+    kwargs = {"confirmed": True}
+    if change == "unconfirmed":
+        kwargs["confirmed"] = False
+    elif change == "wrong_border":
+        machine._jog_position_mm = (75., 143.)
+    elif change.startswith("unknown"):
+        focus.serial.homed = False
+        focus.serial.z = 6. if change == "unknown_six" else 20.
+    elif change == "negative_z":
+        focus.serial.z = -.1
+    elif change == "above_maximum":
+        focus.serial.z = 40.001
+    elif change == "low_ceiling":
+        machine.settings.mainboard_max_z_mm = 24.
+        kwargs["clearance_z_mm"] = 24.
+    elif change == "high_clearance":
+        kwargs["clearance_z_mm"] = 41.
+    elif change == "unstowed":
+        focus.serial.overrides["M119"] = ["z_min: open", "ok"]
+    else:
+        kwargs["_connection_alive"] = lambda: False
+    before_xy = (primary.x, primary.y)
+    with pytest.raises(MachineError):
+        machine.focus_control("reference", **kwargs)
+    assert not any(line.startswith(("G1 ", "G28 ")) for line in focus.serial.writes)
+    assert focus.state.reference is None
+    assert (primary.x, primary.y) == before_xy
+
+
+def test_reference_normalization_verifies_initial_raise_before_native_homing(focus_machine):
+    machine, focus, _ = focus_machine
+    focus.serial.homed, focus.serial.z = True, 6.
+    focus.serial.overrides["G1 Z20.000 F300"] = ["ok"]
+    with pytest.raises(MachineError, match="movement was not confirmed"):
+        machine.focus_control("reference", confirmed=True)
+    assert focus.serial.writes.count("G1 Z20.000 F300") == 1
+    assert "G28 Z R0" not in focus.serial.writes
+    assert focus.state.reference is None and focus.state.requires_clearance
+
+
+def test_stop_after_reference_precheck_prevents_normalization_move(focus_machine, monkeypatch):
+    machine, focus, _ = focus_machine
+    focus.serial.homed, focus.serial.z = True, 6.
+    original = focus.owner._execute_acknowledged
+
+    def execute(command, **kwargs):
+        response = original(command, **kwargs)
+        if command == "M119":
+            machine.request_stop(_recover=False)
+        return response
+
+    monkeypatch.setattr(focus.owner, "_execute_acknowledged", execute)
+    with pytest.raises(MachineError):
+        machine.focus_control("reference", confirmed=True)
+    assert not any(line.startswith(("G1 ", "G28 ")) for line in focus.serial.writes)
+    assert focus.state.reference is None
+
+
 @pytest.mark.parametrize("gap,target", [(7, 20), (5, 18), (3, 16)])
 def test_gauge_targets_and_no_motion_on_teach_preview(focus, gap, target):
     measurement_id = taught(focus)

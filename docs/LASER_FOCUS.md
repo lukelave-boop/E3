@@ -1,5 +1,18 @@
 # Surface height and gauge-taught laser focus
 
+## Matching desktop and Pi support
+
+Install the matching Pi companion before selecting the desktop feature build.
+Camera-selected honeycomb positioning and 2/5 mm teaching jogs work with the
+existing surface-height V2 firmware. A firmware update is needed only for the
+optional live numeric Z stream; it is not a prerequisite for these motion fixes.
+
+At the confirmed border, Reference border brings a freshly verified, homed Z
+position to the native cycle's Z20 starting point, including after teaching
+below Z20. It checks the active maximum, stowed probe and acknowledged position
+before the homing cycle. The native initial lift needs an active maximum of at
+least 25 mm. Unknown coordinates still require the existing reset-start checks.
+
 ## Numeric Z during movement
 
 With the matching live-Z firmware and Pi companion, the number refreshes at up
@@ -106,7 +119,7 @@ This is a bed-plane camera estimate. Raised surfaces are not height-corrected;
 verify the probe is over a solid patch before the separate contact cycle.
 Normal live viewing grants no motion action unless Position probe is selected
 and the separate move is requested. The matching updated Pi companion is
-required; the existing 9518b83f mainboard firmware remains installed.
+required; surface-height V2 firmware supports positioning without live telemetry.
 
 ## Live view and the probe-to-laser transfer
 
@@ -142,7 +155,7 @@ the measurement. Ordinary XY jogging invalidates it. Teaching and focus are
 blocked while the laser has not yet returned from the probe position. Changing
 the measured XY offset clears the current measurement and transfer sequence.
 
-This requires the matching new Pi companion; the existing 9518b83f mainboard
+This requires the matching Pi companion; surface-height V2 mainboard
 firmware supports it without another flash. The wide flat-patch method below
 continues to work when no XY offset is set. A flat 3–5 mm piece is a convenient
 teaching surface within the default Z30 contact envelope; its exact thickness
@@ -253,8 +266,8 @@ Home, STOP, disconnect, session changes, ordinary Z commands or other probe
 operations invalidate current measurement/preview authority. No movement is
 retried automatically after failure. The existing manual Machine-tab Z jog
 range remains Z20 through the configured maximum. The dedicated teaching and
-focus path may work below Z20, but never below Z0 or the measured probe-contact
-carriage plane, and never beyond the configured ceiling.
+focus path may work below Z20, but never below Z0 or beyond the configured
+ceiling. The probe-contact coordinate is not the laser-face collision plane.
 
 This release is explicit setup positioning and gauge validation. Ordinary XY
 jogging, Home / park and job starts are blocked while Z still requires a return

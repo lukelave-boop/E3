@@ -337,13 +337,16 @@ class LaserFocus:
         if action == "reference":
             self.invalidate()
             self.session = session
-            # Reference is admitted only above the confirmed border by service.
-            # Re-reference after a prior cycle returned to a higher clearance.
-            if board["z_known"] and 20 < current <= maximum:
+            # Service admits reference only at the confirmed border. A previous
+            # teaching jog can leave a healthy, known axis below Z20; normalize
+            # either side of that native-cycle starting point without a reset.
+            if board["z_known"]:
+                finite_number(current, "Current Z", 0, maximum)
                 if maximum < 25:
                     raise SafetyError("Reference initial lift exceeds the configured ceiling")
                 stowed()
-                move_to(20)
+                if abs(current - 20) > .05:
+                    move_to(20)
             if current + 5 > maximum:
                 raise SafetyError("Reference initial lift exceeds the configured ceiling")
             self.requires_clearance = True
