@@ -1694,11 +1694,17 @@ def _reconnect_while_old_job_worker_unwinds(
     cleanup_release = threading.Event()
     original_secondary_off = machine._best_effort_secondary_off
 
-    def pause_stale_job_cleanup(*, context: str, commands: Any = None) -> None:
+    def pause_stale_job_cleanup(
+        *, context: str, commands: Any = None,
+        allow_reopen: bool = True, interrupt_on_failure: bool = False,
+    ) -> None:
         if context == "job cleanup":
             cleanup_entered.set()
             assert cleanup_release.wait(2.0)
-        original_secondary_off(context=context, commands=commands)
+        original_secondary_off(
+            context=context, commands=commands,
+            allow_reopen=allow_reopen, interrupt_on_failure=interrupt_on_failure,
+        )
 
     monkeypatch.setattr(machine, "_best_effort_secondary_off", pause_stale_job_cleanup)
     machine.connect()
