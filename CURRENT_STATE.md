@@ -1,5 +1,28 @@
 # Current repository state
 
+## Focus camera rejection diagnostics (2026-09-12)
+
+The operator reports rejection at a previously accepted physical gauge spot.
+The running 0.7.84 build and Pi/desktop XY bounds (10..210 mm on both axes)
+were checked. Mapping code is unchanged from d20a379; the saved calibration
+files have not been rewritten, and current camera metadata is direct MJPEG
+1920x1080 with matching source dimensions. A static-feature comparison of the
+earlier accepted screenshot and current screenshot found 916 inlier matches
+with near-zero median displacement. These checks do not recover the actual
+rejected click: the old UI deletes its marker immediately, and a hand-drawn
+screenshot mark is not an exact record of that click. The cause of the
+reported inconsistency remains unverified; no physical reach claim follows.
+
+This update keeps rejected camera selections visibly red, removes their
+movement target, and reports the actual mapped XY, limits exceeded and source
+pixel. It does not expand limits, alter the calibration, or command hardware.
+Focused acceptance/rejection and offscreen widget checks are recorded at handoff.
+
+The previous 50b0845 full Windows CI completed with 5,437 passed, 25 skipped
+and one obsolete test expecting a 2 mm jog to be rejected. The remote test now
+rejects 5.01 mm and verifies forwarding of both signs of 2 and 5 mm; all 58
+remote tests pass. No production travel bound changed in this update.
+
 ## Focus teaching build selected and Pi installed (2026-09-12)
 
 E3 DEV TEST now selects Focus teaching travel and approach, version 0.7.84,

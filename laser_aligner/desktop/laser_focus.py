@@ -42,6 +42,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._offset_edited = False
         self._offset_entered = [False, False]
         self._camera_target: dict[str, Any] | None = None
+        self._camera_point_rejected = False
         self._camera_live = False
         self._failure_message: str | None = None
         layout = QtWidgets.QVBoxLayout(self)
@@ -273,12 +274,22 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
     def clear_camera_target(self, message: str = "Choose Position probe, then click a solid spot in the live image.") -> None:
         self._camera_target = None
+        self._camera_point_rejected = False
         self.camera_target.setText(message)
         self.cameraSelectionInvalidated.emit(message)
         self._sync()
 
+    def reject_camera_target(self, message: str) -> None:
+        # Retain only visual feedback for the new click. A previous valid
+        # target must never remain actionable after a rejected selection.
+        self._camera_target = None
+        self._camera_point_rejected = True
+        self.camera_target.setText(message)
+        self._sync()
+
     def set_camera_target(self, target: dict[str, Any]) -> None:
         self._camera_target = dict(target)
+        self._camera_point_rejected = False
         x, y = target["target_machine_xy_mm"]
         ox, oy = self._result["probe_xy_offset_mm"]
         sx, sy = self._result.get("laser_spot_offset_mm", [0.0, 0.0])
@@ -424,7 +435,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                      or _number(item.get(number_key)) is None):
                 raise ValueError(f"Invalid focus {key} readback.")
         previous_readback = self._result.get("current_readback") or {}
-        if self._camera_target is not None and (
+        if (self._camera_target is not None or self._camera_point_rejected) and (
             any(self._result.get(key) != result.get(key) for key in (
                 "probe_xy_offset_mm", "laser_spot_offset_mm", "current_carriage_xy_mm", "reference_ready", "max_z_mm"
             )) or any(previous_readback.get(key) != readback.get(key) for key in ("z_known", "z_mm"))
@@ -980,10 +991,12 @@ class LaserFocusDialog(QtWidgets.QDialog):
     def _camera_point_selected(self, selection: dict[str, Any]) -> None:
         if not self.panel.position_probe.isEnabled() or not self.panel.position_probe.isChecked():
             return
+        self.coordinator.parameters_edited()
         try:
             self.panel.set_camera_target(self._map_camera_selection(selection))
         except (CalibrationError, ValueError, RuntimeError, KeyError, TypeError) as exc:
-            self.panel.clear_camera_target(f"Cannot position probe: {exc}")
+            self.panel.reject_camera_target(f"Cannot position probe: {exc}")
+            self.bed_view.reject_selection()
 
     def _camera_selection_invalidated(self, message: str) -> None:
         self.coordinator.parameters_edited()

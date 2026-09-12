@@ -235,3 +235,23 @@ def test_mapping_change_during_calculation_rejected(mapped_context, monkeypatch)
     monkeypatch.setattr(context.bed, "image_to_mm", changed)
     with pytest.raises(CalibrationError, match="changed during"):
         click(context)
+
+
+@pytest.mark.parametrize("pixel,expected", [
+    ((0., 0.), ["mapped X -10.000, Y 210.000 mm", "X is 10.000 mm below minimum 0",
+                "Y is 10.000 mm above maximum 200"]),
+    ((439., 439.), ["mapped X 209.500, Y -9.500 mm", "X is 9.500 mm above maximum 200",
+                    "Y is 9.500 mm below minimum 0"]),
+])
+def test_rejected_click_reports_actual_mapping_and_each_failed_limit(mapped_context, pixel, expected):
+    context, _ = mapped_context
+    context.settings.machine.work_area = replace(context.settings.machine.work_area, x_max=200., y_max=200.)
+    context.bed.calibration.provenance = context._bed_provenance()
+    with pytest.raises(CalibrationError) as rejection:
+        click(context, *pixel)
+    message = str(rejection.value)
+    for detail in expected:
+        assert detail in message
+    assert "Allowed X 0 to 200, Y 0 to 200 mm" in message
+    assert f"Source pixel ({pixel[0]:.2f}, {pixel[1]:.2f}) in 440×440" in message
+    assert not context.machine.status()["connected"]

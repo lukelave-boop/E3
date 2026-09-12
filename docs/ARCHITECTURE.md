@@ -1,5 +1,12 @@
 # Architecture
 
+## Focus selection rejection feedback
+
+AppContext continues to reject invalid mapped work-area points and now includes
+precise coordinates and violated limits in the error. The desktop may retain a
+red visual click marker, separately from its actionable camera target. Rejected
+markers never authorize a move; source and session invalidation still clear them.
+
 ## Focus teaching travel
 
 The raw probe-contact coordinate is a measurement datum, not the laser face.

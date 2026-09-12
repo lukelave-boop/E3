@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased - visible probe selection rejection
+
+- Keep rejected camera probe clicks visible in red while disabling movement.
+- Show mapped machine coordinates, bounds and source pixels in work-area errors.
+
 ## Focus teaching travel and responsiveness (2026-09-12)
 
 Corrected teaching and calculated focus being blocked at the probe-contact

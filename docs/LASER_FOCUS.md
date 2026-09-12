@@ -44,7 +44,10 @@ A crosshair and the proposed probe/head coordinates appear. Confirm the XY
 path is clear and the gauge removed, then choose **Move probe here**. This
 positions the probe at clearance; it does not deploy the pin or descend.
 Check the actual probe over the intended solid patch, then use **Measure
-surface**. **Return laser to measured spot** brings the laser to that same
+surface**. A rejected camera click stays visible as a red crosshair; it is
+not a movement target. Work-area rejection reports the calculated machine XY,
+the exceeded limits and source-image pixel. Select a new point to replace it;
+source, machine or calibration changes still invalidate the marker. **Return laser to measured spot** brings the laser to that same
 physical point for gauge teaching or focus. The XY-path confirmation appears
 above the positioning buttons; the gauge-fit and gauge-removal confirmations
 also appear before the actions they enable.

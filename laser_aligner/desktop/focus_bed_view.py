@@ -58,6 +58,7 @@ class FocusBedView(QtWidgets.QWidget):
         self._pixmap: QtGui.QPixmap | None = None
         self._frame_metadata: dict[str, Any] | None = None
         self._selection: dict[str, Any] | None = None
+        self._selection_rejected = False
         self._selection_enabled = False
         self._display_rect = QtCore.QRectF()
         layout = QtWidgets.QVBoxLayout(self)
@@ -175,10 +176,17 @@ class FocusBedView(QtWidgets.QWidget):
     def clear_selection(self) -> None:
         self._invalidate_selection("Selected point cleared", notify=False)
 
+    def reject_selection(self) -> None:
+        """Keep the clicked pixel visible as feedback, without move authority."""
+        if self._selection is not None:
+            self._selection_rejected = True
+            self._render()
+
     def _invalidate_selection(self, reason: str, *, notify: bool = True) -> None:
         if self._selection is None:
             return
         self._selection = None
+        self._selection_rejected = False
         self._render()
         if notify:
             self.selectionInvalidated.emit(reason)
@@ -232,6 +240,7 @@ class FocusBedView(QtWidgets.QWidget):
             return
         self._selection = dict(copy.deepcopy(metadata), image_x=x, image_y=y,
                                selected_monotonic=time.monotonic())
+        self._selection_rejected = False
         self._render()
         self.pointSelected.emit(self.selection_snapshot())
 
@@ -271,7 +280,8 @@ class FocusBedView(QtWidgets.QWidget):
             x = self._selection["image_x"] / self._selection["width"] * scaled.width()
             y = self._selection["image_y"] / self._selection["height"] * scaled.height()
             painter = QtGui.QPainter(scaled)
-            painter.setPen(QtGui.QPen(QtGui.QColor("#ffcf40"), 2))
+            color = "#ef5350" if self._selection_rejected else "#ffcf40"
+            painter.setPen(QtGui.QPen(QtGui.QColor(color), 2))
             painter.drawEllipse(QtCore.QPointF(x, y), 6, 6)
             painter.drawLine(QtCore.QPointF(x-12, y), QtCore.QPointF(x+12, y))
             painter.drawLine(QtCore.QPointF(x, y-12), QtCore.QPointF(x, y+12))

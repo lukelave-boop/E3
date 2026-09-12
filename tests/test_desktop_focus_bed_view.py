@@ -342,3 +342,50 @@ def test_explicit_clear_is_silent_and_mode_disable_retains_selection(view):
     view.clear_selection()
     view.clear_selection()
     assert not invalidations and view.selection_snapshot() is None
+
+
+def test_rejected_pixel_is_red_and_new_selection_restores_normal_marker(view):
+    view.begin()
+    publish(view)
+    view.set_selection_enabled(True)
+    select(view)
+    original = view.selection_snapshot()
+    view.reject_selection()
+    assert view.selection_snapshot()["image_x"] == original["image_x"]
+    pixmap = view.image_label.pixmap()
+    assert pixmap.toImage().pixelColor(pixmap.width()//2, pixmap.height()//2) == QtGui.QColor("#ef5350")
+    publish(view)
+    assert view._selection_rejected
+    select(view)
+    assert not view._selection_rejected
+    pixmap = view.image_label.pixmap()
+    assert pixmap.toImage().pixelColor(pixmap.width()//2, pixmap.height()//2) == QtGui.QColor("#ffcf40")
+
+
+@pytest.mark.parametrize("change", ["clear", "dimensions", "source", "settings", "stale", "offline", "ended"])
+def test_rejected_marker_has_the_same_invalidation_rules(view, change):
+    from laser_aligner.config import CameraSettings
+    view.camera.settings = CameraSettings()
+    view.begin()
+    publish(view, camera_fingerprint="first")
+    view.set_selection_enabled(True)
+    select(view)
+    view.reject_selection()
+    if change == "clear":
+        view.clear_selection()
+    elif change == "dimensions":
+        publish(view, camera_fingerprint="first", width=1280, height=720)
+    elif change == "source":
+        publish(view, camera_fingerprint="second")
+    elif change == "settings":
+        view.camera.settings.device = "different camera"
+        view._update_status()
+    elif change == "stale":
+        view._received_at -= 10
+        view._update_status()
+    elif change == "offline":
+        view._worker.failed.emit("camera unavailable")
+    else:
+        view.end()
+    assert view.selection_snapshot() is None
+    assert not view._selection_rejected

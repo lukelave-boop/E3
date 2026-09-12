@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Camera probe selection feedback
+
+Rejected probe selections retain a red marker and show the calculated XY,
+failed limit and original image pixel. They cannot enable movement. This makes
+camera mapping rejections inspectable without estimating clicks from screenshots.
+
 ## Gauge teaching controls
 
 Surface / laser focus offers fine 0.1/0.5 mm steps and 1/2/5 mm approach steps

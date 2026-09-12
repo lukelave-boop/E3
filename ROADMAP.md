@@ -1,5 +1,11 @@
 # Roadmap
 
+## Camera probe selection follow-up
+
+Rejected-click diagnostics are implemented for operator investigation. Resolve
+the reported same-spot discrepancy using the actual retained click; the cause
+is not established by the screenshot estimate. Machine travel limits remain.
+
 ## Gauge teaching travel qualification
 
 Corrected the probe-contact lower-bound assumption and added bounded coarse/fine

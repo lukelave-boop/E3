@@ -2199,8 +2199,25 @@ class AppContext:
             raise CalibrationError("Selected camera point has an undefined machine projection")
         # BedMapper includes the active fine registration and residual mesh.
         target = self.bed.image_to_mm(float(corrected[0]), float(corrected[1]))
-        if not self.settings.machine.work_area.contains(*target):
-            raise CalibrationError("Selected point is outside the configured machine work area")
+        area = self.settings.machine.work_area
+        if not area.contains(*target):
+            violations = []
+            for axis, coordinate, minimum, maximum in (
+                ("X", target[0], area.x_min, area.x_max),
+                ("Y", target[1], area.y_min, area.y_max),
+            ):
+                if coordinate < minimum:
+                    violations.append(f"{axis} is {minimum-coordinate:.3f} mm below minimum {minimum:g}")
+                elif coordinate > maximum:
+                    violations.append(f"{axis} is {coordinate-maximum:.3f} mm above maximum {maximum:g}")
+            raise CalibrationError(
+                "Selected point is outside the configured machine work area: "
+                f"mapped X {target[0]:.3f}, Y {target[1]:.3f} mm. "
+                + "; ".join(violations)
+                + f". Allowed X {area.x_min:g} to {area.x_max:g}, "
+                f"Y {area.y_min:g} to {area.y_max:g} mm. "
+                f"Source pixel ({x:.2f}, {y:.2f}) in {width}×{height}."
+            )
         if self.lens.model is not lens or self.bed.calibration is not calibration:
             raise CalibrationError("Camera calibration changed during point selection")
         if state["bed_mapping"] != self.bed_mapping_digest() or state["provenance"] != self._bed_provenance():

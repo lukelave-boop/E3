@@ -890,6 +890,72 @@ def test_camera_selection_edit_while_polling_cancels_queued_move(coordinator):
     assert controller.machine.calls == []
     assert "target changed" in item.panel.message.text()
 
+
+@pytest.mark.parametrize("invalidate", ["offset", "position", "session", "stale"])
+def test_rejected_click_keeps_pixel_but_revokes_old_move_target(app, monkeypatch, invalidate):
+    from laser_aligner.desktop import focus_bed_view
+    from laser_aligner.errors import CalibrationError
+    from tests.test_desktop_focus_bed_view import Worker, publish, select
+
+    controller = FakeController()
+    controller.runtime.context.camera = SimpleNamespace(monitor_frames=lambda **kwargs: iter(()))
+    def mapper(x, y, **kwargs):
+        if x < 600:
+            raise CalibrationError("Selected point is outside the configured machine work area")
+        return camera_target()
+    controller.runtime.context.focus_probe_target = mapper
+    monkeypatch.setattr(focus_bed_view, "_MonitorThread", Worker)
+    dialog = LaserFocusDialog(controller)
+    dialog.coordinator._timer.stop()
+    dialog._camera_timer.stop()
+    try:
+        dialog.show()
+        app.processEvents()
+        dialog.set_machine_status(status())
+        dialog.panel.set_result(camera_result(surface=None))
+        publish(dialog.bed_view)
+        dialog._camera_tick()
+        confirm(dialog.panel)
+        dialog.panel.xy_clear.setChecked(True)
+        dialog.panel.position_probe.click()
+        select(dialog.bed_view)
+        assert dialog.panel.move_probe.isEnabled()
+        select(dialog.bed_view, x=.25)
+        snapshot = dialog.bed_view.selection_snapshot()
+        assert snapshot["image_x"] == pytest.approx(480)
+        assert dialog.bed_view._selection_rejected
+        assert dialog.panel._camera_target is None
+        assert not dialog.panel.move_probe.isEnabled()
+        assert "machine work area" in dialog.panel.camera_target.text()
+        dialog._move_camera_probe()
+        dialog.panel.move_probe.click()
+        assert controller.machine.calls == [] and controller.work == []
+        # A new accepted pixel replaces red feedback with a new move target.
+        select(dialog.bed_view)
+        assert dialog.panel.move_probe.isEnabled()
+        assert not dialog.bed_view._selection_rejected
+        assert not dialog.panel._camera_point_rejected
+        select(dialog.bed_view, x=.25)
+        # Matching idle readback retains the diagnosis and marker.
+        dialog.panel.set_result(camera_result(surface=None))
+        assert dialog.bed_view.selection_snapshot() is not None
+        if invalidate == "offset":
+            dialog.panel.offset_x.setValue(4)
+        elif invalidate == "position":
+            dialog.panel.set_result(camera_result(surface=None, current_carriage_xy_mm=[90, 100]))
+        elif invalidate == "session":
+            dialog.set_machine_status(status(controller_session_generation=9))
+        else:
+            dialog.bed_view._received_at -= 10
+            dialog.bed_view._update_status()
+        assert dialog.bed_view.selection_snapshot() is None
+        assert not dialog.panel._camera_point_rejected
+        assert not dialog.panel.move_probe.isEnabled()
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+        app.processEvents()
+
 def test_camera_head_preview_uses_laser_center_correction_and_invalidates_changes(panel):
     panel.set_result(camera_result(laser_spot_offset_mm=[2.0, -1.0]))
     panel._camera_live = True

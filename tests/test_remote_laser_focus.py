@@ -97,6 +97,24 @@ def test_remote_selected_probe_target_keeps_absolute_vector_and_session(remote_f
     assert request["expected_session_generation"] == pi.session_generation
 
 
+@pytest.mark.parametrize("delta", [-5, -2, 2, 5])
+def test_remote_approach_jog_forwards_delta_and_measurement(remote_focus, delta):
+    service, pi, result = remote_focus
+    result["action"] = "jog"
+    measurement_id = str(uuid.uuid4())
+    response = service.focus_control("jog", confirmed=True, value=delta,
+                                     measurement_id=measurement_id)
+    request = pi.requests[-1]
+    assert request["action"] == ACTION_MACHINE_FOCUS
+    assert request["control"] == "jog"
+    assert request["value"] == delta
+    assert request["measurement_id"] == measurement_id
+    assert request["confirmed"] is True
+    assert request["expected_boot_id"] == pi.boot_id
+    assert request["expected_session_generation"] == pi.session_generation
+    assert response["action"] == "jog"
+
+
 @pytest.mark.parametrize("change", ["hardware", "motion", "confirmation", "delta"])
 def test_remote_rejects_without_focus_request(remote_focus, change):
     service, pi, _ = remote_focus
@@ -108,7 +126,7 @@ def test_remote_rejects_without_focus_request(remote_focus, change):
     elif change == "confirmation":
         kwargs["confirmed"] = False
     else:
-        kwargs["value"] = 2
+        kwargs["value"] = 5.01
     with pytest.raises(SafetyError):
         service.focus_control("jog", **kwargs)
     assert all(r["action"] != ACTION_MACHINE_FOCUS for r in pi.requests)
