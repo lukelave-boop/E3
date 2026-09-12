@@ -41,6 +41,16 @@ void GcodeSuite::G39() {
     else SERIAL_ECHOLNPAIR_F("E3MH:1 Z:", measured_z, 3);
   }
   else {
+    // Finish native cleanup before printing diagnostic data or the terminal error.
+    // Keep the existing failure line so older hosts still fail-stop identically.
+    const auto &t = e3_material::trace;
+    SERIAL_ECHOPAIR("E3PD:1 STAGE:", t.failed_stage ? t.failed_stage : "ENTRY",
+                    " REASON:", t.reason ? t.reason : "PRECONDITION");
+    SERIAL_ECHOPAIR_F(" Z:", t.failed_z, 3);
+    SERIAL_ECHOPAIR_F(" FAST:", t.fast_z, 3);
+    SERIAL_ECHOPAIR_F(" SLOW:", t.slow_z, 3);
+    SERIAL_ECHOPAIR(" CLEANUP_FAILED:", int(t.stow_failed));
+    SERIAL_EOL();
     if (surface) SERIAL_ERROR_MSG("E3MH:2 PROBE_FAILED");
     else SERIAL_ERROR_MSG("E3MH:1 PROBE_FAILED");
   }

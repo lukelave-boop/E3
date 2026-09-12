@@ -500,9 +500,13 @@ def test_authenticated_xy_recovery_rejects_before_serial(focus_server, change):
 def test_authenticated_probe_failure_reconnect_xy_recovery_then_separate_reference(focus_server):
     harness, focus = focus_server
     assert rpc(harness, "reference")["ok"]
-    focus.serial.overrides["G39 C30.000 H15.000"] = ["Error:E3MH:2 PROBE_FAILED"]
+    focus.serial.overrides["G39 C30.000 H15.000"] = [
+        "E3PD:1 STAGE:FAST REASON:NO_TRIGGER Z:-2.000 FAST:nan SLOW:nan CLEANUP_FAILED:0",
+        "Error:E3MH:2 PROBE_FAILED",
+    ]
     failed = rpc(harness, "measure")
     assert not failed["ok"] and "PROBE_FAILED" in str(failed)
+    assert "STAGE:FAST REASON:NO_TRIGGER" in str(failed)
     assert "M112" in focus.serial.writes
     assert focus.state.requires_clearance
 

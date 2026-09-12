@@ -1,5 +1,15 @@
 # Architecture
 
+## Native material probe diagnostics
+
+The material envelope owns a per-cycle failure trace. Native descent records
+the first failure and synchronized Z where available; later cleanup cannot
+overwrite it. G39 emits one informational E3PD line after cleanup followed by
+its existing terminal error. The secondary owner attaches evidence from the
+same exchange to its failure text; it never treats the line as acknowledgement
+or motion authority. Native BLTouch errors propagate through set_deployed.
+Earlier native alarm errors can terminate the exchange before E3PD is received.
+
 ## Retained-clearance XY recovery
 
 MachineService admits typed recover_xy only for a retained focus-clearance

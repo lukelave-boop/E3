@@ -83,7 +83,7 @@ index 4347f55..3465ef4 100644
 +
  #endif // HAS_BED_PROBE
 diff --git a/Marlin/src/module/probe.cpp b/Marlin/src/module/probe.cpp
-index 102d4a4..fb3c2f9 100644
+index 102d4a4..7cf1f3d 100644
 --- a/Marlin/src/module/probe.cpp
 +++ b/Marlin/src/module/probe.cpp
 @@ -88,6 +88,8 @@
@@ -95,7 +95,85 @@ index 102d4a4..fb3c2f9 100644
  Probe probe;
  
  xyz_pos_t Probe::offset; // Initialized by settings.load()
-@@ -589,7 +591,7 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
+@@ -282,7 +284,7 @@ void Probe::do_z_raise(const float z_raise) {
+   do_z_clearance(z_dest);
+ }
+ 
+-FORCE_INLINE void probe_specific_action(const bool deploy) {
++FORCE_INLINE bool probe_specific_action(const bool deploy) {
+   #if ENABLED(PAUSE_BEFORE_DEPLOY_STOW)
+     do {
+       #if ENABLED(PAUSE_PROBE_DEPLOY_WHEN_TRIGGERED)
+@@ -319,7 +321,7 @@ FORCE_INLINE void probe_specific_action(const bool deploy) {
+ 
+   #elif ENABLED(BLTOUCH)
+ 
+-    deploy ? bltouch.deploy() : bltouch.stow();
++    return deploy ? bltouch.deploy() : bltouch.stow();
+ 
+   #elif HAS_Z_SERVO_PROBE
+ 
+@@ -338,6 +340,7 @@ FORCE_INLINE void probe_specific_action(const bool deploy) {
+     UNUSED(deploy);
+ 
+   #endif
++  return false;
+ }
+ 
+ #if EITHER(PREHEAT_BEFORE_PROBING, PREHEAT_BEFORE_LEVELING)
+@@ -435,7 +438,7 @@ bool Probe::set_deployed(const bool deploy) {
+     if (PROBE_TRIGGERED() == deploy) {
+       if (!deploy) endstops.enable_z_probe(false); // Switch off triggered when stowed probes early
+                                                    // otherwise an Allen-Key probe can't be stowed.
+-      probe_specific_action(deploy);
++      if (probe_specific_action(deploy)) return true;
+     }
+ 
+     if (PROBE_TRIGGERED() == deploy) {             // Unchanged after deploy/stow action?
+@@ -449,7 +452,7 @@ bool Probe::set_deployed(const bool deploy) {
+ 
+   #else
+ 
+-    probe_specific_action(deploy);
++    if (probe_specific_action(deploy)) return true;
+ 
+   #endif
+ 
+@@ -490,7 +493,10 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
+     thermalManager.wait_for_hotend_heating(active_extruder);
+   #endif
+ 
+-  if (TERN0(BLTOUCH_SLOW_MODE, bltouch.deploy())) return true; // Deploy in LOW SPEED MODE on every probe action
++  if (TERN0(BLTOUCH_SLOW_MODE, bltouch.deploy())) {
++    e3_material::record_failure("DEPLOY_FAILED", current_position.z);
++    return true; // Deploy in LOW SPEED MODE on every probe action
++  }
+ 
+   // Disable stealthChop if used. Enable diag1 pin on driver.
+   #if ENABLED(SENSORLESS_PROBING)
+@@ -529,8 +535,12 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
+     tmc_disable_stallguard(stepperZ, stealth_states.z);
+   #endif
+ 
+-  if (probe_triggered && TERN0(BLTOUCH_SLOW_MODE, bltouch.stow())) // Stow in LOW SPEED MODE on every trigger
++  if (probe_triggered && TERN0(BLTOUCH_SLOW_MODE, bltouch.stow())) { // Stow in LOW SPEED MODE on every trigger
++    // Native early return precedes stepper-position synchronization; don't label
++    // the commanded low endpoint as a measured contact in this failure case.
++    e3_material::record_failure("STOW_FAILED", NAN);
+     return true;
++  }
+ 
+   // Clear endstop flags
+   endstops.hit_on_purpose();
+@@ -541,6 +551,7 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
+   // Tell the planner where we actually are
+   sync_plan_position();
+ 
++  if (!probe_triggered) e3_material::record_failure("NO_TRIGGER", current_position.z);
+   return !probe_triggered;
+ }
+ 
+@@ -589,16 +600,20 @@ bool Probe::probe_down_to_z(const_float_t z, const_feedRate_t fr_mm_s) {
   *
   * @return The Z position of the bed at the current XY or NAN on error.
   */
@@ -104,7 +182,12 @@ index 102d4a4..fb3c2f9 100644
    DEBUG_SECTION(log_probe, "Probe::run_z_probe", DEBUGGING(LEVELING));
  
    auto try_to_probe = [&](PGM_P const plbl, const_float_t z_probe_low_point, const feedRate_t fr_mm_s, const bool scheck, const float clearance) -> bool {
-@@ -598,7 +600,8 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+     // Tare the probe, if supported
+-    if (TERN0(PROBE_TARE, tare())) return true;
++    if (TERN0(PROBE_TARE, tare())) {
++      if (material) e3_material::record_failure("TARE_FAILED", current_position.z);
++      return true;
++    }
  
      // Do a first probe at the fast speed
      const bool probe_fail = probe_down_to_z(z_probe_low_point, fr_mm_s),            // No probe trigger?
@@ -114,7 +197,18 @@ index 102d4a4..fb3c2f9 100644
      #if ENABLED(FIX_MOUNTED_PROBE)
        Count_probe = 1;
      #endif
-@@ -620,6 +623,18 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+@@ -613,6 +628,10 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
+     #else
+       UNUSED(plbl);
+     #endif
++    if (material) {
++      if (probe_fail) e3_material::record_failure("PROBE_MOVE_FAILED", NAN);
++      else if (early_fail) e3_material::record_failure("CONTACT_RANGE", current_position.z);
++    }
+     return probe_fail || early_fail;
+   };
+ 
+@@ -620,6 +639,22 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/) {
    // If Z isn't known then probe to -10mm.
    const float z_probe_low_point = axis_is_trusted(Z_AXIS) ? -offset.z + Z_PROBE_LOW_POINT : -10.0;
  
@@ -122,10 +216,14 @@ index 102d4a4..fb3c2f9 100644
 +  // independent of the bed-leveling TOTAL_PROBING / EXTRA_PROBING selection.
 +  if (material) {
 +    const float low = -offset.z + _MAX(float(Z_PROBE_LOW_POINT), e3_material::minimum);
++    e3_material::trace.stage = "FAST";
 +    if (try_to_probe(PSTR("FAST"), low, z_probe_fast_mm_s, true, 0)) return NAN;
 +    const float fast_z = current_position.z;
++    e3_material::trace.fast_z = fast_z;
 +    do_blocking_move_to_z(fast_z + Z_CLEARANCE_MULTI_PROBE, z_probe_fast_mm_s);
++    e3_material::trace.stage = "SLOW";
 +    if (try_to_probe(PSTR("SLOW"), low, MMM_TO_MMS(Z_PROBE_FEEDRATE_SLOW), true, 0)) return NAN;
++    e3_material::trace.slow_z = current_position.z;
 +    // Same weighted result as Marlin's native TOTAL_PROBING == 2 cycle.
 +    return (current_position.z * 3.0f + fast_z * 2.0f) * 0.2f;
 +  }
@@ -133,7 +231,7 @@ index 102d4a4..fb3c2f9 100644
    // Double-probing does a fast probe followed by a slow probe
    #if TOTAL_PROBING == 2
  
-@@ -843,4 +858,6 @@ float Probe::probe_at_point(const_float_t rx, const_float_t ry, const ProbePtRai
+@@ -843,4 +878,6 @@ float Probe::probe_at_point(const_float_t rx, const_float_t ry, const ProbePtRai
  
  #endif // HAS_Z_SERVO_PROBE
  

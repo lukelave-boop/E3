@@ -14,6 +14,15 @@ namespace e3_material {
   extern Envelope active_envelope;
   extern bool envelope_active;
 
+  // Diagnostic state for one material cycle only. Never grants motion authority.
+  struct ProbeTrace {
+    const char *stage, *failed_stage, *reason;
+    float failed_z, fast_z, slow_z;
+    bool stow_failed;
+  };
+  extern ProbeTrace trace;
+  void record_failure(const char *reason, const float z);
+
   // Decimal-only syntax is deliberate: no parser truncation, NaN, exponent,
   // unknown/repeated parameters, or trailing non-whitespace text is accepted.
   inline bool decimal(const char *&text, float &value) {

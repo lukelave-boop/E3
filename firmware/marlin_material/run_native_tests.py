@@ -26,12 +26,19 @@ def function(source: str, signature: str) -> str:
 
 
 def run(source: Path, toolchain: Path) -> None:
-    functions = function((source / "Marlin/src/module/probe.cpp").read_text(encoding="utf-8"),
-                         "float Probe::run_z_probe(")
+    probe_source = (source / "Marlin/src/module/probe.cpp").read_text(encoding="utf-8")
+    functions = function(probe_source, "float Probe::run_z_probe(")
     for path in ("Marlin/src/module/material_height.inc", "Marlin/src/gcode/probe/G39.inc"):
         functions += "\n" + "\n".join(line for line in (source / path).read_text().splitlines()
                                        if not line.startswith("#include"))
     harness = (ROOT / "tests/marlin_material_harness.cpp").read_text().replace("// MARKER", functions)
+    action_signature = ("FORCE_INLINE bool probe_specific_action("
+                        if "FORCE_INLINE bool probe_specific_action(" in probe_source
+                        else "FORCE_INLINE void probe_specific_action(")
+    native_functions = "\n".join(function(probe_source, signature) for signature in (
+        action_signature, "bool Probe::set_deployed(", "bool Probe::probe_down_to_z("))
+    harness = harness.replace("// NATIVE_PIN_MARKER",
+                              "#if E3_NATIVE_PIN_TEST\n" + native_functions + "\n#endif")
     output = ROOT / "build/marlin-material-tests"
     output.mkdir(parents=True, exist_ok=True)
     (output / "harness.cpp").write_text(harness)
@@ -40,13 +47,19 @@ def run(source: Path, toolchain: Path) -> None:
                       ". = 0x20000000; .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }")
     compiler = toolchain / ("arm-none-eabi-g++.exe" if (toolchain / "arm-none-eabi-g++.exe").exists()
                             else "arm-none-eabi-g++")
-    for total, extra in ((2, 0), (3, 0), (3, 1)):
-        elf_path = output / f"test-{total}-{extra}.elf"
+    variants = ((2, 0, False, False), (3, 0, False, False), (3, 1, False, False),
+                (2, 0, True, False), (2, 0, True, True))
+    for total, extra, native_pin, slow_mode in variants:
+        label = (f"TOTAL_PROBING={total}, EXTRA={extra}, native_pin={native_pin}, "
+                 f"slow_mode={slow_mode}")
+        elf_path = output / f"test-{total}-{extra}-pin{int(native_pin)}-slow{int(slow_mode)}.elf"
         subprocess.run([str(compiler), "-mcpu=cortex-m4", "-mthumb", "-mfloat-abi=soft",
                         "-std=c++14", "-Os", "-fno-builtin", "-fno-exceptions", "-fno-rtti",
                         "-nostdlib", "-fno-tree-loop-distribute-patterns",
                         "-Wall", "-Wextra", "-Werror", f"-DTOTAL_PROBING={total}",
                         f"-DEXTRA_PROBING={extra}", f"-DMULTIPLE_PROBING={total - extra}",
+                        f"-DE3_NATIVE_PIN_TEST={int(native_pin)}",
+                        f"-DBLTOUCH_SLOW_MODE={int(slow_mode)}",
                         "-I", str(source / "Marlin/src/module"),
                         "-T", str(linker), str(output / "harness.cpp"), "-lm", "-lgcc", "-o", str(elf_path)],
                        check=True)
@@ -72,8 +85,8 @@ def run(source: Path, toolchain: Path) -> None:
         emulator.reg_write(UC_ARM_REG_LR, sentinel | 1)
         emulator.emu_start(entry | 1, sentinel + 2, timeout=20_000_000, count=20_000_000)
         if finished != [0]:
-            raise RuntimeError(f"Production probe test failed: TOTAL_PROBING={total}, line={finished}")
-        print(f"Production G39/probe Cortex-M4 tests passed, TOTAL_PROBING={total}, EXTRA={extra}; fake I/O.")
+            raise RuntimeError(f"Production probe test failed: {label}, line={finished}")
+        print(f"Production G39/probe Cortex-M4 tests passed, {label}; fake I/O.")
 
 
 if __name__ == "__main__":

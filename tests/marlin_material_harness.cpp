@@ -17,6 +17,21 @@
 #define DEBUG_ECHOLNPGM(...) ((void)0)
 #define TERN0(...) 0
 #define TERN_(...)
+#if E3_NATIVE_PIN_TEST
+  #undef TERN0
+  #define E3_TERN0_0(EXPRESSION) 0
+  #define E3_TERN0_1(EXPRESSION) (EXPRESSION)
+  #define E3_TERN0_SELECT(CONDITION,EXPRESSION) E3_TERN0_##CONDITION(EXPRESSION)
+  #define TERN0(CONDITION,EXPRESSION) E3_TERN0_SELECT(CONDITION,EXPRESSION)
+  #define PROBE_TARE 0
+  #define DISABLED(X) (!(X))
+  #define BOTH(A,B) ((A) && (B))
+  #define EITHER(A,B) ((A) || (B))
+  #define BLTOUCH 1
+  #define FORCE_INLINE inline
+  #define DEBUG_POS(...)
+  #define TEST(VALUE,BIT) (((VALUE) & (1U << (BIT))) != 0)
+#endif
 #define UNUSED(X) (void)(X)
 #define PSTR(X) X
 #define MMM_TO_MMS(X) ((X) / 60.0f)
@@ -33,7 +48,12 @@
 using PGM_P = const char *;
 using const_float_t = const float;
 using feedRate_t = float;
-struct Position { float x, y, z; };
+using const_feedRate_t = const float;
+struct xy_pos_t { float x, y; };
+struct Position {
+  float x, y, z;
+  operator xy_pos_t() const { return {x, y}; }
+};
 Position current_position;
 constexpr int Z_AXIS = 2;
 float workspace_z;
@@ -44,7 +64,53 @@ bool no_trigger[8];
 const char *error;
 const char *result_label;
 float result;
+int diagnostic_reports;
+template <typename... Values> void serial_diagnostic(Values...) {}
+#if E3_NATIVE_PIN_TEST
+constexpr int Z_MIN_PROBE = 0;
+unsigned trigger_bits;
+float stepper_z;
+int enables, clears, position_reads, syncs, xy_moves;
+int deploy_failure_at, stow_failure_at;
+bool pin_deployed;
+struct {
+  bool z_probe_enabled;
+  void enable_z_probe(bool value) { ++enables; z_probe_enabled = value; }
+  unsigned trigger_state() const { return trigger_bits; }
+  void hit_on_purpose() { ++clears; trigger_bits = 0; }
+} endstops;
+struct {
+  bool deploy() {
+    ++deploys;
+    if (deploy_fail || deploys == deploy_failure_at) {
+      running = false;
+      error = "BLTOUCH deploy";
+      return true;
+    }
+    pin_deployed = true;
+    return false;
+  }
+  bool stow() {
+    ++stows;
+    if (stow_fail || stows == stow_failure_at) {
+      running = false;
+      error = "BLTOUCH stow";
+      return true;
+    }
+    pin_deployed = false;
+    return false;
+  }
+} bltouch;
+void do_blocking_move_to(xy_pos_t xy) {
+  ++xy_moves;
+  current_position.x = xy.x;
+  current_position.y = xy.y;
+}
+void set_current_from_steppers_for_axis(int) { ++position_reads; current_position.z = stepper_z; }
+void sync_plan_position() { ++syncs; }
+#else
 struct { bool z_probe_enabled; } endstops;
+#endif
 struct { bool leveling_active; } planner;
 struct { const char *command_ptr; float linear_unit_factor; } parser;
 bool axis_is_trusted(int) { return trusted; }
@@ -64,7 +130,24 @@ void remember_feedrate_scaling_off() { ++remembers; }
 void restore_feedrate_and_scaling() { ++restores; }
 #define SERIAL_ERROR_MSG(X) error = (X)
 #define SERIAL_ECHOLNPAIR_F(LABEL,VALUE,PRECISION) do { result = (VALUE); result_label = (LABEL); } while (0)
-void do_blocking_move_to_z(float z, float) {
+#define SERIAL_ECHOPAIR(...) serial_diagnostic(__VA_ARGS__)
+#define SERIAL_ECHOPAIR_F(...) serial_diagnostic(__VA_ARGS__)
+#define SERIAL_EOL() (++diagnostic_reports)
+void do_blocking_move_to_z(float z, float speed) {
+#if E3_NATIVE_PIN_TEST
+  if (z < current_position.z) {
+    const int index = touches++;
+    low_seen[index] = z;
+    speeds[index] = speed;
+    stepper_z = no_trigger[index] ? z : trigger[index];
+    trigger_bits = no_trigger[index] ? 0 : (1U << Z_MIN_PROBE);
+    current_position.z = z; // Native descent must read actual stopped steps back.
+    return;
+  }
+  stepper_z = z;
+#else
+  UNUSED(speed);
+#endif
   lifts_seen[lifts++] = z;
   current_position.z = z;
 }
@@ -72,6 +155,17 @@ struct Probe {
   static Position offset;
   static float run_z_probe(bool sanity_check = true, bool material = false);
   static float material_height(const float clearance=20.0f, const float upper=10.5f);
+#if E3_NATIVE_PIN_TEST
+  static bool set_deployed(bool deploy);
+  static bool deploy() { return set_deployed(true); }
+  static bool stow() { return set_deployed(false); }
+  static bool probe_down_to_z(float low, float speed);
+  static void do_z_raise(float clearance) {
+    const float target = clearance - offset.z;
+    if (current_position.z < target) do_blocking_move_to_z(target, z_probe_fast_mm_s);
+  }
+  static constexpr float z_probe_fast_mm_s = 8.0f;
+#else
   static bool deploy() { ++deploys; return deploy_fail; }
   static bool stow() { ++stows; return stow_fail; }
   static bool probe_down_to_z(float low, float speed) {
@@ -81,6 +175,7 @@ struct Probe {
     current_position.z = no_trigger[i] ? low : trigger[i];
     return no_trigger[i];
   }
+#endif
 };
 Position Probe::offset;
 Probe probe;
@@ -88,6 +183,8 @@ constexpr float z_probe_fast_mm_s = 8.0f;
 struct GcodeSuite { static void G39(); };
 
 // MARKER
+
+// NATIVE_PIN_MARKER
 
 void reset() {
   current_position = { 100, 100, 20 };
@@ -99,6 +196,14 @@ void reset() {
   parser.command_ptr = "G39"; parser.linear_unit_factor = 1;
   deploys = stows = touches = lifts = remembers = restores = 0;
   result = NAN; error = result_label = nullptr;
+  diagnostic_reports = 0;
+#if E3_NATIVE_PIN_TEST
+  stepper_z = current_position.z;
+  trigger_bits = 0;
+  enables = clears = position_reads = syncs = xy_moves = 0;
+  deploy_failure_at = stow_failure_at = 0;
+  pin_deployed = false;
+#endif
   for (int i = 0; i < 8; ++i) { trigger[i] = 5.5f; no_trigger[i] = false; }
 }
 
@@ -108,7 +213,117 @@ bool envelope_restored() {
       && e3_material::active_envelope.maximum == e3_material::maximum;
 }
 
+#if E3_NATIVE_PIN_TEST
+bool failure_is(const char *stage, const char *reason, const float z) {
+  const auto &trace = e3_material::trace;
+  return trace.failed_stage && !strcmp(trace.failed_stage, stage)
+      && trace.reason && !strcmp(trace.reason, reason)
+      && (isnan(z) ? isnan(trace.failed_z) : fabsf(trace.failed_z - z) < .001f);
+}
+#endif
+
 extern "C" int test_main() {
+#if E3_NATIVE_PIN_TEST
+  // Execute production deploy, descent/readback and stow, with fake pin/step I/O.
+  reset(); GcodeSuite::G39();
+  CHECK(!error && fabsf(result - 5.5f) < .001f && touches == 2);
+  CHECK(position_reads == 2 && syncs == 2 && clears == 2);
+  CHECK(low_seen[0] == -2 && low_seen[1] == -2);
+  CHECK(speeds[0] == 8 && speeds[1] == 4);
+  CHECK(!pin_deployed && !endstops.z_probe_enabled && enables == 2);
+  CHECK(deploys == (BLTOUCH_SLOW_MODE ? 3 : 1));
+  CHECK(stows == (BLTOUCH_SLOW_MODE ? 3 : 1));
+  CHECK(current_position.x == 100 && current_position.y == 100 && xy_moves == 2);
+  CHECK(envelope_restored() && remembers == 1 && restores == 1);
+  CHECK(diagnostic_reports == 0 && !e3_material::trace.reason);
+  CHECK(e3_material::trace.fast_z == 5.5f && e3_material::trace.slow_z == 5.5f);
+
+  // Native deployment error must not fall through to enabling/descent.
+  reset(); deploy_fail = true; GcodeSuite::G39();
+  CHECK(error && isnan(result) && touches == 0 && enables == 0);
+  CHECK(deploys == 1 && !endstops.z_probe_enabled && position_reads == 0);
+  CHECK(envelope_restored() && remembers == 1 && restores == 1);
+  CHECK(failure_is("DEPLOY", "DEPLOY_FAILED", 20) && diagnostic_reports == 1);
+  CHECK(isnan(e3_material::trace.fast_z) && isnan(e3_material::trace.slow_z));
+
+  // An outer stow error must propagate through the actual set_deployed path.
+  reset(); stow_failure_at = BLTOUCH_SLOW_MODE ? 3 : 1; GcodeSuite::G39();
+  CHECK(error && isnan(result) && touches == 2 && endstops.z_probe_enabled);
+  CHECK(enables == 1 && envelope_restored());
+  CHECK(failure_is("STOW", "STOW_FAILED", 10) && diagnostic_reports == 1);
+  CHECK(e3_material::trace.stow_failed);
+
+  // Missing first/second trigger still uses stopped-step readback and cleanup.
+  for (int index = 0; index < 2; ++index) {
+    reset(); no_trigger[index] = true; GcodeSuite::G39();
+    CHECK(error && isnan(result) && touches == index + 1);
+    CHECK(position_reads == index + 1 && syncs == index + 1 && clears == index + 1);
+    CHECK(running && !pin_deployed && !endstops.z_probe_enabled && envelope_restored());
+    CHECK(failure_is(index ? "SLOW" : "FAST", "NO_TRIGGER", -2));
+    CHECK(diagnostic_reports == 1 && !e3_material::trace.stow_failed);
+    CHECK(index ? e3_material::trace.fast_z == 5.5f : isnan(e3_material::trace.fast_z));
+    CHECK(isnan(e3_material::trace.slow_z));
+  }
+  // The first cause survives a later cleanup failure; its Z is the stopped step count.
+  reset(); no_trigger[0] = true; stow_failure_at = 1; GcodeSuite::G39();
+  CHECK(failure_is("FAST", "NO_TRIGGER", -2) && diagnostic_reports == 1);
+  CHECK(e3_material::trace.stow_failed && isnan(result) && envelope_restored());
+
+  // Every native contact is checked against the active V2 interval.
+  for (int index = 0; index < 2; ++index) {
+    reset(); parser.command_ptr = "G39 C30 H15"; current_position.z = stepper_z = 30;
+    trigger[index] = 15.01f; GcodeSuite::G39();
+    CHECK(failure_is(index ? "SLOW" : "FAST", "CONTACT_RANGE", 15.01f));
+    CHECK(touches == index + 1 && diagnostic_reports == 1 && isnan(result));
+    CHECK(!e3_material::trace.stow_failed && envelope_restored());
+  }
+  // G39 C30 H15 must accept the below-border paper interval on both touches.
+  reset(); parser.command_ptr = "G39 C30 H15"; current_position.z = stepper_z = 30;
+  trigger[0] = trigger[1] = -1.5f; GcodeSuite::G39();
+  CHECK(!error && fabsf(result + 1.5f) < .001f && touches == 2);
+  CHECK(low_seen[0] == -2 && low_seen[1] == -2 && envelope_restored());
+  // reset() deliberately leaves trace alone: a successful new cycle clears old evidence.
+  CHECK(diagnostic_reports == 0 && !e3_material::trace.reason);
+  CHECK(!e3_material::trace.failed_stage && isnan(e3_material::trace.failed_z));
+  CHECK(e3_material::trace.fast_z == -1.5f && e3_material::trace.slow_z == -1.5f);
+  CHECK(!e3_material::trace.stow_failed);
+
+  #if BLTOUCH_SLOW_MODE
+    // Inner deployment and stow errors are distinct from missing trigger.
+    for (int index = 0; index < 2; ++index) {
+      reset(); deploy_failure_at = index + 2; GcodeSuite::G39();
+      CHECK(error && isnan(result) && !running && touches == index);
+      CHECK(position_reads == index && envelope_restored());
+      CHECK(failure_is(index ? "SLOW" : "FAST", "DEPLOY_FAILED", index ? 10.5f : 20));
+      CHECK(diagnostic_reports == 1 && isnan(e3_material::trace.slow_z));
+      reset(); stow_failure_at = index + 1; GcodeSuite::G39();
+      CHECK(error && isnan(result) && !running && touches == index + 1);
+      // Existing native function returns before stopped-step readback on stow error.
+      CHECK(position_reads == index && envelope_restored());
+      CHECK(failure_is(index ? "SLOW" : "FAST", "STOW_FAILED", NAN));
+      CHECK(diagnostic_reports == 1 && isnan(e3_material::trace.slow_z));
+    }
+  #endif
+
+  // A nested/rejected command must not erase an active owner's evidence.
+  reset(); no_trigger[1] = true; GcodeSuite::G39();
+  const auto prior_trace = e3_material::trace;
+  const int prior_touches = touches, prior_deploys = deploys, prior_stows = stows;
+  e3_material::envelope_active = true;
+  CHECK(isnan(probe.material_height(30, 15)));
+  CHECK(e3_material::trace.reason == prior_trace.reason);
+  CHECK(e3_material::trace.failed_stage == prior_trace.failed_stage);
+  CHECK(e3_material::trace.stage == prior_trace.stage);
+  CHECK(e3_material::trace.failed_z == prior_trace.failed_z);
+  CHECK(e3_material::trace.fast_z == prior_trace.fast_z && isnan(e3_material::trace.slow_z));
+  CHECK(e3_material::trace.stow_failed == prior_trace.stow_failed);
+  CHECK(touches == prior_touches && deploys == prior_deploys && stows == prior_stows);
+  e3_material::envelope_active = false;
+  reset(); relative = true; GcodeSuite::G39();
+  CHECK(error && !strcmp(error, "E3MH:1 PRECONDITION") && diagnostic_reports == 0);
+  CHECK(touches == 0 && deploys == 0 && stows == 0);
+  return 0;
+#else
   reset();
   GcodeSuite::G39();
   CHECK(!error && fabsf(result - 5.5f) < .001f);
@@ -274,4 +489,5 @@ extern "C" int test_main() {
   CHECK(error && deploys == 0 && remembers == 0 && e3_material::envelope_active);
   e3_material::envelope_active = false;
   return 0;
+#endif
 }

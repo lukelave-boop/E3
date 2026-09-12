@@ -73,6 +73,17 @@ made responsive before the recovery firmware can be installed. See
 
 ## Recover XY after a failed probe
 
+The probe-failure candidate firmware propagates CR Touch deploy/stow failures
+before further descent and records which native touch failed. Its matching Pi
+companion includes received `E3PD:1` detail in the focus error, exposing FAST/SLOW
+and NO_TRIGGER/CONTACT_RANGE evidence in the dialog and saved log. Older firmware
+still reports the original generic error. This is diagnostic evidence, not a
+valid measurement; failures still stop and invalidate the reference, and never
+retry automatically. Native alarms may end the exchange before detailed evidence
+arrives. See the firmware's
+[failure record](../firmware/marlin_material/README.md#probe-failure-evidence).
+The original paper-probing cause has not yet been physically established.
+
 A failed native surface probe deliberately stops and disconnects the controllers.
 The retained clearance restriction can then leave ordinary Home waiting for Z
 clearance while Z clearance and border reference wait for Home. A fake-backed

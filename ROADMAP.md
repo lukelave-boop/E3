@@ -1,5 +1,12 @@
 # Roadmap
 
+## Native probe failure qualification
+
+The candidate now propagates deployment/stow errors and records first-failure
+evidence from the actual native descent path. Complete operator-confirmed
+firmware installation and a single observed reference/measurement before claiming
+the original paper-probing issue resolved. Do not widen limits or retry blindly.
+
 ## Probe-failure recovery verification
 
 The explicit current-height XY recovery path repairs the reproduced software

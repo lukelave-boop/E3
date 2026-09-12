@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The probe-failure candidate corrects discarded CR Touch deployment/stow errors
+and adds first/second-touch failure evidence to the focus error. Native tests now
+execute the real descent and pin-control wrappers with fake hardware. The paper
+probing cause remains unverified; see [the focus guide](docs/LASER_FOCUS.md).
+
 ## Recovery after a failed surface probe
 
 Surface / laser focus provides a separate **Recover XY at current height**

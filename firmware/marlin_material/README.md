@@ -74,6 +74,39 @@ The host can bind calibration to that geometry; the compact profile additionally
 advertises and enforces `E3_Z_LIMIT_80_V1` in the actual planner. Software tests
 do not establish attached-mechanics behavior or measurement accuracy.
 
+## Probe failure evidence
+
+The material cycle propagates native BLTouch deploy/stow failures through
+`set_deployed`, rather than discarding their return values. Failed deployment
+does not enter the descent routine. Existing native failure handling and the
+final stow attempt remain in place. Contact limits, speeds, retract distances,
+and high-speed probe configuration are unchanged.
+
+After cleanup, a failed material cycle emits an informational line before the
+unchanged terminal `Error:E3MH:<version> PROBE_FAILED`:
+
+```text
+E3PD:1 STAGE:SLOW REASON:NO_TRIGGER Z:-2.000 FAST:-1.500 SLOW:nan CLEANUP_FAILED:0
+```
+
+STAGE identifies DEPLOY, FAST, SLOW, STOW or RESULT. REASON identifies the
+native failure path, including NO_TRIGGER, CONTACT_RANGE, DEPLOY_FAILED,
+STOW_FAILED and Z_UNTRUSTED. Z is the firmware Z at the first failure when it
+has synchronized that position; `nan` means no valid failure position was
+captured. FAST/SLOW contain accepted touch positions before probe-offset
+conversion, not thickness or laser gap. CLEANUP_FAILED refers only to the
+final stow call. After rejected deployment, native logical state can make this
+call a no-op; a zero flag is not proof that a physical stow command ran or
+succeeded. Later failures never overwrite the first cause.
+Successful cycles and rejected outer preconditions emit no diagnostic line.
+
+A native BLTouch alarm can emit its own Error before G39 returns. The host
+still stops on that first error, so subsequent diagnostics are not guaranteed
+to arrive in those cases. No error is delayed to collect telemetry. Neither
+this record nor fake hardware tests establish physical probe behavior. The
+original paper-probing failure remains unclassified until an operator-confirmed
+test provides further evidence.
+
 ## Source and loader layout
 
 `baseline.json` pins Creality `s1_pro_plus` at

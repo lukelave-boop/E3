@@ -1,5 +1,17 @@
 # Compact F401 mainboard with USB updates
 
+## Probe failure candidate
+
+CR Touch deploy/stow failures propagate through the native probe wrapper. A
+deployment rejection prevents entry to the descent routine. Failed G39 cycles
+also emit first-failure stage and position evidence before their existing error,
+when no earlier native alarm has already ended the exchange. The matching Pi
+companion carries this evidence into the focus error display. The native harness
+now executes actual deploy/stow wrappers and endstop-reading descent code in
+both high-speed and low-speed modes with fake hardware. See
+[failure evidence](../marlin_material/README.md#probe-failure-evidence) for its
+limits. These changes are not yet physically verified on the installed rig.
+
 ## Live Z during focus motion
 
 This application advertises `Cap:E3_LIVE_Z_V1:1`. The matching Pi service can

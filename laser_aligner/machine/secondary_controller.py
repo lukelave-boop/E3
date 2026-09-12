@@ -555,8 +555,16 @@ class CrealityControllerOwner:
                         or normalized.startswith("resend")
                         or "unknown command" in normalized
                     ):
+                        detail = _bounded_detail(response)
+                        # Material-cycle evidence is informational, never an ACK.
+                        # Bind it to this exchange; old firmware has no such line.
+                        if command == "G39" or command.startswith("G39 "):
+                            probe_details = [line.strip() for line in responses[:-1]
+                                             if line.strip().startswith("E3PD:1 ")]
+                            if len(probe_details) == 1:
+                                detail += f"; {_bounded_detail(probe_details[0])}"
                         raise SecondaryControllerError(
-                            f"controller rejected the command: {_bounded_detail(response)}"
+                            f"controller rejected the command: {detail}"
                         )
                     # Bounded startup/informational chatter is not an acknowledgement.
             except Exception as exc:

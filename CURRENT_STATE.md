@@ -1,5 +1,36 @@
 # Current repository state
 
+## Native probe error propagation and diagnostic candidate (2026-09-12)
+
+The prior model's firmware edits were fully reverted; its accidental harness
+indentation was corrected before this work. The installed paper-probing failure
+remains unclassified. Inspecting the actual native path found that the void
+probe_specific_action discarded BLTouch deploy/stow failures and set_deployed
+then reported success. A new production-function harness reproduced descent
+entry after a rejected deployment in the old V2 code. The corrected bool return
+propagates that failure before descent. This is a proved code defect, not yet
+proof of the cause of the observed paper failure.
+
+Failed material cycles now record first-failure stage, cause and synchronized
+position where available. E3PD:1 is emitted after native cleanup and before the
+unchanged G39 terminal error; the Pi carries received evidence into focus errors.
+Native alarms can terminate the exchange before E3PD arrives. Cleanup can be a
+logical no-op after failed deployment, so CLEANUP_FAILED:0 does not prove physical
+stow. Speeds, contact envelope, offset, high-speed mode and retry policy are
+unchanged. Existing stop/disconnect and explicit XY recovery remain required.
+
+Verification: all five Cortex-M4 native harness variants pass, including actual
+deployment wrappers and endstop-reading descent in high/low-speed modes with
+fake hardware. 153 focused Windows controller/RPC/prepare/package tests and five
+installer tests pass; four diagnostic/failure-recovery tests passed again after
+the diagnostic field-name correction. Ruff and compileall pass. The final
+F401 image builds with 6,808 bytes RAM; compiled output-kill, recovery/profile
+and planner-ceiling audits pass with fake MMIO. No physical action was performed.
+Read-only SSH confirms installed secondary source 5c66d616 and service PID42165,
+NRestarts0. Firmware candidate 87daf307 and Pi companion 45b728b5 are built locally;
+installation and an observed physical probe cycle are still pending. The existing
+E3 DEV TEST 0.7.90 client remains selected; no Windows executable was rebuilt.
+
 ## XY recovery 0.7.90 built; installation pending (2026-09-12)
 
 Frozen Windows 0.7.90 is verified at d6901d9b12033b3b1697d019fa9e4036d6669fb6 in

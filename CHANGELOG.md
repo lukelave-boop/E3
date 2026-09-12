@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - native probe failure handling and evidence
+
+- Propagate CR Touch deploy/stow errors; prevent descent after rejected deployment.
+- Report first/second-touch failure stage and position without changing the G39
+  terminal error, contact envelope, speed, or automatic-retry policy.
+- Carry received diagnostic evidence into the Pi focus error, retaining STOP,
+  disconnect, clearance restriction and explicit recovery requirements.
+- Exercise production descent and deployment wrappers in native high/low-speed
+  harnesses. Physical paper probing remains unverified.
+
 ## Unreleased - explicit XY recovery after probe failure
 
 - Add separately confirmed XY Home/park recovery for retained focus clearance

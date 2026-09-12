@@ -127,6 +127,44 @@ def test_exact_fan2_commands_are_acknowledged_and_redundant_state_is_suppressed(
     assert fan.status.enabled is False
 
 
+@pytest.mark.parametrize("command", ["G39", "G39 C30.000 H15.000"])
+def test_probe_diagnostic_reaches_failure_without_changing_stop_path(command):
+    serial = FakeSerial(["ok"])
+    owner, fan = _controller([serial])
+    fan.initialize_off()
+    serial.responses.extend([
+        "E3PD:1 STAGE:SLOW REASON:NO_TRIGGER Z:-2.000 FAST:-1.500 SLOW:nan CLEANUP_FAILED:0",
+        "Error:E3MH:2 PROBE_FAILED", "ok",
+    ])
+    failures = []
+    with pytest.raises(SecondaryControllerError, match="STAGE:SLOW REASON:NO_TRIGGER"):
+        owner._execute_acknowledged(command, on_failure=lambda: failures.append(True))
+    assert failures == [True]
+    assert "M112" in serial.writes
+    assert not owner.ready and serial.close_calls >= 1
+    assert serial.writes.count(command) == 1
+
+
+def test_probe_diagnostic_is_not_an_ack_or_a_later_commands_evidence():
+    serial = FakeSerial(["ok"])
+    owner, fan = _controller([serial])
+    fan.initialize_off()
+    serial.responses.append("E3PD:1 STAGE:FAST REASON:NO_TRIGGER")
+    with pytest.raises(SecondaryControllerError, match="timed out"):
+        owner._execute_acknowledged("G39")
+    assert not owner.ready
+
+    replacement = FakeSerial(["ok"])
+    owner, fan = _controller([replacement])
+    fan.initialize_off()
+    replacement.responses.extend(["E3PD:1 STAGE:FAST REASON:NO_TRIGGER", "ok"])
+    owner._execute_acknowledged("M115")
+    replacement.responses.append("Error:E3MH:2 PROBE_FAILED")
+    with pytest.raises(SecondaryControllerError) as caught:
+        owner._execute_acknowledged("G39")
+    assert "E3PD" not in str(caught.value)
+
+
 def test_mapping_digest_mismatch_is_rejected_without_a_write() -> None:
     serial = FakeSerial(["ok"])
     _owner, fan = _controller([serial])
