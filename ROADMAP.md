@@ -2,9 +2,11 @@
 
 ## Completed focus preview handoff
 
-Package the verified Windows client correction for stale activity after a
-successful Preview. The saved 7 mm teaching is retained; the subsequent
-operator-requested focus move and physical gauge-fit check remain separate.
+Windows 0.7.92 is packaged, verified, selected and open through E3 DEV TEST.
+The corrected Preview retains its target through status polling in the live
+read-only/offscreen test. The saved 7 mm teaching is retained. Physical focus
+movement and gauge-fit verification remain separate; full Windows CI is still
+incomplete because its job was cancelled.
 
 ## Operator-requested lower surface limit
 

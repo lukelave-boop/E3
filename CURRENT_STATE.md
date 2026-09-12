@@ -23,8 +23,15 @@ Move to focus button. No focus move or gauge-fit reproduction was performed.
 264 focused remote/focus/offscreen desktop tests pass; the five new regression
 cases failed before the fix and pass after it. Ruff and compileall pass.
 Evidence is under dist/focus-preview-after-teaching/: status-before.json,
-live-ui-reproduction.json and live-ui-fixed.json. Windows 0.7.92 packaging and
-CI are pending; 0.7.91 is still selected until the fixed bundle is verified.
+live-ui-reproduction.json and live-ui-fixed.json. Windows 0.7.92 is packaged,
+verified and selected through the permanent E3 DEV TEST launcher. Its window
+was observed open at revision 1c3dd03426e33ca2beca41d2d9684ee55328db13.
+All 159 frozen modules match the clean source checkout; installer verification
+also passed. Build hashes are in dist/focus-preview-cache-0.7.92/build-verification.json.
+Fast Development CI run 34718481347 passed Ruff, dependency/bytecode and POSIX
+transport/recovery checks; the full Windows job was cancelled, so full Windows
+CI verification remains incomplete. This feature is not qualified for merge.
+The saved teaching is retained; Pi software and firmware were not changed.
 
 ## V2 -10 mm installed; requested paper retry passed (2026-09-12)
 
