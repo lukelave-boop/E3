@@ -11,9 +11,17 @@ source-setting checks remain required; unsupported modes, inconsistent metadata
 and nonuniform scaling are rejected. Stream geometry is bound to the selection
 signature; ordinary widget resizing and display DPI do not change the target.
 
-Real camera metadata was read without machine commands. Focused mapping and
-offscreen widget verification and the frozen build are recorded in the feature
-handoff. Physical camera-to-probe placement remains for operator testing. This
+Real camera metadata was read without machine commands. All 194 focused Windows tests pass, including 42 new preview cases, plus Ruff
+and compileall. Fast Development CI is running after the test-only teardown synchronization; the full suite is not yet verified green. CI application sources
+match frozen d20a379. The first full run passed 5,420 tests with 25 skipped and
+failed one existing auto-home teardown race. Its test now waits for detached
+handler completion. The separate production shutdown/terminal-update overlap
+remains open; no service behavior was changed for the camera fix. The
+required frozen build is version 0.7.80; all 157 source modules match the clean
+checkout, and the permanent E3 DEV TEST pointer is validated against adjacent
+build-info. See docs/FOCUS_PREVIEW_SCALING.md and dist/focus-preview-0.7.80 for
+identity, hashes and test evidence. Physical camera-to-probe placement remains
+for operator testing. This
 is a desktop-only change; installed Pi software, firmware and calibration stay
 in place. Raised-surface parallax correction remains separate.
 
