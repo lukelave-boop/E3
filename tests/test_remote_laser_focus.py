@@ -22,6 +22,25 @@ server_harness = helpers.server_harness
 focus = focus_helpers.focus
 
 
+def test_selected_job_focus_is_bound_into_remote_program_bytes(remote_focus):
+    service, pi, result = remote_focus
+    from laser_aligner.machine.job_focus import CAPABILITY
+    pi.capabilities.append(CAPABILITY)
+    result.update(action="use_job", job_focus={"id": str(uuid.uuid4()), "target_z_mm": 2.6})
+    service.focus_control("use_job", confirmed=True, preview_id=str(uuid.uuid4()))
+    program = service.preflight_program("G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S100\nG1 X20 Y10 F500\nM5")
+    assert program.lines[0] == "E3FOCUS " + result["job_focus"]["id"]
+    service._require_current_program(program)
+    assert service.preflight_program("G21\nG90\nM5").lines == ("G21", "G90", "M5")
+
+
+def test_job_focus_requires_matching_pi_capability(remote_focus):
+    service, pi, result = remote_focus
+    with pytest.raises(MachineError, match="Pi companion"):
+        service.focus_control("use_job", confirmed=True, preview_id=str(uuid.uuid4()))
+    assert not any(r['action'] == ACTION_MACHINE_FOCUS for r in pi.requests)
+
+
 @pytest.fixture
 def remote_focus(monkeypatch):
     monkeypatch.setenv("E3_BRIDGE_TOKEN", "remote-machine-test-token-value")

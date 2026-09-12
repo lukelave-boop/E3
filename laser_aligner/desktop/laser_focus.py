@@ -267,6 +267,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
         focus_layout.addWidget(self.move, 4, 0, 1, 3)
         focus_layout.addWidget(self.target, 1, 0, 1, 3)
         focus_layout.addWidget(self.gauge_removed, 2, 0, 1, 3)
+        self.job_flat = QtWidgets.QCheckBox("Same flat surface across job; gauge removed; Z and travel path clear")
+        self.use_job = QtWidgets.QPushButton("Use measured focus for next job")
+        self.job_note = QtWidgets.QLabel("Job focus: not selected. Preview the measured surface, then select.")
+        self.job_note.setWordWrap(True)
+        focus_layout.addWidget(self.job_flat, 5, 0, 1, 3)
+        focus_layout.addWidget(self.use_job, 6, 0, 1, 3)
+        focus_layout.addWidget(self.job_note, 7, 0, 1, 3)
+        self.job_flat.toggled.connect(self._sync)
         layout.addWidget(focus)
         footer = QtWidgets.QHBoxLayout()
         self.message = QtWidgets.QLabel("Connect the machine, then refresh focus support.")
@@ -280,7 +288,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
         for button, action in ((self.reference, "reference"), (self.measure, "measure"),
                                (self.teach, "teach"), (self.preview, "preview"),
-                               (self.move, "move"), (self.return_clearance, "clearance"),
+                               (self.use_job, "use_job"), (self.move, "move"), (self.return_clearance, "clearance"),
                                (self.clear_surface, "clear_surface"), (self.forget, "forget"),
                                (self.apply_offset, "set_xy_offset"), (self.align_probe, "align_probe"),
                                (self.align_laser, "align_laser")):
@@ -683,7 +691,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                if sequence.get("phase") == "laser"
                                else "Solid, flat patch spans probe and laser at the same height")
         self.home.setEnabled(idle and projection.can_home and self.path_clear.isChecked()
-                             and not requires_clearance and not recovery_reference_only)
+                             and (not requires_clearance or known)
+                             and not recovery_reference_only)
         self.reconnect_ender.setEnabled(bool(idle and self._result.get("recovery_available") is True))
         recovery_needed = requires_clearance and projection.controller_state == "READY_HOME_REQUIRED"
         self.xy_recovery_group.setVisible(recovery_needed)
@@ -765,6 +774,15 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                     and self._result.get("calibration_compatible") is True))
         move_block = self._move_block_reason()
         self.move.setEnabled(move_block is None)
+        self.use_job.setEnabled(bool(move_block is None
+                                    and self.job_flat.isChecked()
+                                    and self._result.get("job_focus_available") is True))
+        job_focus = self._result.get("job_focus")
+        self.job_note.setText(
+            f"Next job: {job_focus['gap_mm']:g} mm gap at Z{job_focus['target_z_mm']:.3f}; "
+            f"travel at Z{job_focus['clearance_z_mm']:g}. Re-select after changing the work."
+            if job_focus else "Job focus: not selected. Preview the measured surface, then select."
+        )
         self.move_note.setText(
             f"Move unavailable: {move_block}" if move_block else
             f"Choose Move to focus to move Z to {self._result['preview']['target_z_mm']:.3f} mm."
@@ -813,7 +831,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._sync()
         button = self.up if action == "jog" and value and value > 0 else self.down if action == "jog" else {
             "reference": self.reference, "measure": self.measure, "teach": self.teach,
-            "preview": self.preview, "move": self.move, "clearance": self.return_clearance,
+            "preview": self.preview, "use_job": self.use_job, "move": self.move, "clearance": self.return_clearance,
             "clear_surface": self.clear_surface, "forget": self.forget,
             "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
             "recover": self.reconnect_ender, "recover_xy": self.recover_xy,
@@ -827,7 +845,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         }
         if action in {"teach", "jog", "preview", "align_laser"}:
             arguments["measurement_id"] = self._result["surface"]["id"]
-        if action == "move":
+        if action in {"move", "use_job"}:
             arguments["preview_id"] = self._preview_id
         if action == "jog":
             arguments["value"] = value

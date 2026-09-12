@@ -26,7 +26,7 @@ RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy"}
+           "position_probe", "recover", "recover_xy", "use_job"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -60,7 +60,7 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
             raise SafetyError(f"Invalid focus {label} ID")
     if action in {"jog", "teach", "preview", "align_laser"} and measurement_id is None:
         raise SafetyError("Measure this surface before teaching or positioning focus")
-    if action == "move" and preview_id is None:
+    if action in {"move", "use_job"} and preview_id is None:
         raise SafetyError("Preview the focus target before moving")
     if action == "teach" and gap_mm != 7:
         raise SafetyError("Teach with the 7 mm gauge; 5 and 3 mm are derived offsets")
@@ -107,11 +107,13 @@ class LaserFocus:
         self.invalidate()
 
     def invalidate(self):
+        self.job_plan = None
         self.reference = self.surface = self.preview = None
         self.xy_sequence = None
         self.session = None
 
     def clear_surface(self, *, keep_alignment=False):
+        self.job_plan = None
         self.surface = self.preview = None
         if not keep_alignment:
             self.xy_sequence = None
@@ -340,6 +342,8 @@ class LaserFocus:
             if self.xy_sequence and self.xy_sequence["phase"] != "laser":
                 raise SafetyError("Align the laser over the measured point before lowering or teaching Z")
 
+        if action in {"jog", "teach", "preview", "forget", "set_xy_offset"}:
+            self.job_plan = None
         if action == "reference":
             self.invalidate()
             self.session = session
@@ -451,7 +455,7 @@ class LaserFocus:
                                 "calibration_id": self.calibration["id"], "gap_mm": gap_mm,
                                 "target_z_mm": target, "current_z_mm": current,
                                 "clearance_z_mm": clearance}
-        elif action == "move":
+        elif action in {"move", "use_job"}:
             known()
             laser_aligned()
             preview = self.preview
@@ -460,7 +464,23 @@ class LaserFocus:
             self.preview = None
             floor = 0.0
             finite_number(preview["target_z_mm"], "Focus target", floor, maximum)
-            move_to(preview["target_z_mm"])
+            if action == "use_job":
+                measured_contact = self.surface["contact_z_mm"]
+                if current > clearance + .05 or self.xy_recovery_pending_reference:
+                    raise SafetyError("Job focus needs a known Z at or below the selected clearance")
+                if clearance < measured_contact + 15 or preview["target_z_mm"] >= clearance:
+                    raise SafetyError("Job focus needs clearance above the surface and focus target")
+                if self.requires_clearance and clearance < self.selected_clearance:
+                    raise SafetyError("Job focus cannot reduce the retained return clearance")
+                self.selected_clearance = clearance
+                self.job_plan = copy.deepcopy(dict(
+                    preview, id=str(uuid.uuid4()), session=session, firmware=firmware,
+                    geometry=geometry, maximum=maximum, xy=list(xy),
+                    calibration=self.calibration, reference=self.reference,
+                ))
+            else:
+                self.job_plan = None
+                move_to(preview["target_z_mm"])
         elif action == "clearance":
             known()
             if self.requires_clearance and clearance < self.selected_clearance:
@@ -481,7 +501,7 @@ class LaserFocus:
             if action == "reference":
                 self.xy_recovery_pending_reference = False
                 self.requires_clearance = False
-        return copy.deepcopy({"action": action, "available": True, "reference_ready": self.reference is not None,
+        return copy.deepcopy({"action": action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
                               "ender": owner.recovery_status(), "recovery_available": True,
                               "current_readback": {"z_mm": current, "z_known": board["z_known"], "fresh": True},
                               "surface": self.surface, "calibration": self.calibration,

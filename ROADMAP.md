@@ -1,5 +1,13 @@
 # Roadmap
 
+## Measured job focus integration
+
+Implemented explicit one-use selection and Pi-owned clearance/approach/focus/
+cut/lift sequencing, including automatic clearance before manual Home / park.
+Automated acceptance passes; Windows/Pi delivery and operator physical sequence
+verification are pending. Multi-height/layer focus and raised-surface camera
+correction remain separate work.
+
 ## Completed focus preview handoff
 
 Windows 0.7.92 is packaged, verified, selected and open through E3 DEV TEST.

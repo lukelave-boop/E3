@@ -15,8 +15,14 @@ Its taught offset and expanded native probe envelope are implemented for
 operator validation, not physically qualified by earlier firmware tests.
 Measured top-surface elevation includes supports and is not material thickness.
 Preview is read-only; movement requires current measurement/session/geometry
-and bounds checks. A clearance restriction blocks ordinary XY/Home/arming/job
-starts after a focus descent until an acknowledged clearance lift. The operator
+and bounds checks. A clearance restriction blocks ordinary XY/arming/job
+starts after a focus descent until an acknowledged clearance lift. Home / park
+first requests that verified lift. A selected measured-focus job lifts before
+arming, approaches at clearance, lowers only after XY completion, and lifts
+after acknowledged laser-off and draining before successful final Home / park.
+The selection requires one flat job surface and confirmed gauge removal and
+clear Z/XY paths. STOP, failed moves and unknown Z never initiate recovery motion.
+The operator
 must still confirm the actual path, flat patch, gauge fit and changed workpiece.
 No focus actions fire the laser or provide safety-rated stopping or collision
 detection. Job-bound focus and a coordinated post-job lift remain separate work.
@@ -29,7 +35,8 @@ clearance along the entire XY homing/search/parking path at the actual height.
 M119 is only an electrical consistency check. Recovery issues no Ender Z travel,
 retains the clearance restriction, and requires a separate confirmed border
 reference afterwards. STOP and both controller sessions remain guarded through
-final readback; normal jogging, Home, jobs and arming do not gain an exception.
+final readback; the automatic Home clearance lift cannot bypass this recovery
+state. Normal jogging, jobs and arming remain blocked.
 An unknown reset Z near zero is not physical height. The subsequent reference's
 initial 5 mm lift requires independently confirmed physical headroom; arbitrary
 unknown nonzero Z remains rejected. See the [recovery sequence](docs/LASER_FOCUS.md#recover-xy-after-a-failed-probe).

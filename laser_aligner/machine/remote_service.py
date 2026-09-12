@@ -24,6 +24,8 @@ from typing import Any
 from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
+from .job_focus import attach as attach_job_focus
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
@@ -1580,6 +1582,11 @@ class RemoteMachineService:
         *,
         guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     ) -> ValidatedProgram:
+        program = self._policy.preflight_program(
+            text, guarded_output_polygon_mm=guarded_output_polygon_mm,
+        )
+        if program.requires_laser_authorization:
+            text = attach_job_focus(text, getattr(self, "_selected_job_focus", None))
         return self._policy.preflight_program(
             text,
             guarded_output_polygon_mm=guarded_output_polygon_mm,
@@ -1748,6 +1755,8 @@ class RemoteMachineService:
             raise MachineError("Update the E3 Pi service to use probe XY alignment")
         if action == "position_probe" and FOCUS_CLICK_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to position the probe at a selected point")
+        if action == "use_job" and JOB_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
+            raise MachineError("Update the Pi companion before selecting measured job focus")
         recovery_supported = FOCUS_RECOVERY_CAPABILITY in (self._node_capabilities or ())
         if action == "recover" and not recovery_supported:
             raise MachineError("Update the E3 Pi service to reconnect the Ender from this window")
@@ -1801,6 +1810,14 @@ class RemoteMachineService:
             raise PiJobProtocolError(str(exc)) from exc
         self._require_operation_current(generation)
         self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
+        if action == "use_job":
+            plan = result.get("job_focus")
+            if type(plan) is not dict:
+                raise PiJobProtocolError("Pi did not return the selected job focus")
+            attach_job_focus("M5", plan)
+            self._selected_job_focus = dict(plan)
+        elif action not in {"status", "clearance"}:
+            self._selected_job_focus = None
         if action == "preview":
             # The monitor may still cache this completed operation as active.
             # Publish a real post-completion snapshot before the desktop accepts

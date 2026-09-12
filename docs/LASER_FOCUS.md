@@ -235,9 +235,9 @@ is not used in the focus calculation because its top is probed directly.
 
 This feature positions the Ender Z axis from a probed top surface and a saved
 7 mm gauge setting. The primary controller retains XY and laser control.
-The focus actions are laser-off setup actions; they do not fire the laser,
-apply camera height correction, or automatically change focus when starting a
-job. Calibration must be physically taught and checked on this machine.
+The focus setup actions do not fire the laser or apply camera height correction.
+The separate **Use measured focus for next job** selection enables the coordinated
+job sequence below. Calibration must be physically taught and checked on this machine.
 
 Material thickness and surface elevation are different. A 3 mm sheet on a
 30 mm support presents a top surface 33 mm above that support's base, but is
@@ -380,13 +380,36 @@ range remains Z20 through the configured maximum. The dedicated teaching and
 focus path may work below Z20, but never below Z0 or beyond the configured
 ceiling. The probe-contact coordinate is not the laser-face collision plane.
 
-This release is explicit setup positioning and gauge validation. Ordinary XY
-jogging, Home / park and job starts are blocked while Z still requires a return
-to clearance. Clearing a measurement does not remove that restriction. It does
-not yet bind a saved project or recipe to a focus measurement, automatically
-refocus between layers, or coordinate a final Z lift with post-job XY homing.
-Those job-integration steps follow physical calibration acceptance. Camera
-correction for raised work is also separate.
+Ordinary XY jogging remains blocked while Z requires a return to clearance.
+**Home / park** automatically lifts to the retained clearance and verifies that
+lift before moving XY. Unknown Z, recovery state, STOP or a failed lift blocks
+continuation. Clearing a measurement does not remove the clearance restriction.
+
+## Use the measured focus for a job
+
+1. Probe the actual work surface and return the laser to the measured spot.
+   Select the desired gap and choose **Preview target**.
+2. Confirm that the same flat surface spans the whole job, the gauge is removed,
+   and Z travel and the entire XY path are clear at the selected clearance.
+   Choose **Use measured focus for next job**. Its readout shows gap, focus Z
+   and clearance. This selects a one-use job plan; it does not move or emit.
+3. Close the focus window and start the intended job using its normal preview
+   and START authorization. If lowered, E3 first lifts before arming. It moves
+   XY with output off at clearance, waits for completion, lowers to the measured
+   focus Z, verifies it, and only then begins the powered toolpath.
+4. Successful completion acknowledges laser-off, drains queued XY motion, and
+   verifies a clearance lift before the normal Home / park. It still lifts if
+   automatic post-job parking is disabled. Failed or stopped jobs never trigger
+   an automatic lift, Home, or retry.
+
+The Pi owns the complete accepted sequence even if Windows monitoring detaches.
+A controller/Pi reset, changed measurement/calibration/clearance, ordinary XY
+jog or Home invalidates selection; select again after establishing a fresh
+measurement. The UUID binding travels in the exact immutable job bytes and never
+reaches GRBL. Selections are consumed once and are not saved in project files.
+Jobs without a selected binding retain their existing behavior and do not focus
+automatically. This sequence supports one flat surface and one gap per job;
+layer refocusing and camera correction for raised work remain separate.
 
 ## Physical acceptance
 

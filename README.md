@@ -1,5 +1,16 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Measured focus for the next job
+
+In Surface / laser focus, preview the measured surface, confirm that the same
+flat surface spans the job and paths are clear, then choose **Use measured focus
+for next job**. START lifts to clearance, approaches with the laser off, lowers
+to the selected gap, and cuts. Successful completion turns output off and lifts
+before Home / park. Manual Home / park also lifts first when clearance is owed.
+The selection is one use and requires a matching Pi companion. No firmware
+change or re-teaching is needed; establish a fresh reference/measurement after
+the Pi update. Jobs without a selection retain their existing behavior.
+
 The focus-preview client fix refreshes completed-operation status before
 presenting the target, preserving the operator's saved gauge calibration.
 See [current verification and build status](CURRENT_STATE.md).

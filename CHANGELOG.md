@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — measured job focus and clearance
+
+- Bind an explicitly selected measured surface/gap to the next exact Pi-owned
+  job; travel at clearance, lower before cutting, and lift after laser-off before
+  final Home / park. One flat surface per job; stale selections cannot start.
+- Manual Home / park raises to the retained focus clearance before moving XY.
+  Failed or unknown Z blocks continuation; STOP/failure never initiates recovery
+  motion. Saved gauge teaching and firmware are unchanged.
+
 ## Unreleased - retain completed focus preview
 
 - Refresh the Windows remote cache after Preview completes, so its earlier

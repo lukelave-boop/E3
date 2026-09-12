@@ -55,6 +55,10 @@ from .controller_session import (
 )
 from .focus_bounds import FocusXYBounds
 from .io_diagnostics import thread_snapshot
+from .job_focus import binding_id as focus_binding_id
+from .job_focus import check_context as check_job_focus_context
+from .job_focus import move as move_job_focus
+from .job_focus import program_binding, selected_plan
 from .laser_focus import LaserFocus
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
@@ -266,7 +270,7 @@ def _add_exception_note(error: BaseException, note: str) -> None:
 def _program_line_contains_motion(line: str) -> bool:
     """Exclude strict E3-owned auxiliary instructions from G-code parsing."""
 
-    return not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) and contains_motion(line)
+    return focus_binding_id(line) is None and not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) and contains_motion(line)
 
 
 class _ControllerCommandRejected(MachineError):
@@ -315,6 +319,7 @@ class _JobRunContext:
     status: JobStatus
     air_assist_commands: AirAssistCommands | None
     air_assist_off_commands: tuple[str, ...]
+    focus_plan: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3869,7 +3874,17 @@ class MachineService:
                 raise MachineError("Home / park was cancelled by software STOP")
         self._require_safety_configuration()
         if self._laser_focus.requires_clearance and focus_recovery_guard is None:
-            raise SafetyError("Return Z to the selected focus clearance before Home / park")
+            try:
+                self.focus_control("clearance", confirmed=True,
+                                   clearance_z_mm=self._laser_focus.selected_clearance)
+            except MachineError as exc:
+                self._laser_focus.requires_clearance = True
+                raise SafetyError(f"Home / park blocked: clearance lift failed: {exc}") from exc
+            with self._stop_epoch_lock:
+                if self._stop_epoch != operation_stop_epoch:
+                    raise MachineError("Home / park was cancelled during the clearance lift")
+            if self._laser_focus.requires_clearance:
+                raise SafetyError("Home / park requires a verified focus clearance lift")
         if focus_recovery_guard is not None:
             # Only the separately confirmed split-controller recovery supplies
             # this bound guard. Ordinary Home and job startup keep their gate.
@@ -5036,6 +5051,7 @@ class MachineService:
         if len(lines) > 250_000:
             raise SafetyError("G-code program exceeds the 250,000-line safety limit")
 
+        job_focus_id = program_binding(lines)
         seen_mm = False
         seen_absolute = False
         seen_initial_m5 = False
@@ -5052,6 +5068,8 @@ class MachineService:
         last_line_is_m5 = False
 
         for index, line in enumerate(lines, start=1):
+            if focus_binding_id(line) is not None:
+                continue
             words, g_codes, m_codes = self._validate_stream_line(line)
             last_line_is_m5 = m_codes == {5}
             values = {word.letter: word.value for word in words}
@@ -5204,6 +5222,8 @@ class MachineService:
             raise SafetyError("Program must end with a standalone M5 laser-off command")
         if air_assist_on:
             raise SafetyError("Program must disable air assist before its final M5")
+        if job_focus_id is not None and not requires_laser_authorization:
+            raise SafetyError("Measured job focus requires a powered job")
         return lines, requires_laser_authorization
 
     def _require_safety_configuration(self) -> None:
@@ -5382,6 +5402,8 @@ class MachineService:
             raise SafetyError(
                 "Program contains laser-enable commands while process laser lockout is active"
             )
+        if requires_laser_authorization and self._laser_focus.job_plan is not None and program_binding(lines) is None:
+            lines.insert(0, "E3FOCUS " + self._laser_focus.job_plan["id"])
         canonical = "\n".join(lines).encode("utf-8")
         air_assist_commands = self._resolved_air_assist_commands()
         return ValidatedProgram(
@@ -5508,6 +5530,11 @@ class MachineService:
                     )
                 if authorization_phrase.strip() != self.ARM_PHRASE:
                     raise SafetyError("Arming phrase did not match")
+            selected_focus = self._selected_job_focus(program)
+            if selected_focus is not None and self._laser_focus.requires_clearance:
+                self.focus_control("clearance", confirmed=True,
+                                   clearance_z_mm=selected_focus["clearance_z_mm"])
+                self._require_operation_generation_current(stop_epoch, operation="Start")
             with self._lock:
                 self._require_expected_session_generation_locked(
                     expected_session_generation, operation="Start",
@@ -5561,8 +5588,8 @@ class MachineService:
     ) -> dict[str, Any]:
         with self._lock:
             if self._laser_focus.requires_clearance:
-                raise SafetyError("Return Z to focus clearance before starting a job; taught focus is setup-only")
-            self._laser_focus.invalidate()
+                raise SafetyError("Return Z to focus clearance before starting a job")
+            focus_plan = self._selected_job_focus(program)
             requires_laser_authorization = program.requires_laser_authorization
             requires_motion = program.requires_motion
             start_authorization_epoch: int | None = None
@@ -5669,7 +5696,9 @@ class MachineService:
                     status=job_status,
                     air_assist_commands=active_air_assist,
                     air_assist_off_commands=self._active_job_air_assist_off_commands,
+                    focus_plan=focus_plan,
                 )
+                self._laser_focus.invalidate()
                 self._job = job_status
                 self._job_stop = job_stop
                 self._active_job_context = context
@@ -5782,6 +5811,8 @@ class MachineService:
         self._raise_session_failure(context.session)
         if job_stop.is_set():
             raise MachineError("Job stopped")
+        if command != "M5":
+            check_job_focus_context(self, context)
         if self._execute_secondary_air_assist_instruction(command):
             return False
         self._raise_if_secondary_faulted()
@@ -5835,6 +5866,12 @@ class MachineService:
                 f"Job command {command!r} failed while writing: {write_error}"
             ) from write_error
         return True
+
+    def _selected_job_focus(self, program):
+        return selected_plan(self, program)
+
+    def _move_job_focus(self, context, *, clearance):
+        return move_job_focus(self, context, clearance=clearance)
 
     def _finish_powered_job_home_park_and_hold(self) -> None:
         """Home and park after a successful laser job, retaining GRBL coordinate trust."""
@@ -5968,7 +6005,17 @@ class MachineService:
             for command in context.air_assist_off_commands:
                 self._write_running_job_line(command)
                 self._wait_for_ack(job_ack_timeout)
+            focused = False
+            if context.focus_plan is not None:
+                self._move_job_focus(context, clearance=True)
             for index, line in enumerate(lines, start=1):
+                if focus_binding_id(line) is not None:
+                    continue
+                if context.focus_plan is not None and not focused and line.startswith(("M3 ", "M4 ")):
+                    self._execute_running_job_command(context.session.dialect.motion_barrier_command,
+                                                      timeout=job_ack_timeout)
+                    self._move_job_focus(context, clearance=False)
+                    focused = True
                 primary_written = self._write_running_job_line(line)
                 # GRBL may delay an acknowledgement while its planner is full or
                 # while a standalone laser-state command synchronizes queued
@@ -6004,6 +6051,10 @@ class MachineService:
                     write_guard=self._secondary_job_write_guard,
                 )
             air_assist_off_acknowledged = True
+            if context.focus_plan is not None:
+                self._execute_running_job_command(context.session.dialect.motion_barrier_command,
+                                                  timeout=job_ack_timeout)
+                self._move_job_focus(context, clearance=True)
             if run_completion:
                 self._finish_powered_job_home_park_and_hold()
             elif self.settings.backend == "serial" and requires_motion:

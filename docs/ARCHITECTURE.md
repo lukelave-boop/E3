@@ -1,5 +1,22 @@
 # Architecture
 
+## Job-bound measured focus
+
+The focus panel selects an ephemeral Pi-owned job plan from a current preview
+and explicit flat-surface/path confirmation. A UUID directive at the beginning
+of the immutable canonical program binds upload, authorization and execution to
+that exact plan. The normal parser rejects misplaced, repeated or malformed
+directives. MachineService validates live authority, consumes the selection at
+START and copies it into the job context. Ordinary manual commands cannot send
+the directive. Remote monitoring loss cannot interrupt an accepted Pi job.
+
+machine/job_focus.py performs bounded secondary Z positioning under the running
+job's STOP and controller generations, with firmware/known/stowed/readback checks.
+Primary commands continue only under the same focus authority. The stream waits
+for XY completion before descent and for laser-off/drain before the final lift.
+The normal focus service performs any pre-arming or manual Home clearance lift.
+No project schema, firmware, calibration persistence or optical correction changes.
+
 ## Focus preview completion snapshot
 
 The Windows remote client follows a successful focus Preview with a fresh

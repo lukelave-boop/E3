@@ -1,5 +1,33 @@
 # Current repository state
 
+## Measured job focus and automatic clearance (2026-09-12)
+
+The next feature adds explicit Use measured focus for next job. The operator
+confirms one flat job surface, gauge removal and clear Z/XY travel. A one-use
+Pi selection binds the measurement, calibration, gap, clearance, maximum and
+both controller sessions. Its UUID is part of the immutable E3FOCUS job bytes;
+the directive never reaches GRBL. Changed measurement/session/configuration,
+replay or absent binding is rejected. The selection is not persisted.
+
+The Pi owns clearance lift, laser-off XY approach, verified focus descent before
+M3/M4, toolpath execution, acknowledged M5/drain and final verified clearance
+lift before the existing Home/park. Starting while lowered lifts before arming.
+Ordinary Home/park also attempts the retained clearance lift first. Unknown Z,
+failed readback/lift, STOP or recovery state prevents XY continuation. No failed
+job automatically lifts, homes, or retries. Final lift also runs when automatic
+post-job parking is disabled. Jobs without a selected binding keep their prior
+behavior; they do not automatically focus. This is one flat surface per job,
+not layer refocusing, automatic material detection or raised-camera correction.
+
+Windows focused acceptance: 288 passed (job-focus, remote focus, offscreen focus,
+G-code/scan). Broader machine/remote checks: 285 passed; two old fake job contexts
+needed the added focus_plan=None field and both focused STOP checks then passed.
+Earlier unchanged focus coverage also passed. Ruff and compileall passed.
+The Pi-owned loopback upload test completed and lifted after client detach.
+All controller tests use simulated peers; no new physical motion/cut was run.
+Windows 0.7.93 packaging, Pi installation and CI results are pending. The saved
+7 mm calibration hash remains 3923a856b1fe4fd315f5d2ebf1648e6b25e2c0479d24aa07368e0d2b72014ac6.
+
 ## Focus preview completion cache fix (2026-09-12)
 
 The operator taught and saved a 7 mm fit: calibration

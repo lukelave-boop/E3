@@ -425,6 +425,21 @@ def test_preview_must_be_explicit_current_and_gauge_removed_before_move(panel):
     assert not panel.gauge_removed.isChecked()
 
 
+def test_next_job_focus_needs_explicit_preview_and_flat_job_confirmation(panel):
+    confirm(panel)
+    panel.gauge_removed.setChecked(True)
+    panel.set_result(result(action="preview", preview=preview(), job_focus_available=True))
+    assert not panel.use_job.isEnabled()
+    panel.job_flat.setChecked(True)
+    assert panel.use_job.isEnabled()
+    calls = []
+    panel.actionRequested.connect(lambda action, args: calls.append((action, args)))
+    panel.use_job.click()
+    assert calls[0][0] == "use_job" and calls[0][1]["preview_id"] == "preview-1"
+    panel.set_result(result(action="preview", preview=preview()))
+    assert not panel.use_job.isEnabled()
+
+
 @pytest.mark.parametrize("changed", ["gap", "clearance", "surface", "age", "preview_id", "position", "limit",
                                      "calibration", "missing_calibration_id", "incompatible", "floor"])
 def test_edited_or_stale_preview_cannot_authorize_move(panel, changed):
@@ -557,7 +572,7 @@ def test_contact_floor_unknown_z_calibration_and_clearance_gates(panel):
     assert panel.up.isEnabled()
     assert panel.return_clearance.isEnabled()
     assert not any(button.isEnabled() for button in panel.xy_buttons)
-    assert not panel.home.isEnabled()
+    assert panel.home.isEnabled()  # Home first performs a verified clearance lift.
     panel.set_result(result(calibration_compatible=False))
     assert not panel.preview.isEnabled()
     assert "re-teach" in panel.calibration.text()
@@ -581,7 +596,7 @@ def test_return_to_clearance_survives_lost_reference_and_retains_prior_minimum(p
     assert panel.clearance.value() == 40
     panel.path_clear.setChecked(True)
     assert panel.return_clearance.isEnabled()
-    assert not panel.home.isEnabled()
+    assert panel.home.isEnabled()  # Uses the retained Z40 clearance before XY.
     assert not any(button.isEnabled() for button in panel.xy_buttons)
     panel.clearance.setValue(30)
     assert not panel.return_clearance.isEnabled()
