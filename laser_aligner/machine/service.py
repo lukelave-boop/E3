@@ -80,6 +80,8 @@ _STREAM_G_CODES = {0, 1, 21, 90}
 _STREAM_M_CODES = {3, 4, 5}
 _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
 _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
+_FOCUS_OPERATION_TIMEOUT_SECONDS = 120.0
+_FOCUS_XY_FEED_CEILING_MM_MIN = 1200.0
 _INITIAL_CONNECT_RETRY_DELAY_SECONDS = 0.2
 _CONTROLLER_CONNECT_ATTEMPTS = 3
 _CONTROLLER_CONNECT_DEADLINE_SECONDS = 15.0
@@ -2643,6 +2645,7 @@ class MachineService:
                 session=session,
                 command_sequence=sequence,
                 transaction_started_at=transaction_started,
+                response_guard=_write_guard,
             )
             LOGGER.info(
                 "primary controller transaction generation=%d endpoint=%s protocol=%s "
@@ -2693,6 +2696,7 @@ class MachineService:
         command_sequence: int | None = None,
         transaction_started_at: float | None = None,
         require_active_session: bool = True,
+        response_guard=None,
     ) -> list[str]:
         # Candidate synchronization is owned by its STOP epoch, never by an old
         # job context that may still be unwinding on another thread.
@@ -2735,6 +2739,11 @@ class MachineService:
             deadline = time.monotonic() + timeout
             responses: list[str] = []
             while time.monotonic() < deadline:
+                # Focus XY completion can legitimately outlast an ordinary ACK.
+                # Recheck its network/Ender/deadline guard between bounded reads;
+                # never retain either guard lock while waiting for serial input.
+                with response_guard() if response_guard is not None else nullcontext():
+                    pass
                 self._raise_session_failure(session)
                 if expected_stop_epoch is not None:
                     with self._stop_epoch_lock:
@@ -2753,6 +2762,8 @@ class MachineService:
                             if self._stop_epoch != expected_stop_epoch:
                                 raise MachineError("Operation was cancelled by software STOP") from exc
                     raise MachineError(f"Controller read failed: {exc}") from exc
+                with response_guard() if response_guard is not None else nullcontext():
+                    pass
                 if not response:
                     continue
                 self._raise_session_failure(session)
@@ -4082,6 +4093,7 @@ class MachineService:
     ) -> dict[str, Any]:
         """Explicit gauge teaching and positioning, never job or laser authority."""
         validate_focus_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
+        deadline = time.monotonic() + _FOCUS_OPERATION_TIMEOUT_SECONDS
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
             self._require_safety_configuration()
@@ -4108,7 +4120,6 @@ class MachineService:
                     raise SafetyError("Position over the border before referencing focus Z")
                 if self._uses_grbl_coordinate_state():
                     self._verify_grbl_coordinate_state()
-            deadline = time.monotonic() + 120
             secondary_generation = probe.owner.generation
 
             @contextmanager
@@ -4148,15 +4159,32 @@ class MachineService:
                     raise SafetyError("Probe target and carriage endpoints must be inside the configured work area")
                 if not self._uses_grbl_coordinate_state():
                     raise SafetyError("Probe XY alignment requires verified GRBL coordinates")
-                feed = min(300., float(self.settings.max_travel_feed_mm_min))
-                if not math.isfinite(feed) or feed <= 0:
+                feed_limits = (self.laser_settings.travel_feed_mm_min,
+                               self.settings.max_travel_feed_mm_min,
+                               self.settings.max_work_feed_mm_min)
+                if any(type(v) not in {int, float} or not math.isfinite(v) or v <= 0 for v in feed_limits):
                     raise SafetyError("Probe alignment needs a positive configured travel feed")
+                feed = min(_FOCUS_XY_FEED_CEILING_MM_MIN, *feed_limits)
+                travel_seconds = math.dist(origin, target) * 60.0 / feed
+                completion_timeout = max(float(self.settings.read_timeout), travel_seconds * 1.5 + 5.0)
+                # The final readback performs two coordinate queries and one
+                # realtime snapshot. Reserve their full waits, the G1 ACK before
+                # the barrier, and scheduling margin inside the operation budget.
+                coordinate_timeout = max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout)
+                completion_overhead = self.settings.read_timeout + 2 * coordinate_timeout + 1.5 + 1.0
+
+                def require_movement_budget():
+                    # Reject before motion instead of clamping an inadequate wait.
+                    if completion_timeout + completion_overhead > deadline - time.monotonic():
+                        raise SafetyError("Probe XY travel cannot finish within the focus operation time limit")
+
+                require_movement_budget()
                 entries = []
 
-                def execute(command):
+                def execute(command, *, timeout=None):
                     with write_guard():
                         pass
-                    responses = self.send_command(command, _internal_motion=True,
+                    responses = self.send_command(command, timeout=timeout, _internal_motion=True,
                                                   _expected_stop_epoch=epoch, _write_guard=write_guard)
                     entries.append({"command": command, "responses": responses})
                     with write_guard():
@@ -4167,10 +4195,12 @@ class MachineService:
                 execute("G21")
                 execute("G90")
                 with write_guard():
+                    require_movement_budget()
                     self._jog_position_mm = None
                     motion_start()
                 execute(f"G1 X{target[0]:.3f} Y{target[1]:.3f} F{feed:.3f}")
-                execute(self._require_resolved_dialect().motion_barrier_command)
+                execute(self._require_resolved_dialect().motion_barrier_command,
+                        timeout=completion_timeout)
                 check_focus_xy(target, write_guard)
                 with write_guard():
                     if self._controller_state is not ControllerState.READY_MOTION or self._coordinate_reference_session_generation != session.generation:

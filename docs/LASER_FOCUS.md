@@ -9,7 +9,15 @@ path is clear and the gauge removed, then choose **Move probe here**. This
 positions the probe at clearance; it does not deploy the pin or descend.
 Check the actual probe over the intended solid patch, then use **Measure
 surface**. **Return laser to measured spot** brings the laser to that same
-physical point for gauge teaching or focus.
+physical point for gauge teaching or focus. The XY-path confirmation appears
+above the positioning buttons; the gauge-fit and gauge-removal confirmations
+also appear before the actions they enable.
+
+XY positioning uses the configured travel speed, limited to 1,200 mm/min and
+the machine's travel/work feed ceilings. Its completion wait accounts for the
+move duration within the bounded focus operation; it does not use the short
+ordinary-command acknowledgement timeout. STOP, lost connections and failed
+position verification still invalidate the reference and stop the operation.
 
 The view remains raw, but click coordinates pass through the installed lens
 correction and active registered/meshed bed calibration. The service applies

@@ -1,5 +1,35 @@
 # Current repository state
 
+## Probe positioning completion and prerequisite order (2026-09-12)
+
+The operator reported that 0.7.72 began a slow camera-selected XY move, then
+stopped with RECOVERING/MOTION BLOCKED while the Pi and camera remained
+reachable. The code used F300 (5 mm/s) and the ordinary serial ACK timeout for
+the planner-completion barrier. A simulated delayed barrier reproduces that
+defect. The incident's Pi failure transcript is still needed to establish its
+exact failed command; successful physical positioning is not yet recorded.
+
+Focus XY now uses the configured travel speed, capped at 1,200 mm/min and the
+machine travel/work ceilings. The completion timeout is derived from distance
+and feed, with a bounded operation budget that also reserves the command ACK
+and final coordinate checks. Unfinishable requests are rejected before motion.
+The guarded serial wait checks STOP, primary/Ender generations, network loss
+and the operation deadline between bounded reads. Ordinary command timeouts
+remain short. Failure cannot retain a probe target or trusted XY position.
+
+The desktop places XY-path and gauge confirmations above their dependent
+actions, and presents recovery instructions instead of another positioning
+step while recovering. Automated delayed-completion, timeout, configured-feed,
+budget-rejection and cancellation tests cover the backend; offscreen Qt tests
+cover the order and recovering state. Windows and focused POSIX CI and the
+exact frozen build are recorded in the subsequent handoff. No hardware move,
+live-camera placement, or gauge calibration was performed by this change.
+
+The companion installer targets the installed 170fa49a bundle. A Pi software
+update is required; the 9518b83f Ender firmware, active Z maximum and saved
+offset/cooling/calibration settings are retained. The feature branch remains
+active for operator qualification; unrelated Console and USB work is excluded.
+
 ## Verified camera work-area fix handoff (2026-09-12)
 
 E3 DEV TEST selects Camera probe work-area correction, version 0.7.72,

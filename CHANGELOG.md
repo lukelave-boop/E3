@@ -1,5 +1,14 @@
 # Changelog
 
+## Probe move completion and focus prerequisites (2026-09-12)
+
+Fixed camera-selected probe moves using a short command timeout while waiting
+for travel to complete. Focus XY now respects configured travel/work speeds up
+to 1,200 mm/min and budgets completion/readback time before moving. STOP and
+connection-loss checks remain active during the longer wait. Moved prerequisite
+confirmations above their actions and corrected the focus prompt during recovery.
+The matching Pi software update is required; no Ender firmware update is needed.
+
 ## Probe selection across the configured bed (2026-09-12)
 
 Fixed valid camera probe points outside the original inset calibration grid

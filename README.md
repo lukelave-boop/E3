@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Probe positioning completion
+
+Focus positioning waits for the commanded travel to finish, with a bounded
+timeout based on distance and feed. It uses the configured travel speed up to
+1,200 mm/min. Required confirmations appear above their actions. This correction
+requires the matching Pi companion update; see [laser focus](docs/LASER_FOCUS.md).
+
 ## Camera probe selection limits
 
 Camera probe selection covers the configured work area using the current bed

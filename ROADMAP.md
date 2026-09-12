@@ -1,5 +1,12 @@
 # Roadmap
 
+## Probe positioning recovery correction
+
+Implemented a travel-duration completion wait and reordered focus prerequisites.
+Simulated acceptance/cancellation and offscreen UI checks cover the fix. Install
+the matching Pi companion and frozen desktop build, then qualify actual camera
+placement before continuing surface measurement and gauge teaching.
+
 ## Camera probe selection correction
 
 The inset calibration-grid restriction is corrected; selection uses the

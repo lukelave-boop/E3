@@ -1,5 +1,15 @@
 # Architecture
 
+## Focus XY completion timing
+
+MachineService derives the focus planner-barrier timeout from distance and the
+configured feed, capped at 1,200 mm/min and machine travel/work limits. Before
+motion it reserves the G1 acknowledgement and final coordinate readbacks within
+the 120-second operation budget. Its optional ACK response guard rechecks focus
+session/network/deadline authority between bounded serial reads without holding
+STOP or Ender locks during reads. Other command paths keep their ordinary ACK
+timeouts. Desktop RPC and status-monitor ownership are unchanged.
+
 ## Camera probe mapping domain
 
 AppContext.focus_probe_target uses the provenance-bound configured work area

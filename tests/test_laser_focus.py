@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
+import time
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -795,5 +797,185 @@ def test_stop_interrupts_selected_probe_position_without_retaining_target(focus_
     machine.request_stop(_recover=False)
     worker.join(3)
     assert errors and not worker.is_alive()
+    assert focus.state.surface is focus.state.xy_sequence is None
+    assert machine._jog_position_mm is None
+
+
+@pytest.mark.parametrize("configured_feed", [300., 1200.])
+def test_focus_xy_waits_for_delayed_planner_completion_beyond_ordinary_ack_timeout(
+    focus_machine, monkeypatch, configured_feed,
+):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.settings.read_timeout = .1
+    machine.laser_settings.travel_feed_mm_min = configured_feed
+    barrier = machine._require_resolved_dialect().motion_barrier_command
+    original_write = primary.write_line
+    commands, timers, timeouts = [], [], {}
+    original_send = machine.send_command
+
+    def send(command, **kwargs):
+        timeouts[command] = kwargs.get("timeout")
+        return original_send(command, **kwargs)
+
+    def write(command):
+        commands.append(command)
+        if command == barrier:
+            # A planner barrier ACK arrives when the accepted move completes.
+            # Keep the old F300 in one case so higher feed cannot mask this bug.
+            timer = threading.Timer(.35, original_write, args=(command,))
+            timer.daemon = True
+            timers.append(timer)
+            timer.start()
+        else:
+            original_write(command)
+
+    monkeypatch.setattr(machine, "send_command", send)
+    monkeypatch.setattr(primary, "write_line", write)
+    try:
+        result = machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    finally:
+        for timer in timers:
+            timer.cancel()
+            timer.join(1)
+    assert (primary.x, primary.y) == (76.875, 167.167)
+    assert result["xy_sequence"]["phase"] == "probe" and focus.serial.z == 30
+    assert commands.count(barrier) == 1
+    assert f"G1 X76.875 Y167.167 F{configured_feed:.3f}" in commands
+    assert 5 < timeouts[barrier] < 120
+    assert all(timeout is None for command, timeout in timeouts.items()
+               if command in {"M5", "G21", "G90"} or command.startswith("G1 X"))
+
+
+@pytest.mark.parametrize("travel,max_travel,max_work,expected", [
+    (3000., 6000., 3000., 1200.),
+    (700., 6000., 3000., 700.),
+    (500., 500., 3000., 500.),
+    (3000., 6000., 400., 400.),
+])
+def test_focus_xy_feed_respects_configured_and_focus_ceilings(
+    focus_machine, travel, max_travel, max_work, expected,
+):
+    machine, _focus, _primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.laser_settings.travel_feed_mm_min = travel
+    machine.settings.max_travel_feed_mm_min = max_travel
+    machine.settings.max_work_feed_mm_min = max_work
+    result = machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    moves = [entry["command"] for entry in result["transcript"] if entry["command"].startswith("G1 X")]
+    assert moves == [f"G1 X76.875 Y167.167 F{expected:.3f}"]
+
+
+def test_focus_xy_rejects_travel_that_cannot_fit_operation_budget_before_moving(focus_machine, monkeypatch):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.laser_settings.travel_feed_mm_min = 1.
+    before = (primary.x, primary.y)
+    original = primary.write_line
+    commands = []
+    def write(command):
+        commands.append(command)
+        original(command)
+    monkeypatch.setattr(primary, "write_line", write)
+    with pytest.raises(SafetyError, match="time limit"):
+        machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    assert (primary.x, primary.y) == before
+    assert focus.serial.z == 30
+    assert not any(command.startswith("G1 X") for command in commands)
+
+
+@pytest.mark.parametrize("read_timeout", [2., 8.])
+def test_focus_xy_reserves_final_readbacks_and_move_ack_inside_operation_deadline(
+    focus_machine, monkeypatch, read_timeout,
+):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.settings.read_timeout = read_timeout
+    before = (primary.x, primary.y)
+    carriage = (76.875, 167.167)
+    distance = math.dist(before, carriage)
+    # A 110-second barrier budget fits with the former 6-second reserve, but
+    # cannot also accommodate G1 ACK, two coordinate queries, and status readback.
+    machine.laser_settings.travel_feed_mm_min = distance * 90.0 / 105.0
+    original = primary.write_line
+    commands = []
+    def write(command):
+        commands.append(command)
+        original(command)
+    monkeypatch.setattr(primary, "write_line", write)
+    with pytest.raises(SafetyError, match="time limit"):
+        machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    assert (primary.x, primary.y) == before and focus.serial.z == 30
+    assert not any(command.startswith("G1 X") for command in commands)
+
+
+@pytest.mark.parametrize("failure", ["stop", "network", "ender", "controller_error"])
+def test_focus_xy_completion_wait_is_interrupted_without_retaining_authority(
+    focus_machine, monkeypatch, failure,
+):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    barrier = machine._require_resolved_dialect().motion_barrier_command
+    entered = threading.Event()
+    alive = [True]
+    original = primary.write_line
+    commands, errors = [], []
+    def write(command):
+        commands.append(command)
+        if command == barrier:
+            entered.set()
+            return  # No completion ACK: cancellation must interrupt this wait.
+        original(command)
+    monkeypatch.setattr(primary, "write_line", write)
+    def position():
+        try:
+            machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775],
+                                  _connection_alive=lambda: alive[0])
+        except MachineError as exc:
+            errors.append(str(exc))
+    worker = threading.Thread(target=position)
+    worker.start()
+    assert entered.wait(3)
+    if failure == "stop":
+        machine.request_stop(_recover=False)
+    elif failure == "network":
+        alive[0] = False
+    elif failure == "ender":
+        focus.owner._generation += 1
+    else:
+        primary._queue.put("error:9")
+    worker.join(3)
+    assert errors and not worker.is_alive()
+    assert commands.count(barrier) == 1
+    assert len([s for s in commands if s.startswith("G1 X")]) == 1
+    assert focus.state.surface is focus.state.xy_sequence is None
+    assert machine._jog_position_mm is None
+
+
+def test_focus_xy_missing_completion_ack_remains_bounded_and_retires_position(focus_machine, monkeypatch):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.settings.read_timeout = .1
+    barrier = machine._require_resolved_dialect().motion_barrier_command
+    original = primary.write_line
+    commands = []
+    def write(command):
+        commands.append(command)
+        if command != barrier:
+            original(command)
+    monkeypatch.setattr(primary, "write_line", write)
+    target = [primary.x + 3.402, primary.y + 38.608]  # Only 0.1 mm of XY travel.
+    started = time.monotonic()
+    with pytest.raises(MachineError, match="did not acknowledge"):
+        machine.focus_control("position_probe", confirmed=True, value=target)
+    assert 5 <= time.monotonic() - started < 10
+    assert commands.count(barrier) == 1
+    assert len([s for s in commands if s.startswith("G1 X")]) == 1
     assert focus.state.surface is focus.state.xy_sequence is None
     assert machine._jog_position_mm is None

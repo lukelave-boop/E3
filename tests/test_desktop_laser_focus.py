@@ -80,6 +80,26 @@ def confirm(panel):
     panel.flat_patch.setChecked(True)
 
 
+def test_required_confirmations_are_above_their_focus_actions(panel, app):
+    panel.resize(1000, 1400)
+    app.processEvents()
+    for checkbox, action in (
+        (panel.xy_clear, panel.move_probe), (panel.xy_clear, panel.align_probe),
+        (panel.xy_clear, panel.align_laser), (panel.flat_patch, panel.measure),
+        (panel.gauge, panel.teach), (panel.gauge_removed, panel.move),
+    ):
+        assert checkbox.parentWidget() is action.parentWidget()
+        assert checkbox.geometry().bottom() < action.geometry().top()
+
+
+def test_recovery_prompt_does_not_invite_another_camera_move(panel):
+    panel.set_result(camera_result(surface=None))
+    panel._status = status(controller_state="RECOVERING", connected=False)
+    panel._sync()
+    assert "Wait for controller recovery" in panel.next_step.text()
+    assert not panel.position_probe.isEnabled() and not panel.move_probe.isEnabled()
+
+
 def test_offset_transfer_is_explicit_and_requires_fresh_clearance(panel):
     panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3], surface=None))
     confirm(panel)

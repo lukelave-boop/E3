@@ -106,6 +106,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             xy.addWidget(button)
             self.xy_buttons.append(button)
         grid.addLayout(xy, 3, 0, 1, 4)
+        self.xy_clear = QtWidgets.QCheckBox("XY transfer path clear at clearance; gauge removed")
+        grid.addWidget(self.xy_clear, 4, 0, 1, 4)
         self.position_probe = QtWidgets.QPushButton("Position probe")
         self.position_probe.setCheckable(True)
         self.position_probe.setStyleSheet("QPushButton:checked { border: 1px solid #ffcf40; color: #ffcf40; }")
@@ -113,14 +115,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.move_probe = QtWidgets.QPushButton("Move probe here")
         self.camera_target = QtWidgets.QLabel("Choose Position probe, then click a solid spot in the live image.")
         self.camera_target.setWordWrap(True)
-        grid.addWidget(self.position_probe, 4, 0, 1, 2)
-        grid.addWidget(self.move_probe, 4, 2, 1, 2)
-        grid.addWidget(self.camera_target, 5, 0, 1, 4)
+        grid.addWidget(self.position_probe, 5, 0, 1, 2)
+        grid.addWidget(self.move_probe, 5, 2, 1, 2)
+        grid.addWidget(self.camera_target, 6, 0, 1, 4)
         self.position_probe.toggled.connect(self.cameraModeRequested)
         self.move_probe.clicked.connect(self.cameraMoveRequested)
         self.offset_toggle = QtWidgets.QPushButton("Probe / laser XY offset…")
         self.offset_toggle.setCheckable(True)
-        grid.addWidget(self.offset_toggle, 6, 0, 1, 4)
+        grid.addWidget(self.offset_toggle, 7, 0, 1, 4)
         self.offset_editor = QtWidgets.QWidget()
         offset_layout = QtWidgets.QGridLayout(self.offset_editor)
         offset_layout.setContentsMargins(0, 0, 0, 0)
@@ -145,12 +147,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
         offset_layout.addWidget(self.apply_offset, 2, 0, 1, 4)
         self.offset_editor.hide()
         self.offset_toggle.toggled.connect(self.offset_editor.setVisible)
-        grid.addWidget(self.offset_editor, 7, 0, 1, 4)
+        grid.addWidget(self.offset_editor, 8, 0, 1, 4)
         self.offset_readout = QtWidgets.QLabel("Probe XY offset: not set · use a wide, flat patch")
         self.offset_readout.setWordWrap(True)
-        grid.addWidget(self.offset_readout, 8, 0, 1, 4)
-        self.xy_clear = QtWidgets.QCheckBox("XY transfer path clear at clearance; gauge removed")
-        grid.addWidget(self.xy_clear, 9, 0, 1, 4)
+        grid.addWidget(self.offset_readout, 9, 0, 1, 4)
         self.align_probe = QtWidgets.QPushButton("Put probe over laser spot")
         self.align_probe.setToolTip("At clearance, shift XY by minus the measured probe offset. Then measure.")
         self.align_laser = QtWidgets.QPushButton("Return laser to measured spot")
@@ -181,13 +181,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.z_step.setCurrentIndex(0)
         teach_layout.addWidget(self.down, 1, 0)
         teach_layout.addWidget(self.up, 1, 1)
-        teach_layout.addWidget(self.z_step, 1, 2)
+        teach_layout.addWidget(self.z_step, 1, 2, 1, 2)
         self.teach = QtWidgets.QPushButton("Save current Z as 7 mm gap")
-        teach_layout.addWidget(self.teach, 1, 3)
+        teach_layout.addWidget(self.teach, 3, 0, 1, 3)
         self.gauge = QtWidgets.QCheckBox("7 mm gauge fits at this Z")
-        teach_layout.addWidget(self.gauge, 2, 0, 1, 3)
+        teach_layout.addWidget(self.gauge, 2, 0, 1, 4)
         self.forget = QtWidgets.QPushButton("Forget taught offset")
-        teach_layout.addWidget(self.forget, 2, 3)
+        teach_layout.addWidget(self.forget, 3, 3)
         layout.addWidget(teach)
 
         focus = QtWidgets.QGroupBox("3 · Preview and position")
@@ -201,8 +201,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.target.setWordWrap(True)
         self.gauge_removed = QtWidgets.QCheckBox("Gauge removed; path to target clear")
         focus_layout.addWidget(self.gap, 0, 0)
-        focus_layout.addWidget(self.preview, 0, 1)
-        focus_layout.addWidget(self.move, 0, 2)
+        focus_layout.addWidget(self.preview, 0, 1, 1, 2)
+        focus_layout.addWidget(self.move, 3, 0, 1, 3)
         focus_layout.addWidget(self.target, 1, 0, 1, 3)
         focus_layout.addWidget(self.gauge_removed, 2, 0, 1, 3)
         layout.addWidget(focus)
@@ -494,6 +494,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             control.setEnabled(idle)
         self.refresh.setEnabled(idle)
         self.next_step.setText(
+            "Next: Wait for controller recovery, then Home / park XY."
+            if machine_payload(self._status).get("controller_state") in {"RECOVERING", "OPENING", "SYNCHRONIZING", "STOPPING"} else
+            "Next: Connect the controller before focus setup." if not _read_allowed(self._status) else
+            "Waiting for the current operation to finish." if self._busy or self._pending else
+            "Next: Refresh focus status before positioning." if not self.fresh() else
             "Next: Home / park XY, then reference the border." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
             "Next: Confirm the XY path and choose Move probe here." if self._camera_target else
