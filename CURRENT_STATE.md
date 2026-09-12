@@ -1,5 +1,29 @@
 # Current repository state
 
+## Verified camera probe feature handoff (2026-09-11)
+
+E3 DEV TEST selects Camera-selected probe positioning, version 0.7.69,
+exact code revision 850d176429659eb8b550f4d5213fc5c6b2f38f1d, from
+`.codex-worktrees/focus-camera-probe-dev/dist/E3/E3.exe`. The required Windows
+build script and native-library guard passed. All 157 unique packaged E3
+source modules matched the isolated checkout; the EXE and adjacent build-info
+match the permanent pointer. The normal launcher was not changed.
+
+Fast Development CI 34662785230 passed on that exact code revision: Windows
+Python 3.12 full suite 5,237 passed/25 skipped; POSIX transport/session recovery
+493 passed; Ruff, dependency and compile checks passed. CI:
+https://github.com/lukelave-boop/E3/actions/runs/34662785230
+
+The handoff is `dist/focus-camera-probe-0.7.69/START_HERE.md`; artifact hashes and build
+metadata are in adjacent `verification.json`. The Pi companion is
+`e3-pi-laser-focus-170fa49a`, installed after 7602e2df; mainboard firmware stays
+9518b83f. Offscreen widget/render tests were performed, not interactive frozen
+GUI, live camera or hardware alignment tests. The first operator test selects a solid
+camera target and checks the probe placement at clearance before probing.
+Active max40 and saved X+3.302/Y+38.608 are preserved.
+Physical gauge calibration, transfer acceptance and job integration remain
+active work on this branch.
+
 ## Active: camera-selected probe positioning (2026-09-11)
 
 The Surface / laser focus window now has Position probe, a live-image crosshair,
