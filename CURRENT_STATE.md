@@ -1,5 +1,27 @@
 # Current repository state
 
+## XY recovery 0.7.90 built; installation pending (2026-09-12)
+
+Frozen Windows 0.7.90 is verified at d6901d9b12033b3b1697d019fa9e4036d6669fb6 in
+`.codex-worktrees/focus-xy-recovery-ready/dist/E3/E3.exe`. All 159 source and
+embedded compiled modules match the clean checkout; the native bundle guard
+passed. Exact-source Fast Development CI 34711710572 passed: Windows Python
+3.12 5710 passed / 25 skipped; POSIX 500 passed; Ruff and dependency/
+bytecode checks passed. A further 301 Home/recovery tests passed locally after
+the one-line ordinary-Home call compatibility correction. The earlier 050498c
+CI had two Home test-hook failures, and its bundle is superseded.
+
+Matching Pi companion 4a610d7f is verified locally against the exact source and
+installed 34f11e95 baseline. Offline Linux installer checks passed. Automatic
+approval review blocked its predecessor's upload pending explicit payload/
+destination authorization; neither package was uploaded or installed. Pi
+service/firmware/configuration and physical hardware were not changed. The
+permanent E3 DEV TEST pointer remains on 0.7.89 / 31e40fb; it was not switched to
+a desktop whose companion is absent. Current-incident recovery remains pending
+the operator-confirmed plan described below, including the process-restart
+limitation. The PROBE_FAILED cause and physical recovery remain unverified.
+Handoff and exact identities: `dist/focus-xy-recovery-0.7.90/START_HERE.md`.
+
 ## Probe-failure XY recovery repair (2026-09-12)
 
 Paper probing failed at G39 C30.000 H15.000 with E3MH:2 PROBE_FAILED.
