@@ -1,5 +1,42 @@
 # Current repository state
 
+## Verified probe-movement fix handoff (2026-09-12)
+
+E3 DEV TEST selects Probe positioning completion, version 0.7.74, exact
+revision bfca9b115cbc98e5ef7ec871d90baa92fc281aa1, at
+`.codex-worktrees/focus-motion-dev/dist/E3/E3.exe`. The required Windows build
+script produced the frozen executable and passed the native-library guard.
+All 157 packaged source modules match the isolated checkout. EXE SHA256:
+475dfa0c38fb14ef776502093e8f2b846bb7e851b539c4978aeaf4023cc492a7.
+The validated permanent pointer and adjacent build-info match this revision.
+
+Exact-revision Fast Development CI 34692050373 passed: Windows Python 3.12
+5,267 passed/25 skipped, POSIX transport/recovery 493 passed, plus Ruff and
+dependency/bytecode validation. Separately, Ubuntu 22.04.5/WSL2 Python 3.10.12
+passed all 131 focus backend tests with simulated transports. Local Windows
+runs passed 388 machine/focus/remote regression cases and 163 UI/mapping/app/
+installer/launcher cases; final timing checks also passed after review. An
+offscreen render verified the reordered controls. No interactive frozen GUI,
+real camera alignment, physical movement or gauge accuracy was newly verified.
+https://github.com/lukelave-boop/E3/actions/runs/34692050373
+
+The Pi update is `dist/e3-pi-laser-focus-5dcf559d`, manifest SHA256
+5dcf559d32e4d84f8976ab3700ae152d6743a39bfccdca981a9abfd6ba46228f.
+Its service payload matches the frozen source. An offline reconstruction of
+the actual installed 170fa49a kit verified one changed file (service.py), ten
+unchanged files, idempotence, unknown-source rejection before replacement, and
+configuration/max40/cooling/offset/calibration preservation. Only the Linux
+service-inactive check was stubbed in that installer exercise. Five focused
+installer tests also passed. The 834da9e1 intermediate kit is superseded.
+
+The Windows update alone does not fix Pi motion: the companion must be applied
+and the Pi service restarted. Existing Ender firmware remains installed. The
+copy/install and subsequent operator checks are in
+`dist/focus-motion-0.7.74/START_HERE.md`, with source/build/test records alongside.
+The specific incident's Pi log has not been received. Physical placement and
+gauge-focus qualification remain active on this feature branch. Unrelated
+Console/USB work and the normal E3 launcher were not included or changed.
+
 ## Probe positioning completion and prerequisite order (2026-09-12)
 
 The operator reported that 0.7.72 began a slow camera-selected XY move, then
