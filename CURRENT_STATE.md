@@ -1,5 +1,37 @@
 # Current repository state
 
+## Ender recovery direct Pi deployment (2026-09-12)
+
+E3 DEV TEST now selects Ender connection recovery, version 0.7.76, frozen
+revision 51de9f4a18874c0ba1b9c11c1d87c1362335d90d. The required Windows build
+completed, all 157 bundled source modules match the isolated checkout, and
+the validated permanent pointer matches adjacent build-info. The EXE SHA256
+is 30db7942dd28d94423976fd49eece79bb85c5d3009bbcc576cc7d5219af39566.
+The final UI received an offscreen fixture render; interactive frozen GUI,
+camera alignment and physical recovery are not newly verified.
+
+Direct SSH verified the actual Pi baselines and installed the preflighted
+a1710770 companion with the service inactive. Six files were updated with
+backups, six were current, and all twelve were rechecked after installation.
+Machine configuration, saved max40, probe offset and cooling configuration
+hashes are unchanged. Live focus status now exposes the actual Ender fault
+while retaining max40 and offset [3.302,38.608], with no invented Z/reference.
+
+The normal primary connection completed in 2.51 seconds without homing or
+axis travel. One guarded Ender reconnect completed in 47.26 seconds with
+no Ender bytes; the API stayed responsive and settings remained available.
+The updated idle service stopped normally in 0.559 seconds and was restarted.
+The startup readiness wait remains bounded when the Ender is unresponsive.
+
+The audited firmware package 0c719c71 is copied to the Pi and hash-verified,
+but not flashed. The operator confirmed 24 V power remains on. The earlier
+installed firmware cannot read recovery commands inside its kill loop; its
+current silence is consistent with, but does not prove, that state. No USB
+power switch, processor reset, probe actuation, movement or laser test was
+performed. A real processor reset and subsequent physical qualification
+remain outstanding. See docs/ENDER_RECOVERY_HANDOFF.md for exact artifacts,
+test categories and CI evidence. The development branch remains active.
+
 ## Ender connection recovery implementation (2026-09-12)
 
 The received Pi transcript establishes the earlier focus XY G4 barrier failed
