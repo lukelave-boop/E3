@@ -94,7 +94,7 @@ accepts `G39 C<clearance> H<maximum_contact>`. The requested clearance is
 20..80 mm; upper contact is at most 65 mm above the border. Both are required;
 the entire native retract/deploy envelope must fit after runtime probe-offset
 conversion. V2 never homes or moves XY and does not alter the V1 command.
-M115 reports `E3SG:2 PROBE_Z:<six decimals> RETRACT:<six decimals> MIN:-2 MAX:65 CEILING:80`.
+M115 reports `E3SG:2 PROBE_Z:<six decimals> RETRACT:<six decimals> MIN:-10 MAX:65 CEILING:80`.
 These fields identify the geometry to which the host binds its calibration.
 The exact firmware contract is in the source archive's material README.
 

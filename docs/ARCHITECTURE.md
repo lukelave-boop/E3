@@ -1,5 +1,14 @@
 # Architecture
 
+## Versioned surface minimum
+
+The G39 envelope carries its lower contact bound explicitly: V1 retains -2 mm
+and V2 uses the operator-requested -10 mm minimum. The native V2 descent and
+acceptance checks share that bound without changing ordinary native probing.
+The Pi recognizes the supported -2/-10 firmware geometries and binds contact
+and saved-calibration validation to the reported geometry. Desktop range text
+uses returned contact_min_mm; no live value is invented while disconnected.
+
 ## Native material probe diagnostics
 
 The material envelope owns a per-cycle failure trace. Native descent records

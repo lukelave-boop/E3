@@ -799,9 +799,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
             f"Next: {move_block}" if move_block else
             "Next: Choose Move to focus to position the laser."
         )
+        contact_min = _number(self._result.get("contact_min_mm"))
         self.range_note.setText(
-            f"Contact elevation range: −2 to {clearance - 15:g} mm; higher work needs more clearance."
-            if clearance is not None else "Clearance must be 20 mm to the active maximum."
+            (f"Contact elevation range: {contact_min:g} to {clearance - 15:g} mm; higher work needs more clearance.").replace("-", "−")
+            if clearance is not None and contact_min is not None else
+            "Contact elevation range: waiting for controller geometry." if clearance is not None else
+            "Clearance must be 20 mm to the active maximum."
         )
         if requires_clearance and return_minimum is not None:
             self.range_note.setText(self.range_note.text() + f" Return requires Z ≥ {return_minimum:g} mm.")

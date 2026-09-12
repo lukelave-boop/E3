@@ -43,7 +43,7 @@ about 75 mm upward collision clearance from Z20 and selected 60 mm usable
 travel (Z80). That is a measured clearance estimate, not a powered limit test.
 Bare G39 retains its V1 contact range and Z20 starting clearance. Parameterized
 G39 C<clearance> H<maximum_contact> adds the separately advertised V2 cycle:
-clearance 20..80, contact -2..65, and native offset/retract/deploy headroom checks.
+clearance 20..80, contact -10..65, and native offset/retract/deploy headroom checks.
 Its envelope is scoped to that call, including probe failures; it does not change
 ordinary homing, leveling or subsequent V1 calls.
 

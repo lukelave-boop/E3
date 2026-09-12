@@ -20,7 +20,7 @@ XY or change the border datum. The +10.5 mm upper contact corresponds to a
 12 mm sheet on this rig's support 1.5 mm below the border.
 
 The additional `E3_SURFACE_HEIGHT_V2` capability selects a requested native
-clearance/contact envelope with `G39 C<20..80> H<-2..65>`. Bare G39 remains V1.
+clearance/contact envelope with `G39 C<20..80> H<-10..65>`. Bare G39 remains V1.
 V2 retains both native touches, retract and stow; runtime offset/retract headroom
 must fit before deployment. M115's `E3SG:2` line reports the geometry used to
 bind host calibration. See the material README for the exact syntax and result

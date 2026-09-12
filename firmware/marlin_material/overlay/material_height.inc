@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Compiled inside probe.cpp. Native pin control and descent remain in Probe.
 namespace e3_material {
-  Envelope active_envelope = { start_z, maximum };
+  Envelope active_envelope = { start_z, maximum, minimum };
   bool envelope_active = false;
   ProbeTrace trace = { "ENTRY", nullptr, nullptr, NAN, NAN, NAN, false };
 
@@ -15,9 +15,9 @@ namespace e3_material {
 
   struct EnvelopeScope {
     const Envelope previous;
-    explicit EnvelopeScope(const float clearance, const float upper)
+    explicit EnvelopeScope(const float clearance, const float upper, const float lower)
       : previous(active_envelope) {
-      active_envelope = { clearance, upper };
+      active_envelope = { clearance, upper, lower };
       envelope_active = true;
     }
     ~EnvelopeScope() {
@@ -27,7 +27,7 @@ namespace e3_material {
   };
 }
 
-float Probe::material_height(const float clearance, const float upper) {
+float Probe::material_height(const float clearance, const float upper, const float lower) {
   // A rejected nested call must not erase the active cycle's evidence.
   if (e3_material::envelope_active) return NAN;
   e3_material::trace = { "ENTRY", nullptr, nullptr, NAN, NAN, NAN, false };
@@ -35,9 +35,9 @@ float Probe::material_height(const float clearance, const float upper) {
   if (e3_material::envelope_active || !axis_is_trusted(Z_AXIS) || endstops.z_probe_enabled
       || !e3_material::start_ok(current_position.z, offset.z,
           LOGICAL_Z_POSITION(0), Z_CLEARANCE_MULTI_PROBE,
-          _MAX(Z_CLEARANCE_BETWEEN_PROBES, Z_CLEARANCE_DEPLOY_PROBE), clearance, upper))
+          _MAX(Z_CLEARANCE_BETWEEN_PROBES, Z_CLEARANCE_DEPLOY_PROBE), clearance, upper, lower))
     return NAN;
-  const e3_material::EnvelopeScope envelope(clearance, upper);
+  const e3_material::EnvelopeScope envelope(clearance, upper, lower);
   float measured_z = NAN;
   e3_material::trace.stage = "DEPLOY";
   if (!deploy()) measured_z = run_z_probe(true, true) + offset.z;
@@ -55,7 +55,7 @@ float Probe::material_height(const float clearance, const float upper) {
     e3_material::record_failure("Z_UNTRUSTED", current_position.z);
     return NAN;
   }
-  if (!isfinite(measured_z) || measured_z < e3_material::minimum || measured_z > upper) {
+  if (!isfinite(measured_z) || measured_z < lower || measured_z > upper) {
     e3_material::record_failure("INVALID_RESULT", current_position.z);
     return NAN;
   }

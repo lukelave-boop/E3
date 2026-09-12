@@ -115,6 +115,21 @@ def confirm(panel):
     panel.flat_patch.setChecked(True)
 
 
+@pytest.mark.parametrize("minimum", [-10, -2])
+def test_contact_range_displays_controller_minimum_and_keeps_zero_teaching_floor(panel, minimum):
+    payload = result(contact_min_mm=minimum, focus_travel_min_z_mm=0.)
+    payload["firmware_geometry"]["min_mm"] = minimum
+    payload["surface"]["contact_z_mm"] = minimum
+    panel.set_result(payload)
+    assert f"−{abs(minimum)} to 15" in panel.range_note.text()
+    assert "Teaching Z range: 0 to 60" in panel.teaching_limits.text()
+
+
+def test_missing_controller_contact_minimum_is_not_invented(panel):
+    panel.set_result(unavailable_result(contact_min_mm=None))
+    assert "waiting for controller geometry" in panel.range_note.text()
+
+
 def test_required_confirmations_are_above_their_focus_actions(panel, app):
     panel.resize(1000, 1400)
     app.processEvents()

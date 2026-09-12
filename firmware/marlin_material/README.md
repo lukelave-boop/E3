@@ -50,8 +50,12 @@ The exact `Cap:E3_SURFACE_HEIGHT_V2:1` capability adds
 `G39 C<clearance> H<maximum_contact>` without changing bare G39/V1. Both
 parameters are required exactly once, in either order. Values use finite decimal
 syntax; unknown/duplicate parameters, exponents, missing values and trailing junk
-are rejected. Clearance is 20..80 mm and maximum contact is -2..65 mm, both
-in the border-homed native frame. Minimum contact remains -2 mm.
+are rejected. Clearance is 20..80 mm and maximum contact is -10..65 mm, both
+in the border-homed native frame. V2 minimum contact is -10 mm. Both native
+descents target this contact limit after probe-offset conversion, rather than
+stopping at the ordinary bed-probe -2 mm floor. Missing contact still fails at
+the limit. Bare G39/V1 and ordinary G28/G30 retain their existing lower limits;
+normal jog and focus-positioning floors are unchanged.
 
 V2 requires current Z within 0.05 mm of the requested clearance, never above Z80,
 plus the same trusted, absolute-mm, stowed-probe, zero-Z-workspace-offset and
@@ -69,7 +73,7 @@ controller path and verifies that position.
 
 V2 returns `E3MH:2 Z:<contact to three decimal places>` or
 `Error:E3MH:2 ARGUMENTS`, `PRECONDITION`, or `PROBE_FAILED`. M115 also reports
-`E3SG:2 PROBE_Z:<runtime offset to six decimals> RETRACT:<native retract to six decimals> MIN:-2 MAX:65 CEILING:80`.
+`E3SG:2 PROBE_Z:<runtime offset to six decimals> RETRACT:<native retract to six decimals> MIN:-10 MAX:65 CEILING:80`.
 The host can bind calibration to that geometry; the compact profile additionally
 advertises and enforces `E3_Z_LIMIT_80_V1` in the actual planner. Software tests
 do not establish attached-mechanics behavior or measurement accuracy.
@@ -79,14 +83,14 @@ do not establish attached-mechanics behavior or measurement accuracy.
 The material cycle propagates native BLTouch deploy/stow failures through
 `set_deployed`, rather than discarding their return values. Failed deployment
 does not enter the descent routine. Existing native failure handling and the
-final stow attempt remain in place. Contact limits, speeds, retract distances,
-and high-speed probe configuration are unchanged.
+final stow attempt remain in place. Speeds, retract distances, and high-speed
+probe configuration are unchanged.
 
 After cleanup, a failed material cycle emits an informational line before the
 unchanged terminal `Error:E3MH:<version> PROBE_FAILED`:
 
 ```text
-E3PD:1 STAGE:SLOW REASON:NO_TRIGGER Z:-2.000 FAST:-1.500 SLOW:nan CLEANUP_FAILED:0
+E3PD:1 STAGE:SLOW REASON:NO_TRIGGER Z:-10.000 FAST:-1.500 SLOW:nan CLEANUP_FAILED:0
 ```
 
 STAGE identifies DEPLOY, FAST, SLOW, STOW or RESULT. REASON identifies the

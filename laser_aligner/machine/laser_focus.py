@@ -90,7 +90,7 @@ def parse_geometry(lines):
     if match is None:
         raise MachineError("Expected one complete E3 surface geometry report")
     values = tuple(float(match[i]) for i in range(1, 6))
-    if not all(math.isfinite(v) for v in values) or not -10 <= values[0] <= 0 or not 0 < values[1] <= 5 or values[2:] != (-2, 65, 80):
+    if not all(math.isfinite(v) for v in values) or not -10 <= values[0] <= 0 or not 0 < values[1] <= 5 or values[2] not in (-10, -2) or values[3:] != (65, 80):
         raise MachineError("Unsupported E3 surface geometry")
     return dict(zip(("probe_z_mm", "retract_mm", "min_mm", "max_mm", "ceiling_mm"), values, strict=True))
 
@@ -125,7 +125,7 @@ class LaserFocus:
             "reference": None, "surface": None, "preview": None, "xy_sequence": None,
             "current_readback": {"z_mm": None, "z_known": False, "fresh": False},
             "max_z_mm": maximum, "clearance_z_mm": clearance,
-            "contact_min_mm": -2, "contact_max_mm": clearance - 15,
+            "contact_min_mm": None, "contact_max_mm": clearance - 15,
             "calibration": self.calibration, "calibration_compatible": False,
             "calibration_persistent": self.path is not None,
             "probe_xy_offset_mm": self.probe_xy_offset_mm,
@@ -189,16 +189,17 @@ class LaserFocus:
                 raise ValueError("Incomplete calibration")
             if type(calibration["id"]) is not str or str(uuid.UUID(calibration["id"])) != calibration["id"]:
                 raise ValueError("Invalid calibration ID")
-            finite_number(calibration["focus_offset_mm"], "Focus offset", -80, 80)
             finite_number(calibration["taught_z_mm"], "Taught Z", 0, 80)
-            finite_number(calibration["taught_contact_z_mm"], "Taught contact", -2, 65)
             finite_number(calibration["taught_at"], "Taught time", 0, 1e12)
             if calibration["gauge_mm"] != 7 or type(calibration["gauge_mm"]) not in {int, float} or type(calibration["firmware"]) is not str or not 1 <= len(calibration["firmware"]) <= 8192:
                 raise ValueError("Unsupported gauge or firmware identity")
             if type(calibration["geometry"]) is not dict or any(type(v) not in {int, float} or not math.isfinite(v) for v in calibration["geometry"].values()):
                 raise ValueError("Invalid geometry number")
-            if calibration["geometry"] != parse_geometry(calibration["firmware"].splitlines()):
+            geometry = parse_geometry(calibration["firmware"].splitlines())
+            if calibration["geometry"] != geometry:
                 raise ValueError("Geometry binding mismatch")
+            finite_number(calibration["taught_contact_z_mm"], "Taught contact", geometry["min_mm"], geometry["max_mm"])
+            finite_number(calibration["focus_offset_mm"], "Focus offset", -80, 80 - geometry["min_mm"])
             if abs(calibration["taught_z_mm"] - calibration["taught_contact_z_mm"] - calibration["focus_offset_mm"]) > 1e-6:
                 raise ValueError("Inconsistent taught offset")
             return calibration
@@ -318,7 +319,7 @@ class LaserFocus:
             match = _CONTACT.fullmatch(reports[0]) if len(reports) == 1 else None
             if match is None:
                 raise MachineError("G39 must report exactly one V2 surface contact")
-            contact = finite_number(float(match[1]), "Surface contact", -2, maximum_contact)
+            contact = finite_number(float(match[1]), "Surface contact", geometry["min_mm"], maximum_contact)
             stowed()
             if not parse_status(send("M123"))["z_known"]:
                 raise MachineError("Probe lost its Z reference; no further move sent")
@@ -486,7 +487,7 @@ class LaserFocus:
                               "surface": self.surface, "calibration": self.calibration,
                               "calibration_compatible": compatible, "calibration_persistent": self.path is not None,
                               "preview": self.preview, "max_z_mm": maximum, "clearance_z_mm": clearance,
-                              "contact_min_mm": -2, "contact_max_mm": clearance - 15,
+                              "contact_min_mm": geometry["min_mm"], "contact_max_mm": clearance - 15,
                               "firmware_geometry": geometry, "transcript": transcript,
                               "requires_clearance": self.requires_clearance,
                               "xy_recovery_pending_reference": self.xy_recovery_pending_reference,

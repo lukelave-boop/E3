@@ -209,6 +209,37 @@ def test_authenticated_focus_reference_teach_and_preview(focus_server):
     assert result["ok"] and focus.serial.z == 25
 
 
+@pytest.mark.parametrize("contact,accepted", [(-10, True), (-10.001, False)])
+def test_authenticated_minus_ten_surface_contact_boundary(focus_server, contact, accepted):
+    harness, focus = focus_server
+    focus.serial.overrides["M115"] = [line.replace("MIN:-2 ", "MIN:-10 ") for line in focus_helpers.IDENTITY]
+    focus.serial.contacts = [0, contact]
+    assert rpc(harness, "reference")["ok"]
+    focus.serial.writes.clear()
+    response = rpc(harness, "measure")
+    assert response["ok"] is accepted
+    assert focus.serial.writes.count("G39 C30.000 H15.000") == 1
+    if accepted:
+        assert response["result"]["surface"]["contact_z_mm"] == -10
+        assert response["result"]["contact_min_mm"] == -10
+        assert response["result"]["current_readback"]["z_mm"] == 30
+    else:
+        assert focus.state.surface is None and focus.state.requires_clearance
+        assert not any(line.startswith("G1 ") for line in focus.serial.writes)
+
+
+def test_remote_client_preserves_new_firmware_minimum_and_negative_measurement(remote_focus):
+    service, _, result = remote_focus
+    result.update(action="measure", contact_min_mm=-10.,
+                  firmware_geometry={"probe_z_mm": 0., "retract_mm": 5., "min_mm": -10.,
+                                     "max_mm": 65., "ceiling_mm": 80.},
+                  surface={"contact_z_mm": -10., "elevation_mm": -10.})
+    response = service.focus_control("measure", confirmed=True)
+    assert response["contact_min_mm"] == -10
+    assert response["firmware_geometry"] == result["firmware_geometry"]
+    assert response["surface"] == result["surface"]
+
+
 def test_authenticated_focus_rejects_stale_session_before_serial(focus_server):
     harness, focus = focus_server
     before = list(focus.serial.writes)

@@ -98,7 +98,7 @@ def audit_profile(path: Path) -> None:
                     "Cap:E3_USB_UPDATER_F401_V1:1", "Cap:E3_COMPACT_F401_V1:1",
                     "Cap:E3_Z_LIMIT_80_V1:1", "Cap:E3_RECOVERY_V1:1",
                     "Cap:E3_SURFACE_HEIGHT_V2:1", "Cap:E3_LIVE_Z_V1:1",
-                    f"E3SG:2 PROBE_Z:{offset:.6f} RETRACT:5.000000 MIN:-2 MAX:65 CEILING:80",
+                    f"E3SG:2 PROBE_Z:{offset:.6f} RETRACT:5.000000 MIN:-10 MAX:65 CEILING:80",
                     "Cap:SDCARD:0", f"E3HW:1 MCU:{device:X} FLASH_KIB:{capacity}")
         if any(part not in text for part in expected):
             raise ValueError(f"Native M115 reported wrong capabilities/hardware: {text}")

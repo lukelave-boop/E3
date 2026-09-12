@@ -7,6 +7,7 @@
 #define DEBUG_LEVELING_FEATURE 0
 #define FIX_MOUNTED_PROBE 0
 #define LOOP_LE_N(I,N) for (uint8_t I = 0; I <= (N); ++I)
+#define LOOP_L_N(I,N) for (uint8_t I = 0; I < (N); ++I)
 #define LOOP_S_LE_N(I,S,N) for (uint8_t I = (S); I <= (N); ++I)
 #define ABS(X) fabsf(X)
 #define HAS_LEVELING 1
@@ -33,6 +34,7 @@
   #define TEST(VALUE,BIT) (((VALUE) & (1U << (BIT))) != 0)
 #endif
 #define UNUSED(X) (void)(X)
+#define NO_INLINE
 #define PSTR(X) X
 #define MMM_TO_MMS(X) ((X) / 60.0f)
 #define Z_PROBE_FEEDRATE_SLOW 240
@@ -65,7 +67,32 @@ const char *error;
 const char *result_label;
 float result;
 int diagnostic_reports;
-template <typename... Values> void serial_diagnostic(Values...) {}
+char diagnostic_text[256];
+unsigned diagnostic_length;
+struct DiagnosticSerial {
+  void write(char value) {
+    if (diagnostic_length + 1 < sizeof(diagnostic_text)) {
+      diagnostic_text[diagnostic_length++] = value;
+      diagnostic_text[diagnostic_length] = '\0';
+    }
+  }
+  void printNumber(unsigned long number, uint8_t base) {
+    char digits[32];
+    unsigned length = 0;
+    do { digits[length++] = char('0' + number % base); number /= base; } while (number);
+    while (length) write(digits[--length]);
+  }
+  // SERIAL_FLOAT_MARKER
+} diagnostic_serial;
+void serial_diagnostic_value(const char *text) {
+  while (*text) diagnostic_serial.write(*text++);
+}
+void serial_diagnostic_value(int value) { diagnostic_serial.printNumber(value, 10); }
+void serial_diagnostic() {}
+template <typename First, typename... Rest> void serial_diagnostic(First first, Rest... rest) {
+  serial_diagnostic_value(first);
+  serial_diagnostic(rest...);
+}
 #if E3_NATIVE_PIN_TEST
 constexpr int Z_MIN_PROBE = 0;
 unsigned trigger_bits;
@@ -131,8 +158,11 @@ void restore_feedrate_and_scaling() { ++restores; }
 #define SERIAL_ERROR_MSG(X) error = (X)
 #define SERIAL_ECHOLNPAIR_F(LABEL,VALUE,PRECISION) do { result = (VALUE); result_label = (LABEL); } while (0)
 #define SERIAL_ECHOPAIR(...) serial_diagnostic(__VA_ARGS__)
-#define SERIAL_ECHOPAIR_F(...) serial_diagnostic(__VA_ARGS__)
-#define SERIAL_EOL() (++diagnostic_reports)
+#define SERIAL_ECHOPAIR_F(LABEL,VALUE,PRECISION) do { \
+  serial_diagnostic_value(LABEL); diagnostic_serial.printFloat(VALUE, PRECISION); \
+} while (0)
+#define SERIAL_ECHOPGM(TEXT) serial_diagnostic_value(TEXT)
+#define SERIAL_EOL() do { diagnostic_serial.write('\n'); ++diagnostic_reports; } while (0)
 void do_blocking_move_to_z(float z, float speed) {
 #if E3_NATIVE_PIN_TEST
   if (z < current_position.z) {
@@ -154,7 +184,7 @@ void do_blocking_move_to_z(float z, float speed) {
 struct Probe {
   static Position offset;
   static float run_z_probe(bool sanity_check = true, bool material = false);
-  static float material_height(const float clearance=20.0f, const float upper=10.5f);
+  static float material_height(const float clearance=20.0f, const float upper=10.5f, const float lower=-2.0f);
 #if E3_NATIVE_PIN_TEST
   static bool set_deployed(bool deploy);
   static bool deploy() { return set_deployed(true); }
@@ -197,6 +227,8 @@ void reset() {
   deploys = stows = touches = lifts = remembers = restores = 0;
   result = NAN; error = result_label = nullptr;
   diagnostic_reports = 0;
+  diagnostic_length = 0;
+  diagnostic_text[0] = '\0';
 #if E3_NATIVE_PIN_TEST
   stepper_z = current_position.z;
   trigger_bits = 0;
@@ -210,7 +242,8 @@ void reset() {
 bool envelope_restored() {
   return !e3_material::envelope_active
       && e3_material::active_envelope.clearance == e3_material::start_z
-      && e3_material::active_envelope.maximum == e3_material::maximum;
+      && e3_material::active_envelope.maximum == e3_material::maximum
+      && e3_material::active_envelope.minimum == e3_material::minimum;
 }
 
 #if E3_NATIVE_PIN_TEST
@@ -223,6 +256,13 @@ bool failure_is(const char *stage, const char *reason, const float z) {
 #endif
 
 extern "C" int test_main() {
+  // Reject invalid direct-call lower bounds before native deployment or motion.
+  const float invalid_lowers[] = {-10.001f, 15.001f, NAN, INFINITY, -INFINITY};
+  for (float lower : invalid_lowers) {
+    reset(); current_position.z = 30;
+    CHECK(isnan(probe.material_height(30, 15, lower)));
+    CHECK(deploys == 0 && stows == 0 && touches == 0 && envelope_restored());
+  }
 #if E3_NATIVE_PIN_TEST
   // Execute production deploy, descent/readback and stow, with fake pin/step I/O.
   reset(); GcodeSuite::G39();
@@ -235,7 +275,7 @@ extern "C" int test_main() {
   CHECK(stows == (BLTOUCH_SLOW_MODE ? 3 : 1));
   CHECK(current_position.x == 100 && current_position.y == 100 && xy_moves == 2);
   CHECK(envelope_restored() && remembers == 1 && restores == 1);
-  CHECK(diagnostic_reports == 0 && !e3_material::trace.reason);
+  CHECK(diagnostic_reports == 0 && diagnostic_length == 0 && !e3_material::trace.reason);
   CHECK(e3_material::trace.fast_z == 5.5f && e3_material::trace.slow_z == 5.5f);
 
   // Native deployment error must not fall through to enabling/descent.
@@ -252,6 +292,13 @@ extern "C" int test_main() {
   CHECK(enables == 1 && envelope_restored());
   CHECK(failure_is("STOW", "STOW_FAILED", 10) && diagnostic_reports == 1);
   CHECK(e3_material::trace.stow_failed);
+  CHECK(!strcmp(diagnostic_text,
+      "E3PD:1 STAGE:STOW REASON:STOW_FAILED Z:10.000 FAST:5.500 SLOW:5.500 CLEANUP_FAILED:1\n"));
+  // A genuinely accepted zero contact still prints numeric zero, unlike missing evidence.
+  reset(); trigger[0] = trigger[1] = 0;
+  stow_failure_at = BLTOUCH_SLOW_MODE ? 3 : 1; GcodeSuite::G39();
+  CHECK(!strcmp(diagnostic_text,
+      "E3PD:1 STAGE:STOW REASON:STOW_FAILED Z:10.000 FAST:0.000 SLOW:0.000 CLEANUP_FAILED:1\n"));
 
   // Missing first/second trigger still uses stopped-step readback and cleanup.
   for (int index = 0; index < 2; ++index) {
@@ -263,6 +310,10 @@ extern "C" int test_main() {
     CHECK(diagnostic_reports == 1 && !e3_material::trace.stow_failed);
     CHECK(index ? e3_material::trace.fast_z == 5.5f : isnan(e3_material::trace.fast_z));
     CHECK(isnan(e3_material::trace.slow_z));
+    CHECK(!strcmp(diagnostic_text, index ?
+        "E3PD:1 STAGE:SLOW REASON:NO_TRIGGER Z:-2.000 FAST:5.500 SLOW:nan CLEANUP_FAILED:0\n" :
+        "E3PD:1 STAGE:FAST REASON:NO_TRIGGER Z:-2.000 FAST:nan SLOW:nan CLEANUP_FAILED:0\n"));
+    CHECK(!strcmp(error, "E3MH:1 PROBE_FAILED"));
   }
   // The first cause survives a later cleanup failure; its Z is the stopped step count.
   reset(); no_trigger[0] = true; stow_failure_at = 1; GcodeSuite::G39();
@@ -281,12 +332,49 @@ extern "C" int test_main() {
   reset(); parser.command_ptr = "G39 C30 H15"; current_position.z = stepper_z = 30;
   trigger[0] = trigger[1] = -1.5f; GcodeSuite::G39();
   CHECK(!error && fabsf(result + 1.5f) < .001f && touches == 2);
-  CHECK(low_seen[0] == -2 && low_seen[1] == -2 && envelope_restored());
+  CHECK(low_seen[0] == -10 && low_seen[1] == -10 && envelope_restored());
   // reset() deliberately leaves trace alone: a successful new cycle clears old evidence.
   CHECK(diagnostic_reports == 0 && !e3_material::trace.reason);
   CHECK(!e3_material::trace.failed_stage && isnan(e3_material::trace.failed_z));
   CHECK(e3_material::trace.fast_z == -1.5f && e3_material::trace.slow_z == -1.5f);
   CHECK(!e3_material::trace.stow_failed);
+
+  // V2 reaches its actual lower target, including nonzero probe-offset conversion.
+  // These execute native probe_down_to_z with the global bed floor still at -2.
+  const float surface_contacts[] = {-10, -9.999f, -2.001f, -1.5f, 15};
+  const float surface_offsets[] = {0, -2, -10};
+  for (float contact : surface_contacts) for (float offset : surface_offsets) {
+    reset(); parser.command_ptr = "G39 C30 H15"; current_position.z = stepper_z = 30;
+    Probe::offset.z = offset; trigger[0] = trigger[1] = contact - offset;
+    GcodeSuite::G39();
+    CHECK(!error && fabsf(result - contact) < .001f && touches == 2);
+    CHECK(low_seen[0] == -10 - offset && low_seen[1] == -10 - offset);
+    CHECK(position_reads == 2 && diagnostic_reports == 0 && envelope_restored());
+  }
+  for (int index = 0; index < 2; ++index) {
+    reset(); parser.command_ptr = "G39 C30 H15"; current_position.z = stepper_z = 30;
+    trigger[index] = -10.001f; GcodeSuite::G39();
+    CHECK(error && !strcmp(error, "E3MH:2 PROBE_FAILED") && isnan(result));
+    CHECK(failure_is(index ? "SLOW" : "FAST", "CONTACT_RANGE", -10.001f));
+    CHECK(touches == index + 1 && envelope_restored());
+    reset(); parser.command_ptr = "G39 C30 H15"; current_position.z = stepper_z = 30;
+    no_trigger[index] = true; GcodeSuite::G39();
+    CHECK(error && !strcmp(error, "E3MH:2 PROBE_FAILED") && isnan(result));
+    CHECK(touches == index + 1 && low_seen[index] == -10);
+    CHECK(failure_is(index ? "SLOW" : "FAST", "NO_TRIGGER", -10));
+    CHECK(!strcmp(diagnostic_text, index ?
+        "E3PD:1 STAGE:SLOW REASON:NO_TRIGGER Z:-10.000 FAST:5.500 SLOW:nan CLEANUP_FAILED:0\n" :
+        "E3PD:1 STAGE:FAST REASON:NO_TRIGGER Z:-10.000 FAST:nan SLOW:nan CLEANUP_FAILED:0\n"));
+    CHECK(!endstops.z_probe_enabled && envelope_restored());
+  }
+  // V1 and ordinary native probing retain their pre-existing -2 lower target.
+  reset(); trigger[0] = -2.001f; GcodeSuite::G39();
+  CHECK(error && !strcmp(error, "E3MH:1 PROBE_FAILED") && touches == 1);
+  CHECK(low_seen[0] == -2 && envelope_restored());
+  reset(); trigger[0] = trigger[1] = 0;
+  CHECK(!probe.deploy() && fabsf(probe.run_z_probe(true, false)) < .001f);
+  CHECK(touches == 2 && low_seen[0] == -2 && low_seen[1] == -2);
+  CHECK(!probe.stow());
 
   #if BLTOUCH_SLOW_MODE
     // Inner deployment and stow errors are distinct from missing trigger.
@@ -302,6 +390,9 @@ extern "C" int test_main() {
       CHECK(position_reads == index && envelope_restored());
       CHECK(failure_is(index ? "SLOW" : "FAST", "STOW_FAILED", NAN));
       CHECK(diagnostic_reports == 1 && isnan(e3_material::trace.slow_z));
+      CHECK(!strcmp(diagnostic_text, index ?
+          "E3PD:1 STAGE:SLOW REASON:STOW_FAILED Z:nan FAST:5.500 SLOW:nan CLEANUP_FAILED:0\n" :
+          "E3PD:1 STAGE:FAST REASON:STOW_FAILED Z:nan FAST:nan SLOW:nan CLEANUP_FAILED:0\n"));
     }
   #endif
 
@@ -396,6 +487,8 @@ extern "C" int test_main() {
   CHECK(fabsf(probe.run_z_probe(true, false)) < .001f);
   // Upstream TOTAL_PROBING remains in effect for ordinary probing only.
   CHECK(touches == TOTAL_PROBING + (TOTAL_PROBING > 2));
+  CHECK(low_seen[0] == (TOTAL_PROBING > 2 ? 15 : -2));
+  for (int index = TOTAL_PROBING > 2; index < touches; ++index) CHECK(low_seen[index] == -2);
 
   // V2 owns a temporary envelope, preserving native feeds/retracts/stow.
   const char *surface_commands[] = {"G39 C20 H5", "G39 C40 H25", "G39 H65 C80"};
@@ -411,14 +504,14 @@ extern "C" int test_main() {
     CHECK(fabsf(result - (upper[index] - 0.06f)) < .001f);
     CHECK(deploys == 1 && touches == 2 && stows == 1 && lifts == 1);
     CHECK(speeds[0] == 8 && speeds[1] == 4);
-    CHECK(low_seen[0] == -2 - offset && low_seen[1] == -2 - offset);
+    CHECK(low_seen[0] == -10 - offset && low_seen[1] == -10 - offset);
     CHECK(lifts_seen[0] == upper[index] - offset + 5 && lifts_seen[0] <= clearances[index]);
     CHECK(current_position.x == 100 && current_position.y == 100 && workspace_z == 0);
     CHECK(remembers == 1 && restores == 1 && envelope_restored());
   }
   // V2 minimum and maximum remain inclusive, including signed decimal syntax.
-  const char *boundary_commands[] = {"G39 C+20.0 H-2.000", "G39 C80.0 H65.000"};
-  const float boundary_z[] = {-2, 65};
+  const char *boundary_commands[] = {"G39 C+20.0 H-10.000", "G39 C80.0 H65.000"};
+  const float boundary_z[] = {-10, 65};
   for (int index = 0; index < 2; ++index) {
     reset(); parser.command_ptr = boundary_commands[index];
     current_position.z = index ? 80 : 20;
@@ -429,7 +522,7 @@ extern "C" int test_main() {
   const char *bad_arguments[] = {
     "G39 C80", "G39 H65", "G39 C80 H65 X1", "G39 C80 C80 H65",
     "G39 C80 H65 H65", "G39 C80 H65junk", "G39 C80 H65.1",
-    "G39 C19 H5", "G39 C81 H65", "G39 C80 H-2.1", "G39 CNaN H5",
+    "G39 C19 H5", "G39 C81 H65", "G39 C80 H-10.001", "G39 CNaN H5",
     "G39 Cinf H5", "G39 C20 Hnan", "G39 C20 Hinf", "G39 C H5",
     "G39 C. H5", "G39 C20 H", "G39 C20H5", "G39.1 C20 H5",
     "G39 c20 H5", "G39 C20 h5", "G39 C2e1 H5", "G39 C20 H5;foo"
@@ -469,7 +562,7 @@ extern "C" int test_main() {
     reset(); parser.command_ptr = "G39 C80 H65"; current_position.z = 80;
     trigger[0] = trigger[1] = 50;
     if (failure < 2) trigger[failure] = 65.01f;
-    else if (failure < 4) trigger[failure - 2] = -2.01f;
+    else if (failure < 4) trigger[failure - 2] = -10.001f;
     else if (failure < 6) no_trigger[failure - 4] = true;
     else if (failure == 6) deploy_fail = true;
     else if (failure == 7) stow_fail = true;

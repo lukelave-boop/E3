@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# Verified installed 4a610d7f companion (2026-09-12); preserve all unknown edits.
+# Verified installed 45b728b5 companion (2026-09-12); preserve all unknown edits.
 PREVIOUS = {'laser_aligner/config.py': 'f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58',
  'laser_aligner/machine/mainboard.py': '0388228c3ded64c5b424f6da163d6260bbc90a0f1161b19a8a9c88062cea4eba',
  'laser_aligner/machine/service.py': '0afbfd4a3627b81e3475aed1e6ea09200fab8cb59a6751c99c0cc4d306dc30de',
@@ -16,7 +16,7 @@ PREVIOUS = {'laser_aligner/config.py': 'f12b0135c68ee8e787cf316294c15a51451f9ec6
  'laser_aligner/remote_node.py': '81d993afee3e6058aee1895e27f114dc519745928fdf191dcc6aefd6e179ebf9',
  'laser_aligner/machine/z_limits.py': 'c1ccb0ec6f82d7489d49dd50bdaf295a75a20b22117d3cad0ee56298c3b00310',
  'laser_aligner/machine/z_probe.py': '393a2d2c5e791754fed2a14fd706548df4b57bb96cc7fc46ba71d31101c96ece',
- 'laser_aligner/machine/secondary_controller.py': '5c66d616b796b4acb35da02481ce87f9c82b814ebf5aa80e7eae264963bd33f9',
+ 'laser_aligner/machine/secondary_controller.py': 'e7e321e578711a94c7bb8e4a1aaf3b6670c315aa4f104bd0ba461724b19f2831',
  'laser_aligner/machine/secondary_startup.py': 'd7c6bc19862d8f3dd5fd638581860057189956e4314157efb92f317298eb258b',
  'laser_aligner/machine/laser_focus.py': 'cfc635bc5082c18008407a1b371787855d451bf598ff2e165d99dc94fccf2f27',
  'laser_aligner/machine/focus_bounds.py': '9d2f2403c38f50bf20b35bf364de54747128c131bb816ae46534ce6bceb93d5c'}

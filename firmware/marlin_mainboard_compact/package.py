@@ -151,7 +151,7 @@ def main():
         "live_z_capability": "E3_LIVE_Z_V1",
         "live_z": "M154 S1/S0 opt-in 5 Hz executed-step telemetry; homing frame invalid",
         "surface_height_capability": "E3_SURFACE_HEIGHT_V2",
-        "surface_contact_range_mm": [-2, 65], "surface_clearance_range_mm": [20, 80],
+        "surface_contact_range_mm": [-10, 65], "surface_clearance_range_mm": [20, 80],
         "z_ceiling_capability": "E3_Z_LIMIT_80_V1", "files": {},
     }
     for path in sorted(folder.rglob("*")):

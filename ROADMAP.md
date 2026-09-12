@@ -1,5 +1,12 @@
 # Roadmap
 
+## Operator-requested lower surface limit
+
+Deliver the matching V2 -10 mm firmware, Pi validation and truthful desktop
+range display, then perform the requested single paper retry after recovery
+and reference. Preserve ordinary travel limits and record the observed result;
+changing the range alone does not establish measurement accuracy.
+
 ## Native probe failure qualification
 
 The candidate now propagates deployment/stow errors and records first-failure

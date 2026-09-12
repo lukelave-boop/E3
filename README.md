@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Surface / laser focus supports the matching firmware's requested **-10 mm below
+border** probing limit. The Pi validates its advertised contact range and the
+desktop displays it; older -2 mm firmware remains supported. Normal Z jog and
+focus travel still begin at Z0. Installation and the requested physical retry
+are tracked in [CURRENT_STATE.md](CURRENT_STATE.md).
+
 The probe-failure candidate corrects discarded CR Touch deployment/stow errors
 and adds first/second-touch failure evidence to the focus error. Native tests now
 execute the real descent and pin-control wrappers with fake hardware. The paper

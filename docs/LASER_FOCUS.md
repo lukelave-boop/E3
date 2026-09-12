@@ -37,6 +37,17 @@ selection. Ordinary job limits and camera calibration are unchanged.
 
 ## Teaching approach and travel limits
 
+The updated surface-height V2 firmware searches for contact down to −10 mm
+relative to the border. The matching Pi companion validates contact against the
+minimum actually reported by that firmware; previous V2 firmware retains its
+−2 mm limit. The desktop displays this reported minimum, and shows the range as
+unavailable until controller geometry is known. The 0.7.90 client can operate
+with the companion but its old range label is fixed at −2; use the updated
+E3 DEV TEST build for the correct display. Changing the firmware geometry
+invalidates the existing reference and requires gauge calibration to be taught
+again for that firmware. This contact-search limit does not lower the ordinary
+Z jogging or calculated-focus floor below zero.
+
 Use 1, 2 or 5 mm steps for approach only while the complete step has physical
 clearance. Switch to 0.1 mm near the gauge fit and remove the gauge before each
 adjustment. Steps of at least 1 mm use 300 mm/min; 0.1/0.5 mm use 60 mm/min.
@@ -320,7 +331,8 @@ A spacer measured at 7.01 mm, saved with the current nominal 7 mm setting,
 introduces a 0.01 mm increase in the reproduced nominal gaps. That difference
 is within the operator's requested 0.6 mm acceptance; it does not replace the
 physical fit checks. The measured workpiece top may be below the border zero:
-the probe accepts contact from Z-2 up to clearance minus 15 mm. It must still be
+the updated probe firmware accepts contact from Z-10 up to clearance minus 15 mm
+(previous V2 firmware retains Z-2). It must still be
 a solid patch, and all commanded laser Z positions remain between Z0 and the
 active maximum.
 

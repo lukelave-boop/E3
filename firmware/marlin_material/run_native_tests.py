@@ -32,6 +32,9 @@ def run(source: Path, toolchain: Path) -> None:
         functions += "\n" + "\n".join(line for line in (source / path).read_text().splitlines()
                                        if not line.startswith("#include"))
     harness = (ROOT / "tests/marlin_material_harness.cpp").read_text().replace("// MARKER", functions)
+    serial_source = (source / "Marlin/src/core/serial_base.h").read_text(encoding="utf-8")
+    harness = harness.replace("// SERIAL_FLOAT_MARKER",
+                              function(serial_source, "NO_INLINE void printFloat("))
     action_signature = ("FORCE_INLINE bool probe_specific_action("
                         if "FORCE_INLINE bool probe_specific_action(" in probe_source
                         else "FORCE_INLINE void probe_specific_action(")

@@ -122,6 +122,60 @@ def test_reference_and_high_measurement_ranges(focus):
     assert focus.serial.z == 80
 
 
+@pytest.mark.parametrize("minimum,contact", [(-10, -10), (-10, -8), (-10, -2), (-2, -2)])
+def test_surface_contact_uses_advertised_minimum_and_returns_to_clearance(focus, minimum, contact):
+    focus.serial.overrides["M115"] = [line.replace("MIN:-2 ", f"MIN:{minimum} ") for line in IDENTITY]
+    focus.serial.contacts = [0, contact]
+    focus.run("reference")
+    result = focus.run("measure")
+    assert result["contact_min_mm"] == minimum
+    assert result["firmware_geometry"]["min_mm"] == minimum
+    assert result["surface"]["contact_z_mm"] == contact
+    assert result["surface"]["elevation_mm"] == contact
+    assert result["current_readback"]["z_mm"] == 30
+    assert result["focus_travel_min_z_mm"] == 0
+    assert not result["requires_clearance"]
+
+
+@pytest.mark.parametrize("minimum,contact", [(-10, -10.001), (-2, -2.001), (-2, -10)])
+def test_surface_below_advertised_minimum_is_not_a_measurement(focus, minimum, contact):
+    focus.serial.overrides["M115"] = [line.replace("MIN:-2 ", f"MIN:{minimum} ") for line in IDENTITY]
+    focus.serial.contacts = [0, contact]
+    focus.run("reference")
+    focus.serial.writes.clear()
+    with pytest.raises(MachineError, match="Surface contact"):
+        focus.run("measure")
+    assert focus.serial.writes.count("G39 C30.000 H15.000") == 1
+    assert not any(line.startswith("G1 ") for line in focus.serial.writes)
+    assert focus.state.surface is None and focus.state.requires_clearance
+
+
+@pytest.mark.parametrize("taught_z", [0, 80])
+def test_minus_ten_contact_calibration_persists_and_teaching_retains_zero_floor(focus, taught_z):
+    focus.serial.overrides["M115"] = [line.replace("MIN:-2 ", "MIN:-10 ") for line in IDENTITY]
+    focus.serial.contacts = [0, -10]
+    token = measured(focus)
+    focus.serial.z = taught_z
+    result = focus.run("teach", measurement_id=token)
+    assert result["calibration"]["focus_offset_mm"] == taught_z + 10
+    assert LaserFocus(focus.state.path, "ender").calibration == result["calibration"]
+    focus.serial.z = 0
+    before = list(focus.serial.writes)
+    with pytest.raises(MachineError, match="minimum"):
+        focus.run("jog", value=-.1, measurement_id=token)
+    assert not any(line.startswith("G1 ") for line in focus.serial.writes[len(before):])
+
+
+def test_saved_negative_contact_must_match_the_bound_firmware_minimum(focus):
+    taught(focus)
+    data = json.loads(focus.state.path.read_text())
+    data["calibration"]["taught_contact_z_mm"] = -10
+    data["calibration"]["focus_offset_mm"] = data["calibration"]["taught_z_mm"] + 10
+    focus.state.path.write_text(json.dumps(data))
+    with pytest.raises(MachineError, match="Taught contact"):
+        LaserFocus(focus.state.path, "ender")
+
+
 def test_rereference_from_higher_clearance_returns_via_border20(focus):
     focus.run("reference")
     focus.serial.contacts = [0]
@@ -346,6 +400,12 @@ def test_low_configured_maximum_still_allows_status(focus):
 def test_geometry_requires_exact_v2_contract(lines):
     with pytest.raises(MachineError):
         parse_geometry(lines)
+
+
+@pytest.mark.parametrize("minimum", [-10.001, -9, -3, -1, 0])
+def test_geometry_rejects_unrecognized_contact_minimum(minimum):
+    with pytest.raises(MachineError, match="Unsupported"):
+        parse_geometry([line.replace("MIN:-2 ", f"MIN:{minimum} ") for line in IDENTITY])
 
 
 @pytest.mark.parametrize("action,kwargs", [("jog", {"value": True}), ("jog", {"value": float("nan")}), ("teach", {"gap_mm": 5}), ("preview", {"gap_mm": 4}), ("reference", {"clearance_z_mm": 19}), ("measure", {"confirmed": False})])
@@ -1082,6 +1142,7 @@ def test_focus_readonly_failure_retains_config_but_no_live_authority_or_enders_k
     assert result["available"] is False and result["recovery_available"]
     assert result["ender"]["ready"] is False and "status failed" in result["ender"]["fault"]
     assert result["current_readback"] == {"z_mm": None, "z_known": False, "fresh": False}
+    assert result["contact_min_mm"] is None and result["firmware_geometry"] is None
     assert result["max_z_mm"] == 40 and result["probe_xy_offset_mm"] == [3.302, 38.608]
     assert result["requires_clearance"] and not result["reference_ready"]
     assert focus.state.surface is focus.state.preview is None

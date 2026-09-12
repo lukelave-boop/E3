@@ -8,9 +8,9 @@ namespace e3_material {
   // +10.5 mm above the border is a 12 mm sheet on the recorded -1.5 mm support.
   // Leaves room for the native 5 mm retract with a probe offset down to -4.5 mm.
   constexpr float minimum = -2.0f, maximum = 10.5f, start_z = 20.0f;
-  constexpr float surface_maximum = 65.0f, ceiling = 80.0f;
+  constexpr float surface_minimum = -10.0f, surface_maximum = 65.0f, ceiling = 80.0f;
 
-  struct Envelope { float clearance, maximum; };
+  struct Envelope { float clearance, maximum, minimum; };
   extern Envelope active_envelope;
   extern bool envelope_active;
 
@@ -47,6 +47,7 @@ namespace e3_material {
   }
 
   inline bool surface_arguments(const char *text, Envelope &envelope) {
+    envelope.minimum = surface_minimum;
     if (*text++ != 'G' || *text++ != '3' || *text++ != '9'
         || (*text != ' ' && *text != '\t')) return false;
     bool clearance_seen = false, maximum_seen = false;
@@ -68,23 +69,24 @@ namespace e3_material {
     }
     return clearance_seen && maximum_seen
         && envelope.clearance >= start_z && envelope.clearance <= ceiling
-        && envelope.maximum >= minimum && envelope.maximum <= surface_maximum;
+        && envelope.maximum >= envelope.minimum && envelope.maximum <= surface_maximum;
   }
 
   inline bool contact_ok(const float nozzle_z, const float offset_z,
-                         const float upper = maximum) {
+                         const float upper = maximum, const float lower = minimum) {
     const float contact = nozzle_z + offset_z;
-    return isfinite(contact) && contact >= minimum && contact <= upper;
+    return isfinite(contact) && contact >= lower && contact <= upper;
   }
 
   inline bool start_ok(const float nozzle_z, const float offset_z,
                        const float workspace_z, const float retract,
                        const float deploy_clearance, const float clearance = start_z,
-                       const float upper = maximum) {
+                       const float upper = maximum, const float lower = minimum) {
     return isfinite(nozzle_z) && isfinite(offset_z) && isfinite(workspace_z)
         && isfinite(retract) && isfinite(deploy_clearance)
         && isfinite(clearance) && clearance >= start_z && clearance <= ceiling
-        && isfinite(upper) && upper >= minimum && upper <= surface_maximum
+        && isfinite(lower) && lower >= surface_minimum && lower <= upper
+        && isfinite(upper) && upper <= surface_maximum
         && fabsf(nozzle_z - clearance) <= 0.05f && nozzle_z <= ceiling
         && workspace_z == 0.0f
         && offset_z <= 0.0f && offset_z >= -10.0f

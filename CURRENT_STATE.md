@@ -1,6 +1,28 @@
 # Current repository state
 
-## Native probe error propagation and diagnostic candidate (2026-09-12)
+## Requested V2 probe minimum -10 mm (2026-09-12)
+
+After the recorded paper first-descent NO_TRIGGER at -2, the operator explicitly
+requested changing the limit to -10 and then one retry. The V2 surface envelope
+now has an explicit -10 mm lower bound; bare G39/V1 and ordinary native probing
+retain -2. Actual V2 descent uses that envelope rather than the global native
+floor. The Pi accepts the supported advertised -2/-10 geometries, checks contacts
+against the active firmware minimum, and the desktop displays that value.
+Unconnected status does not invent a minimum. Ordinary Z jog/focus floor0,
+configured maximum40, firmware ceiling80, retract/headroom checks, STOP and
+no-automatic-retry behavior are unchanged. Missing diagnostic samples print nan
+explicitly instead of misleading zeroes. The earlier diagnostic firmware remains
+installed while the matching 0.7.91 desktop/firmware/Pi build is prepared.
+Verification: 417 focused host/RPC/offscreen desktop/legacy tests and five Pi
+installer tests pass; all five Cortex-M4 native variants pass with actual probe
+functions and fake hardware. These cover V2 contact at -10, rejection below it,
+missing triggers, V1/native -2 preservation and nonfinite diagnostic formatting.
+Ruff, compileall and exact compact source-pin checks pass. The F401 image builds
+with 6,812 bytes RAM. Compiled output-kill, recovery/profile and planner-ceiling
+audits pass with fake MMIO. CI, packaging and installation are being completed;
+no physical -10 test has run.
+
+## Native probe diagnostic: paper first descent reaches -2 without trigger (2026-09-12)
 
 The prior model's firmware edits were fully reverted; its accidental harness
 indentation was corrected before this work. The installed paper-probing failure
@@ -25,11 +47,81 @@ fake hardware. 153 focused Windows controller/RPC/prepare/package tests and five
 installer tests pass; four diagnostic/failure-recovery tests passed again after
 the diagnostic field-name correction. Ruff and compileall pass. The final
 F401 image builds with 6,808 bytes RAM; compiled output-kill, recovery/profile
-and planner-ceiling audits pass with fake MMIO. No physical action was performed.
-Read-only SSH confirms installed secondary source 5c66d616 and service PID42165,
-NRestarts0. Firmware candidate 87daf307 and Pi companion 45b728b5 are built locally;
-installation and an observed physical probe cycle are still pending. The existing
-E3 DEV TEST 0.7.90 client remains selected; no Windows executable was rebuilt.
+and planner-ceiling audits pass with fake MMIO. All three firmware CI workflows
+passed at 5acf68d. Fast CI's first Windows attempt exceeded its ten-minute limit
+at 99% (5,703 passed / 25 skipped, no failures). Attempt 2 passed at the exact
+5acf68d source: 5,713 passed / 25 skipped in 504.32 seconds; all Fast CI jobs pass.
+The fifteen-minute timeout proposal could not be pushed because the existing
+GitHub login lacks workflow scope. Its patch is preserved under
+`build/ci-timeout-proposal/`; the single unpublished proposal commit was removed
+after the successful rerun so it does not block later application pushes.
+
+After fresh operator confirmation of secure Z with motors unpowered, clear pin
+startup path and physically disabled laser, firmware 87daf307 and Pi companion
+45b728b5 were installed at source 5acf68d. The retained updater verified and
+committed application SHA256 c45317ac360cbf41bbb2a2bedc643adb27578afedbd27ff0a23bd110932c538a.
+Fresh M115 reports Sep 12 2026 13:20:16 with V2/recovery/live-Z/Z80 capabilities.
+M503 is unchanged; M123 reports both fans off and Z unknown. One Pi source file
+was updated with a backup; all thirteen installed hashes and saved configuration
+hashes match. Service PID50112 is active with NRestarts0.
+
+At 13:39:16 the kernel logged a USB hub disable/disconnect affecting the camera,
+Ender and other devices. The hub re-enumerated; the cause is unestablished. An
+explicit normal MachineService Ender reconnect then succeeded. Authenticated
+focus status is available with no Ender fault, fresh unreferenced Z0, maximum40,
+saved XY offset +3.302/+38.608 and no taught calibration. Primary is connected,
+disarmed and initially READY_HOME_REQUIRED. The normal camera service was restored
+and a fresh 1920x1080 frame verified. After a separate fresh operator confirmation
+of physical pin retraction, full XY Home/search/park clearance and disabled laser,
+one normal MachineService Home/park completed at X15/Y195. The primary reports
+READY_MOTION; Ender generation6 and unknown Z0 stayed unchanged. No Ender Z travel
+was requested. Read-only pin inspection before Home acknowledged OFF and returned
+consistent M119 known-axis flags. The primary's explicit-GRBL identity query still
+returns only ok; its precise firmware revision is unknown. Reset Z0 before the
+reference was not physical height or clearance.
+
+After a further operator confirmation of solid border, retracted pin, clear
+initial lift/descent/final clearance and disabled laser, one existing focus
+Reference border action succeeded. Native G28 Z R0 homing completed, then
+G39 C20.000 H5.000 returned E3MH:2 Z:0.001 without a failure diagnostic. Final
+M114/M123 readbacks confirm known Z30, reference_ready true, no clearance latch,
+unchanged Ender generation6 and primary X15/Y195. This verifies the installed
+native border cycle and software readbacks on the connected machine. The user
+has not yet supplied separate observations of individual pin/touch behavior;
+the original paper failure was still unclassified at that point.
+
+The operator subsequently positioned the probe using E3 DEV TEST at paper target
+X97.060784/Y131.798920 (carriage X93.759/Y93.191), confirmed readiness and gauge
+removal, and one Measure surface attempt ran. G39 C30.000 H15.000 again failed:
+`E3PD:1 STAGE:FAST REASON:NO_TRIGGER Z:-2.000 FAST:0.000 SLOW:0.000 CLEANUP_FAILED:0`.
+This record is emitted after the first native descent has read the stopped
+stepper position: it reached the lower endpoint without the probe trigger bit.
+The slow touch did not run. The operator observed the pin extend, probe the
+paper once and then rise roughly 15 mm. That observation is consistent with
+contact followed by the cleanup lift; it does not establish an accepted trigger.
+The service deliberately stopped/disconnected and retained the clearance latch;
+there was no service restart or kernel USB event during this test. No retry or
+recovery was issued. Why contact did not produce an accepted trigger by the
+lower endpoint remains unresolved. The earlier reported support -1.5 mm gives
+only nominal 0.5 mm allowance; its uncertainty/local height was not measured.
+These observations alone did not establish a reason to widen the minimum or
+infer paper deflection. The later explicit operator request above sets -10.
+
+The zero FAST/SLOW values above are a newly identified reporting defect, not
+accepted contact heights: both stored values are NAN on this first-touch failure,
+and this Marlin serial float printer renders NAN as 0.000. An offline explicit
+nonfinite-formatting correction is in progress; installed firmware is unchanged.
+No valid paper measurement or gauge teaching has been established.
+
+Evidence is under `dist/probe-failure-5acf68d/`: installation-result.json,
+timestamped pi-live-verification.json records and camera-verification.json.
+The XY Home record is `1789242952677654500-xy-home.json` in that directory.
+The border test record is `1789243120200241400-border-reference.json`.
+Paper evidence: `1789243358205107900-paper-measurement.json` and
+`paper-measurement-service.log`, including the untruncated diagnostic line.
+The existing E3 DEV TEST 0.7.90 client remains selected; no Windows executable
+was rebuilt. Paper measurement, gauge focus and the original failure cause remain
+unverified; the successful border cycle does not establish their correctness.
 
 ## XY recovery 0.7.90 built; installation pending (2026-09-12)
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased - surface probing down to -10 mm
+
+- Apply the operator-requested -10 mm minimum to V2 surface probing; retain the
+  legacy/native -2 mm minimum and ordinary Z jog/focus travel limits.
+- Validate measurements against the connected firmware's advertised minimum
+  and display that minimum in Surface / laser focus.
+- Print missing probe diagnostic samples as nan instead of false zero contacts.
+
 ## Unreleased - native probe failure handling and evidence
 
 - Propagate CR Touch deploy/stow errors; prevent descent after rejected deployment.
