@@ -16,7 +16,12 @@ commands, firmware installation or laser output were issued for integration.
 
 Fast Development CI 34721997495 passed all jobs, including the full Windows
 Python 3.12 desktop suite. This supersedes the pending CI and physical-sequence
-statements in the historical entries below. Compatibility CI is the merge gate.
+statements in the historical entries below. Compatibility CI 34722714419 passed
+Windows Python 3.10 core, Python 3.12 desktop, Ruff and POSIX controller checks
+at integration candidate 45e06de. The clean local four-worker suite passed
+5,771 tests with 29 platform skips; Ruff and compileall also passed. Only this
+verification record changed after the tested candidate. Main includes all three
+development branches; their redundant branch refs can be removed.
 The aux-firmware-bootstrap (eb6f1d4) and material-height-calibration (d69d916)
 branch tips are already ancestors of marlin-material-height; integrating its
 tip includes all three without replaying older implementations. Pre-existing
