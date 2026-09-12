@@ -1,5 +1,31 @@
 # Current repository state
 
+## Focus preview completion cache fix (2026-09-12)
+
+The operator taught and saved a 7 mm fit: calibration
+6e36c56e-bcc2-47b0-bce4-b863c600163f, taught Z2.600, probe contact -2.095,
+offset +4.695. It is compatible with installed d325105 firmware. Preserve it.
+The Pi successfully previewed the same surface at Z2.600, but the Windows
+client retained the monitor's earlier z_probe.active=true snapshot after the
+preview reply. Once the coordinator's own-operation flag cleared, its next
+poll treated that stale activity as a new operation and discarded local
+preview authority. A real remote-client/offscreen Qt reproduction captured
+this exact sequence without axis motion or calibration changes.
+
+RemoteMachineService now obtains and publishes one real cached-status RPC
+after a successful Preview, before returning its result to the desktop. It
+checks STOP and the same Pi boot/controller session after that read. Failed
+reads or changed authority reject the result; no local busy flag is forged.
+Other focus actions, firmware and Pi software are unchanged. The same live
+read-only reproduction now retains Z2.600 through polls and enables the separate
+Move to focus button. No focus move or gauge-fit reproduction was performed.
+
+264 focused remote/focus/offscreen desktop tests pass; the five new regression
+cases failed before the fix and pass after it. Ruff and compileall pass.
+Evidence is under dist/focus-preview-after-teaching/: status-before.json,
+live-ui-reproduction.json and live-ui-fixed.json. Windows 0.7.92 packaging and
+CI are pending; 0.7.91 is still selected until the fixed bundle is verified.
+
 ## V2 -10 mm installed; requested paper retry passed (2026-09-12)
 
 After the recorded paper first-descent NO_TRIGGER at -2, the operator explicitly

@@ -1,5 +1,13 @@
 # Architecture
 
+## Focus preview completion snapshot
+
+The Windows remote client follows a successful focus Preview with a fresh
+machine-status RPC before publishing the result. This replaces the monitor's
+in-flight activity snapshot with actual post-completion state. The same STOP
+epoch, Pi boot and controller session must remain valid through that read.
+The desktop's normal busy/stale/session guards and explicit move remain intact.
+
 ## Versioned surface minimum
 
 The G39 envelope carries its lower contact bound explicitly: V1 retains -2 mm

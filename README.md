@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The focus-preview client fix refreshes completed-operation status before
+presenting the target, preserving the operator's saved gauge calibration.
+See [current verification and build status](CURRENT_STATE.md).
+
 Surface / laser focus supports the matching firmware's requested **-10 mm below
 border** probing limit. The Pi validates its advertised contact range and the
 desktop displays it; older -2 mm firmware remains supported. Normal Z jog and

@@ -1801,6 +1801,17 @@ class RemoteMachineService:
             raise PiJobProtocolError(str(exc)) from exc
         self._require_operation_current(generation)
         self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
+        if action == "preview":
+            # The monitor may still cache this completed operation as active.
+            # Publish a real post-completion snapshot before the desktop accepts
+            # the preview, otherwise its next poll revokes that preview as busy.
+            completed = self._machine_status_action(
+                ACTION_MACHINE_STATUS, timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
+            )
+            self._require_operation_current(generation)
+            if (completed.get("node_boot_id") != response.get("boot_id")
+                or completed.get("controller_session_generation") != response.get("controller_session_generation")):
+                raise MachineError("Controller session changed after the focus preview")
         return result
 
     def mainboard_control(

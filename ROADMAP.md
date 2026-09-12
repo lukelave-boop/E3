@@ -1,5 +1,11 @@
 # Roadmap
 
+## Completed focus preview handoff
+
+Package the verified Windows client correction for stale activity after a
+successful Preview. The saved 7 mm teaching is retained; the subsequent
+operator-requested focus move and physical gauge-fit check remain separate.
+
 ## Operator-requested lower surface limit
 
 The matching V2 -10 mm firmware and Pi validation are installed. The requested

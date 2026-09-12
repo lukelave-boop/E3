@@ -49,6 +49,42 @@ def test_focus_capability_advertised():
     assert XY_RECOVERY_CAPABILITY in SERVER_CAPABILITIES
 
 
+def test_preview_refreshes_cached_activity_before_returning(remote_focus):
+    service, pi, result = remote_focus
+    result['action'] = 'preview'
+    result['preview'] = {'id': 'preview-1', 'target_z_mm': 2.6}
+    def observed_active(action, request):
+        if action == ACTION_MACHINE_FOCUS:
+            service._status_cache['z_probe'] = {'active': True}
+    pi.before_request = observed_active
+    response = service.focus_control('preview', confirmed=True, measurement_id=str(uuid.uuid4()))
+    assert response['preview'] == result['preview']
+    assert not (service.status().get('z_probe') or {}).get('active', False)
+    assert [r['action'] for r in pi.requests][-2:] == [ACTION_MACHINE_FOCUS, 'machine.status']
+
+
+@pytest.mark.parametrize('change', ['stop', 'restart', 'session', 'read_failure'])
+def test_preview_rejects_changed_authority_during_completion_refresh(remote_focus, change):
+    service, pi, result = remote_focus
+    result['action'] = 'preview'
+    service._require_capabilities()
+    def changed(action, request):
+        if action != 'machine.status':
+            return
+        if change == 'stop':
+            with service._stop_epoch_lock:
+                service._stop_epoch += 1
+        elif change == 'restart':
+            pi.boot_id = str(uuid.uuid4())
+        elif change == 'session':
+            pi.session_generation += 1
+        else:
+            raise MachineError('Completion status unavailable')
+    pi.before_request = changed
+    with pytest.raises(MachineError):
+        service.focus_control('preview', confirmed=True, measurement_id=str(uuid.uuid4()))
+
+
 @pytest.mark.parametrize("action", ["status", "reference", "measure", "clearance", "forget", "clear_surface"])
 def test_remote_typed_focus_binds_session(remote_focus, action):
     service, pi, result = remote_focus

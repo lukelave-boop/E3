@@ -346,6 +346,10 @@ no live homing, surface or motion authority.
 ## Position above work, including raised surfaces
 
 **Preview target** calculates and displays a destination; it does not move Z.
+The updated Windows client refreshes the Pi's completed-operation status before
+displaying the preview. This prevents the preceding busy snapshot from clearing
+the target immediately after a successful calculation. Existing saved gauge
+teaching is retained; this client fix needs no firmware update or Pi restart.
 When **Move to focus** is disabled, the line immediately above it explains the
 missing prerequisite. A brief camera interruption does not discard a Z preview
 for an already measured surface. Camera point selection still requires a fresh

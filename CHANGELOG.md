@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - retain completed focus preview
+
+- Refresh the Windows remote cache after Preview completes, so its earlier
+  active-operation snapshot cannot immediately discard the new target.
+- Reject completion after STOP, a changed controller/Pi session or a failed
+  status read. Preserve the saved gauge teaching; no firmware/Pi update needed.
+
 ## Unreleased - surface probing down to -10 mm
 
 - Apply the operator-requested -10 mm minimum to V2 surface probing; retain the
