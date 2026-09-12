@@ -50,6 +50,7 @@ def test_click_maps_raw_pixel_and_revalidates_same_signature(mapped_context):
     assert result["raw_image_xy"] == [220., 220.]
     assert result["mapping_plane"] == "bed"
     assert result["height_corrected"] is False
+    assert result["within_original_calibration_grid"] is True
     assert click(context, mapping_signature=result["mapping_signature"]) == result
     assert not context.machine.status()["connected"]
 
@@ -129,9 +130,61 @@ def test_camera_setting_change_rejects_saved_frame(mapped_context):
 
 @pytest.mark.parametrize("x,y", [(10., 200.), (-1., 200.), (440., 200.),
                                (200., 440.), (float("nan"), 200.), (True, 200.)])
-def test_image_and_measured_coverage_bounds(mapped_context, x, y):
+def test_image_and_work_area_bounds(mapped_context, x, y):
     with pytest.raises(CalibrationError):
         click(mapped_context[0], x, y)
+
+
+def inset_calibration_grid(context):
+    context.bed.replace_points_and_solve(
+        [BedPoint(100., 340., 40., 40.), BedPoint(380., 340., 180., 40.),
+         BedPoint(380., 60., 180., 180.), BedPoint(100., 60., 40., 180.)],
+        440, 440, provenance=context._bed_provenance(),
+    )
+
+
+@pytest.mark.parametrize("pixel,target", [
+    ((60., 220.), (20., 100.)), ((220., 40.), (100., 190.)),
+    ((400., 220.), (190., 100.)), ((220., 380.), (100., 20.)),
+])
+def test_inset_samples_do_not_shrink_configured_work_area(mapped_context, pixel, target):
+    context, _ = mapped_context
+    inset_calibration_grid(context)
+    result = click(context, *pixel)
+    assert result["target_machine_xy_mm"] == pytest.approx(target)
+    assert result["within_original_calibration_grid"] is False
+    assert click(context, *pixel, mapping_signature=result["mapping_signature"]) == result
+    assert not context.machine.status()["connected"]
+
+
+def test_outside_original_grid_uses_current_registration_and_mesh(mapped_context):
+    context, _ = mapped_context
+    inset_calibration_grid(context)
+    context.bed.apply_registration_translation(2., -3.)
+    context.bed.calibration.residual_mesh = BedResidualMesh(
+        np.array([40., 180.]), np.array([40., 180.]),
+        np.array([[[0.5, -0.25], [0.5, -0.25]], [[0.5, -0.25], [0.5, -0.25]]]),
+        2., 0.05, 0.1,
+    )
+    result = click(context, 60., 220.)
+    assert result["target_machine_xy_mm"] == pytest.approx([22.5, 96.75])
+    assert result["within_original_calibration_grid"] is False
+
+
+def test_outside_original_grid_still_rejects_final_registered_work_bounds(mapped_context):
+    context, _ = mapped_context
+    inset_calibration_grid(context)
+    context.bed.apply_registration_translation(-3., 0.)
+    with pytest.raises(CalibrationError, match="machine work area"):
+        click(context, 22., 220.)
+
+
+@pytest.mark.parametrize("points", [[], [BedPoint(50., 50., x, x) for x in range(4)]])
+def test_missing_or_degenerate_original_grid_rejected(mapped_context, points):
+    context, _ = mapped_context
+    context.bed._points = points
+    with pytest.raises(CalibrationError, match="point coverage"):
+        click(context)
 
 
 def test_work_bounds_apply_after_fine_registration(mapped_context):

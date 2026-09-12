@@ -21,6 +21,14 @@ or a missing probe offset prevents positioning. A changed calibration or
 controller session cancels a pending selection. Clicking the black margins
 outside the image does nothing.
 
+The original calibration grid is not the edge of the usable bed. Points beyond
+that grid use the current bed map, including later registration and local
+corrections, within the configured work area. Their preview says **Outside
+original calibration grid**; this is informational and does not disable the
+separate move. Check the actual placement before probing. A target that would
+put the probe carriage or later laser-return carriage outside the work area
+is still rejected.
+
 This is a bed-plane camera estimate. Raised surfaces are not height-corrected;
 verify the probe is over a solid patch before the separate contact cycle.
 Normal live viewing grants no motion action unless Position probe is selected

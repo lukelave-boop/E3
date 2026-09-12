@@ -2160,10 +2160,14 @@ class AppContext:
         if np.max(np.abs(lens.distort_points(corrected.reshape(1, 2)) - raw.reshape(1, 2))) > 0.05:
             raise CalibrationError("Lens correction did not converge at the selected point")
         hull = cv2.convexHull(points.astype(np.float32))
-        if cv2.contourArea(hull) <= 0 or cv2.pointPolygonTest(
+        if cv2.contourArea(hull) <= 0:
+            raise CalibrationError("Bed calibration has no valid measured point coverage")
+        # These are the original fit samples, not the usable bed boundary.
+        # Later registration and mesh refinements may extend beyond this grid;
+        # the current registered map and configured work area define selection.
+        within_original_grid = cv2.pointPolygonTest(
             hull, (float(corrected[0]), float(corrected[1])), False,
-        ) < 0:
-            raise CalibrationError("Selected point is outside the measured camera-calibration area")
+        ) >= 0
         denominator = calibration.image_to_machine[2] @ np.append(corrected, 1.0)
         if not math.isfinite(float(denominator)) or abs(float(denominator)) < 1e-9:
             raise CalibrationError("Selected camera point has an undefined machine projection")
@@ -2183,6 +2187,7 @@ class AppContext:
             "mapping_signature": signature,
             "mapping_plane": "bed",
             "height_corrected": False,
+            "within_original_calibration_grid": within_original_grid,
         }
 
     def _current_honeycomb_support(self) -> HoneycombSupportReference | None:

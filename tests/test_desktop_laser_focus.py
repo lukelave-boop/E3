@@ -546,6 +546,19 @@ def test_camera_selection_does_not_move_and_requires_path_confirmation(panel):
     assert panel._camera_target is None and not panel.move_probe.isEnabled()
 
 
+@pytest.mark.parametrize("within_grid", [True, False])
+def test_camera_preview_distinguishes_original_sample_grid_from_work_limits(panel, within_grid):
+    panel.set_result(camera_result(surface=None))
+    panel._camera_live = True
+    confirm(panel)
+    panel.position_probe.click()
+    panel.set_camera_target({**camera_target(), "within_original_calibration_grid": within_grid})
+    assert ("Outside original calibration grid" in panel.camera_target.text()) is (not within_grid)
+    assert not panel.move_probe.isEnabled()
+    panel.xy_clear.setChecked(True)
+    assert panel.move_probe.isEnabled()
+
+
 @pytest.mark.parametrize("reason", ["old_pi", "offline", "unknown_z", "low_z", "offset_draft", "stale"])
 def test_camera_position_rejects_unready_machine(panel, reason):
     panel.set_result(camera_result(surface=None))

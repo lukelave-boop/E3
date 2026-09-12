@@ -1,5 +1,11 @@
 # Roadmap
 
+## Camera probe selection correction
+
+The inset calibration-grid restriction is corrected; selection uses the
+configured bed with current registration and mesh. Physical placement and
+gauge-focus acceptance remain the next operator checks.
+
 ## Gauge focus calibration
 
 Implemented for operator testing: camera-selected probe positioning with

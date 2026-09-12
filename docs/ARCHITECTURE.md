@@ -1,5 +1,14 @@
 # Architecture
 
+## Camera probe mapping domain
+
+AppContext.focus_probe_target uses the provenance-bound configured work area
+after lens correction and BedMapper's current registration/residual mesh. The
+original fit-point hull is preview metadata, not a motion boundary, since later
+refinement can cover a larger area. MachineService still independently bounds
+the physical target, probe carriage and later laser-return carriage. The typed
+Pi operation and both G-code pipelines are unchanged.
+
 ## Laser focus setup boundary
 
 FocusBedView emits explicit raw-pixel selection metadata but owns no machine

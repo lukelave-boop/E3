@@ -1,5 +1,23 @@
 # Current repository state
 
+## Camera probe work-area correction (2026-09-12)
+
+The operator's 0.7.69 live-camera screenshot rejected a solid gauge spot as
+outside the measured camera-calibration area. Read-only inspection found the
+picker used the original inset grid (25 points, machine X/Y40..180) as a hard
+boundary despite later full-bed refinement and a larger residual mesh. An
+approximate screenshot click maps within the configured X/Y10..210 area;
+this is a diagnostic estimate, not physical placement verification.
+
+The picker now uses the active registered/meshed mapping and configured work
+area. The original sample hull is an informational preview annotation only.
+Invalid calibration, freshness, session and all physical target/probe-carriage/
+laser-return bounds remain enforced. No Pi or firmware change is required.
+Verification: 240 focused Windows mapping, offscreen Qt and simulated motion
+acceptance/rejection tests passed; affected Ruff, compileall and diff checks
+passed. Frozen build and full CI are recorded with the next handoff. Actual click positioning,
+gauge teaching and raised-surface accuracy remain unverified.
+
 ## Verified camera probe feature handoff (2026-09-11)
 
 E3 DEV TEST selects Camera-selected probe positioning, version 0.7.69,

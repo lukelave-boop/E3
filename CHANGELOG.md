@@ -1,5 +1,12 @@
 # Changelog
 
+## Probe selection across the configured bed (2026-09-12)
+
+Fixed valid camera probe points outside the original inset calibration grid
+being rejected. Selection now uses the current registered bed map and machine
+work area, with an informational original-grid note and unchanged carriage,
+clearance and separate-move checks.
+
 ## Camera-selected probe positioning (2026-09-11)
 
 Added Position probe in the focus window: select a spot in the live camera,

@@ -254,7 +254,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         sx, sy = self._result.get("laser_spot_offset_mm", [0.0, 0.0])
         self.camera_target.setText(
             f"Probe target: X {x:.2f}, Y {y:.2f} mm · Head: X {x-ox-sx:.2f}, Y {y-oy-sy:.2f} mm. "
-            "Bed-plane estimate; check probe alignment before measuring raised work."
+            + ("Outside original calibration grid. "
+               if target.get("within_original_calibration_grid") is False else "")
+            + "Bed-plane estimate; check probe alignment before measuring raised work."
         )
         self._sync()
 

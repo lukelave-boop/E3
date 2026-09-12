@@ -601,6 +601,43 @@ def test_selected_probe_point_uses_offset_without_probing_and_returns_laser_to_s
     assert result["xy_sequence"]["phase"] == "laser"
 
 
+def test_probe_can_reach_operator_camera_point_near_back_of_full_work_area(focus_machine):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    focus.serial.writes.clear()
+    result = machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    assert (primary.x, primary.y) == (76.875, 167.167)
+    assert result["xy_sequence"]["surface_target_xy_mm"] == [80.177, 205.775]
+    assert result["surface"] is None and focus.serial.z == 30
+    assert not any(s.startswith(("G1", "G28", "G39", "M280")) for s in focus.serial.writes)
+    measured = machine.focus_control("measure", confirmed=True)
+    result = machine.focus_control("align_laser", confirmed=True, measurement_id=measured["surface"]["id"])
+    assert (primary.x, primary.y) == (80.177, 205.775)
+    assert result["surface"]["id"] == measured["surface"]["id"]
+
+
+@pytest.mark.parametrize("endpoint", ["selected_point", "probe_carriage", "laser_return"])
+def test_camera_point_near_back_still_requires_every_endpoint_inside_work_area(focus_machine, endpoint):
+    machine, focus, primary = focus_machine
+    if endpoint == "selected_point":
+        # The probe carriage fits; the requested physical point does not.
+        machine.settings.work_area.y_max = 200.
+    elif endpoint == "laser_return":
+        # The physical point and probe carriage fit; future laser carriage does not.
+        machine.laser_settings.spot_offset_y_mm = -20.
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True,
+                          value=[3.302, -20. if endpoint == "probe_carriage" else 38.608])
+    before = (primary.x, primary.y)
+    focus.serial.writes.clear()
+    with pytest.raises(SafetyError, match="work area"):
+        machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    assert (primary.x, primary.y) == before
+    assert focus.serial.z == 30
+    assert not any(s.startswith(("G1", "G28", "G39", "M280")) for s in focus.serial.writes)
+
+
 def test_new_selected_point_replaces_old_target_and_surface_only_at_clearance(focus_machine):
     machine, focus, primary = focus_machine
     align_for_measurement(machine)

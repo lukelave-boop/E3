@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Camera probe selection limits
+
+Camera probe selection covers the configured work area using the current bed
+map. The initial calibration grid is not a travel boundary; points beyond it
+receive an informational preview note. Probe and laser-return carriage limits
+still apply. See [the focus workflow](docs/LASER_FOCUS.md).
+
 ## Laser focus setup
 
 The focus window's **Position probe** mode lets you click the live camera,
