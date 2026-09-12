@@ -1,5 +1,42 @@
 # Current repository state
 
+## Z workflow repair installed and real motion verified (2026-09-12)
+
+This supersedes the staged-only handoff below. Matching Pi companion 34f11e95
+from source ba1ecc3ef93d45cdcb1866961254cf31db74f39a is installed, all 13 payload
+hashes verified, service active. Five previous files were backed up; saved
+machine configuration, 40 mm Z maximum, probeXY offset and cooling settings were
+unchanged. The existing Sep 12 07:10:11 surface-V2/recovery firmware was retained.
+No firmware flash or physical unplugging was required. E3 DEV TEST selects
+**Z motion and focus workflow**, the same verified 0.7.88/2a240827 frozen EXE.
+
+Real, laser-off MachineService validation passed on the GRBL XY controller and
+Ender F401: Home/park X15/Y195, native border reference returning to Z30,
+positioning the retained target X80.222/Y213.031 with probe carriage
+X76.920/Y174.423, surface measurement, laser return to X80.222/Y213.031,
+5 mm / 2 mm / 0.1 mm jogs in both directions, and Return to clearance. Every move had
+acknowledged controller readback; the connection/session stayed healthy and
+disarmed. Surface elevation reported 5.328 mm. Final state: Z30, reference and
+measurement retained, no clearance restriction, maximum 40 mm, FAN1 255/FAN2 0.
+Controller readback and camera observation do not establish encoder accuracy,
+physical pin clearance or optical focus. Real gauge-fit teaching remains the
+operator step; no invented offset was saved. Low-Z re-reference and negative
+offset focus have automated coverage, not a new physical low-Z test here.
+
+Measured total RPC/check/motion times: 5 mm 4.25-4.32 s, 2 mm 3.62-3.66 s,
+0.1 mm 3.29-3.32 s. Existing firmware's two stowed-pin M119 checks account for
+about 2.4 s; the repair keeps those checks. There is no additional fixed 5 s
+post-jog delay. The optional live numeric stream remains unavailable on this
+unchanged firmware; idle/final Z readback is working.
+
+Exact ba1ecc3 Fast Development CI 34706511763 passed: Windows Python 3.12
+5574 passed / 25 skipped; POSIX 500 passed; Ruff/dependencies/bytecode passed.
+Focused local coverage:209 focus/telemetry tests plus 1 STOP regression and
+133 desktop/remote/full-workflow tests. Offline Linux installer checks passed
+backups, idempotence, settings preservation and pre-write tamper rejection.
+Records and the ready-to-use handoff are under `dist/z-motion-ready-0.7.88/`;
+captures/logs/configuration are local artifacts and are not committed.
+
 ## Z workflow repair and matched deployment (2026-09-12)
 
 The operator reports regressions while only seeking teaching jogs larger than
