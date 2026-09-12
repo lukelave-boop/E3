@@ -15,6 +15,7 @@ from .machine_state import (
     project_machine_state,
 )
 from .qt import require_qt
+from .z_telemetry import EnderZTelemetry
 
 QtCore, _, QtWidgets = require_qt()
 
@@ -55,6 +56,7 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         self._machine_status: dict[str, Any] = {}
         self._result: dict[str, Any] = {}
         self._received_at: float | None = None
+        self._live_z = EnderZTelemetry()
         self._busy = False
         self._pending = False
         self._maximum_edited = False
@@ -68,10 +70,11 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             self.step.addItem(f"{value:g} mm", value)
         self.step.setCurrentIndex(1)
         self.height = QtWidgets.QLabel("Z — mm")
+        self.height.setWordWrap(True)
         self.height.setObjectName("zHeightReadout")
         self.height.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.height.setToolTip(
-            "Controller-reported Z above the homed border, not an encoder measurement."
+            "Controller Z readback; live homing coordinates are unreferenced, not an encoder measurement."
         )
         layout.addWidget(self.down, 0, 0)
         layout.addWidget(self.up, 0, 1)
@@ -124,6 +127,10 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         self.step.currentIndexChanged.connect(self._sync)
         self.maximum.valueChanged.connect(self._edit_maximum)
         self.maximum.lineEdit().textEdited.connect(self._edit_maximum)
+        self._display_timer = QtCore.QTimer(self)
+        self._display_timer.setInterval(200)
+        self._display_timer.timeout.connect(self._sync_z_display)
+        self._display_timer.start()
         self._sync()
 
     def _edit_maximum(self, *_args: object) -> None:
@@ -152,13 +159,18 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             self.invalidate("Z readback unavailable", clear_confirmation=changed_session)
         if changed_session:
             self._maximum_edited = False
+        self._live_z.update(status)
         self._sync()
 
     def set_busy(self, busy: bool) -> None:
         self._busy = bool(busy)
         if busy:
-            self.invalidate("Z readback paused during machine operation")
+            self.invalidate("Z controls paused during machine operation")
         self._sync()
+
+    def observe_z_status(self, status: Mapping[str, Any]) -> None:
+        self._live_z.update(status)
+        self._sync_z_display()
 
     def set_pending(self, pending: bool) -> None:
         self._pending = bool(pending)
@@ -170,6 +182,7 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         self.readback_note.setText("Reported position unavailable")
         self.message.setText(message)
         if clear_confirmation:
+            self._live_z.clear()
             self.confirm.setChecked(False)
         self._sync()
 
@@ -223,6 +236,24 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         if self._received_at is not None and not self.fresh():
             self.invalidate("Z readback is stale; waiting for a fresh response.")
 
+    def _sync_z_display(self) -> None:
+        probe = self._machine_status.get("z_probe")
+        active = bool(self._busy or (self._pending and not self.fresh())
+                      or (isinstance(probe, Mapping) and probe.get("active") is True))
+        fresh = self.fresh() and _read_allowed(self._machine_status)
+        observed = self._live_z.readout(active=active, readback_at=self._received_at if fresh else None)
+        if observed is not None:
+            self.height.setText(observed[0])
+            self.readback_note.setText(observed[1])
+        elif fresh and not active and self._live_z.readback_current(self._received_at):
+            z = _number(self._result.get("z_mm"))
+            known = self._result.get("z_known") is True and z is not None
+            self.height.setText(f"Z {z:.3f} mm" if known else "Z unknown")
+            self.readback_note.setText("Reported position · live while idle" if known else "Z homing required")
+        else:
+            self.height.setText("Z — mm")
+            self.readback_note.setText("Reported position unavailable")
+
     def _sync(self) -> None:
         ready = _read_allowed(self._machine_status) and not self._busy and not self._pending
         fresh = self.fresh()
@@ -252,6 +283,7 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             else "Saving the maximum needs the matching machine/Pi support update"
         )
         self.refresh.setEnabled(ready)
+        self._sync_z_display()
 
     def _jog(self, direction: int) -> None:
         self.expire()
@@ -292,7 +324,28 @@ class MainboardZCoordinator(QtCore.QObject):
         panel.jogRequested.connect(lambda delta: self.change("z_jog", delta))
         panel.maximumRequested.connect(lambda maximum: self.change("z_max", maximum))
         panel.refreshRequested.connect(self.refresh)
+        panel._display_timer.timeout.connect(self.observe_cached_z)
         self._timer.start()
+
+    def observe_cached_z(self) -> None:
+        probe = self._status.get("z_probe")
+        active = self._busy or self._mutation or self.panel._pending or (
+            isinstance(probe, Mapping) and probe.get("active") is True
+        )
+        if (not active or not self.panel.isVisible()
+                or getattr(self.controller, "_shutdown_started", False)):
+            return
+        # Machine.status is a cache snapshot, with no serial/network exchange.
+        # This faster path updates observation only, never control authority.
+        machine = getattr(getattr(getattr(self.controller, "runtime", None), "context", None), "machine", None)
+        read = getattr(machine, "status", None)
+        if not callable(read):
+            return
+        try:
+            snapshot = read()
+        except Exception:
+            snapshot = {}
+        self.panel.observe_z_status(snapshot if isinstance(snapshot, Mapping) else {})
 
     def set_status(self, status: Mapping[str, Any]) -> None:
         machine = dict(machine_payload(status))

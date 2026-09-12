@@ -67,7 +67,7 @@ from .camera.service import (
     list_video_devices,
 )
 from .config import Settings, WorkArea
-from .errors import CalibrationError, MachineError
+from .errors import CalibrationError, MachineError, SafetyError
 from .gcode.generator import (
     DesignPlacement,
     ToolpathOptions,
@@ -87,6 +87,7 @@ from .imaging import (
     read_image,
     write_image_atomic,
 )
+from .machine.focus_bounds import FocusXYBounds
 from .machine.laser_focus import focus_calibration_path
 from .machine.network_transport import is_bridge_uri
 from .machine.service import MachineService, list_serial_ports
@@ -2160,7 +2161,14 @@ class AppContext:
         points = np.asarray([(point.image_x, point.image_y) for point in self.bed.points], dtype=np.float64)
         if points.ndim != 2 or points.shape[1] != 2 or len(points) < 4 or not np.isfinite(points).all():
             raise CalibrationError("Bed calibration has no valid measured point coverage")
+        try:
+            focus_bounds = FocusXYBounds(
+                self.settings.machine.work_area, self.settings.laser.guarded_output_polygon_mm,
+            )
+        except SafetyError as exc:
+            raise CalibrationError(str(exc)) from exc
         state = {
+            "focus_xy_bounds": focus_bounds.polygons,
             "camera_preview": {
                 "image_size": preview_size, "source_size": source_size,
                 "source_mode": frame_metadata.get("source_mode"),
@@ -2200,7 +2208,14 @@ class AppContext:
         # BedMapper includes the active fine registration and residual mesh.
         target = self.bed.image_to_mm(float(corrected[0]), float(corrected[1]))
         area = self.settings.machine.work_area
-        if not area.contains(*target):
+        if not focus_bounds.contains(target):
+            if len(focus_bounds.polygons) > 1:
+                raise CalibrationError(
+                    "Selected point is outside the configured focus positioning areas: "
+                    f"mapped X {target[0]:.3f}, Y {target[1]:.3f} mm. "
+                    "Neither the machine rectangle nor the configured honeycomb polygon contains it. "
+                    f"Source pixel ({x:.2f}, {y:.2f}) in {width}×{height}."
+                )
             violations = []
             for axis, coordinate, minimum, maximum in (
                 ("X", target[0], area.x_min, area.x_max),

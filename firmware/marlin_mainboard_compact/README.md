@@ -1,5 +1,23 @@
 # Compact F401 mainboard with USB updates
 
+## Live Z during focus motion
+
+This application advertises `Cap:E3_LIVE_Z_V1:1`. The matching Pi service can
+enable an observational executed-step position stream for an active operation
+with `M154 S1`, and disable it with `M154 S0`. It defaults off after reset.
+The fixed maximum rate is 5 Hz; a full transmit buffer drops a sample instead
+of blocking native motion. After the initial and final samples, unchanged idle
+positions are silent, including if the host disappears before disabling reports.
+Existing hosts that do not enable it are unchanged.
+
+Lines have the form `E3Z:1 N:42 Z:12.345 K:1 H:0 M:1`. The sequence, Z,
+known-frame, homing and moving fields are consumed independently of command
+acknowledgments. Z comes from executed motor steps, not the queued target or a
+physical encoder. G28 reports `H:1 K:0` while rebasing its coordinates: the host
+must show homing with absolute border height unavailable until homing completes.
+These reports are display-only; final acknowledged position and state checks
+continue to control travel. See PROFILE.md in the included source archive.
+
 ## Explicit recovery after a controlled stop
 
 Normal M115 now advertises `Cap:E3_RECOVERY_V1:1`. A native kill or M112

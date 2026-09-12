@@ -1,5 +1,13 @@
 # Roadmap
 
+## Live Z and focus-area follow-up
+
+Executed-step Z telemetry and fixed-honeycomb focus bounds are implemented with
+focused automated tests. Install and physically observe the matching firmware,
+Pi and desktop together before declaring live motion reporting verified. The
+operator's actual retained click is covered by a complete simulated focus
+sequence. Gauge accuracy and raised-surface qualification remain pending.
+
 ## Camera probe selection follow-up
 
 Rejected-click diagnostics are implemented for operator investigation. Resolve

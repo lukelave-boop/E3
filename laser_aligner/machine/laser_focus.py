@@ -10,6 +10,7 @@ import math
 import re
 import time
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 from ..errors import MachineError, SafetyError
@@ -211,10 +212,14 @@ class LaserFocus:
             raise MachineError(f"Cannot save focus calibration: {exc}") from exc
         self.calibration = calibration
 
-    def execute(self, owner, probe, action, *, confirmed, value, clearance_z_mm,
+    def execute(self, owner, probe, action, **options):
+        with ExitStack() as telemetry_scope:
+            return self._execute(owner, probe, action, _telemetry_scope=telemetry_scope, **options)
+
+    def _execute(self, owner, probe, action, *, confirmed, value, clearance_z_mm,
                 gap_mm, measurement_id, preview_id, maximum, primary_generation,
                 stop_epoch, xy, guard, on_motion_start, on_failure, move_xy=None,
-                laser_spot_offset=(0.0, 0.0)):
+                laser_spot_offset=(0.0, 0.0), _telemetry_scope):
         validate_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
         spot_offset = validate_probe_target(laser_spot_offset)
         clearance = finite_number(min(clearance_z_mm, maximum) if action in {"status", "forget", "clear_surface"} else clearance_z_mm,
@@ -247,6 +252,9 @@ class LaserFocus:
 
         identity_lines = send("M115")
         geometry = parse_geometry(identity_lines)
+        owner.set_live_z_support(identity_lines)
+        _telemetry_scope.enter_context(owner.live_z_stream(
+            send, enabled=action in {"reference", "measure", "jog", "move", "clearance"}))
         firmware = "\n".join(identity_lines)
         board = parse_status(send("M123"))
         current = parse_position(send("M114"))

@@ -170,7 +170,7 @@ index 9981a52..ef8259e 100644
  //
  // Touch Screen Settings
 diff --git a/Marlin/Configuration_adv.h b/Marlin/Configuration_adv.h
-index 0f88d46..8dfe0a7 100644
+index 0f88d46..f20bf17 100644
 --- a/Marlin/Configuration_adv.h
 +++ b/Marlin/Configuration_adv.h
 @@ -496,7 +496,7 @@
@@ -210,16 +210,17 @@ index 0f88d46..8dfe0a7 100644
  #if ENABLED(ARC_SUPPORT)
    #define MM_PER_ARC_SEGMENT      1 // (mm) Length (or minimum length) of each arc segment
    //#define ARC_SEGMENTS_PER_R    1 // Max segment length, MM_PER = Min
-@@ -2189,7 +2190,7 @@
+@@ -2189,7 +2190,8 @@
   * Currently handles M108, M112, M410, M876
   * NOTE: Not yet implemented for all platforms.
   */
 -//#define EMERGENCY_PARSER
 +#define EMERGENCY_PARSER
++#define E3_LIVE_Z_V1
  
  /**
   * Realtime Reporting (requires EMERGENCY_PARSER)
-@@ -2359,7 +2360,7 @@
+@@ -2359,7 +2361,7 @@
   *
   * Enable PARK_HEAD_ON_PAUSE to add the G-code M125 Pause and Park.
   */
@@ -228,7 +229,7 @@ index 0f88d46..8dfe0a7 100644
  #if ENABLED(ADVANCED_PAUSE_FEATURE)
    #define PAUSE_PARK_RETRACT_FEEDRATE         60  // (mm/s) Initial retract feedrate. (mm/s) 初始回抽进给率。
    #define PAUSE_PARK_RETRACT_LENGTH            2  // (mm) Initial retract.断料后第一次的回抽长度
-@@ -3205,7 +3206,7 @@
+@@ -3205,7 +3207,7 @@
   * See https://marlinfw.org/docs/configuration/laser_spindle.html for more config details.
   */
  //#define SPINDLE_FEATURE
@@ -263,10 +264,28 @@ index e09b52f..e93fe5e 100644
  
  extern "C" {
 diff --git a/Marlin/src/MarlinCore.cpp b/Marlin/src/MarlinCore.cpp
-index ddfc95c..1047105 100644
+index ddfc95c..ede05ca 100644
 --- a/Marlin/src/MarlinCore.cpp
 +++ b/Marlin/src/MarlinCore.cpp
-@@ -997,72 +997,36 @@ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
+@@ -764,6 +764,8 @@ inline void manage_inactivity(const bool ignore_stepper_queue=false) {
+  *  - Update the Průša MMU2
+  *  - Handle Joystick jogging
+  */
++#include "e3_live_z.inc"
++
+ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
+   #if ENABLED(MARLIN_DEV_MODE)
+     static uint16_t idle_depth = 0;
+@@ -794,6 +796,8 @@ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
+   // Return if setup() isn't completed
+   if (marlin_state == MF_INITIALIZING) goto IDLE_DONE;
+ 
++  e3_live_z::tick();
++
+   // TODO: Still causing errors
+   (void)check_tool_sensor_stats(active_extruder, true);
+ 
+@@ -997,72 +1001,36 @@ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
   * Kill all activity and lock the machine.
   * After this the machine will need to be reset.
   */
@@ -359,6 +378,25 @@ index ddfc95c..1047105 100644
  }
  
  /**
+diff --git a/Marlin/src/gcode/calibrate/G28.cpp b/Marlin/src/gcode/calibrate/G28.cpp
+index 3b1fbef..112a1b6 100644
+--- a/Marlin/src/gcode/calibrate/G28.cpp
++++ b/Marlin/src/gcode/calibrate/G28.cpp
+@@ -214,7 +214,14 @@
+  *  Y   Home to the Y endstop
+  *  Z   Home to the Z endstop
+  */
++#if ENABLED(E3_LIVE_Z_V1)
++  #include "../../e3_live_z.h"
++#endif
++
+ void GcodeSuite::G28() {
++  #if ENABLED(E3_LIVE_Z_V1)
++    const e3_live_z::HomingScope e3_homing_scope;
++  #endif
+   DEBUG_SECTION(log_G28, "G28", DEBUGGING(LEVELING));
+   if (DEBUGGING(LEVELING)) log_machine_info();
+ 
 diff --git a/Marlin/src/gcode/config/M92.cpp b/Marlin/src/gcode/config/M92.cpp
 index 06c47b8..27c2ab3 100644
 --- a/Marlin/src/gcode/config/M92.cpp
@@ -389,7 +427,7 @@ index cdff96f..9ef0b70 100644
  
  #endif
 diff --git a/Marlin/src/gcode/gcode.cpp b/Marlin/src/gcode/gcode.cpp
-index 7fda7cf..fc51adb 100644
+index 7fda7cf..0afd2b2 100644
 --- a/Marlin/src/gcode/gcode.cpp
 +++ b/Marlin/src/gcode/gcode.cpp
 @@ -384,6 +384,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
@@ -400,6 +438,15 @@ index 7fda7cf..fc51adb 100644
          case 30: G30(); break;                                    // G30: Single Z probe
          #if ENABLED(Z_PROBE_SLED)
            case 31: G31(); break;                                  // G31: dock the sled
+@@ -594,7 +595,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
+         case 193: M193(); break;                                  // M193: Wait for cooler temperature to reach target
+       #endif
+ 
+-      #if ENABLED(AUTO_REPORT_POSITION)
++      #if EITHER(AUTO_REPORT_POSITION, E3_LIVE_Z_V1)
+         case 154: M154(); break;                                  // M154: Set position auto-report interval
+       #endif
+ 
 @@ -633,6 +634,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
        case 85: M85(); break;                                      // M85: Set inactivity stepper shutdown timeout
        case 92: M92(); break;                                      // M92: Set the steps-per-unit for one or more axes
@@ -409,7 +456,7 @@ index 7fda7cf..fc51adb 100644
  
        case 117: TERN_(HAS_STATUS_MESSAGE, M117()); break;         // M117: Set LCD message text, if possible
 diff --git a/Marlin/src/gcode/gcode.h b/Marlin/src/gcode/gcode.h
-index 16fc47a..10e0fc8 100644
+index 16fc47a..f25fda7 100644
 --- a/Marlin/src/gcode/gcode.h
 +++ b/Marlin/src/gcode/gcode.h
 @@ -485,6 +485,7 @@ private:
@@ -428,8 +475,17 @@ index 16fc47a..10e0fc8 100644
  
    #if HAS_STATUS_MESSAGE
      static void M117();
+@@ -731,7 +733,7 @@ private:
+     static void M150();
+   #endif
+ 
+-  #if ENABLED(AUTO_REPORT_POSITION)
++  #if EITHER(AUTO_REPORT_POSITION, E3_LIVE_Z_V1)
+     static void M154();
+   #endif
+ 
 diff --git a/Marlin/src/gcode/host/M115.cpp b/Marlin/src/gcode/host/M115.cpp
-index f095445..5685d71 100644
+index f095445..4d06069 100644
 --- a/Marlin/src/gcode/host/M115.cpp
 +++ b/Marlin/src/gcode/host/M115.cpp
 @@ -21,6 +21,7 @@
@@ -440,7 +496,7 @@ index f095445..5685d71 100644
  #include "../../inc/MarlinConfig.h"
  #include "../queue.h"           // for getting the command port
  
-@@ -73,6 +74,21 @@ void GcodeSuite::M115() {
+@@ -73,6 +74,22 @@ void GcodeSuite::M115() {
    //   SERIAL_ECHOLNPGM(STR_M115_DISABLE_REPORT);
    // }
    
@@ -452,6 +508,7 @@ index f095445..5685d71 100644
 +  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_USB_UPDATER_F401_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_RECOVERY_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_LIVE_Z_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_COMPACT_F401_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_Z_LIMIT_80_V1:1");
 +  SERIAL_ECHOPGM("E3HW:1 MCU:");

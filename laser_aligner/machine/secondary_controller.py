@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -28,6 +29,20 @@ _FAN_OFF_COMMAND = "M106 S0"
 _MAX_COMMAND_CHARACTERS = 160
 _MAX_RESPONSE_DIAGNOSTIC_CHARACTERS = 160
 _LOGGER = logging.getLogger(__name__)
+LIVE_Z_CAPABILITY = "Cap:E3_LIVE_Z_V1:1"
+LIVE_Z_MAX_AGE_SECONDS = 1.5
+_LIVE_Z_REPORT = re.compile(r"E3Z:1 N:(\d{1,10}) Z:(-?\d{1,4}\.\d{3}) K:([01]) H:([01]) M:([01])")
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveZSample:
+    generation: int
+    received_at: float
+    sequence: int
+    z_mm: float
+    known: bool
+    homing: bool
+    moving: bool
 
 
 class _SerialTransport(Protocol):
@@ -143,6 +158,78 @@ class CrealityControllerOwner:
         self._secondary_fan_binding: AirAssistCommands | None = None
         self._secondary_fan_enabled: bool | None = None
         self._mainboard_fan1_used = False
+        self._live_z_supported = False
+        self._live_z_stream_active = False
+        self._live_z_sample: _LiveZSample | None = None
+
+    def set_live_z_support(self, identity: tuple[str, ...] | list[str]) -> None:
+        """Record an acknowledged identity, never infer support from a position line."""
+        self._live_z_supported = list(identity).count(LIVE_Z_CAPABILITY) == 1
+        if not self._live_z_supported:
+            self._live_z_sample = None
+
+    def live_z_telemetry(self) -> dict[str, object]:
+        """Read an immutable observational cache without waiting for the ACK lock."""
+        generation = self._generation
+        sample = self._live_z_sample
+        usable = bool(self._trusted and self._transport is not None and not self._close_requested.is_set()
+                      and self._live_z_supported and sample is not None and sample.generation == generation)
+        age = max(0.0, time.monotonic() - sample.received_at) if usable else None
+        return {"supported": self._live_z_supported, "z_mm": sample.z_mm if usable else None,
+                "known": sample.known if usable else False, "homing": sample.homing if usable else False,
+                "moving": sample.moving if usable else False, "sequence": sample.sequence if usable else None,
+                "controller_generation": generation, "age_seconds": age,
+                "valid": bool(usable and age <= LIVE_Z_MAX_AGE_SECONDS and generation == self._generation)}
+
+    def _consume_live_z(self, response: str, generation: int) -> bool:
+        if not response.startswith("E3Z"):
+            return False
+        match = _LIVE_Z_REPORT.fullmatch(response)
+        if match is None or int(match[1]) > 0xFFFFFFFF or not -1000 <= float(match[2]) <= 1000:
+            raise SecondaryControllerError("Malformed live Z telemetry")
+        if match[4] == "1" and match[3] != "0":
+            raise SecondaryControllerError("Homing Z telemetry cannot claim an established reference")
+        if not self._live_z_supported or not self._live_z_stream_active:
+            raise SecondaryControllerError("Unexpected live Z telemetry outside an enabled operation")
+        sequence = int(match[1])
+        previous = self._live_z_sample
+        if previous is not None and previous.generation == generation:
+            delta = (sequence - previous.sequence) & 0xFFFFFFFF
+            if delta == 0 or delta >= 0x80000000:
+                return True  # A duplicate/old report never renews freshness.
+        self._live_z_sample = _LiveZSample(generation, time.monotonic(), sequence, float(match[2]),
+                                          match[3] == "1", match[4] == "1", match[5] == "1")
+        return True
+
+    @contextmanager
+    def live_z_stream(self, execute: Callable[[str], tuple[str, ...]], *, enabled: bool = True):
+        """Opt in only around an owned operation; no extra reader or polling command."""
+        if not enabled or not self._live_z_supported:
+            yield
+            return
+        if self._live_z_stream_active:
+            raise SecondaryControllerError("Live Z stream already belongs to another operation")
+        generation = self._generation
+        self._live_z_stream_active = True
+        self._live_z_sample = None
+        failed = False
+        try:
+            execute("M154 S1")
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                if generation == self._generation and self._trusted and not self._close_requested.is_set():
+                    execute("M154 S0")  # Uses the same cancellation/session write guard.
+            except BaseException:
+                self._live_z_sample = None
+                self._close_transport_locked()
+                if not failed:
+                    raise
+            finally:
+                self._live_z_stream_active = False
 
     @property
     def session(self) -> CrealityControllerSession:
@@ -183,6 +270,8 @@ class CrealityControllerOwner:
             transport = self._transport
             self._generation += 1
             self._trusted = False
+            self._live_z_sample = None
+            self._live_z_supported = False
             self._fault = "Ender emergency stop requested; explicit Ender recovery is required"
             self._secondary_fan_enabled = None
             if transport is not None:
@@ -223,6 +312,9 @@ class CrealityControllerOwner:
 
     def _close_transport_locked(self) -> None:
         self._generation += 1
+        self._live_z_sample = None
+        self._live_z_supported = False
+        self._live_z_stream_active = False
         transport = self._transport
         self._transport = None
         self._trusted = False
@@ -415,6 +507,8 @@ class CrealityControllerOwner:
                 )
                 responses: list[str] = []
                 response_bytes = 0
+                telemetry_lines = 0
+                telemetry_limit = max(32, int((self.session.read_timeout_seconds if timeout is None else timeout) * 20))
                 while True:
                     if write_guard is not None:
                         with write_guard():
@@ -437,6 +531,11 @@ class CrealityControllerOwner:
                     if generation != self._generation or self._close_requested.is_set():
                         raise SecondaryControllerError("Secondary session was interrupted or closed")
                     if response is None:
+                        continue
+                    if self._consume_live_z(response, generation):
+                        telemetry_lines += 1
+                        if telemetry_lines > telemetry_limit:
+                            raise SecondaryControllerError("Live Z telemetry exceeded its bounded rate")
                         continue
                     normalized = response.strip().casefold()
                     response_bytes += len(response)

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - live Z and honeycomb focus bounds
+
+- Display real controller step-counter Z during focus and manual Z movement;
+  label homing coordinates and expire stale observations.
+- Add operation-scoped 5 Hz compact-F401 telemetry through the existing Pi serial
+  owner, with no extra serial reader or motion authority.
+- Allow focus within the existing explicitly configured honeycomb polygon,
+  including points beyond the older camera-area rectangle. Validate complete
+  transfer paths and both probe and laser carriage positions.
+
 ## Unreleased - visible probe selection rejection
 
 - Keep rejected camera probe clicks visible in red while disabling movement.

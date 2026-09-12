@@ -179,6 +179,30 @@ def _job_state(record: Mapping[str, Any] | None) -> str:
     return raw.lower() if isinstance(raw, str) else "idle"
 
 
+def _validated_ender_z_telemetry(raw: object) -> dict[str, Any] | None:
+    """Reject malformed observation data without changing machine authority."""
+    if not isinstance(raw, Mapping):
+        return None
+    value = dict(raw)
+    if any(type(value.get(key)) is not bool for key in ("supported", "valid", "known", "homing", "moving")):
+        return None
+    generation, sequence = value.get("controller_generation"), value.get("sequence")
+    z, age = value.get("z_mm"), value.get("age_seconds")
+    if type(generation) is not int or generation < 0:
+        return None
+    if sequence is not None and (type(sequence) is not int or not 0 <= sequence <= 0xFFFFFFFF):
+        return None
+    if z is not None and (type(z) not in {int, float} or not math.isfinite(z) or not -1000 <= z <= 1000):
+        return None
+    if age is not None and (type(age) not in {int, float} or not math.isfinite(age) or age < 0):
+        return None
+    if value["homing"] and value["known"]:
+        return None
+    value["valid"] = bool(value["valid"] and value["supported"] and z is not None
+                          and sequence is not None and age is not None and age <= 1.5)
+    return value
+
+
 class RemoteMachineService:
     """MachineService-compatible client whose execution owner is the Pi."""
 
@@ -246,6 +270,7 @@ class RemoteMachineService:
         self._local_job_created_at: dict[str, float] = {}
 
         self._monitor_interval_seconds = float(monitor_interval_seconds)
+        self._live_z_poll_count = 0
         self._monitor_stop = threading.Event()
         self._monitor_thread: threading.Thread | None = None
         self._detached = False
@@ -896,6 +921,7 @@ class RemoteMachineService:
         response: Mapping[str, Any] | None = None,
     ) -> bool:
         status = copy.deepcopy(dict(raw_status))
+        status["ender_z_telemetry"] = _validated_ender_z_telemetry(status.get("ender_z_telemetry"))
         with self._state_lock:
             boot_changed = False
             if response is not None:
@@ -1030,11 +1056,18 @@ class RemoteMachineService:
         self._require_capabilities(timeout=_MONITOR_RPC_TIMEOUT_SECONDS)
         with self._state_lock:
             requested_job_observation = self._job_observation_sequence
+        observation_started = time.monotonic()
         machine_response = self._rpc(
             ACTION_MACHINE_STATUS,
             timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
         )
         raw_status = self._response_mapping(machine_response, "status")
+        telemetry = _validated_ender_z_telemetry(raw_status.get("ender_z_telemetry"))
+        if telemetry is not None and telemetry["age_seconds"] is not None:
+            # Conservatively include the entire round trip; a delayed reply
+            # cannot make an older firmware sample appear newly received.
+            telemetry["age_seconds"] += max(0.0, time.monotonic() - observation_started)
+        raw_status["ender_z_telemetry"] = telemetry
         self._require_operation_current(generation)
         # Publish this independently of any later job-detail request. Keep
         # STOP's epoch check and publication atomic with respect to STOP.
@@ -1071,6 +1104,9 @@ class RemoteMachineService:
             job_observation = self._job_observation_sequence
         if job_superseded:
             return
+        with self._state_lock:
+            if self._live_z_poll_count:
+                return  # Focus owns an idle operation; the coherent snapshot suffices.
         try:
             self._refresh_job_status(
                 machine_response, generation=generation, observation=observation,
@@ -1186,7 +1222,22 @@ class RemoteMachineService:
                 )
             else:
                 failures = 0
-                delay = self._monitor_interval_seconds
+                with self._state_lock:
+                    delay = min(self._monitor_interval_seconds, .2) if self._live_z_poll_count else self._monitor_interval_seconds
+
+    @contextmanager
+    def _live_z_monitor_scope(self, active: bool):
+        if active:
+            with self._state_lock:
+                self._live_z_poll_count += 1
+            self._monitor_wake.set()
+        try:
+            yield
+        finally:
+            if active:
+                with self._state_lock:
+                    self._live_z_poll_count -= 1
+                self._monitor_wake.set()
 
     def start_monitoring(self) -> None:
         with self._state_lock:
@@ -1289,6 +1340,14 @@ class RemoteMachineService:
             self._expire_arm_locked()
             status = copy.deepcopy(self._status_cache)
             now = time.monotonic()
+            telemetry = status.get("ender_z_telemetry")
+            if isinstance(telemetry, dict) and telemetry.get("age_seconds") is not None:
+                received_at = self._last_machine_status_monotonic
+                telemetry["age_seconds"] += max(0.0, now - received_at) if received_at is not None else 1.5
+                telemetry["valid"] = bool(telemetry["valid"] and telemetry["age_seconds"] <= 1.5
+                                          and not self._detached
+                                          and status.get("monitor_connected") is True
+                                          and status.get("status_stale") is not True)
             submission = copy.deepcopy(self._job_submission)
             if submission is not None:
                 submission["elapsed_seconds"] = max(
@@ -1694,11 +1753,12 @@ class RemoteMachineService:
             raise SafetyError("Laser focus requires machine.allow_motion")
         if self.armed or self.pi_owned_job_active:
             raise SafetyError("Laser focus requires an idle machine and disarmed laser")
-        response = self._rpc(ACTION_MACHINE_FOCUS, {
-            "control": action, "confirmed": confirmed, "value": value,
-            "clearance_z_mm": clearance_z_mm, "gap_mm": gap_mm,
-            "measurement_id": measurement_id, "preview_id": preview_id,
-        }, timeout=125.0)
+        with self._live_z_monitor_scope(action in {"reference", "measure", "jog", "move", "clearance"}):
+            response = self._rpc(ACTION_MACHINE_FOCUS, {
+                "control": action, "confirmed": confirmed, "value": value,
+                "clearance_z_mm": clearance_z_mm, "gap_mm": gap_mm,
+                "measurement_id": measurement_id, "preview_id": preview_id,
+            }, timeout=125.0)
         result = self._response_mapping(response, "result")
         readback = result.get("current_readback")
         if result.get("available") is False and recovery_supported and action in {"status", "recover"}:
@@ -1745,9 +1805,10 @@ class RemoteMachineService:
         if self.armed or self.pi_owned_job_active:
             raise SafetyError("Mainboard controls require an idle machine and disarmed laser")
         self._require_operation_current(generation)
-        response = self._rpc(ACTION_MACHINE_MAINBOARD, {
-            "control": action, "value": value, "confirmed": confirmed,
-        }, timeout=35.0)
+        with self._live_z_monitor_scope(action in {"z", "z_jog"}):
+            response = self._rpc(ACTION_MACHINE_MAINBOARD, {
+                "control": action, "value": value, "confirmed": confirmed,
+            }, timeout=35.0)
         result = self._response_mapping(response, "result")
         # Missing, malformed or old-node data is never presented as a live Z.
         for key in ("z_known", "firmware_z_limit_verified", "max_z_persistent"):

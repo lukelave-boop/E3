@@ -238,9 +238,48 @@ def make_machine(
 def wait_for_recovery(machine: MachineService, timeout: float = 2.0) -> None:
     with machine._lock:
         recovery = machine._recovery_thread
-    assert recovery is not None
+        state = machine._controller_state
+    if recovery is None:
+        # The production worker clears its handle when it finishes. A fast
+        # recovery may retire before this waiter is scheduled; callers below
+        # still check the exact resulting state/session generation.
+        assert state not in {
+            ControllerState.OPENING, ControllerState.SYNCHRONIZING,
+            ControllerState.STOPPING, ControllerState.RECOVERING,
+        }
+        return
     recovery.join(timeout)
     assert not recovery.is_alive()
+
+
+def test_recovery_wait_accepts_a_worker_that_already_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine, _factory = make_machine(monkeypatch)
+    original_generation = machine.connect()["controller_session_generation"]
+    machine.request_stop()
+    with machine._lock:
+        recovery = machine._recovery_thread
+    if recovery is not None:
+        recovery.join(2.0)
+        assert not recovery.is_alive()
+    assert machine._recovery_thread is None
+    wait_for_recovery(machine)
+    status = machine.status()
+    assert status["controller_state"] == "READY_HOME_REQUIRED"
+    assert status["controller_session_generation"] > original_generation
+    assert not status["coordinate_reference_ready"]
+    machine.disconnect()
+
+
+@pytest.mark.parametrize("state", [ControllerState.OPENING, ControllerState.SYNCHRONIZING,
+                                  ControllerState.STOPPING, ControllerState.RECOVERING])
+def test_recovery_wait_does_not_accept_an_active_state_without_a_worker(state) -> None:
+    machine = MachineService(machine_settings(), LaserSettings(), hardware_enabled=True)
+    with machine._lock:
+        machine._controller_state = state
+    with pytest.raises(AssertionError):
+        wait_for_recovery(machine)
 
 
 def test_controller_state_enum_and_transition_graph_are_authoritative() -> None:

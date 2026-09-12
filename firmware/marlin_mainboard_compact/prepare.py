@@ -11,6 +11,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASELINE = json.loads((HERE.parent / "marlin_material/baseline.json").read_text())
 OVERLAYS = {
+    "Marlin/src/e3_live_z.h": HERE / "e3_live_z.h",
+    "Marlin/src/e3_live_z.inc": HERE / "e3_live_z.inc",
     "Marlin/src/e3_recovery.inc": HERE / "e3_recovery.inc",
     "Marlin/src/HAL/STM32/e3_recovery_protocol.h": HERE / "recovery_protocol.h",
     "Marlin/src/module/e3_material_height.h": HERE.parent / "marlin_material/overlay/e3_material_height.h",

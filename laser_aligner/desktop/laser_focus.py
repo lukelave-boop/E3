@@ -13,6 +13,7 @@ from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
 from .mainboard_z import _number, _read_allowed, _session
 from .qt import require_qt
+from .z_telemetry import EnderZTelemetry
 
 QtCore, _, QtWidgets = require_qt()
 
@@ -35,6 +36,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._status: dict[str, Any] = {}
         self._result: dict[str, Any] = {}
         self._received_at: float | None = None
+        self._live_z = EnderZTelemetry()
         self._busy = False
         self._pending = False
         self._preview_id: str | None = None
@@ -54,6 +56,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         layout.addWidget(intro)
         readouts = QtWidgets.QGridLayout()
         self.height = QtWidgets.QLabel("Z — mm")
+        self.height.setWordWrap(True)
         self.height.setObjectName("focusZReadout")
         self.height.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.height.setToolTip("Controller-reported Z; not an encoder measurement.")
@@ -68,6 +71,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
         readouts.addWidget(self.maximum, 1, 0)
         readouts.addWidget(self.calibration, 1, 1)
         layout.addLayout(readouts)
+        self.live_z_note = QtWidgets.QLabel()
+        self.live_z_note.setWordWrap(True)
+        self.live_z_note.setObjectName("focusLiveZNote")
+        self.live_z_note.hide()
+        layout.addWidget(self.live_z_note)
         ender_row = QtWidgets.QHBoxLayout()
         self.ender_status = QtWidgets.QLabel("Ender: waiting for connection status")
         self.ender_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
@@ -267,6 +275,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
         # Enter commits an editor; it must never activate a motion button.
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setAutoDefault(False)
+        self._display_timer = QtCore.QTimer(self)
+        self._display_timer.setInterval(200)
+        self._display_timer.timeout.connect(self._sync_z_display)
+        self._display_timer.start()
         self._sync()
 
     def fresh(self) -> bool:
@@ -332,6 +344,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self._result["surface"] = None
             self.surface.setText("Surface elevation: not measured")
         if clear_confirmation:
+            self._live_z.clear()
             for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed, self.xy_clear):
                 checkbox.setChecked(False)
         self.message.setText(message)
@@ -349,7 +362,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.ender_status.setText("Ender: awaiting current status")
         maximum = _number(self._result.get("max_z_mm"))
         if maximum is not None:
-            self.maximum.setText(f"Configured maximum: {maximum:g} mm above border · Z status unavailable")
+            self.maximum.setText(f"Configured maximum: {maximum:g} mm above border")
         offset = self._result.get("probe_xy_offset_mm")
         if (isinstance(offset, (list, tuple)) and len(offset) == 2
                 and all(_number(value) is not None and -100 <= value <= 100 for value in offset)):
@@ -536,7 +549,29 @@ class LaserFocusPanel(QtWidgets.QWidget):
             and current is not None and previous_z is not None and abs(current - previous_z) <= .05
         )
 
+    def observe_z_status(self, status: Mapping[str, Any]) -> None:
+        self._live_z.update(status)
+        self._sync_z_display()
+
+    def _sync_z_display(self) -> None:
+        probe = self._status.get("z_probe")
+        active = bool(self._busy or self._pending or (isinstance(probe, Mapping) and probe.get("active") is True))
+        fresh = self.fresh() and _read_allowed(self._status) and self._result.get("available") is True
+        observed = self._live_z.readout(active=active, readback_at=self._received_at if fresh else None)
+        self.live_z_note.setVisible(observed is not None)
+        if observed is not None:
+            self.height.setText(observed[0])
+            self.live_z_note.setText(observed[1])
+        elif fresh and not active and self._live_z.readback_current(self._received_at):
+            readback = self._result.get("current_readback") or {}
+            z = _number(readback.get("z_mm"))
+            known = readback.get("z_known") is True and z is not None
+            self.height.setText(f"Z {z:.3f} mm" if known else "Z unknown · reference required")
+        else:
+            self.height.setText("Z — mm")
+
     def _sync(self) -> None:
+        self._sync_z_display()
         idle = _read_allowed(self._status) and not self._busy and not self._pending
         ready = idle and self.fresh()
         projection = project_machine_state(self._status)
@@ -730,7 +765,28 @@ class LaserFocusCoordinator(QtCore.QObject):
         panel.previewInvalidated.connect(self.parameters_edited)
         panel.homeRequested.connect(self.home)
         panel.xyRequested.connect(self.xy)
+        panel._display_timer.timeout.connect(self.observe_cached_z)
         self._timer.start()
+
+    def observe_cached_z(self) -> None:
+        probe = self._status.get("z_probe")
+        active = self._busy or self._mutation or self.panel._pending or (
+            isinstance(probe, Mapping) and probe.get("active") is True
+        )
+        if (self._closed or not active or not self.panel.isVisible()
+                or getattr(self.controller, "_shutdown_started", False)):
+            return
+        # Read only the machine cache, not AppContext.status or typed focus
+        # status. The live readout cannot alter this coordinator's authority.
+        machine = getattr(getattr(getattr(self.controller, "runtime", None), "context", None), "machine", None)
+        read = getattr(machine, "status", None)
+        if not callable(read):
+            return
+        try:
+            snapshot = read()
+        except Exception:
+            snapshot = {}
+        self.panel.observe_z_status(snapshot if isinstance(snapshot, Mapping) else {})
 
     def set_status(self, status: Mapping[str, Any]) -> None:
         machine = dict(machine_payload(status))
@@ -747,6 +803,7 @@ class LaserFocusCoordinator(QtCore.QObject):
                 self._last_request = -math.inf
         self._status = machine
         self.panel._status = machine
+        self.panel.observe_z_status(machine)
         if became_readable:
             # One observation after recovery may clear an old read failure.
             # A repeated failure relatches; no connection or motion is retried.
@@ -790,6 +847,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         self._epoch += 1
         self._queued = None
         self._timer.stop()
+        self.panel._display_timer.timeout.disconnect(self.observe_cached_z)
         self.controller.statusChanged.disconnect(self.set_status)
         self.controller.busyChanged.disconnect(self.set_busy)
         self.controller.stopInitiated.disconnect(self.stopped)

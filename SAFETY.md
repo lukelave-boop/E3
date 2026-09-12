@@ -1,5 +1,13 @@
 # Safety requirements
 
+Live Z telemetry is an observational executed-step count, not an encoder or
+collision detector. Homing coordinates are provisional until the existing
+completion/readback checks succeed. Missing/stale telemetry removes the live
+number and never grants motion authority. Laser-off focus may use the union
+of the saved machine rectangle and the explicitly configured fixed honeycomb
+polygon; every transfer segment is contained in that union. No camera-derived
+boundary, bounding-box expansion, or telemetry sample authorizes travel.
+
 The new [gauge-focus setup](docs/LASER_FOCUS.md) is an explicit laser-off
 calibration/positioning workflow. It requires surface-height V2 firmware and
 the matching Pi service; it does not enable the suspended legacy probe path.

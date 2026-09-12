@@ -53,6 +53,7 @@ from .controller_session import (
     ControllerSessionDiagnostics,
     ControllerState,
 )
+from .focus_bounds import FocusXYBounds
 from .io_diagnostics import thread_snapshot
 from .laser_focus import LaserFocus
 from .laser_focus import validate_request as validate_focus_request
@@ -4101,6 +4102,7 @@ class MachineService:
         """Explicit gauge teaching and positioning, never job or laser authority."""
         validate_focus_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
         deadline = time.monotonic() + _FOCUS_OPERATION_TIMEOUT_SECONDS
+        focus_bounds = FocusXYBounds(self.settings.work_area, self.laser_settings.guarded_output_polygon_mm)
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
             self._require_safety_configuration()
@@ -4134,8 +4136,8 @@ class MachineService:
                     or self._coordinate_reference_session_generation != session.generation
                     or self._jog_position_mm is None):
                     raise SafetyError("Home / park must establish primary XY before laser focus")
-                if not self.settings.work_area.contains(*self._jog_position_mm):
-                    raise SafetyError("The focus setup point is outside the work area")
+                if not focus_bounds.contains(self._jog_position_mm):
+                    raise SafetyError("The focus setup point is outside the configured positioning areas")
                 if action == "reference" and any(abs(a-b) > .01 for a,b in zip(
                     self._jog_position_mm, (self.settings.photo_x, self.settings.photo_y), strict=True)):
                     raise SafetyError("Position over the border before referencing focus Z")
@@ -4151,6 +4153,8 @@ class MachineService:
                         raise MachineError("Focus operation cancelled or session changed")
                     if require_secondary and action != "recover" and (not probe.owner.ready or probe.owner.generation != secondary_generation):
                         raise MachineError("Focus Ender connection changed")
+                    if FocusXYBounds(self.settings.work_area, self.laser_settings.guarded_output_polygon_mm).polygons != focus_bounds.polygons:
+                        raise MachineError("Focus positioning bounds changed during the operation")
                     if time.monotonic() >= deadline:
                         raise MachineError("Focus operation exceeded its time limit")
                     if _connection_alive is not None and not _connection_alive():
@@ -4185,8 +4189,15 @@ class MachineService:
             def move_focus_xy(target, write_guard, *, surface_target, laser_target):
                 """Only the measured offset transfer may retain surface authority."""
                 origin = self._jog_position_mm
-                if origin is None or not all(self.settings.work_area.contains(*point) for point in (origin, target, surface_target, laser_target)):
-                    raise SafetyError("Probe target and carriage endpoints must be inside the configured work area")
+                if origin is None or not all(focus_bounds.contains(point) for point in (origin, target, surface_target, laser_target)):
+                    raise SafetyError("Probe target and carriage endpoints must be inside the configured work area or honeycomb polygon")
+                # Check the exact rounded command and the later same-spot return.
+                # Endpoint membership alone is insufficient for a union of areas.
+                commanded_target = tuple(float(f"{v:.3f}") for v in target)
+                commanded_laser = tuple(float(f"{v:.3f}") for v in laser_target)
+                if not (focus_bounds.contains_segment(origin, commanded_target)
+                        and focus_bounds.contains_segment(commanded_target, commanded_laser)):
+                    raise SafetyError("Probe transfer path leaves the configured positioning areas")
                 if not self._uses_grbl_coordinate_state():
                     raise SafetyError("Probe XY alignment requires verified GRBL coordinates")
                 feed_limits = (self.laser_settings.travel_feed_mm_min,
@@ -6170,6 +6181,7 @@ class MachineService:
 
     def status(self) -> dict[str, Any]:
         probe_reference = None if self._z_probe is None else self._z_probe.reference
+        ender_z_telemetry = (None if self._z_probe is None else self._z_probe.owner.live_z_telemetry())
         secondary_status = None
         if self._secondary_air_assist is not None:
             snapshot = self._secondary_air_assist.status
@@ -6292,6 +6304,7 @@ class MachineService:
             "armed_until": self._armed_until if armed else None,
             "arm_phrase": self.ARM_PHRASE,
             "secondary_air_assist": secondary_status,
+            "ender_z_telemetry": ender_z_telemetry,
             "z_probe": {
                 "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
                 "unavailable_reason": _PROBE_SUSPENSION_REASON or None,

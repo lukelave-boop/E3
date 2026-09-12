@@ -68,7 +68,7 @@ def audit_profile(path: Path) -> None:
 
     required = ("_ZN10GcodeSuite3G39Ev", "_ZN10GcodeSuite4M115Ev", "_ZN10GcodeSuite4M997Ev",
                 "_ZN10GcodeSuite4M106Ev", "_ZN10GcodeSuite4M107Ev", "_ZN10GcodeSuite4M123Ev",
-                "_ZN10GcodeSuite4M280Ev")
+                "_ZN10GcodeSuite4M280Ev", "_ZN10GcodeSuite4M154Ev")
     if any(name not in symbols for name in required):
         raise ValueError("A required native auxiliary command is absent")
     forbidden = ("_ZN10GcodeSuite4M104Ev", "_ZN10GcodeSuite4M109Ev", "_ZN10GcodeSuite4M140Ev",
@@ -97,7 +97,7 @@ def audit_profile(path: Path) -> None:
                     "Cap:E3_MAINBOARD_V1:1", "Cap:E3_MATERIAL_HEIGHT_V1:1",
                     "Cap:E3_USB_UPDATER_F401_V1:1", "Cap:E3_COMPACT_F401_V1:1",
                     "Cap:E3_Z_LIMIT_80_V1:1", "Cap:E3_RECOVERY_V1:1",
-                    "Cap:E3_SURFACE_HEIGHT_V2:1",
+                    "Cap:E3_SURFACE_HEIGHT_V2:1", "Cap:E3_LIVE_Z_V1:1",
                     f"E3SG:2 PROBE_Z:{offset:.6f} RETRACT:5.000000 MIN:-2 MAX:65 CEILING:80",
                     "Cap:SDCARD:0", f"E3HW:1 MCU:{device:X} FLASH_KIB:{capacity}")
         if any(part not in text for part in expected):

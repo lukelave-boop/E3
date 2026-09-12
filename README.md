@@ -1,5 +1,14 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Live Z and honeycomb focus positioning
+
+Surface / laser focus and the Machine-tab Z readout can display executed
+controller step counts during motion with the matching live-Z firmware and Pi
+companion. Homing readings are labelled unreferenced; stale samples disappear.
+Focus positioning uses both the configured machine rectangle and any explicit
+fixed honeycomb polygon, with complete transfer-path checks. See
+[the focus guide](docs/LASER_FOCUS.md). No live readout is an encoder measurement.
+
 ## Camera probe selection feedback
 
 Rejected probe selections retain a red marker and show the calculated XY,

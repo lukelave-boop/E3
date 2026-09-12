@@ -1,5 +1,52 @@
 # Current repository state
 
+## Live Z telemetry and full-honeycomb focus positioning (2026-09-12)
+
+The retained operator click maps source (476.13,770.42) at 1920x1080 to
+X80.222/Y213.031. This exceeds the legacy Y210 machine rectangle but lies
+inside the separately configured fixed honeycomb output polygon. Saved
+August13 notes explicitly distinguish those areas; the operator again confirms
+that the laser reaches every honeycomb corner. The focus workflow incorrectly
+used only the smaller rectangle. This explains the actual current rejection;
+the precise difference from the earlier unrecorded click remains unverified.
+
+Laser-off focus now uses the union of the existing machine rectangle and an
+explicit configured fixed honeycomb polygon, if present. It never derives
+travel permission from camera detection, support dimensions, or a bounding
+box. Selected point, probe carriage, laser-return carriage and complete
+rounded transfer segments must be contained. Changed bounds invalidate camera
+selection and guarded in-flight writes. Ordinary jobs, Home/park, calibration
+provenance and saved configuration are unchanged. Focused tests cover the
+recorded point through probe/measure/return/teach and rejection paths.
+
+New compact F401 firmware reports actual executed step-counter Z at up to 5 Hz
+during enabled operations; homing coordinates are explicitly unreferenced.
+The sole Pi serial reader demultiplexes reports into a nonblocking immutable
+cache. Remote polling accelerates only during Z actions; desktop display-only
+updates age samples and never authorize motion or replace final readback.
+Unsupported firmware has no extra serial commands; motion shows live unavailable.
+This requires matching firmware, Pi companion and desktop builds. Automated
+verification and artifact identities are recorded at handoff. No hardware was
+operated or installed during development; live movement accuracy remains
+physically unverified.
+
+Correction to the earlier 0.7.86 handoff: its installer completed. CI
+34701494835 finished with 5455 passed,25 skipped and one controller-session
+1000-cycle soak failure. That run predates all live-Z changes; do not claim
+its full suite passed. Current work remains on the active development branch,
+not ready for integration until current verification and hardware handoff.
+
+Current verification: 596 combined focused Windows tests passed; 226 focused
+Linux/WSL Python3.10 host tests passed; 44 firmware package/source tests passed.
+Actual linked F401 audits and Cortex-M4 publisher emulation passed, including
+idle silence, homing flags, TX congestion and executed-versus-target position.
+Offscreen 1400x900 views show live/homing numeric labels without clipping.
+A separate pre-existing CI soak waiter raced the production worker's legitimate
+handle retirement; its test helper now accepts completed recovery while keeping
+exact state/generation assertions. All 146 controller-session tests pass.
+Ruff/compileall pass. Read-only SSH verifies all 12 installed Pi source hashes
+and the saved fixed polygon; no live service or controller state was changed.
+
 ## Rejected-click diagnostic build selected (2026-09-12)
 
 E3 DEV TEST now selects Camera probe selection diagnostics 0.7.86, frozen at

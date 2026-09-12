@@ -1,5 +1,30 @@
 # Architecture
 
+## Observational Z telemetry and focus XY authority
+
+Compact F401 publishes E3Z:1 records from idle at a maximum of 5 Hz only after
+strict M154 S1 opt-in; M154 S0 disables it. Reports use executed step counters
+with logical modifiers. During G28 they explicitly carry homing/unreferenced
+flags. A full line must fit the UART TX ring or the sample is dropped. Stable
+idle emits one final sample and then becomes quiet.
+
+CrealityControllerOwner demultiplexes telemetry before the normal response
+budget in its existing sole reader. It retains an immutable generation-bound
+sample without granting an acknowledgement or coordinate reference. Scoped
+focus/mainboard operations enable/disable the stream through their current
+write guards. Machine status reads only the cache. Remote status includes
+network and local age; focus Z actions temporarily request 200 ms monitoring.
+Desktop observational caches refresh labels and independently age data; typed
+results still exclusively govern controls, bounds, measurements and completion.
+
+FocusXYBounds uses the exact union of the existing machine rectangle and
+explicit fixed guarded-output polygon. Segment clipping requires continuous
+coverage of the actual rounded probe transfer and later laser return; a convex
+hull or axis-aligned bounding box never authorizes additional space. Camera
+selection signatures bind this geometry and the Pi checks it again before
+writes. This policy is restricted to idle disarmed laser-off focus actions;
+ordinary job/powered-output policy and calibration provenance are unchanged.
+
 ## Focus selection rejection feedback
 
 AppContext continues to reject invalid mapped work-area points and now includes

@@ -1,5 +1,36 @@
 # Compact F401 auxiliary application
 
+## Live Z readback
+
+`Cap:E3_LIVE_Z_V1:1` enables an opt-in, observational Z stream. The compact
+profile accepts exactly `M154 S1` to enable fixed 5 Hz reporting and `M154 S0`
+to disable it. Other arguments reject; this is not standard Marlin's seconds
+interval. Reporting defaults off after reset. The host scopes it to a typed
+operation and consumes its lines through the same serial owner as command ACKs.
+
+Reports are `E3Z:1 N:<sequence> Z:<mm> K:<known> H:<homing> M:<moving>`.
+They have no trailing `ok`. Z is read from executed step counters, converted
+through the controller's logical coordinate modifiers, rather than a queued
+destination. It is not encoder feedback or measured laser-to-surface distance.
+During every G28 scope, `H:1 K:0` explicitly marks the internal coordinate
+rebases: that numeric value must not be represented as border-relative height.
+The existing final M114/known-position checks retain motion authority.
+
+The idle hook runs while native G28/G39 and planner synchronization block the
+command queue. Each complete line must fit available USART1 TX space; congestion
+drops a sample instead of blocking idle or queuing a telemetry backlog. It never
+prints from the stepper or UART receive interrupt. After an initial enable sample
+and one final motion sample, an unchanged idle position stays quiet, even if the
+host disappears before disabling the stream. Changes to idle Z or validity still
+report. Enable/disable clears that publication cache. The sequence increments only
+for transmitted samples and wraps as uint32. Host timestamps establish freshness.
+
+`run_live_z_tests.py` executes the production publisher in Cortex-M4 emulation
+with fake I/O, including default-off/strict argument handling, actual counters,
+homing validity, interval/wrap and full-frame TX rejection. Build/profile audits
+also require the linked M154 handler and advertised capability. Hardware timing
+and displayed physical movement remain unverified until an operator test.
+
 ## Border-relative Z80 ceiling
 
 The compact profile fixes Z_MAX_POS at 80 mm. A planner buffer_segment guard

@@ -1,5 +1,27 @@
 # Surface height and gauge-taught laser focus
 
+## Numeric Z during movement
+
+With the matching live-Z firmware and Pi companion, the number refreshes at up
+to five times per second while Z moves. It comes from the controller's executed
+step counter, not the requested destination or a time-based animation. During
+homing it is labelled **homing / unreferenced**, because homing changes the
+coordinate origin. It is not yet a height above the border and is not an encoder
+measurement. Stale reports disappear; unsupported firmware shows live unavailable
+during movement. The final acknowledged idle readback still governs the next
+operation. These display updates never enable a button or alter a motion limit.
+
+## Configured focus positioning area
+
+Focus uses the existing machine rectangle together with an explicitly configured
+fixed honeycomb polygon, when one is saved. The smaller calibration rectangle
+is not the physical honeycomb boundary. The selected point, probe carriage and
+later laser carriage must fit that combined area; the complete move and return
+paths must also remain inside it. It does not fill gaps between the shapes or
+expand to their bounding box. The polygon is fixed configuration, never inferred
+from the camera, live detection or the workpiece. Changed bounds invalidate the
+selection. Ordinary job limits and camera calibration are unchanged.
+
 ## Teaching approach and travel limits
 
 Use 1, 2 or 5 mm steps for approach only while the complete step has physical
@@ -66,7 +88,7 @@ back to the original camera coordinates. Resizing this window does not change
 the selected bed point. The original source must still match the calibration;
 unknown preview transformations and changed source settings remain blocked.
 The selected point, probe carriage and later laser-return carriage must all
-be in the machine work area. Missing/stale calibration, stale/offline frames,
+be in the configured focus positioning area. Missing/stale calibration, stale/offline frames,
 changed source settings or dimensions, unreferenced Z, insufficient clearance,
 or a missing probe offset prevents positioning. A changed calibration or
 controller session cancels a pending selection. Clicking the black margins
@@ -74,10 +96,10 @@ outside the image does nothing.
 
 The original calibration grid is not the edge of the usable bed. Points beyond
 that grid use the current bed map, including later registration and local
-corrections, within the configured work area. Their preview says **Outside
+corrections, within the configured focus area. Their preview says **Outside
 original calibration grid**; this is informational and does not disable the
 separate move. Check the actual placement before probing. A target that would
-put the probe carriage or later laser-return carriage outside the work area
+put the probe carriage or later laser-return carriage outside the configured focus area
 is still rejected.
 
 This is a bed-plane camera estimate. Raised surfaces are not height-corrected;
@@ -113,7 +135,8 @@ offset explicitly; an unset offset never silently becomes zero.
    the gauge setting as described below. Remove the gauge before focus moves.
 
 Each movement is separately requested; no button silently continues into probing
-or lowering Z. Both transfer endpoints must be inside the configured work area.
+or lowering Z. Both endpoints and the entire transfer path must be inside the
+configured focus positioning area.
 The Pi checks Z clearance, controller session and acknowledged XY before keeping
 the measurement. Ordinary XY jogging invalidates it. Teaching and focus are
 blocked while the laser has not yet returned from the probe position. Changing

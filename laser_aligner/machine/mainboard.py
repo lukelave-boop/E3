@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from contextlib import ExitStack
 
 from ..errors import MachineError, SafetyError
 from .secondary_controller import CrealityControllerOwner, WriteGuardFactory
@@ -73,14 +74,17 @@ def control(
                 raise MachineError("Mainboard session changed during the operation")
         return lines
 
-    with owner._lock:
-        identity = " ".join(execute("M115"))
+    with owner._lock, ExitStack() as telemetry_scope:
+        identity_lines = execute("M115")
+        identity = " ".join(identity_lines)
         caps = [word for word in identity.split() if word.startswith("Cap:E3_MAINBOARD")]
         if caps != [CAPABILITY] or "FIRMWARE_NAME:Marlin " not in identity:
             raise MachineError("Install the E3 mainboard V1 firmware before using these controls")
         # Sticky for this owner: cleanup always includes both OFF commands after
         # the dual-fan profile has been identified, even after a serial failure.
         owner._mainboard_fan1_used = True
+        owner.set_live_z_support(identity_lines)
+        telemetry_scope.enter_context(owner.live_z_stream(execute, enabled=moving))
         before = parse_status(execute("M123"))
         initial_z = parse_position(execute("M114"))
         if action == "z_max" and before["z_known"] and initial_z > float(value):
