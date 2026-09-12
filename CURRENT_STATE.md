@@ -19,8 +19,16 @@ the plan and revoke coordinate readiness. Ordinary jogging still invalidates it.
 338 focused Windows controller/job/remote tests pass; two additional rejected
 Home/park tests pass. Ruff and compileall pass. The real loopback RPC test now
 includes selecting focus, parking, uploading and START. Controllers are simulated;
-no physical motion or cutting was performed for this correction. Pi packaging,
-Linux verification, installation and CI are pending. Windows 0.7.93 is unchanged.
+no physical motion or cutting was performed for this correction. The exact
+59c31d7 correction passed 228 isolated Linux/Pi tests and was installed with
+predecessor-hash checks and backups. Both installed files reverified current;
+service PID85283 is active with NRestarts=0. Installation followed a verified
+operator disconnect with no running job and arming off. Saved calibration hash
+3923a856b1fe4fd315f5d2ebf1648e6b25e2c0479d24aa07368e0d2b72014ac6 is unchanged.
+Windows 0.7.93 is unchanged. Reconnect, reference and measure/select once after
+the ended session; the 7 mm teaching remains saved. CI run 34721997495 passed
+POSIX, dependency/bytecode and Ruff jobs; the full Windows suite is still running.
+Evidence: dist/focus-park-retention/ and build/focus-park-*.log.
 
 ## Measured job focus and automatic clearance (2026-09-12)
 

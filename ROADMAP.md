@@ -3,9 +3,10 @@
 ## Focus selection across camera parking
 
 Implemented and regression-tested retention of selected flat job height through
-successful clearance/Home/park. Pi delivery and Linux/CI verification are pending;
-no Windows rebuild or firmware change is needed. Physical qualification remains
-an operator test.
+successful clearance/Home/park. Pi correction 59c31d7 is installed and hash-
+verified; 228 isolated Linux/Pi tests pass. Windows 0.7.93 and firmware are
+unchanged. Full Windows CI is running; physical qualification remains an operator
+test.
 
 ## Measured job focus integration
 
