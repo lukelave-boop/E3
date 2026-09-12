@@ -1,5 +1,17 @@
 # Changelog
 
+## Ender connection and halt recovery (2026-09-12)
+
+Added explicit Reconnect Ender, separate Ender fault/readiness display, retained
+configured limits/offsets, and a read-only refresh after temporary primary state
+changes. Fixed XY-only and read-only/fan failures unnecessarily halting Ender;
+bounded secondary shutdown avoids another full startup wait. Fresh references
+are required after reconnect and interrupted motion is never replayed.
+
+Added restricted compact F401 emergency-halt queries and explicit token-bound
+restart. Matching Pi support is required. An already halted older firmware
+still needs an actual processor reset before it can receive the update.
+
 ## Probe move completion and focus prerequisites (2026-09-12)
 
 Fixed camera-selected probe moves using a short command timeout while waiting

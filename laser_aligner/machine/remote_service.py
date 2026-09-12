@@ -26,6 +26,7 @@ from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
+from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import validate_control
@@ -1686,7 +1687,10 @@ class RemoteMachineService:
             raise MachineError("Update the E3 Pi service to use probe XY alignment")
         if action == "position_probe" and FOCUS_CLICK_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to position the probe at a selected point")
-        if action != "status" and self.settings.allow_motion is not True:
+        recovery_supported = FOCUS_RECOVERY_CAPABILITY in (self._node_capabilities or ())
+        if action == "recover" and not recovery_supported:
+            raise MachineError("Update the E3 Pi service to reconnect the Ender from this window")
+        if action not in {"status", "recover"} and self.settings.allow_motion is not True:
             raise SafetyError("Laser focus requires machine.allow_motion")
         if self.armed or self.pi_owned_job_active:
             raise SafetyError("Laser focus requires an idle machine and disarmed laser")
@@ -1697,13 +1701,26 @@ class RemoteMachineService:
         }, timeout=125.0)
         result = self._response_mapping(response, "result")
         readback = result.get("current_readback")
-        if (result.get("action") != action or result.get("available") is not True
+        if result.get("available") is False and recovery_supported and action in {"status", "recover"}:
+            ender = result.get("ender")
+            if (result.get("action") != action or result.get("reference_ready") is not False
+                or type(readback) is not dict or readback.get("fresh") is not False
+                or readback.get("z_known") is not False or readback.get("z_mm") is not None
+                or any(result.get(key) is not None for key in ("reference", "surface", "preview", "xy_sequence"))
+                or type(ender) is not dict or ender.get("ready") is not False
+                or type(ender.get("fault")) is not str or not 1 <= len(ender["fault"]) <= 2048
+                or type(ender.get("generation")) is not int or ender["generation"] < 0
+                or ender.get("recovery_required") is not True
+                or result.get("recovery_available") is not True):
+                raise PiJobProtocolError("The Pi returned an invalid Ender recovery status")
+        elif (result.get("action") != action or result.get("available") is not True
             or type(readback) is not dict or readback.get("fresh") is not True
             or type(readback.get("z_known")) is not bool
             or type(result.get("reference_ready")) is not bool):
             raise PiJobProtocolError("The Pi did not return a fresh laser focus result")
         try:
-            finite_number(readback.get("z_mm"), "Focus readback", -1000, 1000)
+            if result.get("available") is True:
+                finite_number(readback.get("z_mm"), "Focus readback", -1000, 1000)
             validate_max_z(result.get("max_z_mm"))
         except SafetyError as exc:
             raise PiJobProtocolError(str(exc)) from exc

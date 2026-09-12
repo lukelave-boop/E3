@@ -1,5 +1,28 @@
 # Architecture
 
+## Ender recovery authority
+
+MachineService owns explicit focus recovery through the single Creality owner.
+The action requires an authenticated current primary session, idle/disarmed
+state and acknowledged M5, but no motion authority or XY home. It clears
+ephemeral references and verifies a fresh secondary identity and fan OFF.
+STOP/session/network changes cancel bounded reads and prevent result publication.
+An unavailable result under pi-laser-focus-recovery-v1 contains configured data
+and fault detail with no fresh Z, reference, surface or executable preview.
+
+The desktop separates primary readiness from Ender readiness. Its recovery
+button is explicit; routine refresh never resets hardware or replays an action.
+An own status read is not a probe operation. Actual secondary Z/probe motion is
+tracked separately from primary-only focus transfers, preserving emergency
+interrupts without halting the Ender on an XY completion or read-only failure.
+Owner cleanup does not reopen a failed serial session during shutdown.
+
+The compact F401 kill latch retains disabled motion/output state and polls
+USART1 without interrupts. Fresh token/board identity and an acknowledged
+E3RECOVER exchange permit one processor reset; other commands remain rejected.
+This protocol is neither authentication nor a safety-rated control. It cannot
+repair an already halted older image without an independent processor reset.
+
 ## Focus XY completion timing
 
 MachineService derives the focus planner-barrier timeout from distance and the

@@ -1,5 +1,44 @@
 # Current repository state
 
+## Ender connection recovery implementation (2026-09-12)
+
+The received Pi transcript establishes the earlier focus XY G4 barrier failed
+after three seconds, followed by STOP and an Ender M115 readiness timeout. The
+service also timed out during shutdown. The operator's software reset of the
+CH340 succeeded but did not restore Ender readiness. A direct read-only Pi API
+check confirmed primary READY_MOTION while the secondary remained unavailable.
+M112 delivery was not captured; the old firmware's nonresponsive kill loop is
+a possible explanation, not a physically established diagnosis.
+
+Surface / laser focus exposes the actual Ender fault and configured maximum,
+offset and calibration separately from live Z. Explicit Reconnect Ender uses
+the shared owner, current session, idle/disarmed state and acknowledged primary
+M5. It commands no XY/Z movement, homing, surface measurement or job replay.
+A firmware reset may initialize and move the CR Touch pin; its path must be
+clear. It invalidates ephemeral references and previews while retaining saved
+settings and clearance guards.
+The new pi-laser-focus-recovery-v1 capability distinguishes an unavailable
+diagnostic result from a fresh hardware position. Temporary primary transitions
+and Home no longer permanently suppress a read-only focus refresh.
+
+XY-only motion and read-only/fan failures no longer accidentally invoke the
+Ender Z/probe emergency halt. Actual uncertain Z/probe motion and explicit
+emergency STOP retain that path. Shutdown avoids reopening a failed secondary
+for another 45-second startup and cancels its bounded reads. Focus status reads
+do not advertise an active probe operation and invalidate their own responses.
+
+Compact F401 recovery firmware provides an output-off, polled halt protocol:
+a fresh M115 challenge permits one explicit E3RECOVER reset. It never resumes
+a prior operation. The currently installed 9518b83f image cannot acquire this
+handler while already halted; a real processor reset is needed before upload
+if that is its state. No physical unplug, reset, flash or motion was performed.
+
+Focused simulated serial/RPC acceptance, rejection, STOP and cancellation tests,
+offscreen Qt tests and compiled firmware audits support this implementation.
+Exact final counts, CI, binary identity and package verification belong to the
+feature handoff. Physical recovery remains unverified; the development branch
+stays active for qualification. See docs/ENDER_RECOVERY.md for the boundary.
+
 ## Verified probe-movement fix handoff (2026-09-12)
 
 E3 DEV TEST selects Probe positioning completion, version 0.7.74, exact

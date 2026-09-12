@@ -158,6 +158,49 @@ def test_marlin_handoff_ack_hold_and_identity_required(offline):
     assert port.input_resets == 1 and offline.sleeps == [0.5]
 
 
+@pytest.mark.parametrize("prefix", [b"E", b"E3USB:1 ENTER", b"E3USB:1 ENTERING_UPDATER", b"\xc5", b"\xffjunk"])
+def test_truncated_entry_requires_hold_and_identity_before_upload(prefix):
+    body = payload()
+    port = ScriptedPort([
+        ("M115", MARLIN), ("M997", prefix),
+        ("HOLD", "OK HOLD"), ("M115", UPDATER),
+        (begin(body), "OK BEGIN"), *blocks(body), ("END", "OK END"),
+    ])
+    host.upload(host.Link(port), image_bytes(body))
+    assert port.commands[:5] == ["M115", "M997", "HOLD", "M115", begin(body)]
+    assert port.commands.count("M997") == 1
+    assert "BOOT" not in port.commands and not port.exchanges
+
+
+@pytest.mark.parametrize("partial", [b"E", b"\xc5"])
+@pytest.mark.parametrize("reply", [MARLIN, "E3AUX1 UPDATER 0.1.0 BOARD=0401E013", None])
+def test_truncated_entry_wrong_or_missing_updater_cannot_erase(partial, reply):
+    port = ScriptedPort([
+        ("M115", MARLIN), ("M997", partial),
+        ("HOLD", "OK HOLD"), ("M115", reply),
+    ])
+    with pytest.raises(host.FirmwareError):
+        host.upload(host.Link(port), image_bytes())
+    assert port.commands == ["M115", "M997", "HOLD", "M115"]
+
+
+@pytest.mark.parametrize("partial", [b"E", b"\xc5"])
+@pytest.mark.parametrize("reply", [None, "ok", "ERR UNSUPPORTED"])
+def test_truncated_entry_hold_failure_cannot_erase(partial, reply):
+    port = ScriptedPort([("M115", MARLIN), ("M997", partial), ("HOLD", reply)])
+    with pytest.raises(host.FirmwareError):
+        host.upload(host.Link(port), image_bytes())
+    assert port.commands == ["M115", "M997", "HOLD"]
+
+
+@pytest.mark.parametrize("reply", [b"Error:E3USB:1 PRECONDITION", b"E3USB:1 UPDATER_INVALID", b"ERR REJECTED", b"Alarm:halted"])
+def test_unrelated_partial_entry_response_stops_immediately(reply):
+    port = ScriptedPort([("M115", MARLIN), ("M997", reply)])
+    with pytest.raises(host.ResponseTimeout):
+        host.upload(host.Link(port), image_bytes())
+    assert port.commands == ["M115", "M997"]
+
+
 @pytest.mark.parametrize("response", ["Error:E3USB:1 PRECONDITION", "Error:E3USB:1 UPDATER_INVALID",
                                       "ok", None])
 def test_refused_or_unconfirmed_entry_never_erases_or_retries(response):
@@ -327,12 +370,12 @@ def test_offline_verify_and_file_size_bound(tmp_path):
 def test_cli_closes_port_on_failure_and_boot_is_separate(tmp_path, monkeypatch, capsys):
     path = tmp_path / "application.e3fw"
     path.write_bytes(image_bytes())
-    failed = ScriptedPort(handshake() + [(begin(payload()), None)])
+    failed = ScriptedPort([("", "ERR UNSUPPORTED")] + handshake() + [(begin(payload()), None)])
     monkeypatch.setattr(host, "open_port", lambda _: failed)
     assert host.main(["upload", str(path), "--port", "FAKE", "--hardware-enabled"]) == 1
     assert failed.closed and "BOOT" not in failed.commands
-    assert "Stopped:" in capsys.readouterr().err
-    boot = ScriptedPort(handshake() + [("BOOT", "OK BOOT")])
+    assert "erasing application sector (BEGIN)" in capsys.readouterr().err
+    boot = ScriptedPort([("", "ERR UNSUPPORTED")] + handshake() + [("BOOT", "OK BOOT")])
     monkeypatch.setattr(host, "open_port", lambda _: boot)
     assert host.main(["boot", "--port", "FAKE", "--hardware-enabled"]) == 0
     assert boot.closed and boot.commands[-1] == "BOOT"
@@ -378,7 +421,7 @@ def test_linux_stopped_service_required_and_port_exclusive(monkeypatch, state):
     assert events == [
         "service",
         ("create", dict(port=None, baudrate=115200, timeout=0.1, write_timeout=3, exclusive=True)),
-        ("open", "/fake/ender", False, False), "reset_input", "close",
+        ("open", "/fake/ender", False, False), "close",
     ]
 
 
@@ -404,3 +447,92 @@ def test_linux_service_timeout_fails_closed_and_reports_cleanly(monkeypatch, cap
     assert host.main(["inspect", "--port", "/fake/ender", "--hardware-enabled"]) == 1
     assert events == ["service"]
     assert "Stopped:" in capsys.readouterr().err
+
+
+def test_cli_waits_for_delayed_startup_then_uploads_on_same_connection(offline, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "application.e3fw"
+    path.write_bytes(image_bytes())
+
+    class StartingPort(ScriptedPort):
+        announced = False
+
+        def read(self, size):
+            if offline.now >= 20 and not self.announced:
+                self.announced = True
+                self.incoming.extend(b"start\nMarlin 2.0.8.24F4\n\necho: Last Updated: Sep 10 | Autho")
+            return super().read(size)
+
+        def write(self, data):
+            assert offline.now >= 35  # No early traffic during native startup.
+            return super().write(data)
+
+    exchanges = [("", None), ("M115", MARLIN), ("M997", "E3USB:1 ENTERING_UPDATER"),
+                 ("HOLD", UPDATER + "\nOK HOLD"), ("M115", UPDATER),
+                 (begin(payload()), "OK BEGIN")] + blocks(payload()) + [("END", "OK END")]
+    port = StartingPort(exchanges)
+    opens = []
+    monkeypatch.setattr(host, "open_port", lambda name: opens.append(name) or port)
+    assert host.main(["upload", str(path), "--port", "FAKE", "--hardware-enabled"]) == 0
+    assert opens == ["FAKE"] and port.closed
+    assert not port.exchanges and port.commands == [command for command, _ in exchanges]
+    assert "BOOT" not in port.commands
+    output = capsys.readouterr().out
+    assert "Autho" in output and "verifying and committing" in output
+
+
+def test_passive_and_sync_identity_cannot_authorize_erase():
+    port = ScriptedPort([("", MARLIN), ("M115", None)])
+    port.incoming.extend(MARLIN.encode() + b"\n")
+    link = host.Link(port)
+    link.settle()
+    with pytest.raises(host.FirmwareError):
+        host.upload(link, image_bytes())
+    assert port.commands == ["", "M115"]
+
+
+@pytest.mark.parametrize("initial,sync,expected", [
+    (b"ERR MCU_MISMATCH\n", None, []),
+    (b"", "ERR MCU_MISMATCH", [""]),
+    (b"ERR UNSUPPORTED\n", None, []),
+])
+def test_startup_errors_fail_before_identity_or_erase(initial, sync, expected):
+    port = ScriptedPort([("", sync)] if expected else [])
+    port.incoming.extend(initial)
+    with pytest.raises(host.FirmwareError, match="Startup reported"):
+        host.Link(port).settle()
+    assert port.commands == expected
+
+
+def test_startup_input_is_bounded_before_any_query(monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+
+    def now():
+        clock.now += .00001
+        return clock.now
+
+    monkeypatch.setattr(host.time, "monotonic", now)
+    port = ScriptedPort([])
+    port.incoming.extend(b"x" * 65537)
+    with pytest.raises(host.FirmwareError, match="64 KiB"):
+        host.Link(port).settle()
+    assert not port.commands
+
+
+@pytest.mark.parametrize("stage", ["M115", "M997", "HOLD", "DATA", "END"])
+def test_cli_reports_exact_failed_stage_without_retry(stage, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "application.e3fw"
+    path.write_bytes(image_bytes())
+    exchanges = [("", None), ("M115", MARLIN), ("M997", "E3USB:1 ENTERING_UPDATER"),
+                 ("HOLD", "OK HOLD"), ("M115", UPDATER),
+                 (begin(payload()), "OK BEGIN")] + blocks(payload()) + [("END", "OK END")]
+    index = next(i for i, (command, _) in enumerate(exchanges) if command.split(" ")[0] == stage)
+    exchanges = exchanges[:index] + [(exchanges[index][0], None)]
+    port = ScriptedPort(exchanges)
+    monkeypatch.setattr(host, "open_port", lambda _: port)
+    assert host.main(["upload", str(path), "--port", "FAKE", "--hardware-enabled"]) == 1
+    assert port.commands == [command for command, _ in exchanges] and port.closed
+    error = capsys.readouterr().err
+    labels = {"M115": "querying firmware identity", "M997": "requesting updater entry",
+              "HOLD": "holding updater", "DATA": "block at 0x00000000",
+              "END": "verifying and committing"}
+    assert labels[stage] in error and "No complete firmware response" in error

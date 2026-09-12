@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import struct
+import subprocess
+import sys
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
@@ -94,7 +96,7 @@ def audit_profile(path: Path) -> None:
         expected = ("FIRMWARE_NAME:Marlin", "EXTRUDER_COUNT:0", "Cap:EMERGENCY_PARSER:1",
                     "Cap:E3_MAINBOARD_V1:1", "Cap:E3_MATERIAL_HEIGHT_V1:1",
                     "Cap:E3_USB_UPDATER_F401_V1:1", "Cap:E3_COMPACT_F401_V1:1",
-                    "Cap:E3_Z_LIMIT_80_V1:1",
+                    "Cap:E3_Z_LIMIT_80_V1:1", "Cap:E3_RECOVERY_V1:1",
                     "Cap:E3_SURFACE_HEIGHT_V2:1",
                     f"E3SG:2 PROBE_Z:{offset:.6f} RETRACT:5.000000 MIN:-2 MAX:65 CEILING:80",
                     "Cap:SDCARD:0", f"E3HW:1 MCU:{device:X} FLASH_KIB:{capacity}")
@@ -106,4 +108,7 @@ def audit_profile(path: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", type=Path)
-    audit_profile(parser.parse_args().elf)
+    args = parser.parse_args()
+    audit_profile(args.elf)
+    subprocess.run([sys.executable, str(Path(__file__).with_name("run_recovery_tests.py")),
+                    "--elf", str(args.elf)], check=True)

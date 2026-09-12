@@ -12,8 +12,12 @@ from firmware.marlin_mainboard_compact import install_pi_support as installer
 
 ROOT = Path(__file__).resolve().parents[1]
 DESIRED = (ROOT / installer.RELATIVE_TARGET).read_bytes().replace(b"\r\n", b"\n")
-F103 = DESIRED.replace(b'                "E3AUX1 UPDATER 0.3.0 BOARD=0401C013",\n', b"")
-OLD = DESIRED.replace(
+# Curated pre-recovery compact reader from revision 9110e05. Derive only its
+# historical variants here; changing the new desired reader must not fabricate
+# previously deployed source files or weaken their accepted checksum checks.
+COMPACT = (ROOT / "tests/fixtures/secondary_startup_compact_b052d290.py.txt").read_bytes().replace(b"\r\n", b"\n")
+F103 = COMPACT.replace(b'                "E3AUX1 UPDATER 0.3.0 BOARD=0401C013",\n', b"")
+OLD = COMPACT.replace(
     b'            elif text in {\n'
     b'                "E3AUX1 UPDATER 0.2.0 BOARD=0401E013",\n'
     b'                "E3AUX1 UPDATER 0.2.0 BOARD=0103E013",\n'
@@ -50,12 +54,15 @@ def inactive(monkeypatch):
 
 def test_pinned_sources_match_exact_repository_variants():
     assert hashlib.sha256(DESIRED).hexdigest() == installer.DESIRED_SHA256
-    assert {hashlib.sha256(data).hexdigest() for data in (OLD, F103, DESIRED)} == set(
+    assert hashlib.sha256(COMPACT).hexdigest() == "b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2"
+    assert hashlib.sha256(OLD).hexdigest() == "dd2ba0f981681e6be1479e061746418922b417ef06712c82fef24e4c230890a9"
+    assert hashlib.sha256(F103).hexdigest() == "d4075d31c2551961999f918165ae2940ab4dcf28244fa81c443917ca226fd280"
+    assert {hashlib.sha256(data).hexdigest() for data in (OLD, F103, COMPACT, DESIRED)} == set(
         installer.ACCEPTED_SOURCE_SHA256
     )
 
 
-@pytest.mark.parametrize("current", [OLD, F103])
+@pytest.mark.parametrize("current", [OLD, F103, COMPACT])
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
 def test_apply_known_source_preserves_original_backup_and_newlines(files, inactive, current, newline):
     project, target, source = files

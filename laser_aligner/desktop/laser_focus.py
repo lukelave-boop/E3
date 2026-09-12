@@ -43,6 +43,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._offset_entered = [False, False]
         self._camera_target: dict[str, Any] | None = None
         self._camera_live = False
+        self._failure_message: str | None = None
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
@@ -58,6 +59,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.surface = QtWidgets.QLabel("Surface elevation: not measured")
         self.surface.setWordWrap(True)
         self.maximum = QtWidgets.QLabel("Active maximum: unknown")
+        self.maximum.setWordWrap(True)
         self.calibration = QtWidgets.QLabel("Laser offset: not taught")
         self.calibration.setWordWrap(True)
         readouts.addWidget(self.height, 0, 0)
@@ -65,6 +67,29 @@ class LaserFocusPanel(QtWidgets.QWidget):
         readouts.addWidget(self.maximum, 1, 0)
         readouts.addWidget(self.calibration, 1, 1)
         layout.addLayout(readouts)
+        ender_row = QtWidgets.QHBoxLayout()
+        self.ender_status = QtWidgets.QLabel("Ender: waiting for connection status")
+        self.ender_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.ender_status.setWordWrap(True)
+        self.reconnect_ender = QtWidgets.QPushButton("Reconnect Ender")
+        self.reconnect_ender.setToolTip(
+            "Retry the Ender connection and verify its identity and outputs off. "
+            "Supported recovery firmware may restart and initialize the probe pin. "
+            "No XY/Z movement or homing is replayed."
+        )
+        recovery_notice = QtWidgets.QLabel(
+            "Reconnect may restart the Ender and move its probe pin. Keep the pin path clear."
+        )
+        recovery_notice.setWordWrap(True)
+        layout.addWidget(recovery_notice)
+        ender_row.addWidget(self.ender_status, 1)
+        ender_row.addWidget(self.reconnect_ender)
+        layout.addLayout(ender_row)
+        self.failure_detail = QtWidgets.QLabel()
+        self.failure_detail.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.failure_detail.setWordWrap(True)
+        self.failure_detail.hide()
+        layout.addWidget(self.failure_detail)
         self.next_step = QtWidgets.QLabel("Next: Home / park XY, then reference the border.")
         self.next_step.setObjectName("focusNextStep")
         self.next_step.setWordWrap(True)
@@ -226,6 +251,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.down.clicked.connect(lambda: self.request("jog", -float(self.z_step.currentData())))
         self.up.clicked.connect(lambda: self.request("jog", float(self.z_step.currentData())))
         self.home.clicked.connect(self._home)
+        self.reconnect_ender.clicked.connect(lambda: self.request("recover"))
         self.refresh.clicked.connect(self.refreshRequested)
         self.clearance.valueChanged.connect(self._edit_clearance)
         self.clearance.lineEdit().textEdited.connect(self._edit_clearance)
@@ -286,6 +312,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._preview_id = None
         self.target.setText("Target Z: preview required")
         self.height.setText("Z — mm")
+        self._show_configured_values()
         if clear_surface:
             self._result["surface"] = None
             self.surface.setText("Surface elevation: not measured")
@@ -294,6 +321,61 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 checkbox.setChecked(False)
         self.message.setText(message)
         self._sync()
+
+    def set_failure(self, message: str) -> None:
+        """Keep the actual failure visible through transient status changes."""
+        self._failure_message = message
+        self.failure_detail.setText(message)
+        self.failure_detail.show()
+        self.invalidate(message, clear_surface=True)
+
+    def _show_configured_values(self) -> None:
+        if self._result.get("available") is not False:
+            self.ender_status.setText("Ender: awaiting current status")
+        maximum = _number(self._result.get("max_z_mm"))
+        if maximum is not None:
+            self.maximum.setText(f"Configured maximum: {maximum:g} mm above border · Z status unavailable")
+        offset = self._result.get("probe_xy_offset_mm")
+        if (isinstance(offset, (list, tuple)) and len(offset) == 2
+                and all(_number(value) is not None and -100 <= value <= 100 for value in offset)):
+            self.offset_readout.setText(
+                f"Configured probe offset: X {offset[0]:+.3f} mm · Y {offset[1]:+.3f} mm"
+            )
+        calibration = self._result.get("calibration")
+        if isinstance(calibration, Mapping) and _number(calibration.get("focus_offset_mm")) is not None:
+            self.calibration.setText(
+                f"Configured laser offset: {calibration['focus_offset_mm']:+.3f} mm · compatibility not checked"
+            )
+
+    def _set_unavailable_result(self, result: Mapping[str, Any]) -> None:
+        ender = result.get("ender")
+        readback = result.get("current_readback")
+        maximum = _number(result.get("max_z_mm"))
+        if (result.get("recovery_available") is not True or not isinstance(ender, Mapping)
+                or ender.get("ready") is not False or ender.get("recovery_required") is not True
+                or type(ender.get("generation")) is not int or ender["generation"] < 0
+                or (ender.get("fault") is not None and type(ender.get("fault")) is not str)
+                or not isinstance(readback, Mapping) or readback.get("fresh") is not False
+                or readback.get("z_known") is not False or readback.get("z_mm") is not None
+                or result.get("reference_ready") is not False
+                or any(result.get(key) is not None for key in ("surface", "preview", "xy_sequence"))
+                or maximum is None or not 20 <= maximum <= 80):
+            raise ValueError("Invalid unavailable Ender status; update the matching Pi support.")
+        offset = result.get("probe_xy_offset_mm")
+        if offset is not None and not (isinstance(offset, (list, tuple)) and len(offset) == 2
+                and all(_number(value) is not None and -100 <= value <= 100 for value in offset)):
+            raise ValueError("Invalid configured probe offset.")
+        calibration = result.get("calibration")
+        if calibration is not None and (not isinstance(calibration, Mapping) or not calibration.get("id")
+                                       or _number(calibration.get("focus_offset_mm")) is None):
+            raise ValueError("Invalid configured laser offset.")
+        self._result = dict(result)
+        self.ender_status.setText("Ender: unavailable · connection retry required")
+        if offset is None:
+            self.offset_readout.setText("Configured probe offset: not set")
+        if calibration is None:
+            self.calibration.setText("Configured laser offset: not taught")
+        self.set_failure(ender.get("fault") or "Ender connection is not initialized. Choose Reconnect Ender.")
 
     def _parameters_edited(self, *_args: object) -> None:
         self.clear_camera_target()
@@ -317,6 +399,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
     def set_result(self, result: Mapping[str, Any]) -> None:
         if not isinstance(result, Mapping):
             raise ValueError("Invalid focus status; update the matching Pi support.")
+        if result.get("available") is False:
+            self._set_unavailable_result(result)
+            return
         readback = result.get("current_readback")
         maximum = _number(result.get("max_z_mm"))
         if (result.get("available") is not True or not isinstance(readback, Mapping)
@@ -324,6 +409,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 or maximum is None or not 20 <= maximum <= 80
                 or (readback.get("z_known") is True and _number(readback.get("z_mm")) is None)):
             raise ValueError("Focus support requires the matching Pi update and surface-height V2 firmware.")
+        ender = result.get("ender")
+        if ender is not None and (not isinstance(ender, Mapping) or ender.get("ready") is not True
+                                  or ender.get("recovery_required") is not False):
+            raise ValueError("Invalid connected Ender status.")
         for key, number_key in (("surface", "elevation_mm"), ("calibration", "focus_offset_mm"),
                                 ("preview", "target_z_mm")):
             item = result.get(key)
@@ -338,6 +427,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
         ):
             self.clear_camera_target("Machine position or offset changed; select the probe point again.")
         self._result = dict(result)
+        self._failure_message = None
+        self.failure_detail.clear()
+        self.failure_detail.hide()
+        self.ender_status.setText("Ender: connected · current firmware readback received")
         offset = result.get("probe_xy_offset_mm")
         valid_offset = (isinstance(offset, (list, tuple)) and len(offset) == 2
                         and all(_number(v) is not None and -100 <= v <= 100 for v in offset))
@@ -398,6 +491,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "align_probe": "Probe is over the selected laser spot. Confirm the solid target, then measure.",
             "position_probe": "Probe positioned at the camera target. Check alignment and the solid target, then measure.",
             "align_laser": "Laser returned to the measured spot at clearance. Fit the gauge using small Z steps.",
+            "recover": "Ender connection verified. Establish the border reference before Z positioning.",
         }.get(str(result.get("action")), "Reported position is refreshed while idle."))
         self._sync()
 
@@ -437,6 +531,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                else "Solid, flat patch spans probe and laser at the same height")
         self.home.setEnabled(idle and projection.can_home and self.path_clear.isChecked()
                              and not requires_clearance)
+        self.reconnect_ender.setEnabled(bool(idle and self._result.get("recovery_available") is True))
         self.reference.setEnabled(bool(moving))
         self.measure.setEnabled(bool(moving and known and reference and self.flat_patch.isChecked()
                                      and sequence.get("phase") != "laser"))
@@ -498,7 +593,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             if machine_payload(self._status).get("controller_state") in {"RECOVERING", "OPENING", "SYNCHRONIZING", "STOPPING"} else
             "Next: Connect the controller before focus setup." if not _read_allowed(self._status) else
             "Waiting for the current operation to finish." if self._busy or self._pending else
+            "Next: Reconnect Ender to restore its readback." if self._result.get("available") is False else
             "Next: Refresh focus status before positioning." if not self.fresh() else
+            "Next: Confirm the Z path, then reference the border." if not reference and projection.can_jog else
             "Next: Home / park XY, then reference the border." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
             "Next: Confirm the XY path and choose Move probe here." if self._camera_target else
@@ -524,6 +621,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "preview": self.preview, "move": self.move, "clearance": self.return_clearance,
             "clear_surface": self.clear_surface, "forget": self.forget,
             "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
+            "recover": self.reconnect_ender,
         }.get(action)
         if button is None or not button.isEnabled():
             return
@@ -584,6 +682,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         self.panel._busy = self._busy
         self._closed = False
         self._error = False
+        self._home_status_retry = False
         self._queued: tuple[str, dict[str, Any]] | None = None
         self._last_request = -math.inf
         self._timer = QtCore.QTimer(self)
@@ -602,6 +701,7 @@ class LaserFocusCoordinator(QtCore.QObject):
     def set_status(self, status: Mapping[str, Any]) -> None:
         machine = dict(machine_payload(status))
         changed = _session(machine) != _session(self._status)
+        became_readable = _read_allowed(machine) and not _read_allowed(self._status)
         own_activity = self._mutation and project_machine_state(machine).can_send_diagnostic
         if changed or (not _read_allowed(machine) and not own_activity):
             self._epoch += 1
@@ -613,6 +713,12 @@ class LaserFocusCoordinator(QtCore.QObject):
                 self._last_request = -math.inf
         self._status = machine
         self.panel._status = machine
+        if became_readable:
+            # One observation after recovery may clear an old read failure.
+            # A repeated failure relatches; no connection or motion is retried.
+            self._error = False
+            self._last_request = -math.inf
+        self._retry_after_home()
         self.panel._sync()
 
     def set_busy(self, busy: bool) -> None:
@@ -622,7 +728,15 @@ class LaserFocusCoordinator(QtCore.QObject):
             self._epoch += 1
             self._queued = None
             self.panel.invalidate("Machine operation in progress; measure again after positioning.", clear_surface=True)
+        self._retry_after_home()
         self.panel._sync()
+
+    def _retry_after_home(self) -> None:
+        if (self._home_status_retry and not self._busy and _read_allowed(self._status)
+                and project_machine_state(self._status).can_jog):
+            self._home_status_retry = False
+            self._error = False
+            self._last_request = -math.inf
 
     def parameters_edited(self) -> None:
         self._parameter_epoch += 1
@@ -631,6 +745,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         self._epoch += 1
         self._queued = None
         self._error = True
+        self._home_status_retry = False
         self.panel.invalidate("STOP requested. Reconnect / Home and establish the border reference again.",
                               clear_surface=True, clear_confirmation=True)
 
@@ -664,6 +779,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         if self._closed or self._mutation or self._busy or not self.panel.home.isEnabled():
             return
         self._epoch += 1
+        self._home_status_retry = True
         self.panel.invalidate("Homing and parking XY…", clear_surface=True)
         self.controller.park_at_camera_pose()
 
@@ -677,7 +793,10 @@ class LaserFocusCoordinator(QtCore.QObject):
     def request(self, action: str, arguments: dict[str, Any]) -> None:
         if self._closed or self._busy or not _read_allowed(self._status):
             return
-        if action != "status" and not self.panel.fresh():
+        if action not in {"status", "recover"} and not self.panel.fresh():
+            return
+        if action == "recover" and (arguments.get("confirmed") is not True
+                                     or not self.panel.reconnect_ender.isEnabled()):
             return
         if action == "position_probe":
             arguments = dict(arguments, _camera_parameter_epoch=self._parameter_epoch)
@@ -701,7 +820,8 @@ class LaserFocusCoordinator(QtCore.QObject):
         self.panel._pending = self._mutation
         if self._mutation:
             self._epoch += 1
-            self.panel.invalidate(f"{action.replace('_', ' ').capitalize()}…")
+            self.panel.invalidate("Reconnecting Ender…" if action == "recover"
+                                  else f"{action.replace('_', ' ').capitalize()}…")
         self._last_request = time.monotonic()
         epoch, parameter_epoch = self._epoch, self._parameter_epoch
         session = _session(self._status)
@@ -749,13 +869,14 @@ class LaserFocusCoordinator(QtCore.QObject):
                 result["preview"] = None
             try:
                 self.panel.set_result(result)
+                self._error = result.get("available") is not True
             except (ValueError, TypeError, KeyError) as exc:
                 failure(str(exc))
 
         def failure(message: str) -> None:
             if not self._closed and epoch == self._epoch:
                 self._error = True
-                self.panel.invalidate(f"Focus unavailable: {message}", clear_surface=True)
+                self.panel.set_failure(f"Focus unavailable: {message}")
 
         def finished() -> None:
             self._pending = False

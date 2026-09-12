@@ -62,6 +62,40 @@ def preview(**changes):
     return payload
 
 
+def unavailable_result(**changes):
+    payload = result(
+        available=False, reference_ready=False, recovery_available=True,
+        current_readback={"z_mm": None, "z_known": False, "fresh": False},
+        ender={"ready": False, "fault": "Marlin readiness timed out; last: no response",
+               "generation": 4, "recovery_required": True},
+        max_z_mm=40.0, probe_xy_offset_mm=[3.302, 38.608],
+        surface=None, preview=None, xy_sequence=None,
+    )
+    payload.update(changes)
+    return payload
+
+
+def test_reconnect_preserves_required_clearance_without_restoring_motion(panel):
+    panel.set_result(unavailable_result(requires_clearance=True))
+    panel.path_clear.setChecked(True)
+    assert panel.reconnect_ender.isEnabled()
+    assert not panel.home.isEnabled() and not panel.reference.isEnabled()
+    panel.set_result(result(
+        action="recover", recovery_available=True, requires_clearance=True,
+        reference_ready=False, surface=None, preview=None, xy_sequence=None,
+        current_readback={"z_mm": None, "z_known": False, "fresh": True},
+        ender={"ready": True, "fault": None, "generation": 5, "recovery_required": False},
+    ))
+    assert panel._result["requires_clearance"] is True
+    assert panel.fresh()
+    assert not panel.home.isEnabled()
+    # Referencing Z remains a separate explicit path-confirmed operation.
+    assert panel.reference.isEnabled()
+    assert not panel.up.isEnabled() and not panel.move_probe.isEnabled()
+    assert "then reference the border" in panel.next_step.text()
+    assert "Home / park" not in panel.next_step.text()
+
+
 @pytest.fixture
 def panel(app):
     widget = LaserFocusPanel()
@@ -474,6 +508,159 @@ def test_old_firmware_failure_is_inline_latched_until_refresh(coordinator):
     item.refresh()
     assert len(controller.work) == 1
     controller.complete()
+
+
+def test_unavailable_ender_shows_configured_values_and_explicit_reconnect(panel, app):
+    panel._status = status(controller_state="READY_HOME_REQUIRED", allow_motion=False,
+                           coordinate_reference_ready=False, jog_ready=False)
+    panel.set_result(unavailable_result())
+    calls = []
+    panel.actionRequested.connect(lambda action, args: calls.append((action, args)))
+    app.processEvents()
+    assert "unavailable" in panel.ender_status.text()
+    assert "last: no response" in panel.failure_detail.text()
+    assert panel.failure_detail.isVisible()
+    assert "Configured maximum: 40" in panel.maximum.text()
+    assert "Configured probe offset: X +3.302" in panel.offset_readout.text()
+    assert "Configured laser offset:" in panel.calibration.text()
+    assert not panel.fresh() and panel.height.text() == "Z — mm"
+    assert not panel.reference.isEnabled() and not panel.position_probe.isEnabled()
+    assert not panel.move.isEnabled() and not panel.up.isEnabled()
+    assert panel.reconnect_ender.isEnabled()
+    panel.reconnect_ender.click()
+    assert calls == [("recover", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0})]
+
+
+@pytest.mark.parametrize("changes", [
+    {"current_readback": {"z_mm": 30., "z_known": True, "fresh": True}},
+    {"reference_ready": True}, {"surface": {"id": "unsafe", "elevation_mm": 4.}},
+    {"ender": {"ready": True, "fault": None, "generation": 4, "recovery_required": True}},
+    {"probe_xy_offset_mm": [float("nan"), 3.]},
+])
+def test_unavailable_ender_status_cannot_smuggle_motion_authority(panel, changes):
+    with pytest.raises(ValueError):
+        panel.set_result(unavailable_result(**changes))
+
+
+@pytest.mark.parametrize("changes", [
+    {"armed": True}, {"controller_state": "JOB_RUNNING", "job": {"running": True}},
+    {"controller_state": "RECOVERING", "connected": False},
+    {"status_stale": True}, {"z_probe": {"active": True}},
+])
+def test_reconnect_ender_requires_idle_disarmed_trusted_primary(panel, changes):
+    panel.set_result(unavailable_result())
+    panel._status = status(**changes)
+    panel._sync()
+    calls = []
+    panel.actionRequested.connect(lambda *args: calls.append(args))
+    panel.reconnect_ender.click()
+    assert not panel.reconnect_ender.isEnabled() and not calls
+
+
+def test_focus_failure_survives_temporary_state_change_and_read_only_retry(coordinator):
+    item, controller = coordinator
+    controller.machine.error = "Connect the shared Ender controller before laser focus"
+    item.tick()
+    controller.complete()
+    detail = item.panel.failure_detail.text()
+    unavailable = status(status_stale=True)
+    item.set_status(unavailable)
+    assert item.panel.failure_detail.text() == detail
+    assert "Connect the shared Ender" in detail
+    item.set_status(status())
+    item.tick()
+    assert len(controller.work) == 1
+    controller.complete()  # Still unavailable: latch again instead of retrying forever.
+    item._last_request = -100
+    item.tick()
+    assert controller.work == []
+    assert [action for action, _ in controller.machine.calls] == ["status", "status"]
+
+
+def test_home_completion_retries_read_only_status_after_latched_failure(coordinator):
+    item, controller = coordinator
+    controller.machine.error = "Ender readiness timed out"
+    item.tick()
+    controller.complete()
+    item.panel.path_clear.setChecked(True)
+    item.panel.home.click()
+    assert controller.home_calls == 1 and item._busy
+    assert "Ender readiness timed out" in item.panel.failure_detail.text()
+    item.set_status(status())
+    controller.machine.error = None
+    controller.busyChanged.emit(False)
+    item.tick()
+    assert len(controller.work) == 1
+    controller.complete()
+    assert [action for action, _ in controller.machine.calls] == ["status", "status"]
+    assert item.panel.fresh() and not item.panel.failure_detail.isVisible()
+
+
+def test_reconnect_ender_is_explicit_and_unavailable_reply_never_becomes_fresh(coordinator):
+    item, controller = coordinator
+    controller.machine.payload = unavailable_result()
+    item.tick()
+    controller.complete()
+    item._last_request = -100
+    item.tick()
+    assert controller.work == []
+    assert controller.machine.calls[-1][0] == "status"
+    item.panel.reconnect_ender.click()
+    assert len(controller.work) == 1 and item._mutation
+    controller.complete()
+    assert controller.machine.calls[-1][0] == "recover"
+    assert controller.machine.calls[-1][1]["confirmed"] is True
+    assert not item.panel.fresh() and item._error
+    assert "last: no response" in item.panel.failure_detail.text()
+    controller.machine.payload = result(
+        action="recover", recovery_available=True,
+        ender={"ready": True, "fault": None, "generation": 6, "recovery_required": False},
+        current_readback={"z_mm": 0.0, "z_known": False, "fresh": True},
+        reference_ready=False, surface=None,
+    )
+    item.panel.reconnect_ender.click()
+    controller.complete()
+    assert item.panel.fresh() and not item._error
+    assert "reference required" in item.panel.height.text()
+    assert not item.panel.move.isEnabled() and item.panel._camera_target is None
+
+
+def test_stop_during_reconnect_discards_late_reply_and_never_replays_recovery(coordinator):
+    item, controller = coordinator
+    item.panel.set_result(unavailable_result())
+    item.panel.reconnect_ender.click()
+    operation, callbacks = controller.work.pop()
+    reply = operation()
+    item.stopped()
+    callbacks["on_success"](reply)
+    controller.busyChanged.emit(False)
+    callbacks["on_finished"]()
+    item._last_request = -100
+    item.tick()
+    assert not item.panel.fresh() and controller.work == []
+    assert [action for action, _ in controller.machine.calls] == ["recover"]
+
+
+def test_reported_reconnect_activity_does_not_discard_its_own_reply(coordinator):
+    item, controller = coordinator
+    item.panel.set_result(unavailable_result())
+    controller.machine.payload = result(
+        recovery_available=True, reference_ready=False, surface=None,
+        current_readback={"z_mm": 0., "z_known": False, "fresh": True},
+        ender={"ready": True, "fault": None, "generation": 6, "recovery_required": False},
+    )
+    item.panel.reconnect_ender.click()
+    operation, callbacks = controller.work.pop()
+    reply = operation()
+    item.set_status(status(z_probe={"active": True}))
+    callbacks["on_success"](reply)
+    controller.busyChanged.emit(False)
+    callbacks["on_finished"]()
+    assert item.panel.fresh() and not item._error
+    assert not item.panel.reference.isEnabled()
+    item.set_status(status())
+    assert item.panel.fresh()
+    assert [action for action, _ in controller.machine.calls] == ["recover"]
 
 
 def test_modal_dialog_preserves_stop_during_work_and_refuses_silent_close(app):

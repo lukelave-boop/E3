@@ -21,9 +21,10 @@ CAPABILITY = "Cap:E3_SURFACE_HEIGHT_V2:1"
 PI_CAPABILITY = "pi-laser-focus-v1"
 XY_CAPABILITY = "pi-laser-focus-xy-v1"
 CLICK_CAPABILITY = "pi-laser-focus-click-v1"
+RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe"}
+           "position_probe", "recover"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -111,6 +112,28 @@ class LaserFocus:
         self.surface = self.preview = None
         if not keep_alignment:
             self.xy_sequence = None
+
+    def unavailable_status(self, *, action, maximum, clearance, ender, laser_spot_offset):
+        """Configuration remains inspectable without inventing live Z authority."""
+        self.invalidate()
+        clearance = min(clearance, maximum)
+        return copy.deepcopy({
+            "action": action, "available": False, "reference_ready": False,
+            "reference": None, "surface": None, "preview": None, "xy_sequence": None,
+            "current_readback": {"z_mm": None, "z_known": False, "fresh": False},
+            "max_z_mm": maximum, "clearance_z_mm": clearance,
+            "contact_min_mm": -2, "contact_max_mm": clearance - 15,
+            "calibration": self.calibration, "calibration_compatible": False,
+            "calibration_persistent": self.path is not None,
+            "probe_xy_offset_mm": self.probe_xy_offset_mm,
+            "laser_spot_offset_mm": list(laser_spot_offset),
+            "xy_offset_available": True, "position_probe_available": True,
+            "current_carriage_xy_mm": None, "firmware_geometry": None,
+            "requires_clearance": self.requires_clearance,
+            "return_clearance_mm": self.selected_clearance,
+            "ender": ender, "recovery_available": True,
+            "transcript": [], "physical_feedback": False,
+        })
 
     def _load_xy_offset(self):
         if self.xy_path is None:
@@ -212,7 +235,7 @@ class LaserFocus:
                 motion_started = True
                 on_motion_start()
             lines = owner._execute_acknowledged(command, allow_open=False, timeout=90 if command.startswith("G28") else 35,
-                                               write_guard=guard, on_failure=on_failure,
+                                               write_guard=guard, on_failure=on_failure if motion_started else None,
                                                interrupt_on_failure=motion_started)
             transcript.append({"command": command, "responses": list(lines)})
             with guard():
@@ -433,6 +456,7 @@ class LaserFocus:
             if self.session != session or owner.generation != session[0]:
                 raise MachineError("Focus operation was cancelled")
         return copy.deepcopy({"action": action, "available": True, "reference_ready": self.reference is not None,
+                              "ender": owner.recovery_status(), "recovery_available": True,
                               "current_readback": {"z_mm": current, "z_known": board["z_known"], "fresh": True},
                               "surface": self.surface, "calibration": self.calibration,
                               "calibration_compatible": compatible, "calibration_persistent": self.path is not None,

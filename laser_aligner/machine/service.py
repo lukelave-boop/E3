@@ -640,6 +640,8 @@ class MachineService:
         *,
         context: str,
         commands: AirAssistCommands | None = None,
+        allow_reopen: bool = True,
+        interrupt_on_failure: bool = False,
     ) -> None:
         if commands is None:
             commands = self._active_job_air_assist_commands
@@ -662,7 +664,9 @@ class MachineService:
                 return
             controller = candidate
         try:
-            if controller.best_effort_off():
+            off = (controller.best_effort_off() if allow_reopen and not interrupt_on_failure else
+                   controller.best_effort_off(allow_reopen=allow_reopen, interrupt_on_failure=interrupt_on_failure))
+            if off:
                 self._append_log("AUX", f"M106 S0 ({context})")
             else:
                 self._append_log(
@@ -675,7 +679,7 @@ class MachineService:
                 f"{context} secondary command 'M106 S0' failed: {exc}",
             )
 
-    def _queue_secondary_off(self, *, context: str) -> None:
+    def _queue_secondary_off(self, *, context: str, allow_reopen=True, interrupt_on_failure=False) -> None:
         commands = self._active_job_air_assist_commands
         mainboard_used = self._secondary_air_assist is not None and self._secondary_air_assist.owner._mainboard_fan1_used
         if not mainboard_used and (commands is None or commands.target is not AirAssistTarget.PI_SECONDARY):
@@ -683,7 +687,8 @@ class MachineService:
 
         def cleanup() -> None:
             try:
-                self._best_effort_secondary_off(context=context)
+                self._best_effort_secondary_off(context=context, allow_reopen=allow_reopen,
+                                                interrupt_on_failure=interrupt_on_failure)
             finally:
                 with self._secondary_cleanup_lock:
                     if self._secondary_cleanup_thread is threading.current_thread():
@@ -757,6 +762,7 @@ class MachineService:
             )
         )
         self._z_probe_active = False
+        self._focus_operation_active = False
         self._z_probe_result: dict[str, Any] | None = None
         self._controller_state = ControllerState.DISCONNECTED
         self._controller_state_revision = 0
@@ -2108,7 +2114,8 @@ class MachineService:
         # candidate quarantine. Explicit disconnect suppresses recovery.
         self.stop_job(emergency=False, _recover=False)
         with self._command_lock, self._lock:
-            self._best_effort_secondary_off(context="disconnect cleanup")
+            self._best_effort_secondary_off(context="disconnect cleanup", allow_reopen=False,
+                                            interrupt_on_failure=False)
             # Once the transport is closed there is no same-session controller
             # path left on which retaining a failed job's immutable OFF mapping
             # could provide another retry.
@@ -2352,7 +2359,7 @@ class MachineService:
             self._authorization_epoch += 1
             self._clear_arm_authorization()
             self._job_laser_authorized = False
-        if self._z_probe_active:
+        if self._z_probe_active or self._focus_operation_active:
             self.request_stop(_recover=False)
             return
         if self._job.running:
@@ -4053,7 +4060,7 @@ class MachineService:
         if type(pwm) is not int or pwm not in (0, 255):
             raise SafetyError("CPU cooling accepts only OFF or full speed")
         fan = self._secondary_air_assist
-        if fan is None or self._z_probe_active:
+        if fan is None or self._z_probe_active or self._focus_operation_active:
             return {"state": "deferred"}
         owner = fan.owner
         if not owner._lock.acquire(blocking=False):
@@ -4072,7 +4079,7 @@ class MachineService:
             def guard():
                 with self._secondary_write_gate, self._stop_epoch_lock:
                     if (self._stop_epoch != epoch or owner.generation != generation
-                            or not self.cpu_cooling_enabled or self._z_probe_active):
+                            or not self.cpu_cooling_enabled or self._z_probe_active or self._focus_operation_active):
                         raise MachineError("CPU cooling cancelled by stop, probe or session change")
                     yield
 
@@ -4099,15 +4106,29 @@ class MachineService:
             self._require_safety_configuration()
             if self.hardware_enabled is not True:
                 raise SafetyError("Laser focus requires hardware authority")
-            if action != "status" and self.settings.allow_motion is not True:
+            if action not in {"status", "recover"} and self.settings.allow_motion is not True:
                 raise SafetyError("Laser focus requires machine.allow_motion")
             session = self._require_session()
             if self._job.running or self.armed:
                 raise SafetyError("Laser focus requires an idle machine and disarmed laser")
             probe = self._z_probe
-            if probe is None or not probe.owner.ready:
+            if probe is None:
                 raise MachineError("Connect the shared Ender controller before laser focus")
-            if action not in {"status", "forget", "clear_surface", "set_xy_offset"}:
+
+            def unavailable(error=None):
+                ender = probe.owner.recovery_status()
+                if error is not None:
+                    ender.update(ready=False, fault=str(error)[:512], recovery_required=True)
+                return self._laser_focus.unavailable_status(
+                    action=action, maximum=validate_max_z(self.settings.mainboard_max_z_mm),
+                    clearance=clearance_z_mm, ender=ender,
+                    laser_spot_offset=(self.laser_settings.spot_offset_x_mm, self.laser_settings.spot_offset_y_mm))
+
+            if not probe.owner.recovery_status()["ready"] and action != "recover":
+                if action == "status":
+                    return unavailable()
+                raise MachineError("Connect the shared Ender controller before laser focus")
+            if action not in {"status", "recover", "forget", "clear_surface", "set_xy_offset"}:
                 if (self._controller_state is not ControllerState.READY_MOTION
                     or not self._coordinate_reference_ready
                     or self._coordinate_reference_session_generation != session.generation
@@ -4121,13 +4142,14 @@ class MachineService:
                 if self._uses_grbl_coordinate_state():
                     self._verify_grbl_coordinate_state()
             secondary_generation = probe.owner.generation
+            motion_started = False
 
             @contextmanager
-            def guard():
+            def guard(*, require_secondary=True):
                 with self._secondary_write_gate, self._stop_epoch_lock:
                     if self._stop_epoch != epoch or not self._same_controller_session(self._session, session):
                         raise MachineError("Focus operation cancelled or session changed")
-                    if not probe.owner.ready or probe.owner.generation != secondary_generation:
+                    if require_secondary and action != "recover" and (not probe.owner.ready or probe.owner.generation != secondary_generation):
                         raise MachineError("Focus Ender connection changed")
                     if time.monotonic() >= deadline:
                         raise MachineError("Focus operation exceeded its time limit")
@@ -4136,7 +4158,15 @@ class MachineService:
                     yield
 
             def motion_start():
+                nonlocal motion_started
+                motion_started = True
                 self._z_probe_active = True
+                probe.invalidate()
+                self._z_probe_result = None
+
+            def primary_motion_start():
+                nonlocal motion_started
+                motion_started = True
                 probe.invalidate()
                 self._z_probe_result = None
 
@@ -4197,7 +4227,7 @@ class MachineService:
                 with write_guard():
                     require_movement_budget()
                     self._jog_position_mm = None
-                    motion_start()
+                    primary_motion_start()
                 execute(f"G1 X{target[0]:.3f} Y{target[1]:.3f} F{feed:.3f}")
                 execute(self._require_resolved_dialect().motion_barrier_command,
                         timeout=completion_timeout)
@@ -4210,12 +4240,19 @@ class MachineService:
 
             if action != "status":
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+            self._focus_operation_active = action != "status"
             try:
+                if action == "recover":
+                    self._laser_focus.invalidate()
+                    probe.invalidate()
+                    self._z_probe_result = None
+                    probe.owner.recover_off(write_guard=guard, deadline=min(deadline, time.monotonic() + 60))
+                    secondary_generation = probe.owner.generation
                 with probe.owner._lock:
                     if self._laser_focus.xy_sequence and action in {"measure", "jog", "teach", "preview", "move"}:
                         check_focus_xy(self._jog_position_mm, guard)
-                    return self._laser_focus.execute(
-                        probe.owner, probe, action, confirmed=confirmed, value=value,
+                    result = self._laser_focus.execute(
+                        probe.owner, probe, "status" if action == "recover" else action, confirmed=confirmed, value=value,
                         clearance_z_mm=clearance_z_mm, gap_mm=gap_mm,
                         measurement_id=measurement_id, preview_id=preview_id,
                         maximum=validate_max_z(self.settings.mainboard_max_z_mm),
@@ -4227,13 +4264,23 @@ class MachineService:
                         laser_spot_offset=(self.laser_settings.spot_offset_x_mm,
                                            self.laser_settings.spot_offset_y_mm),
                     )
-            except BaseException:
+                    result["action"] = action
+                    return result
+            except BaseException as exc:
                 self._laser_focus.invalidate()
-                if self._z_probe_active and self.operation_generation() == epoch:
+                if action in {"status", "recover"} and isinstance(exc, MachineError) and not motion_started:
+                    # Cancellation is never turned into a successful diagnostic
+                    # result. Other failures expose saved settings, not stale Z.
+                    with guard(require_secondary=False):
+                        pass
+                    probe.owner.close()
+                    return unavailable(exc)
+                if motion_started and self.operation_generation() == epoch:
                     self.request_stop(_recover=False)
                 raise
             finally:
                 self._z_probe_active = False
+                self._focus_operation_active = False
 
     def mainboard_control(
         self, action: str, value: int | float | None = None, *, confirmed: bool = False,
@@ -5838,6 +5885,9 @@ class MachineService:
             self._best_effort_secondary_off(
                 context="job cleanup",
                 commands=context.air_assist_commands,
+                # STOP cleanup cannot revive the failed owner in a later job
+                # worker after the immediate STOP path deliberately retired it.
+                allow_reopen=not stopped_by_request,
             )
         finally:
             with self._lock:
@@ -5924,6 +5974,7 @@ class MachineService:
         stop_at = time.time()
         stop_call_deadline = time.monotonic() + _REALTIME_STOP_WRITE_DEADLINE_SECONDS
         with self._stop_epoch_lock:
+            interrupt_secondary_motion = emergency or self._z_probe_active
             self._stop_epoch += 1
             if self.cpu_cooling_enabled and self._secondary_air_assist is not None:
                 # Read the generation snapshot without waiting for the serial lock:
@@ -6018,7 +6069,7 @@ class MachineService:
         if self._z_probe is not None:
             self._z_probe.invalidate()
             self._z_probe_result = None
-            if self._z_probe_active:
+            if interrupt_secondary_motion:
                 owner = self._z_probe.owner
                 probe_generation = owner.generation
 
@@ -6030,7 +6081,8 @@ class MachineService:
 
                 threading.Thread(target=interrupt_probe, daemon=True, name="e3-probe-stop").start()
         try:
-            self._queue_secondary_off(context="software STOP")
+            self._queue_secondary_off(context="software STOP", allow_reopen=False,
+                                      interrupt_on_failure=interrupt_secondary_motion)
         except Exception as exc:
             self._append_log(
                 "ERROR",
@@ -6243,7 +6295,7 @@ class MachineService:
             "z_probe": {
                 "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
                 "unavailable_reason": _PROBE_SUSPENSION_REASON or None,
-                "active": self._z_probe_active,
+                "active": self._z_probe_active or self._focus_operation_active,
                 "reference_ready": bool(
                     not _PROBE_SUSPENSION_REASON
                     and self._z_probe is not None and probe_reference is not None

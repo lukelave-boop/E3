@@ -34,6 +34,13 @@ class FirmwareError(ValueError):
     """An image or protocol operation was rejected."""
 
 
+class ResponseTimeout(FirmwareError):
+    def __init__(self, partial: bytes):
+        self.partial = partial
+        detail = f"; partial response: {partial!r}" if partial else ""
+        super().__init__("No complete firmware response before timeout" + detail)
+
+
 def crc32(data: bytes) -> int:
     return zlib.crc32(data) & 0xFFFFFFFF
 
@@ -84,10 +91,59 @@ def read_image(path: Path) -> bytes:
 
 
 class Link:
-    def __init__(self, serial_port):
+    def __init__(self, serial_port, *, progress=None):
         self.port = serial_port
+        self.progress = progress
+        self.stage = "opening serial connection"
+
+    def mark(self, stage: str, *, announce: bool = True) -> None:
+        self.stage = stage
+        if announce and self.progress is not None:
+            self.progress(stage)
+
+    def settle(self) -> None:
+        """Observe startup, then synchronize once on this same open connection.
+
+        No reset, HOLD, BOOT or flash command is issued here. Startup bytes
+        cannot satisfy the subsequent fresh M115 identity/acknowledgement.
+        """
+        def collect(seconds: float, *, synchronizing: bool = False) -> None:
+            deadline = time.monotonic() + seconds
+            data = bytearray()
+            while time.monotonic() < deadline:
+                data.extend(self.port.read(1))
+                if len(data) > 65536:
+                    raise FirmwareError("Startup response exceeded 64 KiB; no retry")
+            if data and self.progress is not None:
+                # repr keeps partial lines and escapes terminal control bytes.
+                self.progress(f"Received {len(data)} startup/sync bytes: {bytes(data[:2048])!r}")
+            for line in data.decode("ascii", errors="backslashreplace").splitlines():
+                if synchronizing and line == "ERR UNSUPPORTED":
+                    continue  # The compact updater rejects an empty line.
+                if line.casefold().startswith(("err", "alarm", "!!")):
+                    raise FirmwareError(f"Startup reported {line[:160]!r}")
+
+        self.mark("waiting 35 seconds for startup (no commands sent)")
+        collect(35.0)
+        self.send("")
+        collect(1.0, synchronizing=True)
 
     def send(self, command: str) -> None:
+        stages = {
+            "": "synchronizing serial line",
+            "M115": "querying firmware identity (M115)",
+            "M997": "requesting updater entry (M997)",
+            "HOLD": "holding updater before erase",
+            "BEGIN": "erasing application sector (BEGIN)",
+            "END": "verifying and committing application (END)",
+            "BOOT": "requesting application boot",
+        }
+        verb = command.split(" ", 1)[0]
+        if verb == "DATA":
+            offset = int(command.split(" ")[1], 16)
+            self.mark(f"writing application block at 0x{offset:08X}", announce=offset % 4096 == 0)
+        else:
+            self.mark(stages.get(verb, f"sending {verb}"))
         data = (command + "\n").encode("ascii")
         if len(data) > 256 or self.port.write(data) != len(data):
             raise FirmwareError("Serial write was incomplete; do not retry this transaction")
@@ -110,7 +166,7 @@ class Link:
             line.extend(chunk)
             if len(line) > 1024:
                 raise FirmwareError("Oversized serial response")
-        raise FirmwareError("No complete firmware response before timeout")
+        raise ResponseTimeout(bytes(line))
 
     def expect(self, expected: str, timeout: float = 3.0) -> None:
         response = self.receive(timeout)
@@ -150,7 +206,21 @@ class Link:
             # Explicit maintenance request, accepted only with idle mechanics,
             # both fan commands OFF and all heater targets OFF. No motion.
             self.send("M997")
-            self.expect("E3USB:1 ENTERING_UPDATER")
+            try:
+                self.expect("E3USB:1 ENTERING_UPDATER")
+            except ResponseTimeout as exc:
+                # Older STM32 Marlin can jump before buffered TX drains,
+                # leaving truncated or garbled bytes. Those bytes grant no
+                # erase authority: HOLD and a fresh exact updater identity
+                # below remain mandatory. Never resend M997. Preserve an
+                # explicit refusal, including one missing its final newline.
+                partial = exc.partial.strip().lower()
+                if not partial or partial.startswith((b"error", b"err", b"alarm", b"!!")) or (
+                    partial.startswith(b"e3usb:") and
+                    not b"e3usb:1 entering_updater".startswith(partial)
+                ):
+                    raise
+                self.mark("entry acknowledgement incomplete; checking updater before any erase")
             time.sleep(0.5)
             self.port.reset_input_buffer()
         self.send("HOLD")
@@ -216,8 +286,7 @@ def open_port(name: str):
         port.rts = False
         port.port = name
         port.open()
-        # Only received startup text is discarded; no reset pulse is requested.
-        port.reset_input_buffer()
+        # Preserve startup text for Link.settle; no reset pulse is requested.
     except BaseException:
         port.close()
         raise
@@ -243,6 +312,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    link = None
     try:
         image = None
         if args.action in ("verify", "upload", "interrupt-upload"):
@@ -254,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.hardware_enabled:
             raise FirmwareError("Hardware access requires --hardware-enabled; no port was opened")
         with open_port(args.port) as port:
-            link = Link(port)
+            link = Link(port, progress=lambda text: print(text, flush=True))
+            link.settle()
             if args.action == "inspect":
                 print(link.identity())
             elif args.action == "upload":
@@ -270,7 +341,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("Boot requested; confirm the application with inspect.")
         return 0
     except (FirmwareError, OSError) as exc:
-        print(f"Stopped: {exc}", file=sys.stderr)
+        stage = f" during {link.stage}" if link is not None else ""
+        print(f"Stopped:{stage}: {exc}" if stage else f"Stopped: {exc}", file=sys.stderr)
         return 1
 
 

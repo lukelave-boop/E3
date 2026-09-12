@@ -28,6 +28,7 @@ class FocusSerial(NativeSerial):
         self.contacts = [0., 5., 25.]
         self.home_z = 0
         self.overrides["M115"] = IDENTITY
+        self.overrides["M106 P1 S0"] = ["ok"]
         self.lose_z_after_probe = False
 
     def write_line(self, line):
@@ -920,6 +921,7 @@ def test_focus_xy_completion_wait_is_interrupted_without_retaining_authority(
     machine, focus, primary = focus_machine
     machine.focus_control("reference", confirmed=True)
     machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    focus.owner._mainboard_fan1_used = True
     barrier = machine._require_resolved_dialect().motion_barrier_command
     entered = threading.Event()
     alive = [True]
@@ -955,6 +957,7 @@ def test_focus_xy_completion_wait_is_interrupted_without_retaining_authority(
     assert len([s for s in commands if s.startswith("G1 X")]) == 1
     assert focus.state.surface is focus.state.xy_sequence is None
     assert machine._jog_position_mm is None
+    assert "M112" not in focus.serial.writes
 
 
 def test_focus_xy_missing_completion_ack_remains_bounded_and_retires_position(focus_machine, monkeypatch):
@@ -979,3 +982,185 @@ def test_focus_xy_missing_completion_ack_remains_bounded_and_retires_position(fo
     assert len([s for s in commands if s.startswith("G1 X")]) == 1
     assert focus.state.surface is focus.state.xy_sequence is None
     assert machine._jog_position_mm is None
+    assert "M112" not in focus.serial.writes
+
+
+def test_focus_readonly_failure_retains_config_but_no_live_authority_or_enders_kill(focus_machine):
+    machine, focus, _ = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.settings.mainboard_max_z_mm = 40
+    focus.state.requires_clearance = True
+    focus.serial.overrides["M115"] = ["Error: serial status failed"]
+    focus.serial.writes.clear()
+    result = machine.focus_control("status")
+    assert result["available"] is False and result["recovery_available"]
+    assert result["ender"]["ready"] is False and "status failed" in result["ender"]["fault"]
+    assert result["current_readback"] == {"z_mm": None, "z_known": False, "fresh": False}
+    assert result["max_z_mm"] == 40 and result["probe_xy_offset_mm"] == [3.302, 38.608]
+    assert result["requires_clearance"] and not result["reference_ready"]
+    assert focus.state.surface is focus.state.preview is None
+    assert "M112" not in focus.serial.writes and machine.status()["connected"]
+
+
+def test_explicit_ender_reconnect_needs_no_motion_or_home_authority_and_preserves_clearance(focus_machine):
+    machine, focus, primary = focus_machine
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.settings.mainboard_max_z_mm = 40
+    machine.settings.allow_motion = False
+    machine._coordinate_reference_ready = False
+    machine._jog_position_mm = None
+    focus.state.requires_clearance = True
+    focus.owner.close()
+    fresh = FocusSerial()
+    focus.owner._serial_factory = lambda *_: fresh
+    initial_primary = (primary.x, primary.y)
+    old_generation = focus.owner.generation
+    result = machine.focus_control("recover", confirmed=True)
+    assert result["action"] == "recover" and result["available"] and result["recovery_available"], result["ender"]
+    assert result["ender"] == {"ready": True, "fault": None, "generation": focus.owner.generation,
+                               "recovery_required": False}
+    assert focus.owner.generation > old_generation
+    assert fresh.open_calls == 1
+    assert fresh.writes[:3] == ["M115", "M106 S0", "M106 P1 S0"]
+    assert not any(s.startswith(("G", "M112", "M999", "M997", "BOOT", "E3RECOVER")) for s in fresh.writes)
+    assert (primary.x, primary.y) == initial_primary
+    assert result["max_z_mm"] == 40 and result["probe_xy_offset_mm"] == [3.302, 38.608]
+    assert result["requires_clearance"] and not result["reference_ready"]
+
+
+@pytest.mark.parametrize("failure", ["startup", "fan_off"])
+def test_explicit_ender_reconnect_failure_does_not_retry_mutation_or_reopen(focus_machine, monkeypatch, failure):
+    machine, focus, _ = focus_machine
+    fresh = FocusSerial()
+    opens = []
+    def factory(*_):
+        opens.append(True)
+        return fresh
+    focus.owner._serial_factory = factory
+    if failure == "startup":
+        def wait(*_args, **_kwargs):
+            raise MachineError("Secondary Marlin readiness timed out; last: no response")
+        monkeypatch.setattr("laser_aligner.machine.secondary_controller.wait_for_marlin", wait)
+    else:
+        fresh.overrides["M106 S0"] = ["Error: fan OFF failed"]
+    result = machine.focus_control("recover", confirmed=True)
+    assert not result["available"] and result["ender"]["recovery_required"]
+    assert not result["current_readback"]["fresh"]
+    assert len(opens) == 1 and fresh.writes.count("M106 S0") == int(failure == "fan_off")
+    assert not any(s.startswith(("G", "M112", "E3RECOVER")) for s in fresh.writes)
+    machine.focus_control("status")
+    assert len(opens) == 1
+
+
+@pytest.mark.parametrize("valid_application", [False, True])
+def test_focus_recovery_resets_halted_peer_once_and_requires_fresh_application_before_off(focus_machine, valid_application):
+    machine, focus, _ = focus_machine
+    class HaltedFocusSerial(FocusSerial):
+        halted = True
+
+        def write_line(self, line):
+            if line == "M115" and self.halted:
+                self.writes.append(line)
+                self.responses.extend(["E3RECOVERY:1 STATE:HALTED BOARD:0401C013 TOKEN:ABCD1234", "ok"])
+            elif line == "E3RECOVER ABCD1234":
+                self.writes.append(line)
+                self.halted = False
+                self.responses.append("E3RECOVERY:1 RESETTING")
+            else:
+                super().write_line(line)
+
+    fresh = HaltedFocusSerial()
+    fresh.overrides["M115"] = IDENTITY[:-1] + (["Cap:E3_RECOVERY_V1:1"] if valid_application else []) + ["ok"]
+    focus.owner._serial_factory = lambda *_: fresh
+    result = machine.focus_control("recover", confirmed=True)
+    assert result["available"] is valid_application
+    assert fresh.writes[:3] == ["M115", "E3RECOVER ABCD1234", "M115"]
+    assert fresh.writes.count("E3RECOVER ABCD1234") == fresh.open_calls == 1
+    assert not any(command.startswith(("G", "M112", "M997", "M999", "BOOT")) for command in fresh.writes)
+    if valid_application:
+        assert fresh.writes[3:5] == ["M106 S0", "M106 P1 S0"]
+        assert result["current_readback"]["fresh"] and not result["reference_ready"]
+    else:
+        assert fresh.writes == fresh.writes[:3]
+        assert "expected recovery firmware" in result["ender"]["fault"]
+
+
+@pytest.mark.parametrize("failure", ["confirmation", "hardware", "armed", "job", "primary", "network"])
+def test_ender_recovery_admission_never_opens_on_rejection(focus_machine, failure):
+    machine, focus, _ = focus_machine
+    opens = []
+    focus.owner._serial_factory = lambda *_: opens.append(True)
+    kwargs = {"confirmed": True}
+    if failure == "confirmation":
+        kwargs["confirmed"] = False
+    elif failure == "hardware":
+        machine.hardware_enabled = False
+    elif failure == "armed":
+        machine._armed_until_monotonic = time.monotonic() + 100
+    elif failure == "job":
+        machine._job.running = True
+    elif failure == "primary":
+        machine._session = None
+        machine._transport = None
+    else:
+        kwargs["_connection_alive"] = lambda: False
+    with pytest.raises(MachineError):
+        machine.focus_control("recover", **kwargs)
+    assert opens == []
+
+
+@pytest.mark.parametrize("failure", ["stop", "network", "primary_generation"])
+def test_ender_reconnect_is_cancelled_during_startup_without_off_or_motion(focus_machine, failure):
+    machine, focus, _ = focus_machine
+    fresh = FocusSerial()
+    started = threading.Event()
+    fresh.on_write = lambda line: started.set() if line == "M115" else None
+    def read(timeout=1):
+        time.sleep(min(timeout, .02))
+        return None
+    fresh.read_line = read
+    focus.owner._serial_factory = lambda *_: fresh
+    alive, errors, results = [True], [], []
+    def recover():
+        try:
+            results.append(machine.focus_control("recover", confirmed=True, _connection_alive=lambda: alive[0]))
+        except MachineError as exc:
+            errors.append(str(exc))
+    worker = threading.Thread(target=recover)
+    worker.start()
+    assert started.wait(3)
+    assert machine.status()["z_probe"]["active"]
+    if failure == "stop":
+        machine.request_stop(_recover=False)
+    elif failure == "network":
+        alive[0] = False
+    else:
+        machine._session = None
+    worker.join(3)
+    assert errors and not results and not worker.is_alive()
+    assert fresh.open_calls == 1 and not focus.owner.ready
+    assert fresh.writes == ["M115"]
+
+
+def test_explicit_emergency_stop_still_interrupts_idle_ender(focus_machine):
+    machine, focus, _ = focus_machine
+    killed = threading.Event()
+    focus.serial.on_write = lambda line: killed.set() if line == "M112" else None
+    machine.request_stop(emergency=True, _recover=False)
+    assert killed.wait(2) and "M112" in focus.serial.writes
+
+
+def test_readonly_focus_status_does_not_publish_probe_activity(focus_machine):
+    machine, focus, _ = focus_machine
+    entered = threading.Event()
+    focus.serial.on_write = lambda line: entered.set() if line == "M115" else None
+    focus.serial.overrides["M115"] = []
+    results = []
+    worker = threading.Thread(target=lambda: results.append(machine.focus_control("status")))
+    worker.start()
+    assert entered.wait(2)
+    assert not machine.status()["z_probe"]["active"]
+    focus.serial.responses.extend(IDENTITY)
+    worker.join(2)
+    assert not worker.is_alive() and results[0]["available"]

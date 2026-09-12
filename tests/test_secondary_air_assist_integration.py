@@ -586,7 +586,7 @@ def test_start_rejects_secondary_port_open_failure_before_primary_streaming(
         machine.disconnect()
 
 
-def test_stop_sends_primary_m5_before_nonblocking_secondary_cleanup(
+def test_stop_sends_primary_m5_without_reopening_an_uncertain_secondary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands = _binding()
@@ -646,7 +646,14 @@ def test_stop_sends_primary_m5_before_nonblocking_secondary_cleanup(
         assert status["phase"] == "failed"
         assert status["error"] == "Job stopped"
         assert sequence[0] == ("primary", "M5")
-        assert ("secondary", "M106 S0") in sequence[1:]
+        # The cancelled fan-ON acknowledgement leaves output unknown. STOP
+        # retires that session; cleanup must not start another 45-second open.
+        fan_status = fan.status
+        assert serial.open_calls == 1 and not fan_status.ready
+        assert fan_status.enabled is None
+        assert "Job stopped" in fan_status.fault
+        assert not any(side == "secondary" for side, _ in sequence[1:])
+        assert "M112" not in serial.writes
     finally:
         release_secondary_ack.set()
         machine.disconnect()

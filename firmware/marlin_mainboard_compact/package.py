@@ -66,7 +66,8 @@ def assemble(updater, application):
     payload = validate_image(application)
     caps = (b"Cap:E3_MAINBOARD_V1:1", b"Cap:E3_MATERIAL_HEIGHT_V1:1",
             b"Cap:E3_USB_UPDATER_F401_V1:1", b"Cap:E3_Z_LIMIT_80_V1:1",
-            b"Cap:E3_SURFACE_HEIGHT_V2:1", b"E3SG:2 PROBE_Z:", b"E3HW:1 MCU:")
+            b"Cap:E3_SURFACE_HEIGHT_V2:1", b"Cap:E3_RECOVERY_V1:1",
+            b"E3SG:2 PROBE_Z:", b"E3HW:1 MCU:")
     if any(cap + b"\0" not in payload and cap + b"\n\0" not in payload for cap in caps):
         raise ValueError("Missing required runtime feature/hardware identity")
     if not 408 <= len(updater) <= 65536:
@@ -145,6 +146,8 @@ def main():
         "repository_base_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "source_state": "working tree; exact patched firmware sources included",
         "physical_verified": False, "z_ceiling_mm": 80,
+        "halt_recovery_capability": "E3_RECOVERY_V1",
+        "halt_recovery": "explicit fresh token reset only; no automatic motion resume",
         "surface_height_capability": "E3_SURFACE_HEIGHT_V2",
         "surface_contact_range_mm": [-2, 65], "surface_clearance_range_mm": [20, 80],
         "z_ceiling_capability": "E3_Z_LIMIT_80_V1", "files": {},

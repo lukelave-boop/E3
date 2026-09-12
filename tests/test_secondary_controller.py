@@ -149,7 +149,7 @@ def test_initial_open_applies_startup_delay_and_synchronizes_before_exact_off() 
 
     fan.initialize_off()
 
-    assert delays == [2.0]
+    assert sum(delays) == pytest.approx(2.0) and all(0 < delay <= .2 for delay in delays)
     assert serial.synchronize_calls == 1
     assert serial.writes == ["M106 S0"]
 
@@ -360,6 +360,26 @@ def test_failed_runtime_off_reopens_only_once_for_cleanup() -> None:
     assert owner.fault is None
 
 
+def test_close_never_reopens_an_already_closed_or_failed_owner():
+    active, unopened = FakeSerial(["ok"]), FakeSerial(["ok"])
+    owner, fan = _controller([active, unopened])
+    fan.initialize_off()
+    owner.close()
+    fan.close()
+    assert unopened.open_calls == 0 and unopened.writes == []
+    assert not owner.ready
+
+
+def test_close_fan_off_failure_does_not_retry_or_halt_idle_ender():
+    active, unopened = FakeSerial(["ok", OSError("lost ACK")]), FakeSerial(["ok"])
+    owner, fan = _controller([active, unopened])
+    fan.initialize_off()
+    owner._mainboard_fan1_used = True
+    fan.close()
+    assert unopened.open_calls == 0 and "M112" not in active.writes
+    assert not owner.ready
+
+
 def test_startup_failure_can_be_retried_with_fresh_acknowledged_off() -> None:
     failed = FakeSerial(["error: heater fault"])
     restarted = FakeSerial(["ok"])
@@ -500,7 +520,8 @@ def test_prestart_rx_sync_fault_recovers_with_startup_settle():
     assert current.writes == ["M106 S0"]
     assert fresh.open_calls == fresh.synchronize_calls == 1
     assert fresh.writes == ["M106 S0"]
-    assert delays == [2, 2]
+    assert sum(delays) == pytest.approx(4.0) and all(0 < delay <= .2 for delay in delays)
+
     assert owner.ready
 
 

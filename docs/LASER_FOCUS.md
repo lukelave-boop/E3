@@ -1,5 +1,23 @@
 # Surface height and gauge-taught laser focus
 
+## Ender readiness and reconnect
+
+Successful XY Home / park does not establish the Ender's Z connection. The
+focus window shows that connection's fault above its actions and retains saved
+limits and offsets as configuration, separately from a live Z reading. With
+the primary connected, idle and disarmed, **Reconnect Ender** explicitly retries
+the shared connection, checks identity and acknowledges outputs off. It never
+homes, measures a surface or repeats an interrupted move. A firmware restart
+may initialize and move the CR Touch pin; keep the pin path clear. A fresh border reference is
+required before positioning; existing clearance restrictions remain in force.
+
+The matching Pi companion adds `pi-laser-focus-recovery-v1`. Supported new
+compact firmware can also answer while emergency-halted and accept an explicit
+restart. The existing 9518b83f firmware supports normal focus operations below,
+but cannot be restarted by this protocol if it is already halted. It must be
+made responsive before the recovery firmware can be installed. See
+[Ender recovery](ENDER_RECOVERY.md) for the protocol and verification limits.
+
 ## Choose a probe point in the camera image
 
 After referencing the border and reaching the selected clearance, choose

@@ -1,5 +1,21 @@
 # Compact F401 retained updater
 
+The maintenance host waits 35 seconds on the same open serial connection,
+then sends a line separator and queries a fresh identity before updater entry.
+It reports the current stage and partial timeout responses. Startup traffic
+cannot authorize an erase; firmware errors stop the operation without retry.
+Keep the Pi hardware service stopped throughout maintenance. Upload commits
+the application but leaves boot as a separate operator command. This startup
+handling has offline protocol coverage; physical upload qualification is pending.
+
+For older Marlin builds whose M997 acknowledgement is truncated or garbled,
+nonempty incomplete bytes permit one HOLD/identity check. Explicit refusals
+and a completely silent timeout still stop the operation. Partial bytes never
+permit an erase by themselves. An exact HOLD acknowledgement and a fresh
+matching updater identity are required; M997 and flash transactions are not
+retried. This covers the reported one-byte handoff failure in simulated tests;
+qualification of this complete host sequence on the machine remains pending.
+
 Updater 0.3.0, board/image ID 0401C013. This is a separate target; historical
 RET6-only and F103 sources/packages remain unchanged. See
 ../marlin_mainboard_compact/README.md for the complete SD/USB kit.

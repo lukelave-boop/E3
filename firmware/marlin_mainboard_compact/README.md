@@ -1,5 +1,42 @@
 # Compact F401 mainboard with USB updates
 
+## Explicit recovery after a controlled stop
+
+Normal M115 now advertises `Cap:E3_RECOVERY_V1:1`. A native kill or M112
+immediately disables all stepper drivers and both fan commands, shuts heaters
+down, and enters a latched recovery loop with interrupts masked. The loop
+reasserts inactive heater/fan/STEP outputs and stops probe-control pulses.
+It uses polled USART1 at 115200 baud; it never runs the planner or consumes
+Marlin's old command queue. It keeps the existing watchdog fed so inactivity
+cannot cause an automatic restart.
+
+A fresh bare M115 in this state returns
+`E3RECOVERY:1 STATE:HALTED BOARD:0401C013 TOKEN:<8 uppercase hex digits>`,
+followed by its own `ok`. Only `E3RECOVER <that token>` requests a reset.
+Each query replaces the previous token; an invalid command consumes it. The
+reset occurs only after the complete `E3RECOVERY:1 RESETTING` line has left
+the UART. There is no trailing `ok` on that reset acknowledgment. Oversized,
+malformed or binary lines are discarded through their newline. M999, M997,
+BOOT, motion and fan commands cannot leave the halt state.
+
+Use E3's explicit recovery action rather than a job or ordinary reconnect to
+send this handshake. Reset discards all motion state and returns through the
+retained loader's normal startup; it does not enter update maintenance or
+resume a job. E3 must verify fresh normal identity, restore OFF state and
+require homing/reference qualification afterward. The token protects against
+stale serial input within the halt session; it is not authentication.
+
+Restart runs native CR Touch initialization, including reset/stow and possibly
+deploy/stow during a mode change. Keep the probe pin path clear. No XY/Z move
+or homing cycle is commanded by reconnect, but pin movement is possible.
+
+This handles future controlled kill paths in this application. It cannot be
+uploaded into an older image that is already silent in its nonrecoverable
+kill loop: that image first needs a real MCU reset or complete power cycle.
+It also cannot recover a CPU that no longer executes code or whose clock or
+USB/serial hardware has failed. Compiled parser, fake UART/GPIO and final ELF
+kill-path tests exercise the software; physical recovery remains unverified.
+
 ## Z80 ceiling update
 
 For the rig measured at Z20, the operator selected 60 mm of remaining upward
@@ -60,7 +97,7 @@ this is recovery, not automatic rollback to a previous application.
 - Native CR Touch handling, Z homing/movement and bounded G39 material measurement.
 - M123 fan command/Z trust report and the emergency parser.
 - M115 reports E3_MAINBOARD_V1, E3_MATERIAL_HEIGHT_V1,
-  E3_SURFACE_HEIGHT_V2, E3_Z_LIMIT_80_V1, E3_USB_UPDATER_F401_V1 and
+  E3_SURFACE_HEIGHT_V2, E3_Z_LIMIT_80_V1, E3_USB_UPDATER_F401_V1, E3_RECOVERY_V1 and
   EMERGENCY_PARSER capabilities, plus the E3SG geometry line and
   `E3HW:1 MCU:<hex ID> FLASH_KIB:<capacity>`.
 - EEPROM settings retain a distinct E31 schema. Incompatible stock settings use

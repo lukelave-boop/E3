@@ -3,6 +3,8 @@
 Default operation is read-only. --apply changes one known source file, keeps a
 unique backup, and requires the E3 service to be inactive. It never opens serial,
 restarts a service, installs dependencies, or changes Git branches/history.
+The reader remains compatible with existing owners; explicit Ender recovery
+requires the complete Pi laser-focus companion, not this single-file update.
 """
 
 from __future__ import annotations
@@ -18,13 +20,14 @@ import tempfile
 from pathlib import Path
 
 RELATIVE_TARGET = Path("laser_aligner/machine/secondary_startup.py")
-DESIRED_SHA256 = "b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2"
+DESIRED_SHA256 = "d7c6bc19862d8f3dd5fd638581860057189956e4314157efb92f317298eb258b"
 # These are SHA-256 hashes of UTF-8 source with LF line endings. Uniform CRLF
 # copies are accepted too, and the project's existing line endings are retained.
 ACCEPTED_SOURCE_SHA256 = {
     "dd2ba0f981681e6be1479e061746418922b417ef06712c82fef24e4c230890a9": "startup-fixed F401 source",
     "d4075d31c2551961999f918165ae2940ab4dcf28244fa81c443917ca226fd280": "F103 companion source",
-    DESIRED_SHA256: "compact F401 companion source",
+    "b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2": "original compact F401 companion source",
+    DESIRED_SHA256: "current compact F401 readiness reader",
 }
 SERVICE = "e3-hardware-node.service"
 

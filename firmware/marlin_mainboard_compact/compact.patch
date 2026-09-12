@@ -263,20 +263,102 @@ index e09b52f..e93fe5e 100644
  
  extern "C" {
 diff --git a/Marlin/src/MarlinCore.cpp b/Marlin/src/MarlinCore.cpp
-index ddfc95c..26e5c7e 100644
+index ddfc95c..1047105 100644
 --- a/Marlin/src/MarlinCore.cpp
 +++ b/Marlin/src/MarlinCore.cpp
-@@ -998,6 +998,10 @@ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
+@@ -997,72 +997,36 @@ void idle(TERN_(ADVANCED_PAUSE_FEATURE, bool no_stepper_sleep/*=false*/)) {
+  * Kill all activity and lock the machine.
   * After this the machine will need to be reset.
   */
++#include "e3_recovery.inc"
++
  void kill(PGM_P const lcd_error/*=nullptr*/, PGM_P const lcd_component/*=nullptr*/, const bool steppers_off/*=false*/) {
++  // Motor enable goes inactive before native diagnostics or any waiting.
++  disable_all_steppers();
 +  // E3 auxiliary outputs must be off even after interrupts/planner stop.
 +  thermalManager.zero_fan_speeds();
 +  WRITE(FAN_PIN, LOW);
 +  WRITE(FAN1_PIN, LOW);
    thermalManager.disable_all_heaters();
  
-   TERN_(HAS_CUTTER, cutter.kill()); // Full cutter shutdown including ISR control
+-  TERN_(HAS_CUTTER, cutter.kill()); // Full cutter shutdown including ISR control
+-
+-  // Echo the LCD message to serial for extra context
+-  if (lcd_error) { SERIAL_ECHO_START(); SERIAL_ECHOLNPGM_P(lcd_error); }
+-
+-  #if HAS_DISPLAY
+-    ui.kill_screen(lcd_error ?: GET_TEXT(MSG_KILLED), lcd_component ?: NUL_STR);
+-  #else
+-    UNUSED(lcd_error); UNUSED(lcd_component);
+-  #endif
+-
+-  TERN_(HAS_TFT_LVGL_UI, lv_draw_error_message(lcd_error));
+-
+-  // "Error:Printer halted. kill() called!"
+-  SERIAL_ERROR_MSG(STR_ERR_KILLED);
+-
+-  #ifdef ACTION_ON_KILL
+-    host_action_kill();
+-  #endif
+-
++  TERN_(HAS_CUTTER, cutter.kill());
++  UNUSED(lcd_error); UNUSED(lcd_component);
++  // Do not use interrupt-driven serial diagnostics on the path into recovery.
++  // The latched loop emits its own bounded, polled HALTED report.
+   minkill(steppers_off);
+ }
+ 
+ void minkill(const bool steppers_off/*=false*/) {
+-
+-  // Wait a short time (allows messages to get out before shutting down.
+-  for (int i = 1000; i--;) DELAY_US(600);
+-
+-  cli(); // Stop interrupts
+-
+-  // Wait to ensure all interrupts stopped
+-  for (int i = 1000; i--;) DELAY_US(250);
+-
+-  // Reiterate heaters off
++  UNUSED(steppers_off);
++  cli();
++  thermalManager.zero_fan_speeds();
++  WRITE(FAN_PIN, LOW);
++  WRITE(FAN1_PIN, LOW);
+   thermalManager.disable_all_heaters();
+-
+-  TERN_(HAS_CUTTER, cutter.kill());  // Reiterate cutter shutdown
+-
+-  // Power off all steppers (for M112) or just the E steppers
+-  steppers_off ? disable_all_steppers() : disable_e_steppers();
+-
++  disable_all_steppers();
++  TERN_(HAS_CUTTER, cutter.kill());
+   TERN_(PSU_CONTROL, PSU_OFF());
+-
+   TERN_(HAS_SUICIDE, suicide());
+-
+-  #if EITHER(HAS_KILL, SOFT_RESET_ON_KILL)
+-
+-    // Wait for both KILL and ENC to be released
+-    while (TERN0(HAS_KILL, !kill_state()) || TERN0(SOFT_RESET_ON_KILL, !ui.button_pressed()))
+-      watchdog_refresh();
+-
+-    // Wait for either KILL or ENC press
+-    while (TERN1(HAS_KILL, kill_state()) && TERN1(SOFT_RESET_ON_KILL, ui.button_pressed()))
+-      watchdog_refresh();
+-
+-    // Reboot the board
+-    HAL_reboot();
+-
+-  #else
+-
+-    for (;;) watchdog_refresh();  // Wait for RESET button or power-cycle
+-
+-  #endif
++  e3_recovery_loop();
+ }
+ 
+ /**
 diff --git a/Marlin/src/gcode/config/M92.cpp b/Marlin/src/gcode/config/M92.cpp
 index 06c47b8..27c2ab3 100644
 --- a/Marlin/src/gcode/config/M92.cpp
@@ -347,7 +429,7 @@ index 16fc47a..10e0fc8 100644
    #if HAS_STATUS_MESSAGE
      static void M117();
 diff --git a/Marlin/src/gcode/host/M115.cpp b/Marlin/src/gcode/host/M115.cpp
-index f095445..08b0e14 100644
+index f095445..5685d71 100644
 --- a/Marlin/src/gcode/host/M115.cpp
 +++ b/Marlin/src/gcode/host/M115.cpp
 @@ -21,6 +21,7 @@
@@ -358,7 +440,7 @@ index f095445..08b0e14 100644
  #include "../../inc/MarlinConfig.h"
  #include "../queue.h"           // for getting the command port
  
-@@ -73,6 +74,20 @@ void GcodeSuite::M115() {
+@@ -73,6 +74,21 @@ void GcodeSuite::M115() {
    //   SERIAL_ECHOLNPGM(STR_M115_DISABLE_REPORT);
    // }
    
@@ -369,6 +451,7 @@ index f095445..08b0e14 100644
 +  SERIAL_ECHOLNPGM(" MIN:-2 MAX:65 CEILING:80");
 +  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_USB_UPDATER_F401_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_RECOVERY_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_COMPACT_F401_V1:1");
 +  SERIAL_ECHOLNPGM("Cap:E3_Z_LIMIT_80_V1:1");
 +  SERIAL_ECHOPGM("E3HW:1 MCU:");

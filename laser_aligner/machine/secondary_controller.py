@@ -14,9 +14,9 @@ import math
 import os
 import time
 from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
-from threading import Lock, RLock
+from threading import Event, Lock, RLock
 from typing import Protocol
 
 from ..air_assist import AirAssistCommands, AirAssistMode, AirAssistTarget
@@ -135,6 +135,7 @@ class CrealityControllerOwner:
         self._sleep = sleep
         self._lock = RLock()
         self._write_lock = Lock()
+        self._close_requested = Event()
         self._generation = 0
         self._transport: _SerialTransport | None = None
         self._trusted = False
@@ -151,6 +152,19 @@ class CrealityControllerOwner:
     def generation(self) -> int:
         """Changes on open/close; reading never waits for a probe ACK."""
         return self._generation
+
+    def recovery_status(self) -> dict:
+        """A nonblocking diagnostic snapshot, never connection authority."""
+        locked = self._lock.acquire(blocking=False)
+        try:
+            if locked:
+                self._refresh_transport_fault_locked()
+            ready = self._trusted and self._transport is not None
+            return {"ready": ready, "fault": None if ready else (self._fault or "Ender connection is not initialized"),
+                    "generation": self._generation, "recovery_required": not ready}
+        finally:
+            if locked:
+                self._lock.release()
 
     def interrupt_probe(self, expected_generation: int) -> None:
         """Best-effort M112 on the existing session, bypassing the ACK lock.
@@ -169,6 +183,7 @@ class CrealityControllerOwner:
             transport = self._transport
             self._generation += 1
             self._trusted = False
+            self._fault = "Ender emergency stop requested; explicit Ender recovery is required"
             self._secondary_fan_enabled = None
             if transport is not None:
                 try:
@@ -226,30 +241,90 @@ class CrealityControllerOwner:
         )
         return SecondaryControllerError(self._fault)
 
-    def _open_locked(self) -> _SerialTransport:
+    def _open_locked(self, *, write_guard=None, deadline=None, recover_halted=False) -> _SerialTransport:
         if self._trusted and self._transport is not None:
             return self._transport
         self._close_transport_locked()
+        self._close_requested.clear()
+        opening_generation = self._generation
         transport: _SerialTransport | None = None
+
+        @contextmanager
+        def opening_guard():
+            with write_guard() if write_guard is not None else nullcontext(), self._write_lock:
+                if self._generation != opening_generation:
+                    raise SecondaryControllerError("Ender connection changed while reconnecting")
+                if self._close_requested.is_set():
+                    raise SecondaryControllerError("Ender connection was closed during initialization")
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise SecondaryControllerError("Ender reconnect exceeded its time limit")
+                yield
+
         try:
             transport = self._serial_factory(
                 self.session.port,
                 self.session.baudrate,
             )
             self._transport = transport
-            transport.open()
-            self._sleep(self.session.startup_delay_seconds)
+            with opening_guard():
+                transport.open()
+            if deadline is not None and self.session.startup_delay_seconds >= deadline - time.monotonic():
+                raise SecondaryControllerError("Ender startup delay exceeds the reconnect time limit")
+            remaining_delay = self.session.startup_delay_seconds
+            while remaining_delay > 0:
+                with opening_guard():
+                    pass
+                delay = min(remaining_delay, .2)
+                self._sleep(delay)
+                remaining_delay -= delay
             # Startup chatter, including an unterminated fragment and unread
             # kernel RX bytes, predates the next command and cannot acknowledge it.
-            wait_for_marlin(transport)
+            identity = wait_for_marlin(transport, guard=opening_guard, deadline=deadline,
+                                       recover_halted=recover_halted)
+            if recover_halted and identity and "Cap:E3_MAINBOARD_V1:1" in identity:
+                self._mainboard_fan1_used = True
+            with opening_guard():
+                self._trusted = True
+                self._generation += 1
+                self._fault = None
         except Exception as exc:
             if transport is not None:
                 self._transport = transport
             raise self._fail_locked(exc) from exc
-        self._trusted = True
-        self._generation += 1
-        self._fault = None
         return transport
+
+    def recover_off(self, *, write_guard: WriteGuardFactory, deadline: float) -> None:
+        """One explicitly requested reconnect, fresh identity and acknowledged OFF.
+
+        A tokenized firmware halt may be reset once by this explicit path only.
+        Neither fan commands nor an interrupted operation are ever retried.
+        """
+        @contextmanager
+        def recovery_guard():
+            with write_guard():
+                if time.monotonic() >= deadline:
+                    raise SecondaryControllerError("Ender reconnect exceeded its time limit")
+                yield
+
+        if not self._lock.acquire(timeout=max(0., min(2., deadline - time.monotonic()))):
+            raise SecondaryControllerError("Ender connection is busy; recovery was not started")
+        try:
+            with recovery_guard():
+                self._close_transport_locked()
+            self._open_locked(write_guard=recovery_guard, deadline=deadline, recover_halted=True)
+            with recovery_guard():
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SecondaryControllerError("Ender reconnect exceeded its time limit")
+            self._all_fans_off(allow_open=False, write_guard=recovery_guard,
+                               timeout=min(3., remaining), interrupt_on_failure=False)
+            with recovery_guard():
+                pass
+        except Exception as exc:
+            raise self._fail_locked(exc) from exc
+        finally:
+            self._lock.release()
 
     @staticmethod
     def _validate_typed_command(command: str) -> str:
@@ -318,6 +393,8 @@ class CrealityControllerOwner:
                 with guard, self._write_lock:
                     if generation != self._generation:
                         raise SecondaryControllerError("Secondary session was interrupted")
+                    if self._close_requested.is_set():
+                        raise SecondaryControllerError("Secondary connection was closed")
                     write_started = True
                     transport.write_line(command)
             except Exception as exc:
@@ -339,11 +416,13 @@ class CrealityControllerOwner:
                 responses: list[str] = []
                 response_bytes = 0
                 while True:
-                    if on_failure is not None and write_guard is not None:
+                    if write_guard is not None:
                         with write_guard():
                             pass
                     if generation != self._generation:
                         raise SecondaryControllerError("Secondary session was interrupted")
+                    if self._close_requested.is_set():
+                        raise SecondaryControllerError("Secondary connection was closed")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0.0:
                         raise SecondaryControllerError(
@@ -352,6 +431,11 @@ class CrealityControllerOwner:
                             f"{_bounded_detail(responses[-1]) if responses else 'none'}"
                         )
                     response = transport.read_line(timeout=min(remaining, 0.2))
+                    if write_guard is not None:
+                        with write_guard():
+                            pass
+                    if generation != self._generation or self._close_requested.is_set():
+                        raise SecondaryControllerError("Secondary session was interrupted or closed")
                     if response is None:
                         continue
                     normalized = response.strip().casefold()
@@ -399,21 +483,30 @@ class CrealityControllerOwner:
                 )
             self._secondary_fan_binding = binding
 
-    def _all_fans_off(self, *, allow_open: bool) -> None:
+    def _all_fans_off(self, *, allow_open: bool, write_guard=None, timeout=None,
+                      interrupt_on_failure=False) -> None:
         """Include FAN1 in lifecycle cleanup after identifying the E3 profile."""
         commands = (_FAN_OFF_COMMAND, "M106 P1 S0") if self._mainboard_fan1_used else (_FAN_OFF_COMMAND,)
         for command in commands:
             self._execute_acknowledged(
                 command, allow_open=allow_open,
-                # The E3 profile's native kill also clears both fan PWM pins.
-                # A failed acknowledgement attempts M112 before closing.
+                write_guard=write_guard, timeout=timeout, interrupt_on_failure=interrupt_on_failure,
+                # Fan uncertainty closes the connection without halting an idle
+                # Z controller. Actual motion/emergency STOP owns M112 separately.
                 on_failure=(lambda: None) if self._mainboard_fan1_used else None,
             )
         self._secondary_fan_enabled = False
 
     def close(self) -> None:
-        with self._lock:
+        self._close_requested.set()
+        # A startup reader checks this event between bounded reads. Closing the
+        # service must not wait behind its complete 45-second identity budget.
+        if not self._lock.acquire(timeout=.5):
+            return
+        try:
             self._close_transport_locked()
+        finally:
+            self._lock.release()
 
 
 class SecondaryMarlinFanController:
@@ -583,33 +676,41 @@ class SecondaryMarlinFanController:
                 raise
             self._owner._secondary_fan_enabled = enabled
 
-    def best_effort_off(self) -> bool:
+    def best_effort_off(self, *, allow_reopen: bool = True, interrupt_on_failure: bool = False) -> bool:
         """Attempt OFF and at most one reopen without propagating cleanup failure."""
 
-        with self._owner._lock:
+        locked = self._owner._lock.acquire() if allow_reopen else self._owner._lock.acquire(timeout=.25)
+        if not locked:
+            return False
+        try:
             attempted_current_session = self._owner.ready
             if attempted_current_session:
                 try:
-                    self._owner._all_fans_off(allow_open=False)
+                    self._owner._all_fans_off(allow_open=False, interrupt_on_failure=interrupt_on_failure,
+                                              timeout=None if allow_reopen else min(.5, self._owner.session.read_timeout_seconds))
                     self._owner._secondary_fan_enabled = False
                     return True
                 except Exception:
                     self._owner._secondary_fan_enabled = None
+            if not allow_reopen:
+                return False
             # A failed current exchange closed the session.  Cleanup may reopen
             # once; an already-closed session receives this one attempt directly.
             try:
-                self._owner._all_fans_off(allow_open=True)
+                self._owner._all_fans_off(allow_open=True, interrupt_on_failure=interrupt_on_failure)
                 self._owner._secondary_fan_enabled = False
                 return True
             except Exception:
                 self._owner._secondary_fan_enabled = None
                 return False
 
+        finally:
+            self._owner._lock.release()
+
     def close(self) -> None:
-        with self._owner._lock:
-            self.best_effort_off()
-            self._owner.close()
-            self._owner._secondary_fan_enabled = None
+        self.best_effort_off(allow_reopen=False)
+        self._owner.close()
+        self._owner._secondary_fan_enabled = None
 
 
 __all__ = [

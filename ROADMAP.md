@@ -1,5 +1,14 @@
 # Roadmap
 
+## Ender recovery qualification
+
+Implemented explicit secondary reconnect, persistent fault visibility, bounded
+shutdown and separation of XY/read-only failures from Ender emergency halt.
+Added a restricted compact-firmware halt/restart protocol. Offline verification
+does not establish physical recovery: install matching host/firmware support
+after restoring processor responsiveness, then qualify reconnect, retained
+settings and fresh Z referencing before resuming focus calibration.
+
 ## Probe positioning recovery correction
 
 Implemented a travel-duration completion wait and reordered focus prerequisites.

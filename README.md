@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Ender connection recovery
+
+Surface / laser focus shows Ender readiness separately from XY homing. An
+explicit Reconnect Ender retries the shared connection and verifies outputs
+off, while retaining configured limits and offsets. It never replays motion.
+Matching Pi support is required; recovery from a firmware halt additionally
+requires the new compact recovery firmware. See [Ender recovery](docs/ENDER_RECOVERY.md).
+
 ## Probe positioning completion
 
 Focus positioning waits for the commanded travel to finish, with a bounded

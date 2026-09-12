@@ -165,14 +165,14 @@ def test_idle_manual_fans_off_without_job_mapping(machine_probe, operation):
     assert state["fan1"] == state["fan2"] == 0
 
 
-def test_uncertain_fan_cleanup_attempts_native_kill():
+def test_uncertain_fan_cleanup_closes_without_halting_idle_z():
     serial, owner, fan, _, _ = ready_probe()
     mainboard_serial(serial)
     owner._mainboard_fan1_used = True
     serial.overrides["M106 P1 S0"] = ["Error: failed", "ok"]
-    fan.best_effort_off()
+    assert fan.best_effort_off(allow_reopen=False) is False
     assert "M106 S0" in serial.writes and "M106 P1 S0" in serial.writes
-    assert "M112" in serial.writes
+    assert "M112" not in serial.writes and not owner.ready
 
 
 def test_manual_partial_fan2_does_not_satisfy_job_full_speed_cache():

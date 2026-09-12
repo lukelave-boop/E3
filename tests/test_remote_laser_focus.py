@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from laser_aligner.errors import MachineError, SafetyError
-from laser_aligner.machine.laser_focus import CLICK_CAPABILITY, PI_CAPABILITY, XY_CAPABILITY
+from laser_aligner.machine.laser_focus import CLICK_CAPABILITY, PI_CAPABILITY, RECOVERY_CAPABILITY, XY_CAPABILITY
 from laser_aligner.machine.pi_machine_server import ACTION_MACHINE_FOCUS, SERVER_CAPABILITIES
 from tests import test_laser_focus as focus_helpers
 from tests import test_pi_machine_server as helpers
@@ -38,6 +38,7 @@ def test_focus_capability_advertised():
     assert PI_CAPABILITY in SERVER_CAPABILITIES
     assert XY_CAPABILITY in SERVER_CAPABILITIES
     assert CLICK_CAPABILITY in SERVER_CAPABILITIES
+    assert RECOVERY_CAPABILITY in SERVER_CAPABILITIES
 
 
 @pytest.mark.parametrize("action", ["status", "reference", "measure", "clearance", "forget", "clear_surface"])
@@ -249,3 +250,132 @@ def test_authenticated_selected_point_rejects_before_serial(focus_server, change
         kwargs["expected_session_generation"] = harness.machine.status()["controller_session_generation"] + 1
     assert not rpc(harness, "position_probe", **kwargs)["ok"]
     assert focus.serial.writes == before
+
+
+def unavailable_result(result, action="status"):
+    result.update(action=action, available=False, reference_ready=False,
+                  current_readback={"fresh": False, "z_known": False, "z_mm": None},
+                  reference=None, surface=None, preview=None, xy_sequence=None,
+                  max_z_mm=40., recovery_available=True,
+                  probe_xy_offset_mm=[3.302, 38.608],
+                  ender={"ready": False, "fault": "Ender did not answer M115",
+                         "generation": 4, "recovery_required": True})
+
+
+def test_remote_old_pi_rejects_recovery_before_request(remote_focus):
+    service, pi, _ = remote_focus
+    with pytest.raises(MachineError, match="Update"):
+        service.focus_control("recover", confirmed=True)
+    assert not any(r["action"] == ACTION_MACHINE_FOCUS for r in pi.requests)
+
+
+def test_remote_recovery_without_motion_authority_is_explicit_and_bound(remote_focus):
+    service, pi, result = remote_focus
+    pi.capabilities.append(RECOVERY_CAPABILITY)
+    service.settings.allow_motion = False
+    result["action"] = "recover"
+    with pytest.raises(SafetyError, match="Confirm"):
+        service.focus_control("recover")
+    response = service.focus_control("recover", confirmed=True)
+    assert response["available"] is True
+    assert pi.requests[-1]["expected_session_generation"] == pi.session_generation
+    assert pi.requests[-1]["expected_boot_id"] == pi.boot_id
+    assert pi.requests[-1]["confirmed"] is True
+
+
+@pytest.mark.parametrize("action", ["status", "recover"])
+def test_remote_unavailable_status_preserves_fault_without_position(remote_focus, action):
+    service, pi, result = remote_focus
+    pi.capabilities.append(RECOVERY_CAPABILITY)
+    unavailable_result(result, action)
+    response = service.focus_control(action, confirmed=action == "recover")
+    assert response["ender"]["fault"] == "Ender did not answer M115"
+    assert response["max_z_mm"] == 40
+    assert response["current_readback"]["z_mm"] is None
+    assert not response["reference_ready"]
+
+
+@pytest.mark.parametrize("bad", ["fresh", "z", "reference", "preview", "fault", "ready", "generation", "max", "capability"])
+def test_remote_unavailable_status_cannot_smuggle_motion_authority(remote_focus, bad):
+    service, pi, result = remote_focus
+    pi.capabilities.append(RECOVERY_CAPABILITY)
+    unavailable_result(result)
+    if bad == "fresh":
+        result["current_readback"]["fresh"] = True
+    elif bad == "z":
+        result["current_readback"]["z_mm"] = 30.
+    elif bad == "reference":
+        result["reference_ready"] = True
+    elif bad == "preview":
+        result["preview"] = {"target_z_mm": 20}
+    elif bad == "fault":
+        result["ender"]["fault"] = ""
+    elif bad == "ready":
+        result["ender"]["ready"] = True
+    elif bad == "generation":
+        result["ender"]["generation"] = True
+    elif bad == "max":
+        result["max_z_mm"] = 90
+    else:
+        pi.capabilities.remove(RECOVERY_CAPABILITY)
+    with pytest.raises(MachineError):
+        service.focus_control("status")
+
+
+def test_remote_unavailable_move_is_failure(remote_focus):
+    service, pi, result = remote_focus
+    pi.capabilities.append(RECOVERY_CAPABILITY)
+    unavailable_result(result, "move")
+    with pytest.raises(MachineError):
+        service.focus_control("move", confirmed=True, preview_id=str(uuid.uuid4()))
+
+
+@pytest.mark.parametrize("change", ["stop", "restart"])
+def test_recovery_result_is_discarded_when_authority_changes(remote_focus, change):
+    service, pi, result = remote_focus
+    pi.capabilities.append(RECOVERY_CAPABILITY)
+    unavailable_result(result, "recover")
+    service._require_capabilities()
+    def invalidate(*args):
+        if change == "stop":
+            with service._stop_epoch_lock:
+                service._stop_epoch += 1
+        else:
+            pi.boot_id = str(uuid.uuid4())
+    pi.before_request = invalidate
+    with pytest.raises(MachineError):
+        service.focus_control("recover", confirmed=True)
+
+
+def test_authenticated_recovery_checks_confirmation_and_session(focus_server):
+    harness, focus = focus_server
+    before = list(focus.serial.writes)
+    assert not rpc(harness, "recover", confirmed=False)["ok"]
+    generation = harness.machine.status()["controller_session_generation"]
+    assert not rpc(harness, "recover", expected_session_generation=generation + 1)["ok"]
+    assert focus.serial.writes == before
+
+
+def test_authenticated_recovery_reconnects_without_replaying_motion(focus_server):
+    harness, focus = focus_server
+    assert rpc(harness, "reference")["ok"]
+    assert rpc(harness, "set_xy_offset", value=[3.302, 38.608])["ok"]
+    before_generation = focus.owner.generation
+    replacement = type(focus.serial)()
+    replacement.overrides["M106 P1 S0"] = ["ok"]
+    focus.owner._serial_factory = lambda _path, _baud: replacement
+    focus.owner.close()
+    harness.machine.settings.allow_motion = False
+    response = rpc(harness, "recover")
+    assert response["ok"], response
+    result = response["result"]
+    assert result["action"] == "recover" and result["available"], result["ender"]
+    assert result["ender"]["ready"] and not result["ender"]["recovery_required"]
+    assert result["ender"]["generation"] > before_generation
+    assert result["current_readback"]["fresh"]
+    assert not result["reference_ready"]
+    assert result["surface"] is None and result["preview"] is None
+    assert result["probe_xy_offset_mm"] == [3.302, 38.608]
+    assert "M115" in replacement.writes and "M106 S0" in replacement.writes
+    assert all(command in {"M115", "M106 S0", "M106 P1 S0", "M123", "M114"}
+               for command in replacement.writes)
