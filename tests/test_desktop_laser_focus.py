@@ -899,3 +899,59 @@ def test_camera_head_preview_uses_laser_center_correction_and_invalidates_change
     panel.set_result(camera_result(laser_spot_offset_mm=[3.0, -1.0]))
     assert panel._camera_target is None
     assert "offset changed" in panel.camera_target.text()
+
+
+
+def test_coarse_teaching_steps_require_pi_support_and_revert_on_old_node(panel):
+    payload = result()
+    payload["max_teaching_step_mm"] = 5
+    panel.set_result(payload)
+    assert [panel.z_step.itemData(i) for i in range(panel.z_step.count())] == [.1, .5, 1, 2, 5]
+    panel.z_step.setCurrentIndex(panel.z_step.findData(5))
+    panel.set_result(result())
+    assert [panel.z_step.itemData(i) for i in range(panel.z_step.count())] == [.1, .5, 1]
+    assert panel.z_step.currentData() == .1
+
+
+def test_long_jog_completion_defers_poll_but_allows_next_click(coordinator, monkeypatch):
+    item, controller = coordinator
+    now = [100.0]
+    monkeypatch.setattr("laser_aligner.desktop.laser_focus.time.monotonic", lambda: now[0])
+    item.panel.set_result(result())
+    confirm(item.panel)
+    item.panel.up.click()
+    assert len(controller.work) == 1
+    now[0] += 6.0
+    controller.complete()
+    item.tick()
+    assert controller.work == []
+    # No artificial inter-click timer: completion enables the next single move.
+    item.panel.up.click()
+    assert len(controller.work) == 1
+    controller.complete()
+    now[0] += 2.01
+    item.tick()
+    assert len(controller.work) == 1
+    assert controller.work[0][1]["show_busy"] is False
+
+
+
+def test_teaching_below_probe_contact_requires_updated_pi_and_respects_zero(panel):
+    confirm(panel)
+    payload = result(current_readback={"z_mm": 6.0, "z_known": True, "fresh": True},
+                     requires_clearance=True, focus_travel_min_z_mm=0.0, max_teaching_step_mm=5)
+    payload["surface"]["contact_z_mm"] = 5.124
+    panel.set_result(payload)
+    panel.z_step.setCurrentIndex(panel.z_step.findData(1))
+    assert panel.down.isEnabled()
+    assert "0 to" in panel.teaching_limits.text()
+    payload["current_readback"]["z_mm"] = .5
+    panel.set_result(payload)
+    assert not panel.down.isEnabled()
+    assert "smaller step" in panel.teaching_limits.text()
+    panel.z_step.setCurrentIndex(panel.z_step.findData(.1))
+    assert panel.down.isEnabled()
+    payload["current_readback"]["z_mm"] = 0
+    panel.set_result(payload)
+    assert not panel.down.isEnabled()
+    assert "minimum reached" in panel.teaching_limits.text()

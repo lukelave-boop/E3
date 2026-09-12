@@ -1,5 +1,25 @@
 # Current repository state
 
+## Focus teaching travel and responsiveness correction (2026-09-12)
+
+The operator reported slow individual teaching jogs and a disabled down button
+at Z6 with surface elevation +5.124. The old lower bound incorrectly treated
+the probe-contact carriage coordinate as the laser-face collision plane.
+Teaching, preview and focus now use the existing absolute Z0 to configured
+maximum travel interval; negative taught mounting offsets remain persisted in
+the existing schema. All measurement/session/XY, stowed-probe, path, completion,
+readback, clearance, stop and maximum guards remain. No negative-Z bypass exists.
+
+Approach steps of 1/2/5 mm use F300, while 0.1/0.5 mm fine fitting uses F60.
+The UI exposes 2/5 mm only when the Pi advertises support, displays its teaching
+range, and schedules idle readback from request completion to avoid immediate
+post-jog polling. Commands remain single moves with no auto-repeat or batching.
+Secondary focus transcript entries include exchange durations for diagnosing
+remaining latency. Local Windows backend/offscreen UI tests: 231 passed; focused
+Ruff and compileall passed. Linux tests, frozen build and Pi installation are
+recorded in the handoff. No new physical movement or gauge accuracy is claimed.
+The operator authorized ending the teaching session to install after tests.
+
 ## Operator confirms camera-selected probe placement (2026-09-12)
 
 After the 0.7.80 handoff, the operator reported: "it successfully positioned

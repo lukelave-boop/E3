@@ -172,12 +172,12 @@ def test_rejected_teaching_moves_have_no_motion(focus, change):
     args = dict(measurement_id=measurement_id, value=-1)
     action = "jog"
     if change == "below_floor":
-        focus.serial.z = 5
+        focus.serial.z = 0
     elif change == "over_ceiling":
         focus.serial.z = 80
         args["value"] = 1
     elif change == "large_jog":
-        args["value"] = 1.01
+        args["value"] = 5.01
     elif change == "wrong_id":
         args["measurement_id"] = "x"*36
     elif change == "wrong_xy":
@@ -372,9 +372,9 @@ def test_service_stop_interrupts_pending_focus_move(focus_machine):
     machine, focus, _ = focus_machine
     machine.focus_control("reference", confirmed=True)
     result = machine.focus_control("measure", confirmed=True)
-    focus.serial.overrides["G1 Z29.000 F60"] = []
+    focus.serial.overrides["G1 Z29.000 F300"] = []
     entered = threading.Event()
-    focus.serial.on_write = lambda line: entered.set() if line == "G1 Z29.000 F60" else None
+    focus.serial.on_write = lambda line: entered.set() if line == "G1 Z29.000 F300" else None
     results, errors = [], []
     def move():
         try:
@@ -1164,3 +1164,68 @@ def test_readonly_focus_status_does_not_publish_probe_activity(focus_machine):
     focus.serial.responses.extend(IDENTITY)
     worker.join(2)
     assert not worker.is_alive() and results[0]["available"]
+
+
+@pytest.mark.parametrize("step,feed", [(-5, 300), (-2, 300), (-1, 300), (-.5, 60), (-.1, 60), (5, 300)])
+def test_teaching_approach_steps_keep_completion_and_readback(focus, step, feed):
+    token = measured(focus)
+    focus.serial.writes.clear()
+    result = focus.run("jog", value=step, measurement_id=token)
+    command = f"G1 Z{30 + step:.3f} F{feed}"
+    writes = focus.serial.writes
+    assert writes.count(command) == 1
+    after = writes[writes.index(command) + 1:]
+    assert after == ["M400", "M114", "M123", "M119"]
+    assert result["current_readback"]["z_mm"] == 30 + step
+    assert result["max_teaching_step_mm"] == 5
+    assert all(entry["duration_seconds"] >= 0 for entry in result["transcript"])
+
+
+@pytest.mark.parametrize("z,step,maximum", [(3, -5, 40), (38, 5, 40), (30, -5.001, 40), (30, 5.001, 40)])
+def test_coarse_step_rejects_floor_ceiling_and_oversize_before_movement(focus, z, step, maximum):
+    token = measured(focus)
+    focus.serial.z = z
+    focus.serial.writes.clear()
+    with pytest.raises(MachineError):
+        focus.run("jog", value=step, measurement_id=token, maximum=maximum)
+    assert not any(line.startswith("G1 ") for line in focus.serial.writes)
+
+
+@pytest.mark.parametrize("failure", ["lost_reference", "wrong_position", "deployed_pin"])
+def test_coarse_step_does_not_report_success_on_bad_completion(focus, failure):
+    token = measured(focus)
+    def corrupt(line):
+        if line.startswith("G1 Z"):
+            if failure == "lost_reference":
+                focus.serial.homed = False
+            elif failure == "wrong_position":
+                focus.serial.overrides["M114"] = ["X:0 Y:0 Z:30 E:0", "ok"]
+            else:
+                focus.serial.overrides["M119"] = ["z_min: open", "ok"]
+    focus.serial.on_write = corrupt
+    focus.serial.writes.clear()
+    with pytest.raises(MachineError):
+        focus.run("jog", value=-5, measurement_id=token)
+    assert sum(line.startswith("G1 Z") for line in focus.serial.writes) == 1
+    assert focus.state.requires_clearance
+
+
+
+def test_teach_below_probe_contact_persists_negative_offset_and_focuses_raised_surface(focus):
+    token = measured(focus)  # Raw contact Z5; independent of laser face.
+    focus.serial.z = 6
+    result = focus.run("jog", value=-3, measurement_id=token)
+    assert result["current_readback"]["z_mm"] == 3
+    assert result["focus_travel_min_z_mm"] == 0
+    result = focus.run("teach", measurement_id=token)
+    assert result["calibration"]["focus_offset_mm"] == -2
+    assert LaserFocus(focus.state.path, "ender").calibration == result["calibration"]
+    # Derived 3 mm gap would require Z below zero and remains rejected.
+    with pytest.raises(MachineError):
+        focus.run("preview", gap_mm=3, measurement_id=token)
+    focus.run("clearance", clearance_z_mm=45)
+    surface = focus.run("measure", clearance_z_mm=45)["surface"]  # Contact25.
+    preview = focus.run("preview", clearance_z_mm=45, measurement_id=surface["id"])["preview"]
+    assert preview["target_z_mm"] == 23
+    moved = focus.run("move", clearance_z_mm=45, preview_id=preview["id"])
+    assert moved["current_readback"]["z_mm"] == 23

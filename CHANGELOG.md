@@ -1,5 +1,13 @@
 # Changelog
 
+## Focus teaching travel and responsiveness (2026-09-12)
+
+Corrected teaching and calculated focus being blocked at the probe-contact
+coordinate even when the laser face remained above its gauge. Z0 and the active
+maximum remain limits. Added Pi-advertised 2/5 mm approach steps, faster 1 mm
+approach, visible teaching bounds and completion-based idle polling. Fine
+steps remain slow; moves are individually acknowledged and verified.
+
 ## Focus camera preview scaling (2026-09-12)
 
 Fixed Position probe rejecting a valid 1280x720 monitor preview from the calibrated

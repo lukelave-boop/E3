@@ -193,8 +193,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         teach = QtWidgets.QGroupBox("2 · Teach once with the 7 mm gauge")
         teach_layout = QtWidgets.QGridLayout(teach)
         hint = QtWidgets.QLabel(
-            "After measuring, lower Z in small steps until the 7 mm gauge fits between the "
-            "laser reference face and this same surface. Save that position, then remove the gauge."
+            "Approach with 1, 2 or 5 mm steps only while there is room for the whole step. "
+            "Switch to 0.1 mm near the 7 mm gauge fit. Remove the gauge before each move; "
+            "fit it between the laser reference face and this same surface."
         )
         hint.setWordWrap(True)
         teach_layout.addWidget(hint, 0, 0, 1, 4)
@@ -213,6 +214,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         teach_layout.addWidget(self.gauge, 2, 0, 1, 4)
         self.forget = QtWidgets.QPushButton("Forget taught offset")
         teach_layout.addWidget(self.forget, 3, 3)
+        self.teaching_limits = QtWidgets.QLabel()
+        self.teaching_limits.setWordWrap(True)
+        teach_layout.addWidget(self.teaching_limits, 4, 0, 1, 4)
         layout.addWidget(teach)
 
         focus = QtWidgets.QGroupBox("3 · Preview and position")
@@ -462,6 +466,16 @@ class LaserFocusPanel(QtWidgets.QWidget):
             f"Surface elevation: {surface['elevation_mm']:+.3f} mm above border"
             if surface else "Surface elevation: not measured"
         )
+        # Only offer larger steps after the Pi explicitly advertises support.
+        steps = (0.1, 0.5, 1.0, 2.0, 5.0) if result.get("max_teaching_step_mm") == 5 else (0.1, 0.5, 1.0)
+        if tuple(self.z_step.itemData(i) for i in range(self.z_step.count())) != steps:
+            selected = self.z_step.currentData()
+            blocker = QtCore.QSignalBlocker(self.z_step)
+            self.z_step.clear()
+            for step in steps:
+                self.z_step.addItem(f"{step:g} mm", step)
+            self.z_step.setCurrentIndex(steps.index(selected) if selected in steps else 0)
+            del blocker
         calibration = result.get("calibration")
         self.calibration.setText(
             f"Taught laser offset: {calibration['focus_offset_mm']:+.3f} mm"
@@ -575,7 +589,16 @@ class LaserFocusPanel(QtWidgets.QWidget):
         measured = self._result.get("surface") or {}
         geometry = self._result.get("firmware_geometry") or {}
         contact, probe_z = _number(measured.get("contact_z_mm")), _number(geometry.get("probe_z_mm"))
-        floor = max(0.0, contact - probe_z) if contact is not None and probe_z is not None else None
+        # Older companions keep their original restriction until updated.
+        travel_min = self._result.get("focus_travel_min_z_mm")
+        floor = (0.0 if type(travel_min) in {int, float} and travel_min == 0 else
+                 max(0.0, contact - probe_z) if contact is not None and probe_z is not None else None)
+        self.teaching_limits.setText(
+            f"Teaching Z range: {floor:g} to {maximum:g} mm. Z is the controller position, not the laser gap."
+            + (" Select a smaller step to descend further." if z is not None and z > floor and z-step < floor else
+               " Z travel minimum reached." if z is not None and z <= floor else "")
+            if floor is not None and maximum is not None else "Teaching Z range: waiting for controller readback."
+        )
         self.down.setEnabled(bool(teach_ready and z is not None and floor is not None and z - step >= floor))
         self.up.setEnabled(bool(teach_ready and z is not None and maximum is not None and z + step <= maximum))
         self.teach.setEnabled(bool(teach_ready and self.gauge.isChecked()
@@ -879,6 +902,10 @@ class LaserFocusCoordinator(QtCore.QObject):
                 self.panel.set_failure(f"Focus unavailable: {message}")
 
         def finished() -> None:
+            # A completed operation already includes fresh Z readback. Wait a
+            # full idle interval from completion, not request start, so a long
+            # jog cannot immediately trigger another read ahead of the operator.
+            self._last_request = time.monotonic()
             self._pending = False
             self._mutation = False
             self.panel._pending = False

@@ -1,5 +1,13 @@
 # Roadmap
 
+## Gauge teaching travel qualification
+
+Corrected the probe-contact lower-bound assumption and added bounded coarse/fine
+teaching steps with responsive idle polling. Focused simulated-controller and
+Windows widget tests cover negative taught offsets and travel-limit rejection.
+Operator gauge fit, resulting focus accuracy and observed response time remain
+physical qualification steps; raised-surface camera correction is separate.
+
 ## Reduced-preview probe positioning
 
 Implemented calibrated click mapping for the Pi's full-frame monitor resize.

@@ -45,7 +45,7 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
     if gap_mm not in (3, 5, 7):
         raise SafetyError("Select a 3, 5 or 7 mm focus gap")
     if action == "jog":
-        if finite_number(value, "Focus jog", -1, 1) == 0:
+        if finite_number(value, "Focus jog", -5, 5) == 0:
             raise SafetyError("Focus jog must be nonzero")
     elif action == "set_xy_offset":
         validate_xy_offset(value)
@@ -234,10 +234,12 @@ class LaserFocus:
             if motion:
                 motion_started = True
                 on_motion_start()
+            started = time.monotonic()
             lines = owner._execute_acknowledged(command, allow_open=False, timeout=90 if command.startswith("G28") else 35,
                                                write_guard=guard, on_failure=on_failure if motion_started else None,
                                                interrupt_on_failure=motion_started)
-            transcript.append({"command": command, "responses": list(lines)})
+            transcript.append({"command": command, "responses": list(lines),
+                               "duration_seconds": round(time.monotonic() - started, 6)})
             with guard():
                 if self.session != session or owner.generation != session[0]:
                     raise MachineError("Focus session changed")
@@ -404,16 +406,20 @@ class LaserFocus:
             known()
             laser_aligned()
             contact = measured()
-            floor = max(0.0, contact - geometry["probe_z_mm"])
+            # Probe contact is a datum, not the laser-face collision plane.
+            # Teaching may legitimately yield a negative mounting offset.
+            floor = 0.0
             if action == "jog":
                 self.preview = None
                 target = current + value
                 if target < floor:
-                    raise SafetyError("Focus jog would cross the contacted carriage plane")
-                move_to(target, 60)
+                    raise SafetyError("Focus jog would cross the Z travel minimum")
+                # Fine fitting remains slow; approach steps use the already
+                # established clearance/focus travel feed. No move is repeated.
+                move_to(target, 300 if abs(value) >= 1 else 60)
             elif action == "teach":
                 if current < floor:
-                    raise SafetyError("Taught position is below the contacted carriage plane")
+                    raise SafetyError("Taught position is below the Z travel minimum")
                 self.preview = None
                 self.persist({"id": str(uuid.uuid4()), "focus_offset_mm": current - contact,
                               "gauge_mm": 7, "taught_z_mm": current, "taught_contact_z_mm": contact,
@@ -435,7 +441,7 @@ class LaserFocus:
             if not compatible or preview is None or preview_id != preview["id"] or self.surface is None or preview["measurement_id"] != self.surface["id"] or preview["calibration_id"] != self.calibration["id"] or preview["gap_mm"] != gap_mm or preview["clearance_z_mm"] != clearance or abs(preview["current_z_mm"] - current) > .05:
                 raise SafetyError("Focus preview is stale; preview the current surface again")
             self.preview = None
-            floor = max(0.0, self.surface["contact_z_mm"] - geometry["probe_z_mm"])
+            floor = 0.0
             finite_number(preview["target_z_mm"], "Focus target", floor, maximum)
             move_to(preview["target_z_mm"])
         elif action == "clearance":
@@ -465,6 +471,8 @@ class LaserFocus:
                               "firmware_geometry": geometry, "transcript": transcript,
                               "requires_clearance": self.requires_clearance,
                               "return_clearance_mm": self.selected_clearance,
+                              "max_teaching_step_mm": 5,
+                              "focus_travel_min_z_mm": 0.0,
                               "xy_offset_available": True,
                               "position_probe_available": True,
                               "laser_spot_offset_mm": spot_offset,

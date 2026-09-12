@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Gauge teaching controls
+
+Surface / laser focus offers fine 0.1/0.5 mm steps and 1/2/5 mm approach steps
+with matching Pi support. Its displayed Z travel range is independent of the
+probe's contact coordinate; the taught laser offset may be negative. Use small
+steps near the gauge fit. See [laser focus](docs/LASER_FOCUS.md).
+
 ## Focus camera preview sizes
 
 Position probe supports the Pi's reduced full-frame live preview. Clicks are

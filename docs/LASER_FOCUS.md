@@ -1,5 +1,23 @@
 # Surface height and gauge-taught laser focus
 
+## Teaching approach and travel limits
+
+Use 1, 2 or 5 mm steps for approach only while the complete step has physical
+clearance. Switch to 0.1 mm near the gauge fit and remove the gauge before each
+adjustment. Steps of at least 1 mm use 300 mm/min; 0.1/0.5 mm use 60 mm/min.
+The matching Pi companion is required for 2/5 mm steps and the corrected range.
+Each click is a separate move with completion and Z readback before the next;
+holding or repeated clicking does not queue a run of moves. Idle polling waits
+from the latest completed readback so it does not immediately take another turn.
+
+The displayed Z is the controller coordinate, not the gap under the laser.
+Probe contact does not establish the laser-face collision plane: a valid gauge
+setting can be below the probe-contact coordinate and give a negative taught
+offset. Teaching and calculated focus retain Z0 as their minimum and the active
+configured maximum. No move below zero is permitted. If the gauge cannot fit
+within that travel interval, the mounting/reference setup needs examination.
+The operator still checks the actual laser, probe housing and workpiece path.
+
 ## Ender readiness and reconnect
 
 Successful XY Home / park does not establish the Ender's Z connection. The

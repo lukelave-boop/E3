@@ -1,5 +1,17 @@
 # Architecture
 
+## Focus teaching travel
+
+The raw probe-contact coordinate is a measurement datum, not the laser face.
+LaserFocus uses absolute Z0 and the configured maximum for teaching, target
+preview and movement; its saved mounting offset may be negative. The UI retains
+legacy limits until the companion explicitly returns focus_travel_min_z_mm=0.
+The companion advertises max_teaching_step_mm=5; unsupported nodes retain fine
+steps through 1 mm. Every jog retains fresh identity, reference, pin, position,
+XY/session and completion checks. Fine steps use F60 and approach steps F300.
+The coordinator restarts its idle-poll interval at operation completion rather
+than request start, without delaying an operator click or queuing repeated jogs.
+
 ## Focus preview and camera coordinate spaces
 
 FocusBedView converts label coordinates into transmitted-image coordinates,
