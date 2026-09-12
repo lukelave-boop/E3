@@ -1,5 +1,28 @@
 # Current repository state
 
+## Verified live focus feature handoff (2026-09-11)
+
+E3 DEV TEST selects Live focus view and probe alignment, version 0.7.67,
+exact code revision 9bc42b1a305bd54d4ba2a8f6311070843d9634d5, from
+`.codex-worktrees/focus-live-offset-dev/dist/E3/E3.exe`. The required Windows
+build script and native-library guard passed. All 157 unique packaged E3
+source modules matched the isolated checkout; the EXE and adjacent build-info
+match the permanent pointer. The normal launcher was not changed.
+
+Fast Development CI 34660818669 passed on that exact code revision: Windows
+Python 3.12 full suite 5,125 passed/25 skipped; POSIX transport/session recovery
+493 passed; Ruff, dependency and compile checks passed. CI:
+https://github.com/lukelave-boop/E3/actions/runs/34660818669
+
+The handoff is `dist/focus-live-0.7.67/START_HERE.md`; artifact hashes and build
+metadata are in adjacent `verification.json`. The Pi companion is
+`e3-pi-laser-focus-7602e2df`, installed after a43df3a1; mainboard firmware stays
+9518b83f. Offscreen widget/render tests were performed, not interactive frozen
+GUI, live camera or hardware alignment tests. The first operator XY check uses
+saved X+3.302/Y+38.608 at selected clearance before probing. Active max40 stays.
+Physical gauge calibration, transfer acceptance and job integration remain
+active work on this branch.
+
 ## Active: live focus view and measured XY transfer (2026-09-11)
 
 The focus window now includes an observational live camera pane,
