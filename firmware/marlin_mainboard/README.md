@@ -14,6 +14,38 @@ It implements real outputs, unlike the earlier BENCH application.
 | Readback | M115 capabilities, M119 inputs/trust, M114 position, M123 independent commanded fan PWM and Z trust |
 | Emergency parser | Enabled; software stopping is not safety-rated |
 
+## Retained Z after a clean shutdown
+
+`Cap:E3_Z_RESTORE_V1:1` permits the typed host to adopt a saved native Z with
+`M124 Z<decimal>`. The firmware accepts one finite decimal between 0 and 80 mm;
+the host further restricts adoption to its saved clearance and configured maximum.
+Success reports `E3ZR:1 Z:<millimetres to three decimals>` before normal `ok`.
+Invalid syntax or state reports `Error:E3ZR:1 ARGUMENTS` or `PRECONDITION`.
+There is no G92 fallback, movement, probing, EEPROM write or output change.
+
+Adoption requires running firmware, zero Z workspace offset, absolute
+millimetres, leveling off, a logically stowed
+probe, no material cycle, FAN2 off, an empty planner without stop cleanup, and
+no pending commands beyond M124 itself or injected commands. Pending emergency
+STOP flags reject. FAN1 CPU cooling is independent and may remain on. A fresh
+unhomed/untrusted native Z0 accepts one assignment to the planner/stepper counters
+and only Z's homed/trusted flags. For a still-powered reconnect, both Z flags
+must already be set and native, logical and executed-step Z must match the
+requested value to three decimal places. That branch only acknowledges the
+unchanged counters and flags, including virtual XY flags established by native
+safe homing; a mismatch or a single remaining Z flag rejects.
+Driver enable and idle-timeout control remain the host's separate typed responsibility.
+
+Only a matching, consumed clean-shutdown record from E3 can justify the request.
+Reset Z0 alone is not physical position evidence. Firmware cannot detect manual
+axis movement or unpowered drift; the operator must discard retained knowledge
+and reference again after either. The production M124 Cortex-M4 harness verifies
+acceptance, strict rejection and unchanged XY/output state with fake I/O. It runs
+alongside the existing mainboard probe harness. Retained-Z behavior is implemented
+but has not been physically verified.
+
+## Existing mainboard behavior
+
 The native material cycle, offset/headroom checks, contact failures and host
 session safeguards are inherited from `../marlin_material/`. G39 does not move
 XY or change the border datum. The +10.5 mm upper contact corresponds to a

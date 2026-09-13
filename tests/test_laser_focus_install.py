@@ -1,12 +1,17 @@
 """The focus companion preserves operator files and applies only a known baseline."""
 import hashlib
 import importlib.util
+import io
 import json
+import shutil
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from scripts.package_laser_focus import PREVIOUS, package
+from scripts.package_laser_focus import PREVIOUS, PREVIOUS_REVISION, ROOT, package
 
 
 @pytest.fixture
@@ -34,7 +39,8 @@ def test_upgrade_preserves_configuration_and_cooling_and_is_idempotent(kit):
     installer, project, bundle = kit
     config = project / "config"
     config.mkdir()
-    for name in ("pi-hardware.json", "pi-hardware.json.z-limits.json"):
+    for name in ("pi-hardware.json", "pi-hardware.json.z-limits.json",
+                 "pi-hardware.json.laser-focus.json", "pi-hardware.json.laser-focus.json.z-retention.json"):
         (config / name).write_bytes(b"operator settings\n")
     cooler = project / "laser_aligner/machine/cpu_cooling.py"
     cooler.write_bytes(b"existing temperature control\n")
@@ -50,6 +56,72 @@ def test_upgrade_preserves_configuration_and_cooling_and_is_idempotent(kit):
             assert content.count(b"\r\n") == content.count(b"\n")
     again = installer.install(project, bundle=bundle, apply=True)
     assert all(e["status"] == "already_current" for e in again["files"])
+
+
+def test_companion_includes_complete_retention_lifecycle_and_new_module_is_absent_only(kit):
+    installer, project, bundle = kit
+    manifest = json.loads((bundle / "manifest.json").read_bytes())
+    entries = {entry["path"]: entry for entry in manifest["files"]}
+    required = {"laser_aligner/machine/z_retention.py", "laser_aligner/machine/job_focus.py",
+                "laser_aligner/machine/service.py", "laser_aligner/machine/pi_job_service.py",
+                "laser_aligner/machine/secondary_controller.py", "laser_aligner/remote_node.py"}
+    assert required <= entries.keys()
+    assert manifest["predecessor_revision"] == PREVIOUS_REVISION
+    assert entries["laser_aligner/machine/z_retention.py"]["previous_sha256_lf"] is None
+    assert not (project / "laser_aligner/machine/z_retention.py").exists()
+    result = installer.install(project, bundle=bundle, apply=True)
+    added = next(entry for entry in result["files"] if entry["path"].endswith("z_retention.py"))
+    assert added["status"] == "updated" and "backup" not in added
+    assert (project / "laser_aligner/machine/z_retention.py").read_bytes() == (
+        bundle / "laser_aligner/machine/z_retention.py").read_bytes()
+
+
+def test_unknown_existing_retention_module_rejects_before_any_update(kit):
+    installer, project, bundle = kit
+    original = (project / "laser_aligner/machine/service.py").read_bytes()
+    target = project / "laser_aligner/machine/z_retention.py"
+    target.write_bytes(b"# operator's existing implementation\n")
+    with pytest.raises(ValueError, match="unknown local changes"):
+        installer.install(project, bundle=bundle, apply=True)
+    assert target.read_bytes() == b"# operator's existing implementation\n"
+    assert (project / "laser_aligner/machine/service.py").read_bytes() == original
+    assert not list(project.rglob("*.e3-backup-*"))
+
+
+def test_package_applies_to_exact_main_predecessor_and_imports_without_hardware(tmp_path, monkeypatch):
+    if shutil.which("git") is None or subprocess.run(
+        ["git", "cat-file", "-e", PREVIOUS_REVISION], cwd=ROOT, capture_output=True,
+    ).returncode:
+        pytest.skip("The pinned main revision is required for the real predecessor fixture")
+    source = subprocess.check_output(["git", "archive", "--format=zip", PREVIOUS_REVISION, "laser_aligner"], cwd=ROOT)
+    project = (tmp_path / "pinned-main").resolve()
+    project.mkdir()
+    with zipfile.ZipFile(io.BytesIO(source)) as archive:
+        assert all((project / item.filename).resolve().is_relative_to(project) for item in archive.infolist())
+        archive.extractall(project)
+    for name, digest in PREVIOUS.items():
+        path = project / name
+        if digest is None:
+            assert not path.exists()
+        else:
+            assert hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == digest
+    configuration = project / "config"
+    configuration.mkdir()
+    for name in ("pi-hardware.json", "pi-hardware.json.laser-focus.json", "pi-hardware.json.z-limits.json"):
+        (configuration / name).write_bytes(b"operator data must remain byte-identical\n")
+    bundle = package(tmp_path / "dist")
+    spec = importlib.util.spec_from_file_location("pinned_focus_installer", bundle / "install_laser_focus.py")
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    monkeypatch.setattr(installer, "inactive", lambda: None)  # Isolated fixture; no real service.
+    result = installer.install(project, bundle=bundle, apply=True)
+    assert len(result["files"]) == len(PREVIOUS) and not result["service_started"]
+    assert all(path.read_bytes() == b"operator data must remain byte-identical\n" for path in configuration.iterdir())
+    assert all(entry["status"] == "already_current" for entry in installer.install(project, bundle=bundle)["files"])
+    subprocess.run([sys.executable, "-c",
+                    "import laser_aligner.machine.service, laser_aligner.machine.z_retention, "
+                    "laser_aligner.machine.job_focus, laser_aligner.machine.pi_job_service, laser_aligner.remote_node"],
+                   cwd=project, check=True, capture_output=True)
 
 
 def test_unknown_local_edit_rejects_before_any_file_is_replaced(kit):

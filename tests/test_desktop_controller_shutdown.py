@@ -184,6 +184,20 @@ def test_remote_detach_budget_never_exceeds_the_global_shutdown_deadline(
     assert machine.detach_deadlines == [pytest.approx(100.02)]
 
 
+def test_local_shutdown_uses_clean_exit_before_any_explicit_stop(monkeypatch):
+    monkeypatch.setattr(controller_module.time, "monotonic", lambda: 100.0)
+    machine = _Machine(pi_owned_execution=False)
+    deadlines = []
+    machine.shutdown = lambda *, deadline: deadlines.append(deadline)
+    controller = _controller(machine)
+
+    DesktopController.begin_shutdown(controller, deadline=103.0)
+    DesktopController.begin_shutdown(controller, deadline=102.0)
+
+    assert deadlines == [103.0]
+    assert machine.stop_calls == []
+
+
 def test_shutdown_deadline_never_extends_and_worker_drain_is_finite(
     qt_application: QtWidgets.QApplication,
     monkeypatch: pytest.MonkeyPatch,

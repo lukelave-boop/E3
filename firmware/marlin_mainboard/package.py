@@ -34,8 +34,9 @@ def assemble(updater: bytes, image: bytes) -> bytes:
     if stack != 0x20010000 or not reset & 1 or not 0x08010000 <= reset & ~1 < 0x08020000:
         raise ValueError("Invalid retained-updater entry vectors")
     payload = validate_image(image)
-    if b"Cap:E3_MAINBOARD_V1:1\n\0" not in payload or b"Cap:E3_MATERIAL_HEIGHT_V1:1\n\0" not in payload:
-        raise ValueError("The application is missing the required mainboard / material capability")
+    capabilities = (b"Cap:E3_MAINBOARD_V1:1", b"Cap:E3_MATERIAL_HEIGHT_V1:1", b"Cap:E3_Z_RESTORE_V1:1")
+    if any(capability + b"\n\0" not in payload for capability in capabilities):
+        raise ValueError("The application is missing a required mainboard / material / restore capability")
     combined = updater + image
     if len(combined) > 0x70000 or combined[0x10200:] != payload:
         raise ValueError("SD image exceeds the application region or has an incorrect layout")
@@ -109,6 +110,8 @@ def main() -> None:
             for path in sorted((HERE.parent / project).rglob("*")):
                 if path.is_file() and "__pycache__" not in path.parts:
                     archive.write(path, "E3/firmware/" + path.relative_to(HERE.parent).as_posix())
+        for filename in ("marlin_material_harness.cpp", "marlin_z_restore_harness.cpp"):
+            archive.write(ROOT / "tests" / filename, "E3/tests/" + filename)
     manifest = {
         "target": "Creality S1 Pro STM32F401RET6 / CR4NS200141C13",
         "status": "ready for operator physical validation", "physical_validation_complete": False,

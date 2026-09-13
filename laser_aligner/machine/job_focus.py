@@ -67,7 +67,8 @@ def selection_snapshot(machine, token):
     measurement_current = plan is not None and (
         (state.reference == plan["reference"] and state.surface is not None
          and state.surface["id"] == plan["measurement_id"])
-        or (plan.get("parked_at_clearance") is True and state.reference is None and state.surface is None)
+        or (plan.get("parked_at_clearance") is True and state.reference in (None, plan["reference"])
+            and state.surface is None)
     )
     if (plan is None or plan["id"] != token or probe is None or machine._session is None
         or plan["session"] != (probe.owner.generation, machine._session.generation, machine._operation_stop_epoch())

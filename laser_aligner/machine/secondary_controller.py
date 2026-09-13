@@ -182,6 +182,10 @@ class CrealityControllerOwner:
                 "valid": bool(usable and age <= LIVE_Z_MAX_AGE_SECONDS and generation == self._generation)}
 
     def _consume_live_z(self, response: str, generation: int) -> bool:
+        # Typed restore acknowledgements are ordinary command responses, not
+        # observational E3Z telemetry. Their caller validates the complete line.
+        if response.startswith("E3ZR:"):
+            return False
         if not response.startswith("E3Z"):
             return False
         match = _LIVE_Z_REPORT.fullmatch(response)

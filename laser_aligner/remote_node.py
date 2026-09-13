@@ -223,10 +223,6 @@ def main(argv: list[str] | None = None) -> int:
     settings.machine.protocol = protocol
     settings.ensure_directories()
     job_store = PiJobStore(settings.app.data_dir / "pi_machine_jobs")
-    _recover_pending_secondary_air_assist(
-        job_store,
-        primary_port=settings.machine.port,
-    )
     secondary_air_assist = _secondary_air_assist_for_settings(
         settings,
         protocol=protocol,
@@ -243,6 +239,12 @@ def main(argv: list[str] | None = None) -> int:
             mainboard_limits_path=mainboard_limits_path(settings.source_path),
             focus_calibration_path=focus_calibration_path(settings.source_path),
         )
+        # MachineService consumes the clean-Z checkpoint before even restart
+        # fan recovery is permitted to open the shared physical controller.
+        _recover_pending_secondary_air_assist(
+            job_store,
+            primary_port=settings.machine.port,
+        )
         job_service = PiJobService(
             machine,
             job_store,
@@ -252,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         workers: list[Thread] = []
         cooling = CpuCoolingWorker(machine) if cpu_cooling_enabled else None
         stop_requested = Event()
+        clean_exit = False
         previous_signal_handlers: dict[int, object] = {}
         try:
             # PiJobStore construction already reconciled persisted active jobs
@@ -302,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
                     if stop_requested.wait(0.5):
                         break
                 if stop_requested.is_set():
+                    clean_exit = True
                     LOGGER.info("Stopping E3 hardware node")
                     return 0
                 failed = next(
@@ -310,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 raise RuntimeError(f"{failed} stopped unexpectedly")
             except KeyboardInterrupt:
+                clean_exit = True
                 LOGGER.info("Stopping E3 hardware node")
         finally:
             if cooling is not None and cooling.thread.ident is not None:
@@ -321,7 +326,10 @@ def main(argv: list[str] | None = None) -> int:
                         machine_server.stop()
                 finally:
                     try:
-                        job_service.shutdown(stop_machine=True)
+                        if clean_exit:
+                            job_service.shutdown(stop_machine=True)
+                        else:
+                            job_service.shutdown(stop_machine=True, clean_exit=False)
                     finally:
                         if camera_server is not None:
                             camera_server.stop()

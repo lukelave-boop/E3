@@ -1,5 +1,49 @@
 # Current repository state
 
+## Clean-shutdown Z retention candidate (2026-09-12)
+
+Implemented a Pi-owned, one-use checkpoint for an idle, disarmed, referenced
+Ender at or above its selected clearance. Normal controller disconnect or
+graceful Pi shutdown verifies fresh primary laser-off/idle and secondary
+firmware, known Z, stow, bounds and stable position before saving. It never
+lifts or probes during shutdown. Active jobs, STOP, failures, uncertain state,
+changed configuration and lowered/recovery state cannot create a checkpoint.
+Desktop detach from an accepted Pi job retains its existing behavior.
+
+The saved inode is durably invalidated before controller admission, and a
+process claim spans restore verification. Crashes cannot reuse a consumed
+record; stale processes cannot reclaim and publish an older snapshot. Firmware
+capability E3_Z_RESTORE_V1 / M124 adopts only reset/unhomed Z or verifies an
+already-known identical native coordinate under the same strict guards. The
+host restores motor hold with M84 S0 / M17 Z and checks final readbacks. There
+is no axis travel, G92 fallback, laser output or automatic job restart.
+
+The accepted border datum survives fresh primary XY Home. Workpiece surfaces,
+previews and job selections remain ephemeral. The new Forget saved Z action
+discards datum authority without deleting gauge calibration or issuing hardware
+commands. Physical manual movement, unpowered drift and changed mounting or
+border setup cannot be detected; the operator must forget and reference again.
+Exact firmware-bound teaching remains unchanged and may need one explicit new
+teaching after the firmware update. See docs/Z_RETENTION.md.
+
+Final focused Windows acceptance: 339 focus/job/storage/remote-Z/installer tests
+passed. Broader controller/remote/Pi checks passed 542 tests; shutdown/remote
+checks passed 200; final Home/binding/connection-cleanup audits passed 203.
+Offscreen focus UI checks passed 141. The full local four-worker run completed
+5,895 passing tests and 29 platform skips; its three regressions identified
+over-invalidation after a rejected focus bound or a Z-limit edit. Both retained
+known-coordinate paths were corrected and all three now pass in the 339-test
+run. Repository Ruff and compileall pass. Production Cortex-M4 restore
+acceptance/rejection and all five probe harnesses pass, including known XYZ
+flags from native safe homing. Compact build and compiled output/recovery/
+profile/planner audits pass (6,812 bytes RAM, 86,008 bytes flash). Eight installer
+tests verify exact-main predecessor hashes, absent-only new files and byte-
+preserved configuration/calibration. Exact candidate Windows CI/build evidence
+is pending below. Local Python is 3.14.4; CI covers supported 3.10/3.12.
+No retained-Z firmware, Pi companion or Windows build has been installed or
+physically tested. Existing installed configuration and gauge teaching were
+not accessed or changed. Pre-existing console/startup/F103 edits are preserved.
+
 ## Operator-confirmed focus workflow and branch integration (2026-09-12)
 
 The operator reports that the installed build completed all requested behavior:

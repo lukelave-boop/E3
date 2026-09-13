@@ -1777,7 +1777,14 @@ class RemoteMachineService:
         if not xy_recovery_supported:
             result["xy_recovery_available"] = False
         readback = result.get("current_readback")
-        if result.get("available") is False and recovery_supported and action in {"status", "recover"}:
+        if action == "forget_z":
+            if (result.get("action") != action or result.get("available") is not False
+                or result.get("reference_ready") is not False
+                or type(readback) is not dict or readback.get("fresh") is not False
+                or readback.get("z_known") is not False or readback.get("z_mm") is not None
+                or any(result.get(key) is not None for key in ("reference", "surface", "preview", "xy_sequence"))):
+                raise PiJobProtocolError("The Pi did not confirm that Z was forgotten")
+        elif result.get("available") is False and recovery_supported and action in {"status", "recover"}:
             ender = result.get("ender")
             if (result.get("action") != action or result.get("reference_ready") is not False
                 or type(readback) is not dict or readback.get("fresh") is not False

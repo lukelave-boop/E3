@@ -11,7 +11,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +70,7 @@ from .transport import MachineTransport
 from .transport_factory import create_machine_transport
 from .z_limits import MainboardZLimits, validate_max_z
 from .z_probe import CrealityZProbe, finite_number, native_homing_endpoint, parse_position
+from .z_retention import ZRetention, capture_z, restore_z, z_retention_path
 
 LOGGER = logging.getLogger(__name__)
 # Withdrawn after an operator observed descent with the CR Touch pin retracted.
@@ -841,6 +842,16 @@ class MachineService:
         self._job_laser_authorized = False
         self._last_successful_job: dict[str, Any] | None = None
         self._log: deque[str] = deque(maxlen=200)
+        self._z_retention_configured = secondary_air_assist is not None and focus_calibration_path is not None
+        self._z_retention_binding = self._retained_z_binding()
+        retention_path = z_retention_path(focus_calibration_path) if self._z_retention_configured else None
+        self._z_retention = ZRetention(retention_path, self._z_retention_binding)
+        # Consume a clean checkpoint before the Pi startup path can open either
+        # controller. Failure to publish dirty state must prevent connection.
+        self._pending_retained_z = self._z_retention.take()
+        self._z_retention_restored = False
+        self._clean_z_disconnected = False
+        self._z_retention_reason = "No clean Z checkpoint is available"
         try:
             configured_air = resolve_air_assist_commands(
                 self.settings.air_assist,
@@ -853,6 +864,135 @@ class MachineService:
             and configured_air.target is AirAssistTarget.PRIMARY
         ):
             self._air_assist_off_commands = configured_air.off_commands
+
+    def _retained_z_binding(self) -> dict[str, Any]:
+        """Bind retained physical coordinates to this exact configured rig."""
+        if not self._z_retention_configured:
+            return {}
+        binding = {
+            "primary": [self.settings.backend, self.settings.protocol,
+                        self.settings.port, self.settings.baudrate],
+            "secondary": [self.settings.air_assist.port, self.settings.air_assist.baudrate],
+            "maximum": self.settings.mainboard_max_z_mm,
+            "work_area": asdict(self.settings.work_area),
+            "photo": [self.settings.photo_x, self.settings.photo_y, self.settings.photo_z],
+            "spot_offset": [self.laser_settings.spot_offset_x_mm, self.laser_settings.spot_offset_y_mm],
+            "guarded_output_polygon_mm": self.laser_settings.guarded_output_polygon_mm,
+        }
+        return json.loads(json.dumps(binding, allow_nan=False))
+
+    def _invalidate_retained_z(self, reason: str, *, require_reference: bool = True) -> None:
+        """Revoke memory authority without waiting for disk or serial locks."""
+        self._z_retention.invalidate()
+        self._clean_z_disconnected = False
+        self._pending_retained_z = None
+        self._z_retention_restored = False
+        self._z_retention_reason = reason
+        self._laser_focus.drop_z_reference(require_reference=require_reference)
+
+    def discard_retained_z(self, reason: str = "Reference Z again before using focus", *,
+                           require_reference: bool = True) -> None:
+        self._invalidate_retained_z(reason, require_reference=require_reference)
+        self._z_retention.discard()
+
+    def _retained_z_status(self) -> dict[str, Any]:
+        current = (self._z_probe is not None and
+                   self._laser_focus.retain_z_reference(self._z_probe.owner.generation) is not None)
+        restored = self._z_retention_restored and current
+        reason = ("Restored Z is no longer current; reference the border again"
+                  if self._z_retention_restored and not current else self._z_retention_reason)
+        return {**self._z_retention.status(), "restored": restored, "reason": reason}
+
+    def _restore_retained_z_after_connect(self, session: ControllerSession, epoch: int) -> None:
+        snapshot, self._pending_retained_z = self._pending_retained_z, None
+        if snapshot is None:
+            return
+        owner = None if self._z_probe is None else self._z_probe.owner
+        deadline = time.monotonic() + 8.0
+        generation = None if owner is None else owner.generation
+
+        @contextmanager
+        def guard():
+            with self._secondary_write_gate, self._stop_epoch_lock:
+                if (self._stop_epoch != epoch or self._shutdown_requested
+                    or not self._same_controller_session(self._session, session)
+                    or owner is None or owner.generation != generation
+                    or self._retained_z_binding() != self._z_retention_binding
+                    or time.monotonic() >= deadline):
+                    raise MachineError("Retained Z restore was cancelled or its machine binding changed")
+                yield
+
+        try:
+            if (session.dialect is not GRBL_DIALECT or owner is None or not owner.ready
+                or self.hardware_enabled is not True or self.settings.allow_motion is not True):
+                raise MachineError("Retained Z needs the initialized separate Ender controller")
+            with self._z_retention.claim_guard():
+                with owner._lock:
+                    restore_z(owner, self._laser_focus, snapshot, self.settings.mainboard_max_z_mm, guard)
+                with guard():
+                    self._z_retention_restored = True
+                    self._z_retention_reason = "Z reference restored after a clean exit; XY Home is still required"
+        except Exception as exc:
+            self.discard_retained_z(f"Retained Z was not restored: {exc}")
+            self._append_log("INFO", self._z_retention_reason)
+
+    def _capture_retained_z_for_disconnect(self, deadline: float) -> tuple[dict, int, int] | None:
+        """Read an idle checkpoint while the caller exclusively owns commands."""
+        owner = None if self._z_probe is None else self._z_probe.owner
+        if owner is None or not owner._lock.acquire(blocking=False):
+            return None
+        try:
+            return self._capture_retained_z_locked(deadline)
+        finally:
+            owner._lock.release()
+
+    def _capture_retained_z_locked(self, deadline: float) -> tuple[dict, int, int] | None:
+        owner = self._z_probe.owner
+        with self._lock:
+            session = self._session
+            if (self._z_retention.path is None or owner is None or not owner.ready
+                or session is None or session.dialect is not GRBL_DIALECT
+                or session.configured_endpoint != self.settings.port
+                or session.baudrate != self.settings.baudrate
+                or session.dialect.id != self.settings.protocol
+                or self._controller_state is not ControllerState.READY_MOTION
+                or self._job.running or self.armed or self._z_probe_active or self._focus_operation_active
+                or self._laser_focus.requires_clearance or self._laser_focus.xy_recovery_pending_reference
+                or self._recovery_stop_epoch is not None
+                or self._retained_z_binding() != self._z_retention_binding
+                or self._laser_focus.retain_z_reference(owner.generation) is None):
+                return None
+        epoch = self.operation_generation()
+        generation = owner.generation
+
+        @contextmanager
+        def guard():
+            with self._secondary_write_gate, self._stop_epoch_lock:
+                if (self._stop_epoch != epoch or not self._same_controller_session(self._session, session)
+                    or owner.generation != generation or self._job.running or self.armed
+                    or time.monotonic() >= deadline):
+                    raise MachineError("Clean Z checkpoint was cancelled or exceeded the shutdown deadline")
+                yield
+
+        try:
+            self.send_command("M5", timeout=max(.001, min(.5, deadline - time.monotonic())),
+                              _expected_stop_epoch=epoch, _write_guard=guard)
+            self.send_command(session.dialect.motion_barrier_command,
+                              timeout=max(.001, min(.5, deadline - time.monotonic())),
+                              _internal_motion=True, _expected_stop_epoch=epoch, _write_guard=guard)
+            if self.sample_realtime_position(_write_guard=guard)["state"].lower() != "idle":
+                raise MachineError("Primary controller did not confirm idle for clean Z retention")
+            with owner._lock:
+                owner._all_fans_off(allow_open=False, write_guard=guard, timeout=.5,
+                                   interrupt_on_failure=False)
+                snapshot = capture_z(owner, self._laser_focus, self.settings.mainboard_max_z_mm, guard)
+            with guard():
+                pass
+            return snapshot, generation, epoch
+        except Exception as exc:
+            self.discard_retained_z(f"Clean Z checkpoint was not saved: {exc}")
+            self._append_log("INFO", self._z_retention_reason)
+            return None
 
     def _set_controller_state_locked(
         self,
@@ -1162,6 +1302,7 @@ class MachineService:
                 return
             if not self._same_controller_session(self._session, session):
                 return
+            self._invalidate_retained_z("Controller communication failed; reference Z again")
             session.diagnostics.record_failure(
                 reason,
                 code=failure_code,
@@ -1213,6 +1354,10 @@ class MachineService:
         self._start_bounded_stop_cleanup(
             session, context="uncertain-session quarantine", deadline=deadline,
         )
+        try:
+            self._z_retention.discard()
+        except Exception as exc:
+            self._append_log("ERROR", f"Could not invalidate saved Z after controller failure: {exc}")
         if recover and callable(getattr(session.transport, "synchronize_input", None)):
             self._schedule_controller_recovery(recovery_epoch, session=session)
 
@@ -1373,6 +1518,25 @@ class MachineService:
             active_baudrate = self.settings.baudrate if baudrate is None else baudrate
             if type(active_baudrate) is not int or active_baudrate <= 0:
                 raise MachineError("Controller baud rate must be a positive integer")
+            # A clean file must never coexist with a newly admitted controller
+            # session. A failed dirty write rejects connection before opening.
+            if self._pending_retained_z is None:
+                saved = self._z_retention.take()
+            else:
+                self._z_retention.assert_claim()
+                saved = None
+            self._clean_z_disconnected = False
+            if saved is not None:
+                self._pending_retained_z = saved
+            if (recovery or self._retained_z_binding() != self._z_retention_binding
+                or active_port != self.settings.port or selected != self.settings.protocol
+                or active_baudrate != self.settings.baudrate):
+                self.discard_retained_z("Changed connection or recovery requires a fresh Z reference")
+            # A new primary session may inherit Z only from the consumed clean
+            # checkpoint. Drop any unrelated in-memory datum before opening;
+            # successful restoration below establishes its verified successor.
+            self._laser_focus.drop_z_reference(require_reference=False)
+            self._z_retention_restored = False
             return self._connect_locked(
                 active_port=active_port,
                 selected_protocol=selected,
@@ -1563,6 +1727,7 @@ class MachineService:
                         session=candidate,
                     )
                 self._resolved_air_assist_commands()
+                self._restore_retained_z_after_connect(candidate, expected_stop_epoch)
                 self._append_log(
                     "INFO",
                     f"connected session {candidate.generation} using {dialect.id}",
@@ -1578,6 +1743,9 @@ class MachineService:
                 return self.status()
             except BaseException as exc:
                 last_error = exc
+                # Admission already dirtied the file. Do not place another
+                # fallible disk flush in front of candidate M5/close cleanup.
+                self._invalidate_retained_z("Controller connection failed; reference Z again")
                 candidate.diagnostics.record_failure(
                     exc,
                     code=_connect_failure_code(exc),
@@ -2116,31 +2284,86 @@ class MachineService:
                 if self._recovery_thread is threading.current_thread():
                     self._recovery_thread = None
 
-    def disconnect(self) -> None:
-        # request_stop owns the exact-session M5, close, cancellation, and
-        # candidate quarantine. Explicit disconnect suppresses recovery.
-        self.stop_job(emergency=False, _recover=False)
-        with self._command_lock, self._lock:
-            self._best_effort_secondary_off(context="disconnect cleanup", allow_reopen=False,
-                                            interrupt_on_failure=False)
-            # Once the transport is closed there is no same-session controller
-            # path left on which retaining a failed job's immutable OFF mapping
-            # could provide another retry.
-            self._active_job_air_assist_off_commands = ()
-            self._active_job_air_assist_commands = None
-            self._session = None
-            self._candidate_session = None
-            self._candidate_connect_deadline = None
-            self._transport = None
-            self._invalidate_coordinate_reference()
-            self._clear_arm_authorization()
-            self._job_laser_authorized = False
-            self._recovery_stop_epoch = None
-            if not self._shutdown_requested:
-                self._set_controller_state_locked(
-                    ControllerState.DISCONNECTED,
-                    force_terminal=True,
-                )
+    def disconnect(self, *, deadline: float | None = None) -> None:
+        # Capture only an already-idle machine. A busy operation goes directly
+        # through priority STOP; closing the app never waits for it to become
+        # eligible for retention or initiates a clearance move.
+        deadline = time.monotonic() + 2.0 if deadline is None else deadline
+        with self._lock:
+            if self._clean_z_disconnected and self._session is None and not self._job.running:
+                return
+        acquired = self._command_lock.acquire(blocking=False)
+        checkpoint = None
+        try:
+            if acquired:
+                try:
+                    checkpoint = self._capture_retained_z_for_disconnect(deadline)
+                except Exception as exc:
+                    # Persistence/validation failure must never skip ordinary
+                    # disconnect's priority M5/STOP cleanup below.
+                    self._invalidate_retained_z(f"Clean Z checkpoint failed: {exc}")
+                    self._append_log("ERROR", self._z_retention_reason)
+            # request_stop owns exact-session M5, close and cancellation. Its
+            # ordinary invalidation happens before a new clean file is written.
+            self.stop_job(emergency=False, _recover=False)
+            with self._command_lock, self._lock:
+                self._best_effort_secondary_off(context="disconnect cleanup", allow_reopen=False,
+                                                interrupt_on_failure=False)
+                self._active_job_air_assist_off_commands = ()
+                self._active_job_air_assist_commands = None
+                self._session = None
+                self._candidate_session = None
+                self._candidate_connect_deadline = None
+                self._transport = None
+                self._invalidate_coordinate_reference()
+                self._clear_arm_authorization()
+                self._job_laser_authorized = False
+                self._recovery_stop_epoch = None
+                if not self._shutdown_requested:
+                    self._set_controller_state_locked(ControllerState.DISCONNECTED, force_terminal=True)
+            if checkpoint is not None:
+                self._save_disconnected_z(checkpoint, deadline)
+        finally:
+            if acquired:
+                self._command_lock.release()
+
+    def _save_disconnected_z(self, checkpoint: tuple[dict, int, int], deadline: float) -> None:
+        snapshot, generation, captured_epoch = checkpoint
+        owner = self._z_probe.owner
+        cleanup = self._secondary_cleanup_thread
+        if cleanup is not None and cleanup.is_alive():
+            cleanup.join(timeout=max(0., min(.5, deadline - time.monotonic())))
+        revision = self._z_retention.revision()
+
+        @contextmanager
+        def guard():
+            # Disk staging/fsync happens outside this small gate. The store
+            # checks its memory revision before the atomic publish; STOP can
+            # invalidate a staged save without waiting on disk or an ACK.
+            with self._stop_epoch_lock:
+                if (self._stop_epoch != captured_epoch + 1 or self._session is not None
+                    or owner.generation != generation or not owner._trusted
+                    or owner._secondary_fan_enabled is not False
+                    or (cleanup is not None and cleanup.is_alive())
+                    or self._job.running or self._z_probe_active or self._focus_operation_active
+                    or self._active_port != self.settings.port
+                    or self._active_baudrate != self.settings.baudrate
+                    or self._protocol != self.settings.protocol
+                    or self._retained_z_binding() != self._z_retention_binding
+                    or time.monotonic() >= deadline):
+                    raise MachineError("Z checkpoint lost clean-shutdown authority")
+                yield
+
+        try:
+            if not self._z_retention.save(snapshot, expected_revision=revision, guard=guard):
+                raise MachineError("Z checkpoint was invalidated while it was being saved")
+            with guard():
+                self._clean_z_disconnected = True
+                self._z_retention_reason = "Known Z saved after a clean idle exit"
+            self._append_log("INFO", self._z_retention_reason)
+        except Exception as exc:
+            self.discard_retained_z(f"Known Z was not saved: {exc}")
+            self._append_log("INFO", self._z_retention_reason)
 
     def replace_connection(self) -> dict[str, Any]:
         """Explicitly replace an untrusted session under a fresh STOP generation.
@@ -3764,6 +3987,7 @@ class MachineService:
                         focus_park_guard=focus_park_guard,
                     )
             except BaseException as exc:
+                self._invalidate_retained_z("Home / park failed; reference Z again")
                 self._log_home_outcome(
                     session=attempt_session,
                     started=started,
@@ -3797,6 +4021,7 @@ class MachineService:
                     capture_home_position=False,
                 )
             except BaseException as exc:
+                self._invalidate_retained_z("Job-start Home failed; reference Z again")
                 self._log_home_outcome(
                     session=attempt_session,
                     started=started,
@@ -4201,6 +4426,15 @@ class MachineService:
                     clearance=clearance_z_mm, ender=ender,
                     laser_spot_offset=(self.laser_settings.spot_offset_x_mm, self.laser_settings.spot_offset_y_mm))
                 result["xy_recovery_available"] = xy_recovery_available()
+                result["z_retention"] = self._retained_z_status()
+                return result
+
+            if action == "forget_z":
+                self.discard_retained_z("Z forgotten by the operator; reference the border again")
+                # Forgetting coordinates is local state only: neither a status
+                # read nor a controller write is needed to remove authority.
+                result = unavailable()
+                result["action"] = "forget_z"
                 return result
 
             if action == "recover_xy" and not xy_recovery_available():
@@ -4363,7 +4597,7 @@ class MachineService:
             self._focus_operation_active = action != "status"
             try:
                 if action == "recover":
-                    self._laser_focus.invalidate()
+                    self.discard_retained_z("Ender recovery requires a fresh Z reference")
                     probe.invalidate()
                     self._z_probe_result = None
                     probe.owner.recover_off(write_guard=guard, deadline=min(deadline, time.monotonic() + 60))
@@ -4441,11 +4675,20 @@ class MachineService:
                     else:
                         result = execute_focus("status" if action == "recover" else action)
                     result["action"] = action
+                    if action == "reference":
+                        self._z_retention_reason = "Fresh Z reference established; a clean idle exit can save it"
                     result["xy_recovery_available"] = xy_recovery_available()
+                    result["z_retention"] = self._retained_z_status()
                     with guard():
                         return result
             except BaseException as exc:
-                self._laser_focus.invalidate()
+                # A rejected bound/selection before any move loses focus
+                # authority, but does not make the controller's healthy Z
+                # coordinate unknown or prevent its existing clearance return.
+                self._invalidate_retained_z(
+                    "Focus operation failed; reference Z again",
+                    require_reference=motion_started or not isinstance(exc, SafetyError),
+                )
                 if action in {"status", "recover"} and isinstance(exc, MachineError) and not motion_started:
                     # Cancellation is never turned into a successful diagnostic
                     # result. Other failures expose saved settings, not stale Z.
@@ -4476,6 +4719,8 @@ class MachineService:
             raise MachineError("Persistent Z limits are unavailable in this process; update the E3 node")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
+            if moving and self._laser_focus.z_reference_required:
+                raise SafetyError("Reference the border again before moving Z")
             if moving and self._laser_focus.xy_recovery_pending_reference:
                 raise SafetyError("Reference the border after XY recovery before moving Z")
             self._require_safety_configuration()
@@ -4507,7 +4752,8 @@ class MachineService:
             if action in {"z", "z_jog", "fan1", "fan2"}:
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
             if moving:
-                self._laser_focus.invalidate()
+                self.discard_retained_z("Manual Z positioning requires a new focus reference",
+                                        require_reference=False)
                 if self._z_probe is not None:
                     self._z_probe.invalidate()
                 self._z_probe_result = None
@@ -4520,6 +4766,8 @@ class MachineService:
                         max_z_mm=self.settings.mainboard_max_z_mm,
                     )
                     if action == "z_max":
+                        self.discard_retained_z("Z maximum changed; reference the border again",
+                                                require_reference=False)
                         maximum = validate_max_z(value)
                         if result["z_known"] and result["z_mm"] > maximum:
                             raise SafetyError("Maximum Z cannot be below the current acknowledged Z position")
@@ -4582,7 +4830,8 @@ class MachineService:
                         raise MachineError("Pin diagnostic monitoring connection was lost")
                     yield
 
-            self._laser_focus.invalidate()
+            self.discard_retained_z("Probe pin inspection requires a new focus reference",
+                                    require_reference=False)
             if self._z_probe is not None:
                 self._z_probe.invalidate()
             self._z_probe_result = None
@@ -4687,6 +4936,7 @@ class MachineService:
                     yield
 
             self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+            self.discard_retained_z("Native probing changes the Z datum; reference focus again")
             self._z_probe_result = None
             self._z_probe_active = not native_operation
             if native_operation:
@@ -6190,6 +6440,7 @@ class MachineService:
         stop_at = time.time()
         stop_call_deadline = time.monotonic() + _REALTIME_STOP_WRITE_DEADLINE_SECONDS
         with self._stop_epoch_lock:
+            self._invalidate_retained_z("Software STOP discarded Z; reference the border again")
             interrupt_secondary_motion = emergency or self._z_probe_active
             self._stop_epoch += 1
             if self.cpu_cooling_enabled and self._secondary_air_assist is not None:
@@ -6305,6 +6556,14 @@ class MachineService:
                 f"software STOP secondary OFF cleanup could not start: {exc}",
             )
 
+        # Priority controller interruption above must never wait for a disk
+        # flush. The in-memory revision already prevents a concurrent clean
+        # checkpoint from being published by a stale shutdown worker.
+        try:
+            self._z_retention.discard()
+        except Exception as exc:
+            self._append_log("ERROR", f"Could not invalidate saved Z after STOP: {exc}")
+
         recovery_source = session or candidate
         if (
             _recover
@@ -6339,13 +6598,18 @@ class MachineService:
         """Permanently prevent publication and perform bounded fail-off cleanup."""
 
         with self._lock:
+            if self._shutdown_requested:
+                return
             self._shutdown_requested = True
             self._recovery_stop_epoch = None
-            self._set_controller_state_locked(
-                ControllerState.SHUTTING_DOWN,
-                force_terminal=True,
-            )
-        self.stop_job(emergency=False, _recover=False)
+        try:
+            self.disconnect(deadline=deadline)
+        finally:
+            with self._lock:
+                self._set_controller_state_locked(
+                    ControllerState.SHUTTING_DOWN,
+                    force_terminal=True,
+                )
         with self._lock:
             recovery = self._recovery_thread
         if (
@@ -6510,6 +6774,7 @@ class MachineService:
             "arm_phrase": self.ARM_PHRASE,
             "secondary_air_assist": secondary_status,
             "ender_z_telemetry": ender_z_telemetry,
+            "z_retention": self._retained_z_status(),
             "z_probe": {
                 "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
                 "unavailable_reason": _PROBE_SUSPENSION_REASON or None,

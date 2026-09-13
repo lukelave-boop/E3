@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
@@ -90,6 +91,11 @@ def run(source: Path, toolchain: Path) -> None:
         if finished != [0]:
             raise RuntimeError(f"Production probe test failed: {label}, line={finished}")
         print(f"Production G39/probe Cortex-M4 tests passed, {label}; fake I/O.")
+
+    if (source / "Marlin/src/gcode/temp/e3_mainboard.inc").exists():
+        sys.path.insert(0, str(ROOT))
+        from firmware.marlin_mainboard.run_restore_tests import run as run_restore
+        run_restore(source, toolchain)
 
 
 if __name__ == "__main__":

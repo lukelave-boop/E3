@@ -1,7 +1,7 @@
 """Taught gauge focus, using the shared Ender owner and measured surface coordinates.
 
-Calibration survives restart; references, surfaces and movement previews never do.
-XY transfers use the MachineService callback; no laser output or job integration.
+Calibration survives restart. A separately validated clean-shutdown checkpoint
+may restore the border datum; surfaces and movement previews never survive.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy", "use_job"}
+           "position_probe", "recover", "recover_xy", "use_job", "forget_z"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -104,6 +104,9 @@ class LaserFocus:
         self.requires_clearance = False
         self.xy_recovery_pending_reference = False
         self.selected_clearance = 30.0
+        self._z_reference = None
+        self._z_reference_generation = None
+        self.z_reference_required = False
         self.invalidate()
 
     def invalidate(self):
@@ -111,6 +114,27 @@ class LaserFocus:
         self.reference = self.surface = self.preview = None
         self.xy_sequence = None
         self.session = None
+
+    def retain_z_reference(self, owner_generation):
+        """The border datum follows Ender Z, independently of primary XY Home."""
+        if self.z_reference_required or self._z_reference_generation != owner_generation:
+            return None
+        return copy.deepcopy(self._z_reference)
+
+    def restore_z_reference(self, reference, owner_generation, clearance):
+        """Called only after a complete fresh reference or retained-Z readback."""
+        self.invalidate()
+        self._z_reference = copy.deepcopy(reference)
+        self._z_reference_generation = owner_generation
+        self.selected_clearance = clearance
+        self.z_reference_required = False
+
+    def drop_z_reference(self, *, require_reference=True):
+        self.invalidate()
+        self._z_reference = None
+        self._z_reference_generation = None
+        if require_reference:
+            self.z_reference_required = True
 
     def clear_surface(self, *, keep_alignment=False):
         self.job_plan = None
@@ -235,6 +259,10 @@ class LaserFocus:
         transcript = []
         motion_started = False
         session = (owner.generation, primary_generation, stop_epoch)
+        if self.session is not None and self.session[2] != stop_epoch:
+            self.drop_z_reference()
+        if self._z_reference is not None and self._z_reference_generation != owner.generation:
+            self.drop_z_reference()
         if self.session != session:
             self.invalidate()
             self.session = session
@@ -267,13 +295,21 @@ class LaserFocus:
         board = parse_status(send("M123"))
         current = parse_position(send("M114"))
         if not board["z_known"]:
-            self.invalidate()
+            self.drop_z_reference()
             self.session = session
         if self.preview and abs(self.preview["current_z_mm"] - current) > .05:
             self.preview = None
-        if self.reference and (self.reference["firmware"] != firmware or self.reference["geometry"] != geometry):
-            self.invalidate()
+        retained = self.retain_z_reference(owner.generation)
+        if retained and (retained["firmware"] != firmware or retained["geometry"] != geometry):
+            self.drop_z_reference()
             self.session = session
+            retained = None
+        if self.reference and (self.reference["firmware"] != firmware or self.reference["geometry"] != geometry):
+            self.drop_z_reference()
+            self.session = session
+            retained = None
+        if retained is not None and board["z_known"] and 0 <= current <= maximum:
+            self.reference = retained
         if self.surface and tuple(self.surface["carriage_xy_mm"]) != tuple(xy):
             self.clear_surface()
         if self.xy_sequence:
@@ -288,7 +324,7 @@ class LaserFocus:
                 raise SafetyError("Expected the confirmed stowed probe")
 
         def known():
-            if not board["z_known"] or not 0 <= current <= maximum:
+            if self.z_reference_required or not board["z_known"] or not 0 <= current <= maximum:
                 raise SafetyError("Reference the border before focus positioning")
             stowed()
 
@@ -345,7 +381,7 @@ class LaserFocus:
         if action in {"jog", "teach", "preview", "forget", "set_xy_offset"}:
             self.job_plan = None
         if action == "reference":
-            self.invalidate()
+            self.drop_z_reference()
             self.session = session
             # Service admits reference only at the confirmed border. A previous
             # teaching jog can leave a healthy, known axis below Z20; normalize
@@ -369,6 +405,9 @@ class LaserFocus:
                 raise MachineError("Border contact is not near homed zero")
             move_to(clearance)
             self.reference = {"border_z_mm": border, "firmware": firmware, "geometry": geometry}
+            self._z_reference = copy.deepcopy(self.reference)
+            self._z_reference_generation = owner.generation
+            self.z_reference_required = False
         elif action == "set_xy_offset":
             self.persist_xy_offset(value)
         elif action in {"align_probe", "align_laser", "position_probe"}:

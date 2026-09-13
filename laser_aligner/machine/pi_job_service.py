@@ -1698,22 +1698,26 @@ class PiJobService:
             "latest_job": None if active is not None else latest,
         }
 
-    def shutdown(self, *, stop_machine: bool = True) -> None:
+    def shutdown(self, *, stop_machine: bool = True, clean_exit: bool = True) -> None:
         self.begin_shutdown()
         failures: list[str] = []
         if stop_machine:
+            with self._state_lock:
+                if self._active_job_id is not None:
+                    self._stop_requested_for = self._active_job_id
+            if not clean_exit:
+                self.machine._invalidate_retained_z("Pi service failed; reference Z again")
             try:
-                self.stop(emergency=False, _recover=False)
+                # MachineService distinguishes an idle clean checkpoint from
+                # the busy/faulted priority STOP path. An earlier unconditional
+                # STOP would discard the datum before it could be verified.
+                self.machine.shutdown(deadline=time.monotonic() + 2.0)
             except Exception as exc:
                 failures.append(_bounded_error(exc))
                 try:
                     self.machine.request_stop(emergency=False, _recover=False)
                 except Exception as fallback_exc:
                     failures.append(_bounded_error(fallback_exc))
-            try:
-                self.machine.shutdown(deadline=time.monotonic() + 2.0)
-            except Exception as exc:
-                failures.append(_bounded_error(exc))
         watcher = self._watcher
         if watcher is not None and watcher.is_alive():
             watcher.join(timeout=2.0)

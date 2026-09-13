@@ -1,5 +1,40 @@
 # Architecture
 
+## Clean-shutdown Z retention
+
+MachineService owns retention for the split GRBL XY / Ender Z workflow. The
+Pi's clean idle disconnect/shutdown, rather than a Windows exit flag or cached
+telemetry, can publish a checkpoint after fresh laser-off/drain, firmware,
+stowed-probe, known-Z and clearance checks. Saving requires a valid border
+reference, Z at or above selected clearance and within the configured maximum,
+no active job/operation, no arming and no unresolved recovery restriction.
+Failure, STOP or changed authority prevents a clean publication.
+
+machine/z_retention.py stores an atomic, versioned checkpoint beside the focus
+calibration file in a separate .z-retention.json persistence domain. It binds
+the snapshot to the configured rig and exact firmware/geometry. A clean record
+is consumed into a dirty session claim before controller admission; atomic
+writes, process locking and claim checks prevent a stale session from restoring
+or publishing another session's checkpoint. A later crash leaves no reusable
+clean checkpoint. Storage failure while consuming prevents connection admission.
+
+Restoration uses the shared secondary owner under primary/Ender generations,
+STOP and configuration guards. The new Cap:E3_Z_RESTORE_V1:1 contract admits
+M124 for unknown reset Z0 or validates already-known matching Z without rewriting
+it; different known Z and unknown nonzero Z reject. M124 issues no travel or
+probing, and no G92 fallback exists. The host separately sends M84 S0 and M17 Z
+to establish Z hold, then verifies position, known-axis and stowed-probe reports.
+Only successful readback restores the border datum. Fresh XY Home is still
+required and preserves that datum; surface/preview/next-job state remains cleared.
+
+The desktop presents z_retention status and a typed, confirmed forget_z action.
+Forgetting revokes retained/current reference authority and leaves gauge
+calibration intact. Nodes without the status field expose no new control. This
+changes desktop/Pi focus and shared controller lifecycle behavior, not either
+toolpath geometry pipeline or the project schema. Exact-firmware gauge binding
+is unchanged. Physical installation and power-cycle qualification are pending;
+see [the operator workflow](Z_RETENTION.md).
+
 ## Retaining selected height through XY Home / park
 
 The job_focus.preserve_through_park context retains only an already validated

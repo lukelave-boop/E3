@@ -67,6 +67,7 @@ def assemble(updater, application):
     caps = (b"Cap:E3_MAINBOARD_V1:1", b"Cap:E3_MATERIAL_HEIGHT_V1:1",
             b"Cap:E3_USB_UPDATER_F401_V1:1", b"Cap:E3_Z_LIMIT_80_V1:1",
             b"Cap:E3_SURFACE_HEIGHT_V2:1", b"Cap:E3_RECOVERY_V1:1", b"Cap:E3_LIVE_Z_V1:1",
+            b"Cap:E3_Z_RESTORE_V1:1",
             b"E3SG:2 PROBE_Z:", b"E3HW:1 MCU:")
     if any(cap + b"\0" not in payload and cap + b"\n\0" not in payload for cap in caps):
         raise ValueError("Missing required runtime feature/hardware identity")
@@ -129,7 +130,8 @@ def main():
             for path in sorted((ROOT / "firmware" / project).rglob("*")):
                 if path.is_file() and "__pycache__" not in path.parts:
                     archive.write(path, "E3/" + path.relative_to(ROOT).as_posix())
-        for name in ("tests/marlin_material_harness.cpp", "tests/test_ender_aux_f401compact.py",
+        for name in ("tests/marlin_material_harness.cpp", "tests/marlin_z_restore_harness.cpp",
+                     "tests/test_ender_aux_f401compact.py",
                      "tests/test_compact_f401_package.py", "tests/test_compact_pi_support.py",
                      "tests/test_compact_prepare.py",
                      "scripts/diagnose_ender_startup.py", "laser_aligner/machine/secondary_startup.py"):

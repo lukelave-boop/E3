@@ -600,7 +600,11 @@ class DesktopController(QtCore.QObject):
                     remember_idle_for_shutdown=True,
                 )
             else:
-                machine.request_stop(emergency=False)
+                shutdown = getattr(machine, "shutdown", None)
+                if callable(shutdown):
+                    shutdown(deadline=shutdown_deadline)
+                else:
+                    machine.request_stop(emergency=False)
         except Exception as exc:
             LOGGER.warning("Shutdown machine cleanup failed: %s", exc)
         return shutdown_deadline

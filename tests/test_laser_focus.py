@@ -630,7 +630,7 @@ def test_alignment_rejects_before_xy_motion(focus_machine, change):
     elif change == "network":
         kwargs["_connection_alive"] = lambda: False
     else:
-        focus.state.reference = None
+        focus.state.drop_z_reference()
     before = (primary.x, primary.y)
     with pytest.raises(MachineError):
         machine.focus_control("align_probe", confirmed=True, **kwargs)
@@ -896,7 +896,7 @@ def test_selected_probe_point_rejects_untrusted_or_unreachable_move(focus_machin
     elif change == "offset":
         focus.state.probe_xy_offset_mm = None
     elif change == "reference":
-        focus.state.reference = None
+        focus.state.drop_z_reference()
     elif change == "z":
         focus.serial.z = 29.9
     elif change == "clearance_latch":

@@ -1,5 +1,21 @@
 # Safety requirements
 
+Retained Z is conditional software knowledge, not an absolute position sensor.
+Only a verified clean idle Pi disconnect/shutdown at or above saved clearance
+may save the border datum and Z. A checkpoint is consumed before the next
+connection; failed/interrupted shutdown, STOP, changed configuration/firmware or
+failed controller validation requires a new reference. Restoration sends no
+travel/probe command and separately enables Z motor hold; XY must still Home.
+Measurements, previews and job selections do not survive this restoration.
+
+Manual Z movement, unpowered axis drift, probe-mount changes and border/support
+movement while off cannot be detected by this feature. After any such change,
+choose **Forget saved Z** and **Reference border** again. Forgetting preserves
+taught gauge calibration; changed mounting may require re-teaching, and a
+firmware update still invokes the existing exact-firmware compatibility check.
+No retained-Z hardware installation or physical power-cycle acceptance is yet
+recorded. This feature is not safety-rated. See [saved Z](docs/Z_RETENTION.md).
+
 Live Z telemetry is an observational executed-step count, not an encoder or
 collision detector. Homing coordinates are provisional until the existing
 completion/readback checks succeed. Missing/stale telemetry removes the live

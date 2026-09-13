@@ -1,5 +1,28 @@
 # Surface height and gauge-taught laser focus
 
+## Keep known Z across normal shutdowns
+
+With the matching retained-Z desktop, Pi and firmware, a clean idle Pi
+controller disconnect/shutdown can save the border datum and verified Z at or
+above the selected clearance. On the next connection E3 restores that knowledge
+without travel or probing, then requires fresh XY Home / park. The restored
+border datum survives that Home; choose a new point and measure the workpiece
+again before previewing or selecting focus for a job. Closing Windows alone is
+not evidence that the Pi completed a clean shutdown.
+
+Surface / laser focus shows whether Z was restored or why a new reference is
+needed. If the Z axis drifted or was moved by hand, or the probe mount or
+border/support changed while off, choose **Forget saved Z**, then **Reference
+border** again. The taught gauge offset is kept. Unsupported firmware, a dirty
+previous exit, changed configuration or failed readback cannot restore Z.
+
+This retained-Z candidate needs a firmware update with the new restore
+capability; earlier focus-positioning features below retain their stated
+compatibility. Saved gauge calibration remains bound to its exact firmware and
+may require explicit re-teaching once after that update. No retained-Z hardware
+installation or physical power-cycle test has been performed yet. See the
+[saved-Z workflow and qualification limits](Z_RETENTION.md).
+
 Operator verification on 2026-09-12: Windows 0.7.93 plus Pi correction 59c31d7
 completed the requested measured-job focus, clearance approach, automatic
 clearance before Home/park and selection retention sequence. See CURRENT_STATE.md

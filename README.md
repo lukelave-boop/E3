@@ -1,5 +1,19 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Saved Z after a normal shutdown
+
+The retained-Z feature preserves a verified border reference and Z coordinate
+when the Pi finishes a clean, idle disconnect or shutdown at or above the saved
+clearance. The next connection can restore Z without probing or travel; fresh
+XY Home / park is still required. Surface measurements and job selections are
+not retained. If the axis, probe mount, or border/support moved while off, use
+**Forget saved Z**, then **Reference border** again.
+
+This candidate requires matching desktop, Pi and restore-capable firmware.
+Existing firmware-bound gauge calibration is preserved but may need one new
+teaching after the firmware update. No retained-Z hardware installation or
+physical power-cycle test has been performed yet. See [saved Z](docs/Z_RETENTION.md).
+
 ## Focus selection and camera parking
 
 After selecting measured focus for the next job, successful Home / park now

@@ -94,6 +94,27 @@ class LaserFocusPanel(QtWidgets.QWidget):
         ender_row.addWidget(self.ender_status, 1)
         ender_row.addWidget(self.reconnect_ender)
         layout.addLayout(ender_row)
+        self.z_retention_group = QtWidgets.QGroupBox("Saved Z between sessions")
+        retention_layout = QtWidgets.QVBoxLayout(self.z_retention_group)
+        retention_row = QtWidgets.QHBoxLayout()
+        self.z_retention_status = QtWidgets.QLabel()
+        self.z_retention_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.z_retention_status.setWordWrap(True)
+        self.forget_z = QtWidgets.QPushButton("Forget saved Z")
+        self.forget_z.setToolTip(
+            "Discard the saved Z position and current border reference. "
+            "Reference the border again before Z positioning. The taught gauge offset is kept."
+        )
+        retention_row.addWidget(self.z_retention_status, 1)
+        retention_row.addWidget(self.forget_z)
+        retention_layout.addLayout(retention_row)
+        self.z_retention_note = QtWidgets.QLabel(
+            "If the Z axis, probe mount, or border/support was physically moved while off, "
+            "choose Forget saved Z, then Reference border again. The taught gauge offset is kept."
+        )
+        self.z_retention_note.setWordWrap(True)
+        retention_layout.addWidget(self.z_retention_note)
+        layout.addWidget(self.z_retention_group)
         self.failure_detail = QtWidgets.QLabel()
         self.failure_detail.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.failure_detail.setWordWrap(True)
@@ -290,6 +311,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                (self.teach, "teach"), (self.preview, "preview"),
                                (self.use_job, "use_job"), (self.move, "move"), (self.return_clearance, "clearance"),
                                (self.clear_surface, "clear_surface"), (self.forget, "forget"),
+                               (self.forget_z, "forget_z"),
                                (self.apply_offset, "set_xy_offset"), (self.align_probe, "align_probe"),
                                (self.align_laser, "align_laser")):
             button.clicked.connect(lambda _checked=False, a=action: self.request(a))
@@ -569,6 +591,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "clearance": "At clearance. XY positioning and workpiece changes can resume.",
             "clear_surface": "Surface measurement cleared.",
             "forget": "Taught offset forgotten.",
+            "forget_z": "Saved Z forgotten. Reference the border again. The taught gauge offset is kept.",
             "set_xy_offset": "Measured XY offset saved. Align the laser visually over your target, then put the probe there.",
             "align_probe": "Probe is over the selected laser spot. Confirm the solid target, then measure.",
             "position_probe": "Probe positioned at the camera target. Check alignment and the solid target, then measure.",
@@ -670,10 +693,31 @@ class LaserFocusPanel(QtWidgets.QWidget):
         else:
             self.height.setText("Z — mm")
 
+    def _sync_z_retention(self, ready: bool) -> None:
+        retention = self._result.get("z_retention")
+        reported = (
+            isinstance(retention, Mapping)
+            and type(retention.get("available")) is bool
+            and type(retention.get("restored")) is bool
+            and isinstance(retention.get("reason"), str)
+        )
+        self.z_retention_group.setVisible(reported)
+        self.forget_z.setEnabled(bool(ready and reported and retention["available"]
+                                     and self._result.get("available") is True))
+        if not reported:
+            self.z_retention_status.clear()
+        elif not self.fresh():
+            self.z_retention_status.setText("Saved Z: refresh to check the saved position.")
+        else:
+            prefix = ("Saved Z: restored from a normal shutdown. " if retention["restored"]
+                      and retention["available"] else "Saved Z: ")
+            self.z_retention_status.setText(prefix + (retention["reason"] or "No saved position restored."))
+
     def _sync(self) -> None:
         self._sync_z_display()
         idle = _read_allowed(self._status) and not self._busy and not self._pending
         ready = idle and self.fresh()
+        self._sync_z_retention(ready)
         projection = project_machine_state(self._status)
         clearance = self._clearance_value()
         moving = ready and projection.can_jog and self.path_clear.isChecked() and clearance is not None
@@ -832,7 +876,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         button = self.up if action == "jog" and value and value > 0 else self.down if action == "jog" else {
             "reference": self.reference, "measure": self.measure, "teach": self.teach,
             "preview": self.preview, "use_job": self.use_job, "move": self.move, "clearance": self.return_clearance,
-            "clear_surface": self.clear_surface, "forget": self.forget,
+            "clear_surface": self.clear_surface, "forget": self.forget, "forget_z": self.forget_z,
             "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
             "recover": self.reconnect_ender, "recover_xy": self.recover_xy,
         }.get(action)
@@ -851,9 +895,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             arguments["value"] = value
         if action == "set_xy_offset":
             arguments["value"] = self._offset_value()
+        if action == "forget_z":
+            arguments = {"confirmed": True}
         if action != "recover_xy":
             self.xy_recovery_clear.setChecked(False)
-        if action in {"recover", "recover_xy"}:
+        if action in {"recover", "recover_xy", "forget_z"}:
             for checkbox in (self.path_clear, self.flat_patch, self.gauge, self.gauge_removed, self.xy_clear):
                 checkbox.setChecked(False)
         if action in {"jog", "reference", "measure", "move", "clearance"}:
@@ -1075,7 +1121,8 @@ class LaserFocusCoordinator(QtCore.QObject):
         if self._mutation:
             self._epoch += 1
             self.panel.invalidate("Reconnecting Ender…" if action == "recover"
-                                  else f"{action.replace('_', ' ').capitalize()}…")
+                                  else f"{action.replace('_', ' ').capitalize()}…",
+                                  clear_surface=action == "forget_z", clear_confirmation=action == "forget_z")
         self._last_request = time.monotonic()
         epoch, parameter_epoch = self._epoch, self._parameter_epoch
         session = _session(self._status)

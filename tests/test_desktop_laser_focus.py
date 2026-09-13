@@ -1416,3 +1416,148 @@ def test_teaching_below_probe_contact_requires_updated_pi_and_respects_zero(pane
     panel.set_result(payload)
     assert not panel.down.isEnabled()
     assert "minimum reached" in panel.teaching_limits.text()
+
+
+def retained_result(**changes):
+    return result(z_retention={"available": True, "restored": True, "reason": "Current controller state verified."},
+                  **changes)
+
+
+def test_saved_z_status_is_informational_and_never_dispatches_motion(panel, app):
+    calls = []
+    panel.actionRequested.connect(lambda *args: calls.append(args))
+    panel.set_result(retained_result(reference_ready=False, surface=None,
+                                    current_readback={"z_mm": 30., "z_known": False, "fresh": True}))
+    app.processEvents()
+    assert panel.z_retention_group.isVisible()
+    assert "restored from a normal shutdown" in panel.z_retention_status.text()
+    assert "probe mount" in panel.z_retention_note.text()
+    assert "border/support" in panel.z_retention_note.text()
+    assert "physically moved while off" in panel.z_retention_note.text()
+    assert "Reference border again" in panel.z_retention_note.text()
+    assert calls == []
+    assert not panel.up.isEnabled() and not panel.move.isEnabled() and not panel.measure.isEnabled()
+    assert panel.forget_z.isEnabled()
+
+
+def test_saved_z_rejection_explains_why_reference_is_needed(panel):
+    panel.set_result(result(
+        reference_ready=False, surface=None,
+        z_retention={"available": True, "restored": False, "reason": "Previous exit was not a clean shutdown."},
+        current_readback={"z_mm": 0., "z_known": False, "fresh": True},
+    ))
+    assert "Previous exit was not a clean shutdown" in panel.z_retention_status.text()
+    assert "restored from" not in panel.z_retention_status.text()
+    assert "reference the border" in panel.next_step.text()
+    assert not panel.up.isEnabled() and not panel.move.isEnabled()
+
+
+@pytest.mark.parametrize("retention", [
+    None, {}, {"available": True},
+    {"available": "true", "restored": True, "reason": "Saved"},
+    {"available": True, "restored": 1, "reason": "Saved"},
+    {"available": True, "restored": True, "reason": None},
+])
+def test_missing_or_malformed_z_retention_cannot_enable_forget_saved_z(panel, retention):
+    panel.set_result(retained_result())
+    panel.set_result(result(z_retention=retention))
+    calls = []
+    panel.actionRequested.connect(lambda *args: calls.append(args))
+    panel.forget_z.click()
+    panel.request("forget_z")
+    assert panel.z_retention_group.isHidden()
+    assert not panel.forget_z.isEnabled() and not calls
+    assert not panel.z_retention_status.text()
+
+
+def test_old_node_omitting_z_retention_removes_previously_available_action(panel):
+    panel.set_result(retained_result())
+    panel.set_result(result())
+    assert panel.z_retention_group.isHidden()
+    assert not panel.forget_z.isEnabled()
+
+
+def test_unavailable_z_retention_reports_reason_and_disables_forget(panel):
+    panel.set_result(result(z_retention={
+        "available": False, "restored": False, "reason": "Persistent machine configuration is unavailable."
+    }))
+    assert not panel.z_retention_group.isHidden()
+    assert "Persistent machine configuration is unavailable" in panel.z_retention_status.text()
+    assert not panel.forget_z.isEnabled()
+
+
+@pytest.mark.parametrize("change", ["armed", "job", "disconnected", "stale_status", "active_probe",
+                                         "busy", "pending", "stale_readback", "unavailable_ender"])
+def test_forget_saved_z_requires_current_idle_disarmed_machine(panel, change):
+    panel.set_result(retained_result())
+    if change == "armed":
+        panel._status = status(armed=True)
+    elif change == "job":
+        panel._status = status(controller_state="JOB_RUNNING", job={"running": True})
+    elif change == "disconnected":
+        panel._status = status(controller_state="DISCONNECTED", connected=False)
+    elif change == "stale_status":
+        panel._status = status(status_stale=True)
+    elif change == "active_probe":
+        panel._status = status(z_probe={"active": True})
+    elif change == "busy":
+        panel._busy = True
+    elif change == "pending":
+        panel._pending = True
+    elif change == "stale_readback":
+        panel._received_at = time.monotonic() - FRESH_SECONDS - 1
+    else:
+        panel.set_result(unavailable_result(z_retention={"available": True, "restored": False, "reason": "Saved"}))
+    calls = []
+    panel.actionRequested.connect(lambda *args: calls.append(args))
+    panel.request("forget_z")
+    assert not panel.forget_z.isEnabled() and not calls
+
+
+def test_stale_saved_z_status_does_not_claim_current_restoration(panel):
+    panel.set_result(retained_result())
+    panel.invalidate("Controller session changed.", clear_surface=True)
+    assert "refresh to check" in panel.z_retention_status.text()
+    assert "restored from" not in panel.z_retention_status.text()
+
+
+def test_forget_saved_z_is_explicit_and_keeps_taught_offset(coordinator):
+    item, controller = coordinator
+    item.panel.set_result(retained_result(action="preview", preview=preview()))
+    item.panel.path_clear.setChecked(True)
+    item.panel.gauge_removed.setChecked(True)
+    calibration = copy.deepcopy(item.panel._result["calibration"])
+    assert item.panel.move.isEnabled()
+    assert controller.machine.calls == []
+    controller.machine.payload = result(
+        reference_ready=False, surface=None, preview=None,
+        z_retention={"available": True, "restored": False, "reason": "Saved Z forgotten; reference the border again."},
+    )
+    item.panel.forget_z.click()
+    assert item._mutation and not item.panel.forget_z.isEnabled()
+    assert item.panel._preview_id is None and item.panel._result["surface"] is None
+    assert not item.panel.path_clear.isChecked() and not item.panel.gauge_removed.isChecked()
+    controller.complete()
+    assert controller.machine.calls == [("forget_z", {"confirmed": True})]
+    assert item.panel._result["calibration"] == calibration
+    assert item.panel._result["reference_ready"] is False
+    assert "Saved Z forgotten" in item.panel.message.text()
+    assert "taught gauge offset is kept" in item.panel.message.text()
+    assert not item.panel.move.isEnabled() and not item.panel.up.isEnabled()
+    assert controller.home_calls == 0 and controller.xy_calls == []
+
+
+def test_stop_discards_late_forget_saved_z_reply(coordinator):
+    item, controller = coordinator
+    item.panel.set_result(retained_result())
+    controller.machine.payload = retained_result()
+    item.panel.forget_z.click()
+    operation, callbacks = controller.work.pop()
+    reply = operation()
+    item.stopped()
+    callbacks["on_success"](reply)
+    controller.busyChanged.emit(False)
+    callbacks["on_finished"]()
+    assert not item.panel.fresh() and not item.panel.forget_z.isEnabled()
+    assert not item.panel.up.isEnabled() and not item.panel.move.isEnabled()
+    assert controller.machine.calls == [("forget_z", {"confirmed": True})]

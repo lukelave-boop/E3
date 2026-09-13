@@ -1,5 +1,15 @@
 # Compact F401 mainboard with USB updates
 
+## Retained Z after clean E3 shutdown
+
+This profile advertises `Cap:E3_Z_RESTORE_V1:1` and the guarded, non-motion
+`M124 Z<decimal>` coordinate adoption command. It requires the matching Pi
+clean-shutdown record and all firmware preconditions described in the
+[mainboard contract](../marlin_mainboard/README.md#retained-z-after-a-clean-shutdown).
+The host must never infer physical height from reset Z0 alone. Changed or manually
+moved Z requires a new reference. The production command passes Cortex-M4 tests
+with fake I/O; physical power-cycle retention is still unverified.
+
 ## Probe failure candidate
 
 CR Touch deploy/stow failures propagate through the native probe wrapper. A

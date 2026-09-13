@@ -1,5 +1,16 @@
 # Roadmap
 
+## Retained Z qualification
+
+Implement clean idle Pi-owned Z checkpoints, consume-before-connect storage,
+guarded firmware coordinate restoration, and explicit Forget saved Z controls.
+Keep border-reference retention separate from surface measurements and one-use
+job focus. Matching desktop/Pi/firmware deployment and a recorded physical
+power-cycle acceptance test remain pending; automated acceptance does not
+establish unpowered axis stability. Preserve exact-firmware gauge compatibility
+and require explicit re-teaching when that identity changes. See
+[the retention workflow](docs/Z_RETENTION.md) and CURRENT_STATE.md for verification.
+
 ## Focus selection across camera parking
 
 Implemented and regression-tested retention of selected flat job height through

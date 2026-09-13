@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — retain known Z after a clean exit
+
+- Save the Pi's verified border datum and Z at or above saved clearance after
+  clean idle controller disconnect/shutdown; consume the checkpoint before the
+  next connection so an interrupted session cannot replay it after a crash.
+- Restore only with matching configuration and restore-capable firmware. The
+  guarded M124 command verifies an already-known matching Z or adopts the saved
+  coordinate from unknown reset Z0 without travel; the host enables Z hold.
+- Retain the restored border datum through fresh XY Home / park. Discard prior
+  surface measurements, previews and next-job selections across sessions.
+- Show saved-Z status and add **Forget saved Z**, preserving taught calibration
+  while requiring a new border reference. Physical drift or setup movement
+  remains undetectable and requires this explicit reset of retained knowledge.
+- Matching desktop/Pi/firmware installation and physical power-cycle acceptance
+  are pending. Exact-firmware gauge binding remains; no automatic calibration
+  migration is introduced. See [saved Z](docs/Z_RETENTION.md).
+
 ## Unreleased — retain job focus through parking
 
 - Fix Home / park discarding the selected next-job focus height. Retain the

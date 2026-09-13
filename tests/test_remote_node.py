@@ -114,7 +114,7 @@ def test_remote_node_hosts_one_local_machine_service_and_no_raw_bridge(
             self.shutdown_calls: list[bool] = []
             constructed.append(("job-service", self))
 
-        def shutdown(self, *, stop_machine: bool = True) -> None:
+        def shutdown(self, *, stop_machine: bool = True, clean_exit: bool = True) -> None:
             self.shutdown_calls.append(stop_machine)
 
     class FakeServer:
@@ -497,8 +497,9 @@ def test_startup_off_failure_is_degraded_and_secondary_closes_after_machine_shut
             store.reconcile_boot()
             events.append("job-service-created")
 
-        def shutdown(self, *, stop_machine: bool = True) -> None:
+        def shutdown(self, *, stop_machine: bool = True, clean_exit: bool = True) -> None:
             assert stop_machine is True
+            assert clean_exit is False
             events.append("machine-shutdown")
 
     class FakeServer:

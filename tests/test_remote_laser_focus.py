@@ -68,6 +68,26 @@ def test_focus_capability_advertised():
     assert XY_RECOVERY_CAPABILITY in SERVER_CAPABILITIES
 
 
+def test_forget_z_accepts_explicit_empty_reference_without_inventing_readback(remote_focus):
+    service, pi, result = remote_focus
+    result.update(action="forget_z", available=False, reference_ready=False,
+                  current_readback={"z_mm": None, "z_known": False, "fresh": False},
+                  reference=None, surface=None, preview=None, xy_sequence=None,
+                  z_retention={"available": True, "restored": False, "reason": "Forgotten"})
+    observed = service.focus_control("forget_z", confirmed=True)
+    assert observed["current_readback"]["fresh"] is False
+    assert observed["z_retention"]["reason"] == "Forgotten"
+    assert pi.requests[-1]["action"] == ACTION_MACHINE_FOCUS
+
+
+def test_forget_z_rejects_reply_retaining_reference_authority(remote_focus):
+    service, _, result = remote_focus
+    result.update(action="forget_z", available=False, reference_ready=True,
+                  current_readback={"z_mm": None, "z_known": False, "fresh": False})
+    with pytest.raises(MachineError, match="forgotten"):
+        service.focus_control("forget_z", confirmed=True)
+
+
 def test_preview_refreshes_cached_activity_before_returning(remote_focus):
     service, pi, result = remote_focus
     result['action'] = 'preview'

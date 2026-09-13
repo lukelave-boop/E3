@@ -19,6 +19,7 @@ CAPABILITIES = (
     b"Cap:E3_SURFACE_HEIGHT_V2:1",
     b"Cap:E3_RECOVERY_V1:1",
     b"Cap:E3_LIVE_Z_V1:1",
+    b"Cap:E3_Z_RESTORE_V1:1",
     b"E3SG:2 PROBE_Z:",
     b"E3HW:1 MCU:",
 )

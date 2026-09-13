@@ -1,5 +1,18 @@
 # Compact F401 auxiliary application
 
+## Guarded retained Z adoption
+
+`Cap:E3_Z_RESTORE_V1:1` adds `M124 Z<decimal>` for E3's consumed clean-shutdown
+record. At fresh unhomed Z0 it assigns native and executed-step counters, then
+marks only Z homed and trusted, without motion or output changes. A still-powered
+known-Z reconnect instead verifies matching native/logical/executed coordinates
+and both Z flags without assigning any counter. The [mainboard contract](../marlin_mainboard/README.md#retained-z-after-a-clean-shutdown)
+defines the strict syntax, 0..80 firmware bound and idle/reset/stowed preconditions.
+This is separate from persisted jobs, probe results and EEPROM configuration.
+No record or ambiguous shutdown means a new Z reference is required. Manual axis
+movement or unpowered drift invalidates the retained assumption. Software checks
+cannot establish physical retention; operator power-cycle validation is pending.
+
 ## Live Z readback
 
 `Cap:E3_LIVE_Z_V1:1` enables an opt-in, observational Z stream. The compact
