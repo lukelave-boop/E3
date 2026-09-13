@@ -26,35 +26,44 @@ click only previews the target. The duplicate right-hand live bed view is
 removed. The separate **Surface / laser focus…** button/dialog and the focus
 workspace's Position XY jog row are removed.
 
-The whole **Preview and position** section now lives in **Tools → Machine
+**Measure surface** automatically calculates and selects the focus for every
+job on the same flat workpiece. The daily **Workpiece focus** section shows the
+gap and calculated Z. Changing the gap recalculates the job height without
+moving. Measure again when the material or its supports change.
+
+Manual **Preview and position** controls live in **Tools → Machine
 Setup… → 7 · Z / laser focus**, alongside probe XY offsets, 7 mm gauge teaching
 and reference/measurement helpers, including its raw live camera preview.
 **Move to focus** and **Use measured focus for next job** confirm the physical
 conditions printed beside those actions;
 the two separate checkboxes are removed. Headroom, manual-Z probe-stowed/path,
 recovery and gauge-fit confirmations remain. This desktop layout preserves
-backend safeguards, calibration and saved-Z behavior, and adds no Pi or firmware
-update beyond the saved-Z feature's existing requirements. See [the focus guide](docs/LASER_FOCUS.md).
+backend safeguards, calibration and saved-Z behavior. Automatic reusable focus
+requires the matching Pi companion; no new firmware or gauge teaching is needed
+for this correction. See [the focus guide](docs/LASER_FOCUS.md).
 
 ## Focus selection and camera parking
 
-After selecting measured focus for the next job, successful Home / park now
+After measuring the workpiece, successful Home / park
 retains that job height after verifying clearance and unchanged controller/Z
 authority. You can park for the camera view and then START without re-probing.
 Changing the work still requires a new measurement. The saved 7 mm teaching is
 unchanged; this correction needs only the matching Pi update.
 
-## Measured focus for the next job
+## Measured focus for every job on the workpiece
 
-In **Machine Setup → 7 · Z / laser focus → Preview and position**, preview
-the measured surface. Check that the same flat surface spans the job, the gauge
-is removed and Z/XY paths are clear, then press **Use measured focus for next
-job** to confirm those conditions. START lifts to clearance, approaches with
-the laser off, lowers to the selected gap, and cuts. Successful completion turns output off and lifts
-before Home / park. Manual Home / park also lifts first when clearance is owed.
-The selection is one use and requires a matching Pi companion. No firmware
-change or re-teaching is needed; establish a fresh reference/measurement after
-the Pi update. Jobs without a selection retain their existing behavior.
+In **Machine → Z axis · Ender**, position the probe and **Measure surface**.
+Check that the same flat surface spans the job, the gauge is removed and Z/XY
+paths are clear. No extra selection in Machine Setup is needed. START lifts to
+clearance, completes the XY approach with output off, then moves to and verifies
+the measured focus Z before laser output. Successful completion turns output
+off and lifts before Home / park. Successful jobs, framing, XY jogging and
+Home / park retain the workpiece height under unchanged controller/reference
+authority. A new measurement replaces it. Lost reference, STOP, failed moves
+or changed calibration block powered jobs until a fresh measurement; they
+cannot silently fall back to XY-only cutting. Workpiece height is not restored
+across a Pi/controller restart. Establish a fresh reference/measurement after
+the matching Pi update; saved gauge teaching is preserved.
 
 The focus-preview client fix refreshes completed-operation status before
 presenting the target, preserving the operator's saved gauge calibration.
@@ -167,13 +176,13 @@ See [the focus sequence](docs/LASER_FOCUS.md) for the matching Pi update and
 operator calibration; no additional mainboard flash is needed for this change.
 
 Teach the 7 mm gauge in **Machine Setup → 7 · Z / laser focus**. Measure a work
-surface in **Machine → Z axis · Ender**, then use Machine Setup tab 7's
-**Preview and position** to preview/reproduce 7, 5 or 3 mm head gaps using
-that saved teaching.
+surface in **Machine → Z axis · Ender** to set the focus for subsequent jobs.
+The daily gap selector derives 7, 5 or 3 mm head gaps from that saved teaching;
+Machine Setup tab 7 retains manual **Preview and position** helpers.
 Raised supports contribute to surface elevation without being mistaken for
 material thickness. It requires the matching Pi companion and surface-height
 V2 firmware. Calibration and positioning are explicit laser-off actions;
-**Use measured focus for next job** separately selects the coordinated job
+**Measure surface** automatically selects reusable focus for the coordinated job
 sequence. Raised-work camera correction remains separate.
 See [the calibration and installation guide](docs/LASER_FOCUS.md).
 

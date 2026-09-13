@@ -1,5 +1,44 @@
 # Current repository state
 
+## Automatic reusable workpiece focus correction (2026-09-12)
+
+The operator reports that completing only Machine-tab reference/measurement
+in 0.7.118 allowed XY positioning and laser output without a focus Z move.
+Source inspection confirms the missing handoff: that UI created a surface but
+did not select the separate Setup-only one-use job plan, so the program carried
+no E3FOCUS binding. This is a code-path diagnosis; no command trace or physical
+reproduction was captured during this correction.
+
+Machine-tab Measure now automatically calculates a reusable workpiece plan
+from the probed top surface, saved gauge offset and chosen gap. Daily Workpiece
+focus shows the gap and Z. Changing gap explicitly rebinds the same datum with
+no movement; polling does not change it. No Setup preview/selection or return-
+laser transfer is needed to prepare an ordinary job. Successful jobs, Frame,
+XY jogging and Home / park retain the datum only after verified clearance and
+unchanged controller/reference authority. A new measurement replaces it.
+
+Preflight and START require its bound plan once focus is required. Missing or
+invalid focus after STOP, failure, changed calibration or lost reference blocks
+positive output. A calibrated process starts blocked until fresh measurement;
+workpiece height is not restored across Pi/controller restarts. Gauge teaching,
+project schemas and firmware are unchanged. Software does not establish the
+physical surface is unchanged, flat or unobstructed.
+
+This shared MachineService/Pi change affects execution from both desktop and
+browser pipelines. The desktop requires pi-workpiece-focus-v1 on a focus-capable
+Pi; older companions cannot silently accept automatic measurement or powered
+jobs. The new hash-checked companion supports the exact prior installed focus
+or saved-Z source baselines, preserves configuration/calibration, backs up source
+and refuses unknown changes. No service or firmware changes have been applied.
+Read-only SSH reached 192.168.5.18 but key authentication was rejected; live Pi
+hashes and installation remain unverified.
+
+Focused Windows fake-controller, remote-protocol and offscreen-widget checks
+are in progress; exact frozen-source CI/build verification will be recorded
+below when complete. No interactive GUI, real camera, controller/laser or
+physical focus accuracy test has been performed. Root console/startup/F103
+working-tree edits remain separate in the main checkout.
+
 ## Main-view probe build verified and selected (2026-09-12)
 
 Exact application revision 1c504d4b7c92e408798e6712b14ff28e85b9c482 passed

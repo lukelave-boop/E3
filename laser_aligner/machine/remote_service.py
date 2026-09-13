@@ -25,7 +25,9 @@ from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
+from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
+from .job_focus import program_binding as job_focus_binding
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
@@ -299,6 +301,11 @@ class RemoteMachineService:
         self._job_submission: dict[str, Any] | None = None
         self._monitor_wake = threading.Event()
         self._retired_boot_ids: set[str] = set()
+        self._selected_job_focus: dict[str, Any] | None = None
+        self._job_focus_required = False
+        self._workpiece_focus_observed = False
+        self._focus_observation_epoch = 0
+        self._job_focus_block_reason = "Refresh the measured workpiece focus before starting a powered job"
 
         self._hold_lock = threading.RLock()
         self._hold_context = threading.local()
@@ -589,6 +596,13 @@ class RemoteMachineService:
                 self._node_capabilities = None
                 self._authorization_epoch += 1
                 self._clear_arm_locked()
+            if boot_changed or (
+                self._controller_session_generation is not None
+                and self._controller_session_generation != session_generation
+            ):
+                self._selected_job_focus = None
+                self._workpiece_focus_observed = False
+                self._job_focus_block_reason = "Controller session changed; reference and measure the workpiece again"
             if (
                 boot_changed
                 or self._controller_state_revision != state_revision
@@ -923,6 +937,7 @@ class RemoteMachineService:
         *,
         job_record: Mapping[str, Any] | None,
         response: Mapping[str, Any] | None = None,
+        focus_observation_epoch: int | None = None,
     ) -> bool:
         status = copy.deepcopy(dict(raw_status))
         status["ender_z_telemetry"] = _validated_ender_z_telemetry(status.get("ender_z_telemetry"))
@@ -932,6 +947,17 @@ class RemoteMachineService:
                 accepted, boot_changed = self._commit_response_metadata(response)
                 if not accepted:
                     return False
+            if WORKPIECE_FOCUS_CAPABILITY in (self._node_capabilities or ()):
+                if focus_observation_epoch is None or focus_observation_epoch == self._focus_observation_epoch:
+                    self._cache_workpiece_focus(status.get("workpiece_focus"))
+                # An idle focus edit need not change the primary state revision.
+                # A status request begun before its accepted reply cannot undo it.
+                status["workpiece_focus"] = copy.deepcopy({
+                    "job_focus_required": self._job_focus_required,
+                    "job_focus": self._selected_job_focus,
+                    "job_focus_block_reason": (self._job_focus_block_reason
+                                               if self._selected_job_focus is None else None),
+                })
             self._last_machine_status_monotonic = time.monotonic()
             self._last_node_response_monotonic = time.monotonic()
             self._machine_observation_sequence += 1
@@ -1060,6 +1086,7 @@ class RemoteMachineService:
         self._require_capabilities(timeout=_MONITOR_RPC_TIMEOUT_SECONDS)
         with self._state_lock:
             requested_job_observation = self._job_observation_sequence
+            focus_observation_epoch = self._focus_observation_epoch
         observation_started = time.monotonic()
         machine_response = self._rpc(
             ACTION_MACHINE_STATUS,
@@ -1102,6 +1129,7 @@ class RemoteMachineService:
                 )
             if not self._cache_remote_status(
                 raw_status, job_record=job_record, response=machine_response,
+                focus_observation_epoch=focus_observation_epoch,
             ):
                 return
             observation = self._machine_observation_sequence
@@ -1418,6 +1446,8 @@ class RemoteMachineService:
                 raise PiJobProtocolError(
                     f"Remote machine shutdown deadline expired before {action}"
                 )
+        with self._state_lock:
+            focus_observation_epoch = self._focus_observation_epoch
         response = self._rpc(
             action,
             payload,
@@ -1430,6 +1460,7 @@ class RemoteMachineService:
             remote_status,
             job_record=None,
             response=response,
+            focus_observation_epoch=focus_observation_epoch,
         ):
             raise PiJobProtocolError(
                 f"Remote {action} response was older than the cached controller state"
@@ -1592,7 +1623,9 @@ class RemoteMachineService:
             text, guarded_output_polygon_mm=guarded_output_polygon_mm,
         )
         if program.requires_laser_authorization:
-            text = attach_job_focus(text, getattr(self, "_selected_job_focus", None))
+            with self._state_lock:
+                self._require_workpiece_focus()
+                text = attach_job_focus(text, self._selected_job_focus)
         return self._policy.preflight_program(
             text,
             guarded_output_polygon_mm=guarded_output_polygon_mm,
@@ -1611,6 +1644,52 @@ class RemoteMachineService:
                 "or hardware gates changed after program preflight; validate the exact "
                 "program again"
             )
+        if program.requires_laser_authorization:
+            with self._state_lock:
+                self._require_workpiece_focus()
+                token = job_focus_binding(program.lines)
+                if self._selected_job_focus is not None and token != self._selected_job_focus["id"]:
+                    raise SafetyError("Workpiece focus changed after preflight; prepare the job again")
+                if token is not None and self._selected_job_focus is None:
+                    raise SafetyError("Measured workpiece focus is no longer current; measure the workpiece again")
+
+    def _require_workpiece_focus(self) -> None:
+        capabilities = self._node_capabilities or ()
+        if FOCUS_CAPABILITY in capabilities and WORKPIECE_FOCUS_CAPABILITY not in capabilities:
+            raise SafetyError("Update the Pi companion before running jobs with automatic workpiece focus")
+        if WORKPIECE_FOCUS_CAPABILITY in capabilities and not self._workpiece_focus_observed:
+            raise SafetyError("Refresh the Pi workpiece focus status before starting a powered job")
+        if self._job_focus_required and self._selected_job_focus is None:
+            raise SafetyError(self._job_focus_block_reason)
+
+    def _cache_workpiece_focus(self, raw: object) -> None:
+        """Cache only accepted Pi evidence; this never creates focus authority."""
+        self._selected_job_focus = None
+        self._workpiece_focus_observed = False
+        if not isinstance(raw, Mapping) or type(raw.get("job_focus_required")) is not bool:
+            self._job_focus_required = True
+            raise PiJobProtocolError("Pi did not return the measured workpiece focus state")
+        self._job_focus_required = self._job_focus_required or raw["job_focus_required"]
+        reason = raw.get("job_focus_block_reason")
+        if reason is not None and (type(reason) is not str or not 1 <= len(reason) <= 2048):
+            raise PiJobProtocolError("Pi returned an invalid workpiece focus reason")
+        self._job_focus_block_reason = reason or "Measure the workpiece before starting a powered job"
+        plan = raw.get("job_focus")
+        if plan is None:
+            self._workpiece_focus_observed = True
+            return
+        try:
+            if type(plan) is not dict or plan.get("reusable") is not True or raw["job_focus_required"] is not True:
+                raise SafetyError("Pi returned an invalid reusable workpiece focus")
+            attach_job_focus("M5", plan)
+            target = finite_number(plan.get("target_z_mm"), "Workpiece focus Z", 0, 80)
+            clearance = finite_number(plan.get("clearance_z_mm"), "Workpiece clearance", 20, 80)
+            if target > clearance or plan.get("gap_mm") not in (3, 5, 7):
+                raise SafetyError("Pi returned an invalid workpiece focus target")
+        except (SafetyError, KeyError) as exc:
+            raise PiJobProtocolError(str(exc)) from exc
+        self._selected_job_focus = copy.deepcopy(plan)
+        self._workpiece_focus_observed = True
 
     def arm(
         self,
@@ -1763,6 +1842,11 @@ class RemoteMachineService:
             raise MachineError("Update the E3 Pi service to position the probe at a selected point")
         if action == "use_job" and JOB_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the Pi companion before selecting measured job focus")
+        workpiece_supported = WORKPIECE_FOCUS_CAPABILITY in (self._node_capabilities or ())
+        if action in {"measure", "set_job_gap"} and not workpiece_supported:
+            self._job_focus_required = True
+            self._selected_job_focus = None
+            raise MachineError("Update the Pi companion before measuring automatic workpiece focus")
         recovery_supported = FOCUS_RECOVERY_CAPABILITY in (self._node_capabilities or ())
         if action == "recover" and not recovery_supported:
             raise MachineError("Update the E3 Pi service to reconnect the Ender from this window")
@@ -1822,14 +1906,21 @@ class RemoteMachineService:
         except SafetyError as exc:
             raise PiJobProtocolError(str(exc)) from exc
         self._require_operation_current(generation)
-        self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
-        if action == "use_job":
+        with self._stop_epoch_lock, self._state_lock:
+            if self._stop_epoch != generation:
+                raise MachineError("Operation was cancelled by software STOP")
+            self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
+            if workpiece_supported:
+                self._focus_observation_epoch += 1
+                self._cache_workpiece_focus(result)
+        result["workpiece_focus_available"] = workpiece_supported
+        if not workpiece_supported and action == "use_job":
             plan = result.get("job_focus")
             if type(plan) is not dict:
                 raise PiJobProtocolError("Pi did not return the selected job focus")
             attach_job_focus("M5", plan)
             self._selected_job_focus = dict(plan)
-        elif action not in {"status", "clearance"}:
+        elif not workpiece_supported and action not in {"status", "clearance"}:
             self._selected_job_focus = None
         if action == "preview":
             # The monitor may still cache this completed operation as active.

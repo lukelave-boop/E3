@@ -1559,7 +1559,8 @@ def test_calibration_controls_exist_only_in_machine_setup(app, calibration_mode)
         assert not hasattr(panel, "_xy")
         assert not hasattr(panel, "gauge_removed")
         assert not hasattr(panel, "job_flat")
-        assert panel.preview_group.isHidden() is (not calibration_mode)
+        assert not panel.preview_group.isHidden()
+        assert panel.preview_group.title() == ("Preview and position" if calibration_mode else "Workpiece focus")
         labels = [item.text() for item in panel.findChildren(QtWidgets.QCheckBox)]
         assert not any(
             "XY transfer path" in label or "Solid, flat patch" in label
@@ -1587,7 +1588,10 @@ def test_preview_and_position_are_setup_only_with_no_removed_xy_dispatch(app, ca
         panel.path_clear.setChecked(True)
         panel.show()
         app.processEvents()
-        assert panel.preview_group.isVisible() is calibration_mode
+        assert panel.preview_group.isVisible()
+        assert panel.preview.isVisible() is calibration_mode
+        assert panel.move.isVisible() is calibration_mode
+        assert panel.use_job.isVisible() is calibration_mode
         assert panel.preview.isEnabled() is calibration_mode
         assert panel.move.isEnabled() is calibration_mode
         assert panel.use_job.isEnabled() is calibration_mode

@@ -129,6 +129,7 @@ def _explicit_test_machine_runtime(
                     air_assist_commands=None,
                     air_assist_off_commands=(),
                     focus_plan=None,
+                    retained_workpiece_plan=None,
                 )
                 service._legacy_test_job_context = context
                 service._active_job_context = context

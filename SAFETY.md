@@ -36,10 +36,16 @@ starts after a focus descent until an acknowledged clearance lift. Home / park
 first requests that verified lift. A selected measured-focus job lifts before
 arming, approaches at clearance, lowers only after XY completion, and lifts
 after acknowledged laser-off and draining before successful final Home / park.
-The selection requires one flat job surface and confirmed gauge removal and
+Measurement now selects that job focus automatically and requires one flat job surface and confirmed gauge removal and
 clear Z/XY paths. STOP, failed moves and unknown Z never initiate recovery motion.
 The operator
 must still confirm the actual path, flat patch, gauge fit and changed workpiece.
+The workpiece height is reusable after successful jobs, framing, XY jogging and
+Home / park only with verified clearance and unchanged reference/controller
+authority. New measurement replaces the height; it is not restored after a
+Pi/controller restart. Once focus is required, a missing or invalid datum blocks
+powered jobs instead of allowing a job to omit its Z move. Changing gap is an
+explicit no-motion recalculation; status polling cannot change the selected gap.
 No focus actions fire the laser or provide safety-rated stopping or collision
 detection. A selected flat job height may survive successful Home / park only
 with verified clearance and unchanged primary/Ender sessions, firmware and Z

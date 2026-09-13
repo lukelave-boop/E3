@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -58,7 +59,8 @@ from .io_diagnostics import thread_snapshot
 from .job_focus import binding_id as focus_binding_id
 from .job_focus import check_context as check_job_focus_context
 from .job_focus import move as move_job_focus
-from .job_focus import preserve_through_park, program_binding, selected_plan
+from .job_focus import preserve_through_park, program_binding, retain_after_job, selected_plan
+from .job_focus import selection_snapshot as focus_selection_snapshot
 from .laser_focus import LaserFocus
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
@@ -321,6 +323,7 @@ class _JobRunContext:
     air_assist_commands: AirAssistCommands | None
     air_assist_off_commands: tuple[str, ...]
     focus_plan: dict[str, Any] | None = None
+    retained_workpiece_plan: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -5046,7 +5049,7 @@ class MachineService:
             raise SafetyError("Jog feed must be positive")
 
         operation_stop_epoch = self._operation_stop_epoch()
-        with self._command_lock:
+        with self._command_lock, preserve_through_park(self, lift=False):
             with self._stop_epoch_lock:
                 if self._stop_epoch != operation_stop_epoch:
                     raise MachineError("Jog was cancelled by software STOP")
@@ -5656,6 +5659,8 @@ class MachineService:
             raise SafetyError(
                 "Program contains laser-enable commands while process laser lockout is active"
             )
+        if requires_laser_authorization:
+            self._laser_focus.require_job_focus()
         if requires_laser_authorization and self._laser_focus.job_plan is not None and program_binding(lines) is None:
             lines.insert(0, "E3FOCUS " + self._laser_focus.job_plan["id"])
         canonical = "\n".join(lines).encode("utf-8")
@@ -5844,6 +5849,9 @@ class MachineService:
             if self._laser_focus.requires_clearance:
                 raise SafetyError("Return Z to focus clearance before starting a job")
             focus_plan = self._selected_job_focus(program)
+            retained_workpiece_plan = None
+            if focus_plan is None and self._laser_focus.job_plan is not None:
+                retained_workpiece_plan = focus_selection_snapshot(self, self._laser_focus.job_plan["id"])
             requires_laser_authorization = program.requires_laser_authorization
             requires_motion = program.requires_motion
             start_authorization_epoch: int | None = None
@@ -5951,6 +5959,7 @@ class MachineService:
                     air_assist_commands=active_air_assist,
                     air_assist_off_commands=self._active_job_air_assist_off_commands,
                     focus_plan=focus_plan,
+                    retained_workpiece_plan=retained_workpiece_plan,
                 )
                 self._laser_focus.invalidate()
                 self._job = job_status
@@ -6265,7 +6274,12 @@ class MachineService:
             for index, line in enumerate(lines, start=1):
                 if focus_binding_id(line) is not None:
                     continue
-                if context.focus_plan is not None and not focused and line.startswith(("M3 ", "M4 ")):
+                focus_words = ({word.letter: word.value for word in parse_words(line)}
+                               if context.focus_plan is not None and not focused
+                               and not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) else {})
+                if (context.focus_plan is not None and not focused
+                        and focus_words.get("S", 0) > 0
+                        and (focus_words.get("M") in (3, 4) or focus_words.get("G") == 1)):
                     self._execute_running_job_command(context.session.dialect.motion_barrier_command,
                                                       timeout=job_ack_timeout)
                     self._move_job_focus(context, clearance=False)
@@ -6326,6 +6340,18 @@ class MachineService:
             self._raise_session_failure(context.session)
             if context.stop_event.is_set():
                 raise MachineError("Job stopped")
+            if context.focus_plan is not None or context.retained_workpiece_plan is not None:
+                final_xy = self._jog_position_mm
+                if final_xy is None:
+                    final_xy = tuple((context.focus_plan or context.retained_workpiece_plan)["xy"])
+                    for line in lines:
+                        if (focus_binding_id(line) is not None
+                                or line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX)):
+                            continue
+                        words = {word.letter: word.value for word in parse_words(line)}
+                        if words.get("G") in (0, 1):
+                            final_xy = (words.get("X", final_xy[0]), words.get("Y", final_xy[1]))
+                retain_after_job(self, context, final_xy)
         except BaseException as exc:
             with self._lock:
                 stopped_by_request = bool(
@@ -6664,6 +6690,12 @@ class MachineService:
             }
         with self._lock:
             state = self._controller_state
+            workpiece_focus = copy.deepcopy({
+                "job_focus_required": self._laser_focus.job_focus_required,
+                "job_focus": self._laser_focus.job_plan,
+                "job_focus_block_reason": (self._laser_focus.job_focus_block_reason
+                                           if self._laser_focus.job_plan is None else None),
+            })
             session = self._session or self._candidate_session
             session_snapshot = None if session is None else session.status_snapshot()
             diagnostics = (
@@ -6775,6 +6807,7 @@ class MachineService:
             "secondary_air_assist": secondary_status,
             "ender_z_telemetry": ender_z_telemetry,
             "z_retention": self._retained_z_status(),
+            "workpiece_focus": workpiece_focus,
             "z_probe": {
                 "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
                 "unavailable_reason": _PROBE_SUSPENSION_REASON or None,

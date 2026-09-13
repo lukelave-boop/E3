@@ -1,5 +1,36 @@
 # Architecture
 
+## Reusable measured workpiece focus
+
+MachineService owns the workpiece datum. A successful typed measurement with
+compatible gauge calibration creates the plan directly, including when the
+probe carriage is offset from the laser. The contact Z plus taught mounting
+offset and chosen gap determine the job Z. Explicit `set_job_gap` validates and
+rebinds that same datum without motion; status reads never change the gap.
+
+The `E3FOCUS` UUID binds canonical job bytes to the datum. Preflight and START
+reject missing/stale bindings once focus is required. A calibrated process
+starts with focus required but no workpiece datum. Generic invalidation leaves
+this requirement set, preventing accidental ordinary powered execution after
+STOP, failure or lost reference. An untouched non-focus machine and zero-power
+programs keep their existing behavior.
+
+The running job owns a copy of the plan and performs the existing guarded
+clearance/XY barrier/Z readback/output sequence. Only successful drained
+completion at verified clearance republishes its reusable plan. Laser-off
+framing verifies clearance without descending. Home/park and ordinary XY jog
+retention similarly validate both sessions, STOP, firmware, reference and Z.
+New measurements and gap changes generate new UUIDs; program authorization and
+Pi job identity remain specific to each execution. No project schema changes
+or workpiece persistence across controller/Pi restarts are introduced.
+
+The Pi advertises `pi-workpiece-focus-v1` and publishes `workpiece_focus` in
+coherent machine status. RemoteMachineService caches only accepted current
+metadata and validated plan summaries; the Pi remains authoritative at upload
+and START. Older focus-capable Pi services reject with an update message in the
+new desktop. The daily panel shows the gap and target from this shared state;
+manual positioning and gauge teaching remain in Machine Setup.
+
 ## Clean-shutdown Z retention
 
 MachineService owns retention for the split GRBL XY / Ender Z workflow. The
@@ -48,12 +79,14 @@ discard the plan and revoke primary coordinate readiness.
 
 ## Job-bound measured focus
 
-The focus panel selects an ephemeral Pi-owned job plan from a current preview
-and explicit flat-surface/path confirmation. A UUID directive at the beginning
+Measurement now selects a reusable Pi-owned workpiece plan after the stated
+flat-surface/path conditions. The Setup-only legacy selection remains supported.
+A UUID directive at the beginning
 of the immutable canonical program binds upload, authorization and execution to
 that exact plan. The normal parser rejects misplaced, repeated or malformed
-directives. MachineService validates live authority, consumes the selection at
-START and copies it into the job context. Ordinary manual commands cannot send
+directives. MachineService validates live authority and copies the plan into
+the job context at START, retaining it again only after successful clearance
+verification. Ordinary manual commands cannot send
 the directive. Remote monitoring loss cannot interrupt an accepted Pi job.
 
 machine/job_focus.py performs bounded secondary Z positioning under the running
@@ -231,7 +264,9 @@ LaserFocusWorkspace shares the focus panel and coordinator between the embedded
 Machine-tab **Z axis · Ender** reference/measurement workspace and Machine Setup
 tab 7. Daily Position probe selects in the main corrected workspace and creates
 no duplicate camera pane; calibration mode retains its raw FocusBedView. The
-separate Surface / laser focus dialog entry point is removed. Calibration mode creates the complete **Preview and position**,
+separate Surface / laser focus dialog entry point is removed. Daily mode shows
+the reusable workpiece gap/target without a preview or next-job selection step.
+Calibration mode creates manual **Preview and position**,
 measured probe XY offset editor and 7 mm teaching controls only in Machine
 Setup, which also retains reference and measurement helpers. Both surfaces use
 AppContext's existing camera and machine services. Ender recovery, saved-Z

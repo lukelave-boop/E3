@@ -1,10 +1,21 @@
 # Roadmap
 
+## Automatic workpiece focus
+
+Machine-tab measurement supplies reusable job focus directly. The Pi must
+finish the clearance XY approach and verify the calculated Z before positive
+output. Successful jobs, framing, XY jogging and Home / park retain the flat
+workpiece datum under unchanged authority. New measurement or gap selection
+replaces the binding; lost reference/failures require a new measurement and
+block powered jobs. Reuse across Pi/controller restart remains excluded.
+Matching Pi deployment and repeated-job physical qualification are pending;
+see CURRENT_STATE.md for exact automated/build evidence.
+
 ## Retained Z qualification
 
 Implement clean idle Pi-owned Z checkpoints, consume-before-connect storage,
 guarded firmware coordinate restoration, and explicit Forget saved Z controls.
-Keep border-reference retention separate from surface measurements and one-use
+Keep border-reference retention separate from surface measurements and reusable
 job focus. Matching desktop/Pi/firmware deployment and a recorded physical
 power-cycle acceptance test remain pending; automated acceptance does not
 establish unpowered axis stability. Preserve exact-firmware gauge compatibility
@@ -18,14 +29,15 @@ Place daily reference, measurement, recovery and saved-Z controls in
 calibrated view on the left, previews a crosshair and requires a separate
 **Move probe here** press; remove the duplicated right-hand live view. Require
 fresh calibrated image metadata and preserve machine/honeycomb coordinate
-mapping. Keep the complete **Preview and position** section in
+mapping. Show calculated reusable **Workpiece focus** in the daily controls;
+keep manual **Preview and position** controls in
 **Machine Setup → 7 · Z / laser focus** with probe offsets, gauge teaching and
 its raw live camera preview. Remove the separate Surface / laser focus dialog
 and its Position XY jog row. Move and next-job selection explicitly confirm the physical conditions
 printed beside their buttons; headroom, manual-Z, recovery and gauge-fit checks
 remain. Preserve saved-Z restoration, retained Home / park XY and Forget saved Z
-without backend or persistence changes. This layout adds no Pi or firmware
-requirement beyond the selected features' existing requirements. Verification
+without project persistence changes. Automatic workpiece focus requires its
+matching Pi companion; the layout alone adds no firmware requirement. Verification
 and build status belong in CURRENT_STATE; revised-layout operator testing is
 separate from historical physical results.
 

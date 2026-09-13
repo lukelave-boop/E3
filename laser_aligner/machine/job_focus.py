@@ -1,10 +1,11 @@
-"""One-use focus binding carried in immutable job bytes, never sent to GRBL."""
+"""Measured-workpiece focus binding in immutable job bytes, never sent to GRBL."""
 from __future__ import annotations
 
 import copy
 import re
 from contextlib import contextmanager
 
+from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
 from ..errors import MachineError, SafetyError
 from .focus_bounds import FocusXYBounds
 from .mainboard import parse_status, validate_max_z
@@ -12,6 +13,7 @@ from .z_probe import parse_position
 
 PREFIX = "E3FOCUS"
 CAPABILITY = "pi-job-focus-v1"
+WORKPIECE_FOCUS_CAPABILITY = "pi-workpiece-focus-v1"
 _LINE = re.compile(r"E3FOCUS ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 
 
@@ -46,13 +48,18 @@ def attach(text: str, plan: dict | None) -> str:
 def selected_plan(machine, program):
     token = program_binding(program.lines)
     if token is None:
+        if program.requires_laser_authorization and machine._laser_focus.job_focus_required:
+            machine._laser_focus.require_job_focus()
+            raise SafetyError("Powered job is missing its measured workpiece focus binding; prepare the job again")
         return None
     plan = selection_snapshot(machine, token)
     # A first-move endpoint check alone cannot validate travel from the measured spot.
     from ..gcode.preview import parse_words
     for line in program.lines[1:]:
-        if line.startswith(("G0 ", "G1 ")):
-            words = {w.letter: w.value for w in parse_words(line)}
+        if line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
+            continue
+        words = {w.letter: w.value for w in parse_words(line)}
+        if words.get("G") in (0, 1):
             bounds = FocusXYBounds(machine.settings.work_area, program.guarded_output_polygon_mm)
             if not bounds.contains_segment(tuple(plan["xy"]), (words["X"], words["Y"])):
                 raise SafetyError("Travel from the measured spot to the job start leaves the positioning area")
@@ -76,6 +83,7 @@ def selection_snapshot(machine, token):
         or not measurement_current
         or machine._jog_position_mm != tuple(plan["xy"])
         or state.selected_clearance != plan["clearance_z_mm"]
+        or state._z_reference != plan["reference"] or state.z_reference_required
         or validate_max_z(machine.settings.mainboard_max_z_mm) != plan["maximum"]):
         raise SafetyError("Job focus selection is stale; measure, preview and select it again")
     if state.xy_recovery_pending_reference:
@@ -84,7 +92,7 @@ def selection_snapshot(machine, token):
 
 
 @contextmanager
-def preserve_through_park(machine):
+def preserve_through_park(machine, *, lift=True):
     """Retain only the chosen flat job height across an explicitly requested XY park."""
     state = machine._laser_focus
     if state.job_plan is None:
@@ -125,8 +133,9 @@ def preserve_through_park(machine):
     try:
         with guard():
             pass
-        with machine.operation_scope(plan["session"][2]):
-            machine.focus_control("clearance", confirmed=True, clearance_z_mm=plan["clearance_z_mm"])
+        if lift:
+            with machine.operation_scope(plan["session"][2]):
+                machine.focus_control("clearance", confirmed=True, clearance_z_mm=plan["clearance_z_mm"])
         verify_clearance()
         yield guard
         verify_clearance()
@@ -153,7 +162,7 @@ def preserve_through_park(machine):
 
 
 def check_context(machine, context):
-    plan = context.focus_plan
+    plan = context.focus_plan or context.retained_workpiece_plan
     if plan is None:
         return
     probe = machine._z_probe
@@ -161,13 +170,15 @@ def check_context(machine, context):
         or machine._stop_epoch != plan["session"][2]
         or context.session.generation != plan["session"][1]
         or validate_max_z(machine.settings.mainboard_max_z_mm) != plan["maximum"]
-        or machine._laser_focus.calibration != plan["calibration"]):
+        or machine._laser_focus.calibration != plan["calibration"]
+        or machine._laser_focus._z_reference != plan["reference"]
+        or machine._laser_focus.z_reference_required):
         raise MachineError("Measured job focus authority changed during execution")
 
 
-def move(machine, context, *, clearance):
+def move(machine, context, *, clearance, verify_only=False):
     """Move only Z under this exact Pi-owned running job and both sessions."""
-    plan, probe = context.focus_plan, machine._z_probe
+    plan, probe = context.focus_plan or context.retained_workpiece_plan, machine._z_probe
     if plan is None or probe is None:
         raise MachineError("Measured job focus context is unavailable")
     owner = probe.owner
@@ -218,6 +229,10 @@ def move(machine, context, *, clearance):
         if not clearance and abs(current - plan["clearance_z_mm"]) > .05:
             raise SafetyError("Job focus descent must begin at verified clearance")
         stowed()
+        if verify_only:
+            if abs(current - target) > .05:
+                raise MachineError("Workpiece focus clearance was not confirmed")
+            return
         machine._set_running_job_phase("lifting" if clearance else "focusing")
         with guard():
             machine._z_probe_active = True
@@ -239,3 +254,24 @@ def move(machine, context, *, clearance):
         finally:
             machine._z_probe_active = False
         machine._set_running_job_phase("streaming")
+
+
+def retain_after_job(machine, context, xy):
+    """Retain a measured flat workpiece only after successful, drained completion."""
+    plan = context.focus_plan or context.retained_workpiece_plan
+    if plan is None or plan.get("reusable") is not True:
+        return
+    move(machine, context, clearance=True, verify_only=True)
+    state = machine._laser_focus
+    with machine._secondary_write_gate, machine._stop_epoch_lock:
+        check_context(machine, context)
+        if (context.stop_event.is_set() or machine._active_job_context is not context
+                or not machine._same_controller_session(machine._session, context.session)
+                or state.requires_clearance or state._z_reference != plan["reference"]
+                or state.z_reference_required or xy is None):
+            raise MachineError("Workpiece focus lost authority at job completion")
+        state.session = plan["session"]
+        state.job_plan = copy.deepcopy(dict(plan, xy=list(xy),
+                                            current_z_mm=plan["clearance_z_mm"],
+                                            parked_at_clearance=True))
+        machine._jog_position_mm = tuple(xy)

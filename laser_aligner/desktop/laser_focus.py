@@ -68,6 +68,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         intro = QtWidgets.QLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
             "This is laser-off setup; it does not change camera calibration or start a job."
+            if calibration_mode else
+            "Measure the workpiece to calculate the focus for every job on it. "
+            "The job moves to that focus before laser output."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -208,6 +211,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         grid.addWidget(self.measure, 12, 0, 1, 2)
         grid.addWidget(self.clear_surface, 12, 2, 1, 2)
         self.position_note = QtWidgets.QLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
+        if not calibration_mode:
+            self.position_note.setText(
+                "Measure surface sets the focus for every job on this flat workpiece. "
+                "Confirm one flat surface across the job, the gauge removed, and clear Z/XY paths. "
+                "Measure again after changing the material or its supports."
+            )
         self.position_note.setWordWrap(True)
         grid.addWidget(self.position_note, 11, 0, 1, 4)
         if not calibration_mode:
@@ -290,7 +299,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             teach_layout.addWidget(self.teaching_limits, 4, 0, 1, 4)
             layout.addWidget(teach)
 
-        self.preview_group = QtWidgets.QGroupBox("Preview and position", self)
+        self.preview_group = QtWidgets.QGroupBox("Preview and position" if calibration_mode else "Workpiece focus", self)
         focus_layout = QtWidgets.QGridLayout(self.preview_group)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
@@ -323,15 +332,17 @@ class LaserFocusPanel(QtWidgets.QWidget):
         focus_layout.addWidget(self.job_confirmation, 5, 0, 1, 3)
         focus_layout.addWidget(self.use_job, 6, 0, 1, 3)
         focus_layout.addWidget(self.job_note, 7, 0, 1, 3)
-        if calibration_mode:
-            layout.addWidget(self.preview_group)
-        else:
-            self.preview_group.hide()
-            setup_note = QtWidgets.QLabel(
-                "Preview and position: Machine Setup → 7 · Z / laser focus."
-            )
-            setup_note.setWordWrap(True)
-            layout.addWidget(setup_note)
+        if not calibration_mode:
+            for control in (self.preview, self.move, self.move_note, self.move_confirmation,
+                            self.use_job, self.job_confirmation):
+                control.hide()
+            while focus_layout.count():
+                focus_layout.takeAt(0)
+            for row, control in enumerate((
+                self.gap, self.target, self.job_note,
+            )):
+                focus_layout.addWidget(control, row, 0)
+        layout.addWidget(self.preview_group)
         footer = QtWidgets.QHBoxLayout()
         self.message = QtWidgets.QLabel("Connect the machine, then refresh focus support.")
         self.message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
@@ -360,7 +371,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.refresh.clicked.connect(self.refreshRequested)
         self.clearance.valueChanged.connect(self._edit_clearance)
         self.clearance.lineEdit().textEdited.connect(self._edit_clearance)
-        self.gap.currentIndexChanged.connect(self._parameters_edited)
+        self.gap.currentIndexChanged.connect(self._edit_gap)
         for checkbox in (self.path_clear, self.gauge, self.xy_recovery_clear):
             if checkbox is not None:
                 checkbox.toggled.connect(self._sync)
@@ -511,6 +522,20 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.path_clear.setChecked(False)
         self._parameters_edited()
 
+    def _edit_gap(self, *_args: object) -> None:
+        self._parameters_edited()
+        if not self.calibration_mode:
+            self.request("set_job_gap")
+
+    def _can_set_job_gap(self) -> bool:
+        return bool(
+            not self.calibration_mode and not self._busy and not self._pending
+            and _read_allowed(self._status) and self.fresh()
+            and self._result.get("available") is True
+            and self._result.get("workpiece_focus_available") is True
+            and (self._result.get("job_focus") or {}).get("reusable") is True
+        )
+
     def _clearance_value(self) -> float | None:
         if not self.clearance.hasAcceptableInput():
             return None
@@ -557,6 +582,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
         ):
             self.clear_camera_target("Machine position or offset changed; select the probe point again.")
         self._result = dict(result)
+        job_focus = result.get("job_focus")
+        if not self.calibration_mode and isinstance(job_focus, Mapping) and job_focus.get("reusable") is True:
+            gap_index = self.gap.findData(job_focus.get("gap_mm"))
+            if gap_index >= 0:
+                blocker = QtCore.QSignalBlocker(self.gap)
+                self.gap.setCurrentIndex(gap_index)
+                del blocker
         self._failure_message = None
         self.failure_detail.clear()
         self.failure_detail.hide()
@@ -621,7 +653,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.message.setText({
             "reference": "Border reference saved. Position over a flat surface at clearance, then measure.",
             "home_retained": "XY parked. Saved Z reference retained; select and measure the current workpiece.",
-            "measure": "Surface measured. Teach with the gauge, or preview using the saved offset.",
+            "measure": (
+                "Surface measured. Teach with the gauge, or preview using the saved offset."
+                if self.calibration_mode else
+                "Surface measured. Check Workpiece focus for the calculated job height."
+            ),
+            "set_job_gap": "Workpiece focus gap updated; no movement sent.",
             "jog": "Z jog finished. Check the 7 mm gauge fit before saving.",
             "teach": "Taught offset saved. Remove the gauge before moving.",
             "preview": ("Target previewed; no movement sent." if self._preview_id else
@@ -873,6 +910,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             f"travel at Z{job_focus['clearance_z_mm']:g}. Re-select after changing the work."
             if job_focus else "Job focus: not selected. Preview the measured surface, then select."
         )
+        workpiece_ready = self._sync_workpiece_focus() if not self.calibration_mode else False
         self.move_note.setText(
             f"Move unavailable: {move_block}" if move_block else
             f"Choose Move to focus to move Z to {self._result['preview']['target_z_mm']:.3f} mm."
@@ -897,17 +935,21 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Next: Confirm the Z path, then reference the border." if reference_only else
             "Next: Confirm the clear path, then Home / park XY; the saved Z needs no border probe."
             if home_action == "home_retained" and not projection.can_jog else
+            "Workpiece focus is ready for every job. Measure again after changing the material or supports."
+            if workpiece_ready and not self._camera_target and not self.position_probe.isChecked() else
             "Next: Confirm the clear path, then choose Home / park + reference." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
             "Next: Choose Move probe here with the gauge removed and XY path clear." if self._camera_target else
             f"Next: Click a solid probe spot in the {self._camera_location}." if self.position_probe.isChecked() else
+            f"Jobs blocked: {self._result['job_focus_block_reason']}"
+            if not self.calibration_mode and self._result.get("job_focus_block_reason") else
             "Next: Return the laser to the measured spot at clearance." if probe_phase and surface else
             "Next: Confirm the solid target under the probe, then measure surface." if probe_phase else
             f"Next: Choose Position probe and click a flat target in the {self._camera_location}." if not surface and offset_valid else
             "Next: Position over a wide, flat patch and measure its surface." if not surface else
             ("Next: Fit the 7 mm gauge with small Z steps, then save the setting." if self.calibration_mode else
              "Next: Teach the 7 mm gauge in Machine Setup → 7 · Z / laser focus.") if not self._result.get("calibration_compatible") else
-            "Next: Open Machine Setup → 7 · Z / laser focus to preview and select focus."
+            "Next: Measure the current workpiece to establish the focus for jobs."
             if not self.calibration_mode else
             f"Next: {move_block}" if move_block else
             "Next: Choose Move to focus to position the laser."
@@ -922,8 +964,41 @@ class LaserFocusPanel(QtWidgets.QWidget):
         if requires_clearance and return_minimum is not None:
             self.range_note.setText(self.range_note.text() + f" Return requires Z ≥ {return_minimum:g} mm.")
 
+    def _sync_workpiece_focus(self) -> bool:
+        plan = self._result.get("job_focus")
+        self.target.setText("Focus Z: measure the current workpiece")
+        if not self.fresh() or self._busy or self._pending or not _read_allowed(self._status):
+            self.target.setText("Focus Z: awaiting current status")
+            self.job_note.setText("Workpiece focus: refresh when the machine is idle.")
+            return False
+        reason = self._result.get("job_focus_block_reason")
+        if reason:
+            self.job_note.setText(f"Jobs blocked: {reason}")
+            return False
+        if isinstance(plan, Mapping) and plan.get("reusable") is True:
+            gap = _number(plan.get("gap_mm"))
+            target = _number(plan.get("target_z_mm"))
+            clearance = _number(plan.get("clearance_z_mm"))
+            if gap is not None and target is not None and clearance is not None:
+                self.target.setText(f"Focus Z: {target:.3f} mm · {gap:g} mm gap")
+                self.job_note.setText(
+                    f"Every job uses this focus and travels at Z{clearance:g} mm. "
+                    "Measure again after changing the material or its supports."
+                )
+                return True
+        self.job_note.setText(
+            "Workpiece focus: measure a solid, flat spot before starting jobs."
+            if self._result.get("workpiece_focus_available") is True else
+            "Automatic workpiece focus requires the matching Pi companion update."
+        )
+        return False
+
     def request(self, action: str, value: float | None = None) -> None:
         self._sync()
+        if action == "set_job_gap":
+            if self._can_set_job_gap():
+                self.actionRequested.emit(action, {"confirmed": True, "gap_mm": float(self.gap.currentData())})
+            return
         button = self.up if action == "jog" and value and value > 0 else self.down if action == "jog" else {
             "reference": self.reference, "home_reference": self.reference, "home_retained": self.reference,
             "measure": self.measure, "teach": self.teach,
@@ -1178,6 +1253,11 @@ class LaserFocusCoordinator(QtCore.QObject):
             return
         if action in {"preview", "move", "use_job"} and not self.panel.calibration_mode:
             return
+        if action == "set_job_gap" and (arguments.get("confirmed") is not True
+                                        or not self.panel._can_set_job_gap()):
+            return
+        if action == "set_job_gap":
+            arguments = dict(arguments, _gap_epoch=self._parameter_epoch)
         if action not in {"status", "recover"} and not self.panel.fresh():
             return
         if action == "recover" and (arguments.get("confirmed") is not True
@@ -1206,6 +1286,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         arguments = dict(arguments)
         camera_selection = arguments.pop("_camera_selection", None)
         camera_epoch = arguments.pop("_camera_epoch", None)
+        gap_epoch = arguments.pop("_gap_epoch", None)
         self._pending = True
         self._mutation = action != "status"
         # Background reads keep controls responsive. A clicked action takes
@@ -1231,6 +1312,8 @@ class LaserFocusCoordinator(QtCore.QObject):
                 raise RuntimeError("Focus request cancelled because the controller session changed.")
             if not _read_allowed(current):
                 raise RuntimeError("Focus setup requires an idle, connected machine with laser disarmed.")
+            if action == "set_job_gap" and gap_epoch != self._parameter_epoch:
+                raise RuntimeError("Workpiece focus gap changed; choose the gap again after refreshing.")
             method = getattr(machine, "focus_control", None)
             if not callable(method):
                 raise RuntimeError("Install the matching Pi support and surface-height V2 firmware for focus setup.")

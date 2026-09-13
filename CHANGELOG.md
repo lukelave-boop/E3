@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — use measured workpiece focus automatically
+
+- Machine-tab **Measure surface** now supplies the focus for every job on the
+  same flat workpiece, with no separate Setup preview/selection step. Show the
+  gap and calculated Z beside the daily controls; a gap change recalculates
+  the height without movement.
+- Retain the measured height after successful jobs, Frame, XY jogs and Home /
+  park under verified clearance and unchanged controller/Z authority. A new
+  measurement replaces it. Missing or invalid focus blocks powered execution
+  after the focus workflow has been used, including after STOP or restart.
+- Require the matching `pi-workpiece-focus-v1` companion before measurement or
+  powered execution on a focus-capable Pi. Preserve the taught gauge offset,
+  firmware, project schema and main-view probe selection.
+
 ## Unreleased — select probe points in the main view
 
 - Remove the duplicate live bed view from **Machine → Z axis · Ender**.

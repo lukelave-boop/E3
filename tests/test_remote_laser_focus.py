@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from laser_aligner.errors import MachineError, SafetyError
+from laser_aligner.machine.job_focus import WORKPIECE_FOCUS_CAPABILITY
 from laser_aligner.machine.laser_focus import (
     CLICK_CAPABILITY,
     PI_CAPABILITY,
@@ -26,7 +27,9 @@ def test_selected_job_focus_is_bound_into_remote_program_bytes(remote_focus):
     service, pi, result = remote_focus
     from laser_aligner.machine.job_focus import CAPABILITY
     pi.capabilities.append(CAPABILITY)
-    result.update(action="use_job", job_focus={"id": str(uuid.uuid4()), "target_z_mm": 2.6})
+    result.update(action="use_job", job_focus_required=True,
+                  job_focus={"id": str(uuid.uuid4()), "target_z_mm": 2.6,
+                             "clearance_z_mm": 30., "gap_mm": 7., "reusable": True})
     service.focus_control("use_job", confirmed=True, preview_id=str(uuid.uuid4()))
     program = service.preflight_program("G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S100\nG1 X20 Y10 F500\nM5")
     assert program.lines[0] == "E3FOCUS " + result["job_focus"]["id"]
@@ -46,11 +49,19 @@ def remote_focus(monkeypatch):
     monkeypatch.setenv("E3_BRIDGE_TOKEN", "remote-machine-test-token-value")
     pi, service = FakePi(), _service()
     pi.capabilities.append(PI_CAPABILITY)
+    pi.capabilities.append(WORKPIECE_FOCUS_CAPABILITY)
     result = {"action": "status", "available": True, "reference_ready": False,
-              "current_readback": {"z_mm": 20., "z_known": True, "fresh": True}, "max_z_mm": 80.}
+              "current_readback": {"z_mm": 20., "z_known": True, "fresh": True}, "max_z_mm": 80.,
+              "job_focus_required": False, "job_focus": None, "job_focus_block_reason": None}
     def exchange(host, port, token, request, **kwargs):
         if request["action"] != ACTION_MACHINE_FOCUS:
-            return pi(host, port, token, request, **kwargs)
+            response = pi(host, port, token, request, **kwargs)
+            if "status" in response:
+                response["status"]["workpiece_focus"] = {
+                    key: copy.deepcopy(result[key])
+                    for key in ("job_focus_required", "job_focus", "job_focus_block_reason")
+                }
+            return response
         pi.requests.append(copy.deepcopy(request))
         pi.timeouts.append(kwargs["timeout"])
         if pi.before_request:
@@ -66,6 +77,7 @@ def test_focus_capability_advertised():
     assert CLICK_CAPABILITY in SERVER_CAPABILITIES
     assert RECOVERY_CAPABILITY in SERVER_CAPABILITIES
     assert XY_RECOVERY_CAPABILITY in SERVER_CAPABILITIES
+    assert WORKPIECE_FOCUS_CAPABILITY in SERVER_CAPABILITIES
 
 
 def test_forget_z_accepts_explicit_empty_reference_without_inventing_readback(remote_focus):

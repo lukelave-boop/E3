@@ -62,8 +62,10 @@ def test_job_clearance_travel_focus_cut_lift_home_order(focus_machine, monkeypat
     assert any(e == ("xy", "M5") for e in events[indices[-1]+1:lift])
     assert not any(line.startswith("E3FOCUS") for _, line in events)
     assert not focus.state.requires_clearance
-    with pytest.raises(MachineError, match="stale"):
-        machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+    machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+    wait(machine)
+    assert machine._job.error is None
+    assert focus.state.job_plan["id"] == plan["id"]
 
 
 @pytest.mark.parametrize("failure", ["unknown", "firmware", "pin", "stop_descent", "failed_lift"])
@@ -207,14 +209,15 @@ def test_park_does_not_restore_focus_after_changed_authority(focus_machine, monk
     assert not machine._coordinate_reference_ready
 
 
-def test_jog_after_park_still_invalidates_selected_job(focus_machine):
+def test_laser_off_jog_after_park_retains_flat_workpiece(focus_machine):
     machine, focus, primary = focus_machine
     select(machine)
     program = machine.preflight_program(PROGRAM)
     machine.prepare_photo_position()
     machine.jog(1, 0, 300)
-    with pytest.raises(MachineError, match="stale"):
-        machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+    machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+    wait(machine)
+    assert machine._job.error is None
 
 
 @pytest.mark.parametrize("failure", ["unknown", "rejected", "stop"])

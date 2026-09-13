@@ -26,7 +26,7 @@ RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy", "use_job", "forget_z"}
+           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -99,6 +99,10 @@ class LaserFocus:
     def __init__(self, path: Path | None, controller_port: str):
         self.path, self.controller_port = path, controller_port
         self.calibration = self._load()
+        # A lost workpiece datum must never downgrade a calibrated machine to
+        # ordinary unfocused output. A new process requires a fresh measurement.
+        self.job_focus_required = self.calibration is not None
+        self.job_focus_block_reason = "Measure the workpiece before starting a powered job"
         self.xy_path = None if path is None else path.with_name(path.stem + "-xy.json")
         self.probe_xy_offset_mm = self._load_xy_offset()
         self.requires_clearance = False
@@ -142,6 +146,42 @@ class LaserFocus:
         if not keep_alignment:
             self.xy_sequence = None
 
+    def require_job_focus(self):
+        if self.job_focus_required and self.job_plan is None:
+            raise SafetyError(self.job_focus_block_reason)
+
+    def _select_measured_job(self, *, firmware, geometry, maximum, session, xy,
+                             current, clearance, gap, compatible):
+        """Bind one flat workpiece for repeated jobs, without a positioning move."""
+        self.job_focus_required = True
+        self.job_plan = None
+        if not compatible:
+            self.job_focus_block_reason = "Teach the 7 mm focus gauge, then measure the workpiece before starting a powered job"
+            return
+        contact = self.surface["contact_z_mm"]
+        target = contact + self.calibration["focus_offset_mm"] + gap - 7
+        if (not 0 <= target < clearance or target > maximum
+                or clearance < contact + 15 or current > clearance + .05
+                or self.xy_recovery_pending_reference):
+            self.job_focus_block_reason = "Measured job focus is outside the available Z clearance; correct the setup and measure again"
+            return
+        laser_target = (self.xy_sequence["laser_target_xy_mm"]
+                        if self.xy_sequence else list(xy))
+        measured_spot = (self.xy_sequence["surface_target_xy_mm"]
+                         if self.xy_sequence else list(xy))
+        self.selected_clearance = clearance
+        self.job_plan = copy.deepcopy(dict(
+            id=str(uuid.uuid4()), measurement_id=self.surface["id"],
+            contact_z_mm=contact,
+            calibration_id=self.calibration["id"], gap_mm=gap,
+            target_z_mm=target, current_z_mm=current, clearance_z_mm=clearance,
+            session=session, firmware=firmware, geometry=geometry, maximum=maximum,
+            xy=list(xy), measurement_xy_mm=list(measured_spot),
+            laser_target_xy_mm=list(laser_target), calibration=self.calibration,
+            reference=self.reference, reusable=True,
+        ))
+        self.job_focus_block_reason = "Measured workpiece focus is no longer current; measure the workpiece again"
+
     def unavailable_status(self, *, action, maximum, clearance, ender, laser_spot_offset):
         """Configuration remains inspectable without inventing live Z authority."""
         self.invalidate()
@@ -159,6 +199,9 @@ class LaserFocus:
             "xy_offset_available": True, "position_probe_available": True,
             "current_carriage_xy_mm": None, "firmware_geometry": None,
             "requires_clearance": self.requires_clearance,
+            "job_focus_required": self.job_focus_required, "job_focus": self.job_plan,
+            "workpiece_focus_available": True,
+            "job_focus_block_reason": self.job_focus_block_reason if self.job_plan is None else None,
             "xy_recovery_pending_reference": self.xy_recovery_pending_reference,
             "return_clearance_mm": self.selected_clearance,
             "ender": ender, "recovery_available": True,
@@ -241,6 +284,9 @@ class LaserFocus:
         except OSError as exc:
             raise MachineError(f"Cannot save focus calibration: {exc}") from exc
         self.calibration = calibration
+        if calibration is not None:
+            self.job_focus_required = True
+            self.job_focus_block_reason = "Measure the workpiece before starting a powered job"
 
     def execute(self, owner, probe, action, **options):
         with ExitStack() as telemetry_scope:
@@ -378,7 +424,7 @@ class LaserFocus:
             if self.xy_sequence and self.xy_sequence["phase"] != "laser":
                 raise SafetyError("Align the laser over the measured point before lowering or teaching Z")
 
-        if action in {"jog", "teach", "preview", "forget", "set_xy_offset"}:
+        if action in {"jog", "teach", "forget", "set_xy_offset"}:
             self.job_plan = None
         if action == "reference":
             self.drop_z_reference()
@@ -448,7 +494,11 @@ class LaserFocus:
             self.preview = None
             if self.surface:
                 self.surface["carriage_xy_mm"] = list(xy)
+            if action == "align_laser" and self.job_plan is not None:
+                self.job_plan["xy"] = list(xy)
         elif action == "measure":
+            self.job_focus_required = True
+            self.job_plan = None
             known()
             if self.xy_sequence and self.xy_sequence["phase"] == "laser":
                 raise SafetyError("Align the probe again before remeasuring the laser target")
@@ -462,6 +512,9 @@ class LaserFocus:
             self.surface = {"id": str(uuid.uuid4()), "contact_z_mm": contact,
                             "elevation_mm": contact - self.reference["border_z_mm"],
                             "carriage_xy_mm": list(xy), "measured_at": time.time()}
+            self._select_measured_job(firmware=firmware, geometry=geometry, maximum=maximum,
+                                      session=session, xy=xy, current=current, clearance=clearance,
+                                      gap=gap_mm, compatible=compatible)
         elif action in {"jog", "teach", "preview"}:
             known()
             laser_aligned()
@@ -516,10 +569,29 @@ class LaserFocus:
                     preview, id=str(uuid.uuid4()), session=session, firmware=firmware,
                     geometry=geometry, maximum=maximum, xy=list(xy),
                     calibration=self.calibration, reference=self.reference,
+                    reusable=True, measurement_xy_mm=list(xy), laser_target_xy_mm=list(xy),
+                    contact_z_mm=self.surface["contact_z_mm"],
                 ))
+                self.job_focus_required = True
             else:
                 self.job_plan = None
                 move_to(preview["target_z_mm"])
+        elif action == "set_job_gap":
+            known()
+            plan = self.job_plan
+            if (plan is None or not compatible or plan["session"] != session
+                    or plan["calibration"] != self.calibration
+                    or plan["reference"] != self.reference
+                    or plan["firmware"] != firmware or plan["geometry"] != geometry
+                    or plan["maximum"] != maximum or tuple(plan["xy"]) != tuple(xy)
+                    or self.xy_recovery_pending_reference):
+                raise SafetyError("Workpiece focus is stale; measure the workpiece again")
+            target = plan["contact_z_mm"] + self.calibration["focus_offset_mm"] + gap_mm - 7
+            finite_number(target, "Workpiece focus target", 0, maximum)
+            if target >= plan["clearance_z_mm"]:
+                raise SafetyError("Workpiece focus target must remain below clearance")
+            self.job_plan = copy.deepcopy(dict(plan, id=str(uuid.uuid4()),
+                                              gap_mm=gap_mm, target_z_mm=target))
         elif action == "clearance":
             known()
             if self.requires_clearance and clearance < self.selected_clearance:
@@ -541,6 +613,9 @@ class LaserFocus:
                 self.xy_recovery_pending_reference = False
                 self.requires_clearance = False
         return copy.deepcopy({"action": action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
+                              "workpiece_focus_available": True,
+                              "job_focus_required": self.job_focus_required,
+                              "job_focus_block_reason": self.job_focus_block_reason if self.job_plan is None else None,
                               "ender": owner.recovery_status(), "recovery_available": True,
                               "current_readback": {"z_mm": current, "z_known": board["z_known"], "fresh": True},
                               "surface": self.surface, "calibration": self.calibration,
