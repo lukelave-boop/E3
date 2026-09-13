@@ -23,7 +23,6 @@ POLL_SECONDS = 2.0
 
 class LaserFocusPanel(QtWidgets.QWidget):
     actionRequested = QtCore.Signal(str, dict)
-    xyRequested = QtCore.Signal(float, float)
     refreshRequested = QtCore.Signal()
     previewInvalidated = QtCore.Signal()
     cameraModeRequested = QtCore.Signal(bool)
@@ -146,15 +145,16 @@ class LaserFocusPanel(QtWidgets.QWidget):
         recovery_layout.addWidget(self.xy_recovery_note)
         layout.addWidget(self.xy_recovery_group)
 
-        prepare = QtWidgets.QGroupBox("1 · Reference and measure")
-        grid = QtWidgets.QGridLayout(prepare)
+        self.reference_group = QtWidgets.QGroupBox("Reference and measure")
+        grid = self.reference_layout = QtWidgets.QGridLayout(self.reference_group)
         self.clearance = MeasurementSpinBox()
         self.clearance.setRange(20.0, 80.0)
         self.clearance.setDecimals(1)
         self.clearance.setSuffix(" mm")
         self.clearance.setValue(30.0)
         self.clearance.setToolTip("Clearance above the border; must fit the machine's remaining travel.")
-        grid.addWidget(QtWidgets.QLabel("Clearance Z"), 0, 0)
+        self.clearance_label = QtWidgets.QLabel("Clearance Z")
+        grid.addWidget(self.clearance_label, 0, 0)
         grid.addWidget(self.clearance, 0, 1)
         self.range_note = QtWidgets.QLabel("Measurement range awaits firmware readback")
         self.range_note.setWordWrap(True)
@@ -166,19 +166,6 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.return_clearance = QtWidgets.QPushButton("Return to clearance")
         grid.addWidget(self.reference, 2, 0, 1, 2)
         grid.addWidget(self.return_clearance, 2, 2, 1, 2)
-        self.xy_step = QtWidgets.QComboBox()
-        for step in (1.0, 5.0, 10.0):
-            self.xy_step.addItem(f"{step:g} mm", step)
-        self.xy_buttons: list[QtWidgets.QPushButton] = []
-        xy = QtWidgets.QHBoxLayout()
-        xy.addWidget(QtWidgets.QLabel("Position XY"))
-        xy.addWidget(self.xy_step)
-        for text, dx, dy in (("X−", -1, 0), ("X+", 1, 0), ("Y−", 0, -1), ("Y+", 0, 1)):
-            button = QtWidgets.QPushButton(text)
-            button.clicked.connect(lambda _checked=False, x=dx, y=dy: self._xy(x, y))
-            xy.addWidget(button)
-            self.xy_buttons.append(button)
-        grid.addLayout(xy, 3, 0, 1, 4)
         self.position_probe = QtWidgets.QPushButton("Position probe")
         self.position_probe.setCheckable(True)
         self.position_probe.setStyleSheet("QPushButton:checked { border: 1px solid #ffcf40; color: #ffcf40; }")
@@ -205,7 +192,30 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.position_note = QtWidgets.QLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
         self.position_note.setWordWrap(True)
         grid.addWidget(self.position_note, 11, 0, 1, 4)
-        layout.addWidget(prepare)
+        if not calibration_mode:
+            # Full-width actions fit the existing narrow Machine inspector.
+            self.align_laser.setText("Return laser to spot")
+            self.path_clear.setText("Headroom and Z path clear\nto the selected clearance")
+            self.xy_recovery_group.setTitle("Interrupted probe recovery")
+            self.xy_recovery_clear.setText(
+                "Probe is physically\nretracted;\n"
+                "the ENTIRE XY homing/\n"
+                "search/parking path\n"
+                "is clear at the actual\ncurrent height"
+            )
+            while grid.count():
+                grid.takeAt(0)
+            grid.addWidget(self.clearance_label, 0, 0)
+            grid.addWidget(self.clearance, 0, 1)
+            for row, widget in (
+                (1, self.range_note), (2, self.path_clear), (3, self.reference),
+                (4, self.return_clearance), (5, self.position_probe),
+                (7, self.camera_target), (8, self.offset_readout),
+                (9, self.align_probe), (10, self.align_laser),
+                (11, self.position_note), (12, self.measure), (13, self.clear_surface),
+            ):
+                grid.addWidget(widget, row, 0, 1, 2)
+        layout.addWidget(self.reference_group)
 
         self.offset_editor = self.offset_x = self.offset_y = self.apply_offset = None
         self.down = self.up = self.z_step = self.teach = self.gauge = self.forget = self.teaching_limits = None
@@ -262,8 +272,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             teach_layout.addWidget(self.teaching_limits, 4, 0, 1, 4)
             layout.addWidget(teach)
 
-        focus = QtWidgets.QGroupBox("2 · Preview and position")
-        focus_layout = QtWidgets.QGridLayout(focus)
+        self.preview_group = QtWidgets.QGroupBox("Preview and position", self)
+        focus_layout = QtWidgets.QGridLayout(self.preview_group)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
             self.gap.addItem(f"{gap:g} mm gap", gap)
@@ -274,22 +284,36 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.move_note = QtWidgets.QLabel()
         self.move_note.setWordWrap(True)
         self.move_note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        self.gauge_removed = QtWidgets.QCheckBox("Gauge removed; path to target clear")
         focus_layout.addWidget(self.gap, 0, 0)
         focus_layout.addWidget(self.preview, 0, 1, 1, 2)
         focus_layout.addWidget(self.move_note, 3, 0, 1, 3)
         focus_layout.addWidget(self.move, 4, 0, 1, 3)
         focus_layout.addWidget(self.target, 1, 0, 1, 3)
-        focus_layout.addWidget(self.gauge_removed, 2, 0, 1, 3)
-        self.job_flat = QtWidgets.QCheckBox("Same flat surface across job; gauge removed; Z and travel path clear")
         self.use_job = QtWidgets.QPushButton("Use measured focus for next job")
         self.job_note = QtWidgets.QLabel("Job focus: not selected. Preview the measured surface, then select.")
         self.job_note.setWordWrap(True)
-        focus_layout.addWidget(self.job_flat, 5, 0, 1, 3)
+        self.move_confirmation = QtWidgets.QLabel(
+            "Choosing Move to focus confirms the gauge is removed and the path to the target is clear."
+        )
+        self.move_confirmation.setWordWrap(True)
+        focus_layout.addWidget(self.move_confirmation, 2, 0, 1, 3)
+        self.job_confirmation = QtWidgets.QLabel(
+            "Choosing Use measured focus for next job confirms one flat surface across the job, "
+            "the gauge removed, and clear Z and travel paths."
+        )
+        self.job_confirmation.setWordWrap(True)
+        focus_layout.addWidget(self.job_confirmation, 5, 0, 1, 3)
         focus_layout.addWidget(self.use_job, 6, 0, 1, 3)
         focus_layout.addWidget(self.job_note, 7, 0, 1, 3)
-        self.job_flat.toggled.connect(self._sync)
-        layout.addWidget(focus)
+        if calibration_mode:
+            layout.addWidget(self.preview_group)
+        else:
+            self.preview_group.hide()
+            setup_note = QtWidgets.QLabel(
+                "Preview and position: Machine Setup → 7 · Z / laser focus."
+            )
+            setup_note.setWordWrap(True)
+            layout.addWidget(setup_note)
         footer = QtWidgets.QHBoxLayout()
         self.message = QtWidgets.QLabel("Connect the machine, then refresh focus support.")
         self.message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
@@ -319,7 +343,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.clearance.valueChanged.connect(self._edit_clearance)
         self.clearance.lineEdit().textEdited.connect(self._edit_clearance)
         self.gap.currentIndexChanged.connect(self._parameters_edited)
-        for checkbox in (self.path_clear, self.gauge, self.gauge_removed, self.xy_recovery_clear):
+        for checkbox in (self.path_clear, self.gauge, self.xy_recovery_clear):
             if checkbox is not None:
                 checkbox.toggled.connect(self._sync)
         if calibration_mode:
@@ -397,7 +421,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.surface.setText("Surface elevation: not measured")
         if clear_confirmation:
             self._live_z.clear()
-            self._reset_checks(self.path_clear, self.gauge, self.gauge_removed)
+            self._reset_checks(self.path_clear, self.gauge)
         self.message.setText(message)
         self._sync()
 
@@ -664,8 +688,6 @@ class LaserFocusPanel(QtWidgets.QWidget):
             return "Choose Preview target for the selected gap."
         if not self.path_clear.isChecked():
             return "Confirm ‘Headroom and Z path clear to the selected clearance’ above."
-        if not self.gauge_removed.isChecked():
-            return "Remove the gauge, then confirm ‘Gauge removed; path to target clear’ above."
         return None
 
     def observe_z_status(self, status: Mapping[str, Any]) -> None:
@@ -800,9 +822,6 @@ class LaserFocusPanel(QtWidgets.QWidget):
         if self.calibration_mode:
             for editor in (self.offset_x, self.offset_y):
                 editor.setEnabled(bool(idle and xy_available))
-        for button in self.xy_buttons:
-            button.setEnabled(bool(moving and known and at_clearance))
-        self.xy_step.setEnabled(idle)
         if self.calibration_mode:
             teach_ready = moving and reference and surface and known and not probe_phase
             step = float(self.z_step.currentData())
@@ -823,12 +842,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.up.setEnabled(bool(teach_ready and z is not None and maximum is not None and z + step <= maximum))
             self.teach.setEnabled(bool(teach_ready and self.gauge.isChecked()
                                       and self._result.get("calibration_persistent") is True))
-        self.preview.setEnabled(bool(ready and known and reference and surface and not probe_phase and clearance is not None
+        self.preview.setEnabled(bool(self.calibration_mode and ready and known and reference and surface and not probe_phase and clearance is not None
                                     and self._result.get("calibration_compatible") is True))
         move_block = self._move_block_reason()
-        self.move.setEnabled(move_block is None)
-        self.use_job.setEnabled(bool(move_block is None
-                                    and self.job_flat.isChecked()
+        self.move.setEnabled(self.calibration_mode and move_block is None)
+        self.use_job.setEnabled(bool(self.calibration_mode and move_block is None
                                     and self._result.get("job_focus_available") is True))
         job_focus = self._result.get("job_focus")
         self.job_note.setText(
@@ -840,7 +858,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             f"Move unavailable: {move_block}" if move_block else
             f"Choose Move to focus to move Z to {self._result['preview']['target_z_mm']:.3f} mm."
         )
-        for control in (self.clearance, self.gap, self.path_clear, self.gauge, self.gauge_removed, self.z_step):
+        for control in (self.clearance, self.gap, self.path_clear, self.gauge, self.z_step):
             if control is not None:
                 control.setEnabled(idle)
         self.refresh.setEnabled(idle)
@@ -870,6 +888,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Next: Position over a wide, flat patch and measure its surface." if not surface else
             ("Next: Fit the 7 mm gauge with small Z steps, then save the setting." if self.calibration_mode else
              "Next: Teach the 7 mm gauge in Machine Setup → 7 · Z / laser focus.") if not self._result.get("calibration_compatible") else
+            "Next: Open Machine Setup → 7 · Z / laser focus to preview and select focus."
+            if not self.calibration_mode else
             f"Next: {move_block}" if move_block else
             "Next: Choose Move to focus to position the laser."
         )
@@ -915,10 +935,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
         if action != "recover_xy":
             self.xy_recovery_clear.setChecked(False)
         if action in {"recover", "recover_xy", "forget_z"}:
-            self._reset_checks(self.path_clear, self.gauge, self.gauge_removed)
+            self._reset_checks(self.path_clear, self.gauge)
         if action in {"jog", "home_reference", "home_retained", "reference", "measure", "move", "clearance",
                       "set_xy_offset", "align_probe", "align_laser"}:
-            self._reset_checks(self.gauge, self.gauge_removed)
+            self._reset_checks(self.gauge)
         self.actionRequested.emit(action, arguments)
         self.xy_recovery_clear.setChecked(False)
 
@@ -962,11 +982,6 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.position_probe.setChecked(True)
             self.cameraMoveRequested.emit()
 
-    def _xy(self, dx: float, dy: float) -> None:
-        self._sync()
-        if all(button.isEnabled() for button in self.xy_buttons):
-            self.xy_recovery_clear.setChecked(False)
-            self.xyRequested.emit(dx * float(self.xy_step.currentData()), dy * float(self.xy_step.currentData()))
 
 
 class LaserFocusCoordinator(QtCore.QObject):
@@ -989,6 +1004,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         self._busy = self._controller_busy
         self.panel._busy = self._busy
         self._closed = False
+        self._suspended = False
         self._error = False
         self._queued: tuple[str, dict[str, Any]] | None = None
         self._last_request = -math.inf
@@ -1001,7 +1017,6 @@ class LaserFocusCoordinator(QtCore.QObject):
         panel.actionRequested.connect(self.request)
         panel.refreshRequested.connect(self.refresh)
         panel.previewInvalidated.connect(self.parameters_edited)
-        panel.xyRequested.connect(self.xy)
         panel._display_timer.timeout.connect(self.observe_cached_z)
         self._timer.start()
 
@@ -1010,7 +1025,8 @@ class LaserFocusCoordinator(QtCore.QObject):
         active = self._busy or self._mutation or self.panel._pending or (
             isinstance(probe, Mapping) and probe.get("active") is True
         )
-        if (self._closed or not active or not self.panel.isVisible()
+        if (self._closed or self._suspended or self._modal_blocked()
+                or not active or not self.panel.isVisible()
                 or getattr(self.controller, "_shutdown_started", False)):
             return
         # Read only the machine cache, not AppContext.status or typed focus
@@ -1102,10 +1118,29 @@ class LaserFocusCoordinator(QtCore.QObject):
         self.controller.busyChanged.disconnect(self.set_busy)
         self.controller.stopInitiated.disconnect(self.stopped)
 
+    def set_suspended(self, suspended: bool) -> None:
+        """Pause observation without cancelling an already dispatched operation."""
+        if self._closed or self._suspended == suspended:
+            return
+        self._suspended = suspended
+        if suspended:
+            self._queued = None
+            if not self._mutation:
+                self._epoch += 1
+                self.panel._pending = False
+                self.panel.invalidate("Z controls paused; refresh when this section is active.")
+        else:
+            self._last_request = -math.inf
+
+    def _modal_blocked(self) -> bool:
+        modal = QtWidgets.QApplication.activeModalWidget()
+        return modal is not None and modal is not self.panel.window()
+
     def tick(self) -> None:
         if not self.panel.fresh() and self.panel._received_at is not None:
             self.panel.invalidate("Z readback expired; waiting for a fresh response.")
-        if (self._closed or not self.panel.isVisible() or self._pending or self._busy
+        if (self._closed or self._suspended or self._modal_blocked()
+                or not self.panel.isVisible() or self._pending or self._busy
                 or self._error or not _read_allowed(self._status)
                 or getattr(self.controller, "_shutdown_started", False)
                 or time.monotonic() - self._last_request < POLL_SECONDS):
@@ -1117,15 +1152,11 @@ class LaserFocusCoordinator(QtCore.QObject):
         self._last_request = -math.inf
         self.tick()
 
-    def xy(self, dx: float, dy: float) -> None:
-        if self._closed or self._mutation or self._busy or not all(b.isEnabled() for b in self.panel.xy_buttons):
-            return
-        self._epoch += 1
-        self.panel.invalidate("Positioning XY; measure the new patch afterward.", clear_surface=True)
-        self.controller.jog(dx, dy, 300.0)
-
     def request(self, action: str, arguments: dict[str, Any]) -> None:
-        if self._closed or self._busy or not _read_allowed(self._status):
+        if (self._closed or self._suspended or self._modal_blocked()
+                or self._busy or not _read_allowed(self._status)):
+            return
+        if action in {"preview", "move", "use_job"} and not self.panel.calibration_mode:
             return
         if action not in {"status", "recover"} and not self.panel.fresh():
             return
@@ -1278,32 +1309,46 @@ class LaserFocusCoordinator(QtCore.QObject):
             if not self._closed:
                 self.panel._sync()
             queued, self._queued = self._queued, None
-            if queued is not None and not self._closed and not self._busy and _read_allowed(self._status):
+            if (queued is not None and not self._closed and not self._suspended
+                    and not self._modal_blocked() and not self._busy and _read_allowed(self._status)):
                 self._start_request(*queued)
 
         self.controller._run(operation, on_success=success, on_failure=failure,
                              on_finished=finished, show_busy=action != "status",
-                             label="Surface / laser focus", serialize_controller=True)
+                             label="Z reference / focus", serialize_controller=True)
 
 
 class LaserFocusWorkspace(QtWidgets.QWidget):
     def __init__(self, controller: Any, parent: QtWidgets.QWidget | None = None, *, calibration_mode: bool = False) -> None:
         super().__init__(parent)
+        self._suspended = False
+        self._shutdown = False
         layout = QtWidgets.QVBoxLayout(self)
-        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(620)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.panel = LaserFocusPanel(calibration_mode=calibration_mode)
-        scroll.setWidget(self.panel)
-        self.splitter.addWidget(scroll)
         context = controller.runtime.context
         self.bed_view = FocusBedView(getattr(context, "camera", None), self)
-        self.splitter.addWidget(self.bed_view)
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 2)
-        self.splitter.setSizes([820, 540])
-        layout.addWidget(self.splitter, 1)
+        self.splitter = None
+        if calibration_mode:
+            self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setMinimumWidth(620)
+            scroll.setWidget(self.panel)
+            self.splitter.addWidget(scroll)
+            self.splitter.addWidget(self.bed_view)
+            self.splitter.setStretchFactor(0, 3)
+            self.splitter.setStretchFactor(1, 2)
+            self.splitter.setSizes([820, 540])
+            layout.addWidget(self.splitter, 1)
+        else:
+            # The Machine inspector already scrolls. Keep the camera next to
+            # its selection controls without a nested viewport or fixed width.
+            self.panel.layout().setContentsMargins(0, 0, 0, 0)
+            self.panel.reference_layout.addWidget(self.bed_view, 6, 0, 1, 2)
+            self.bed_view.image_label.setMinimumSize(240, 180)
+            self.bed_view.image_label.setMaximumHeight(300)
+            layout.addWidget(self.panel)
         self.coordinator = LaserFocusCoordinator(self.panel, controller, self)
         self._context = context
         self.panel.cameraModeRequested.connect(self.bed_view.set_selection_enabled)
@@ -1352,6 +1397,8 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         self.panel.clear_camera_target(message)
 
     def _camera_tick(self) -> None:
+        if not self._update_observers():
+            return
         camera_live = self.bed_view.current_frame_fresh()
         if self.panel._camera_live and not camera_live:
             self.coordinator.camera_selection_changed()
@@ -1385,59 +1432,51 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
             "confirmed": True, "clearance_z_mm": self.panel._clearance_value(),
             "value": target["target_machine_xy_mm"], "_camera_selection": selection,
         }
-        self.panel._reset_checks(self.panel.gauge, self.panel.gauge_removed)
+        self.panel._reset_checks(self.panel.gauge)
         self.coordinator.request("position_probe", arguments)
 
     def set_machine_status(self, status: Mapping[str, Any]) -> None:
         self.coordinator.set_status(status)
 
+    def set_suspended(self, suspended: bool) -> None:
+        self._suspended = bool(suspended)
+        self._update_observers()
+
+    def _update_observers(self) -> bool:
+        active = (not self._shutdown and not self._suspended and self.isVisible()
+                  and not self.coordinator._modal_blocked())
+        self.coordinator.set_suspended(not active)
+        self.setEnabled(active)
+        if active:
+            if not self.bed_view._active:
+                self.bed_view.begin()
+            self.panel._display_timer.start()
+        else:
+            if self.bed_view._active:
+                self.bed_view.end()
+            self.panel._display_timer.stop()
+            self.panel._camera_live = False
+            self.panel.position_probe.setChecked(False)
+        return active
+
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        self.bed_view.begin()
+        if not self._shutdown:
+            self._camera_timer.start()
+            self._update_observers()
 
     def hideEvent(self, event) -> None:  # noqa: N802
-        self.bed_view.end()
+        self._camera_timer.stop()
+        self._update_observers()
         super().hideEvent(event)
 
     def shutdown(self, *, force: bool = False) -> bool:
         if self.coordinator.mutation_busy and not force:
             self.panel.message.setText("Wait for the operation to finish, or use Software STOP.")
             return False
+        self._shutdown = True
         self.coordinator.close()
         self._camera_timer.stop()
         self.panel._display_timer.stop()
         self.bed_view.end()
         return True
-
-
-class LaserFocusDialog(QtWidgets.QDialog):
-    def __init__(self, controller: Any, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Surface / laser focus")
-        self.resize(1400, 900)
-        layout = QtWidgets.QVBoxLayout(self)
-        self.workspace = LaserFocusWorkspace(controller, self)
-        layout.addWidget(self.workspace)
-        self.panel = self.workspace.panel
-        self.coordinator = self.workspace.coordinator
-        self.bed_view = self.workspace.bed_view
-        self.splitter = self.workspace.splitter
-        self.stop = self.workspace.stop
-        self._camera_timer = self.workspace._camera_timer
-        self.close_button = QtWidgets.QPushButton("Close")
-        self.close_button.setAutoDefault(False)
-        self.close_button.clicked.connect(self.reject)
-        layout.addWidget(self.close_button, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
-
-    def set_machine_status(self, status: Mapping[str, Any]) -> None:
-        self.workspace.set_machine_status(status)
-
-    def _camera_tick(self) -> None:
-        self.workspace._camera_tick()
-
-    def _move_camera_probe(self) -> None:
-        self.workspace._move_camera_probe()
-
-    def done(self, result: int) -> None:
-        if self.workspace.shutdown():
-            super().done(result)

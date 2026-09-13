@@ -1,14 +1,15 @@
 # Ender connection and fault recovery
 
 The XY/laser controller and Ender have separate connections. Successful XY
-Home/park does not establish Ender readiness. Surface / laser focus now shows
+Home/park does not establish Ender readiness. **Machine → Z axis · Ender** shows
 the Ender's actual connection fault above its actions. Saved Z maximum and
 probe offsets remain visible as configuration; they are not a live Z reading.
 
 ## Reconnect from E3
 
 With the primary controller connected, idle and disarmed, choose **Reconnect
-Ender** in Surface / laser focus. No XY/Z movement, homing cycle or laser arming
+Ender** in **Machine → Z axis · Ender** or the reference helpers in **Machine
+Setup → 7 · Z / laser focus**. No XY/Z movement, homing cycle or laser arming
 is commanded. A supported firmware reset runs native CR Touch initialization
 and may move its pin; keep its deployment and retraction path clear. The service
 invalidates the old surface, reference

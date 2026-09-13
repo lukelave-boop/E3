@@ -11,17 +11,19 @@ establish unpowered axis stability. Preserve exact-firmware gauge compatibility
 and require explicit re-teaching when that identity changes. See
 [the retention workflow](docs/Z_RETENTION.md) and CURRENT_STATE.md for verification.
 
-## Consolidated Z workflow
+## Machine Z layout
 
-The daily focus window combines Home/park with guarded border referencing and
-uses one two-stage camera positioning button. Machine Setup tab 7 embeds the
-probe XY offset editor and complete 7 mm gauge teaching workflow with its
-reference, measurement and live-view helpers. The separate XY-path and
-flat-patch checkboxes are removed; remaining physical confirmations and backend
-safeguards are retained. This desktop change preserves installed Pi software,
-firmware and saved teaching. Windows verification is recorded in CURRENT_STATE;
-operator testing of the revised controls remains separate from historical
-physical results.
+Place daily reference, measurement, live camera, recovery and saved-Z controls
+in **Machine → Z axis · Ender**, and the complete **Preview and position**
+section in **Machine Setup → 7 · Z / laser focus** with probe offsets and gauge
+teaching. Remove the separate Surface / laser focus dialog and its Position XY
+jog row. Move and next-job selection explicitly confirm the physical conditions
+printed beside their buttons; headroom, manual-Z, recovery and gauge-fit checks
+remain. Preserve saved-Z restoration, retained Home / park XY and Forget saved Z
+without backend or persistence changes. This layout adds no Pi or firmware
+requirement beyond the selected features' existing requirements. Verification
+and build status belong in CURRENT_STATE; revised-layout operator testing is
+separate from historical physical results.
 
 ## Focus selection across camera parking
 

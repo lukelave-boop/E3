@@ -59,6 +59,10 @@ def test_setup_embeds_calibration_on_tab_seven_without_another_owner(setup):
     assert focus.coordinator.controller is controller
     assert focus.panel.offset_editor is not None
     assert focus.panel.teach is not None
+    assert not focus.panel.preview_group.isHidden()
+    assert not hasattr(focus.panel, "gauge_removed")
+    assert not hasattr(focus.panel, "job_flat")
+    assert not hasattr(focus.panel, "xy_buttons")
     assert not hasattr(dialog, "laser_focus_button")
     assert dialog._controller_operation_scope == controller.controller_worker_scope
 
@@ -67,8 +71,16 @@ def test_focus_camera_view_follows_setup_tab_visibility(setup, app, monkeypatch)
     dialog, _controller = setup
     events = []
     focus = dialog.focus_workspace
-    monkeypatch.setattr(focus.bed_view, "begin", lambda: events.append("begin"))
-    monkeypatch.setattr(focus.bed_view, "end", lambda: events.append("end"))
+    def begin():
+        focus.bed_view._active = True
+        events.append("begin")
+
+    def end():
+        focus.bed_view._active = False
+        events.append("end")
+
+    monkeypatch.setattr(focus.bed_view, "begin", begin)
+    monkeypatch.setattr(focus.bed_view, "end", end)
     dialog.tabs.setCurrentIndex(0)
     dialog.show()
     app.processEvents()
@@ -144,6 +156,13 @@ def test_focus_worker_blocks_setup_and_stop_invalidates_its_authority(setup, app
     focus = dialog.focus_workspace
     started, release = threading.Event(), threading.Event()
     stopped = []
+    dialog.tabs.setCurrentIndex(6)
+    dialog.show()
+    app.processEvents()
+    focus.coordinator._timer.stop()
+    focus._camera_timer.stop()
+    focus.set_machine_status(controller.runtime.context.machine.status())
+    focus.panel.set_result(result())
 
     def operation(action, **kwargs):
         started.set()

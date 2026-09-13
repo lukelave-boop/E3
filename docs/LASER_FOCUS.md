@@ -10,9 +10,9 @@ border datum survives that Home; choose a new point and measure the workpiece
 again before previewing or selecting focus for a job. Closing Windows alone is
 not evidence that the Pi completed a clean shutdown.
 
-Surface / laser focus shows whether Z was restored or why a new reference is
-needed. If the Z axis drifted or was moved by hand, or the probe mount or
-border/support changed while off, choose **Forget saved Z**, then **Reference
+**Machine → Z axis · Ender** shows whether Z was restored or why a new
+reference is needed. If the Z axis drifted or was moved by hand, or the probe
+mount or border/support changed while off, choose **Forget saved Z**, then **Reference
 border** again. The taught gauge offset is kept. Unsupported firmware, a dirty
 previous exit, changed configuration or failed readback cannot restore Z.
 
@@ -31,29 +31,42 @@ establish dimensional accuracy or qualify fault handling on physical hardware.
 
 ## Daily focus and machine calibration
 
-Use **Machine → Z axis → Surface / laser focus…** for routine referencing,
-surface measurement, focus previews and next-job focus selection. Set the
-clearance and check the physical headroom and full XY/Z path before choosing
-**Home / park + reference**. This single action homes and parks XY, verifies
-completion and unchanged controller sessions, then references the border and
-returns to clearance. A failed Home, STOP or changed session prevents the
-reference stage. It does not retry automatically.
+Use **Machine → Z axis · Ender → Reference and measure** for routine
+referencing and surface measurement. Ender status/recovery, saved-Z controls,
+the live bed view and related actions are embedded beside the manual Z controls.
+Set the clearance and check the physical headroom and full XY/Z path before
+choosing **Home / park + reference**. This single action homes and parks XY,
+verifies completion and unchanged controller sessions, then references the
+border and returns to clearance. A failed Home, STOP or changed session prevents
+the reference stage. After an accepted saved-Z restore the button becomes
+**Home / park XY** and parks without re-probing. Recovery keeps its separate
+reference-only action. No failed action retries automatically.
 
-Open **Tools → Machine Setup… → 7 · Z / laser focus** to edit **Probe / laser
-XY offset** or **Teach once with the 7 mm gauge**. The whole teaching section,
-including teaching jogs, gauge-fit confirmation, Save and Forget, lives only
-in this tab. The embedded page includes the same reference, measurement and
-live-camera helpers, so calibration can be completed there. The daily window
-displays and uses the saved offsets.
+Open **Tools → Machine Setup… → 7 · Z / laser focus** for the entire
+**Preview and position** section: gap selection, target preview, focus move
+and next-job focus selection. These controls live only in this tab alongside
+**Probe / laser XY offset** and **Teach once with the 7 mm gauge**, including
+teaching jogs, gauge-fit confirmation, Save and Forget. The page retains
+reference, measurement, recovery, saved-Z and camera helpers so calibration can
+be completed there. Both pages use the same machine state and saved offsets.
 
-The separate XY transfer-path and solid-flat-patch checkboxes have been removed.
-Check the actual clear path, remove the gauge before XY travel, and inspect
-the solid target before probing. The headroom/Z-path, gauge-fit, gauge-removal
-and flat-job confirmations remain, as do the backend bounds, clearance, session
-and STOP checks. These desktop changes do not require a Pi or firmware update
-or invalidate saved gauge teaching. Earlier protocol requirements below still
-apply to the installed services. The revised interface has no new physical
-verification; see [CURRENT_STATE.md](../CURRENT_STATE.md) for test evidence.
+The separate **Surface / laser focus…** button/dialog and focus workspace's
+**Position XY** jog row are removed. Use the camera-positioning and probe/laser
+transfer actions here; ordinary XY jogging remains in Machine under its existing
+guards. Check the clear path, remove the gauge before XY travel and inspect the
+solid target before probing.
+
+The separate gauge-removal/target-path and flat-job checkboxes are also removed.
+**Move to focus** explicitly confirms that the gauge is removed and the path to
+the target is clear. **Use measured focus for next job** explicitly confirms
+one flat surface across the whole job, gauge removal and clear Z/XY travel paths.
+Read and check the physical conditions printed beside each action before
+pressing it. Headroom/Z-path, manual-Z probe-stowed/path, recovery and gauge-fit
+confirmations remain, with the backend bounds, clearance, session and STOP
+checks. This desktop layout preserves saved-Z restoration and gauge teaching
+and adds no Pi or firmware requirement beyond the selected features' existing
+requirements. The revised interface has no new physical verification; see
+[CURRENT_STATE.md](../CURRENT_STATE.md) for test evidence.
 
 ## Matching desktop and Pi support
 
@@ -122,8 +135,8 @@ The operator still checks the actual laser, probe housing and workpiece path.
 ## Ender readiness and reconnect
 
 Successful XY Home / park does not establish the Ender's Z connection. The
-focus window shows that connection's fault above its actions and retains saved
-limits and offsets as configuration, separately from a live Z reading. With
+reference workspace shows that connection's fault above its actions and retains
+saved limits and offsets as configuration, separately from a live Z reading. With
 the primary connected, idle and disarmed, **Reconnect Ender** explicitly retries
 the shared connection, checks identity and acknowledges outputs off. It never
 homes, measures a surface or repeats an interrupted move. A firmware restart
@@ -142,8 +155,8 @@ made responsive before the recovery firmware can be installed. See
 The probe-failure candidate firmware propagates CR Touch deploy/stow failures
 before further descent and records which native touch failed. Its matching Pi
 companion includes received `E3PD:1` detail in the focus error, exposing FAST/SLOW
-and NO_TRIGGER/CONTACT_RANGE evidence in the dialog and saved log. Older firmware
-still reports the original generic error. This is diagnostic evidence, not a
+and NO_TRIGGER/CONTACT_RANGE evidence in the workspace and saved log. Older
+firmware still reports the original generic error. This is diagnostic evidence, not a
 valid measurement; failures still stop and invalidate the reference, and never
 retry automatically. Native alarms may end the exchange before detailed evidence
 arrives. See the firmware's
@@ -214,7 +227,8 @@ the exceeded limits and source-image pixel. Select a new point to replace it;
 source, machine or calibration changes still invalidate the marker. **Return laser to measured spot** brings the laser to that same
 physical point for gauge teaching or focus. The physical path and solid-target
 instructions appear beside these actions. The gauge-fit confirmation remains
-in Machine Setup; gauge removal is still confirmed before Move to focus.
+in Machine Setup. There, pressing **Move to focus** confirms the adjacent
+conditions: gauge removed and path to the target clear.
 
 XY positioning uses the configured travel speed, limited to 1,200 mm/min and
 the machine's travel/work feed ceilings. Its completion wait accounts for the
@@ -226,7 +240,7 @@ The view remains raw, but click coordinates pass through the installed lens
 correction and active registered/meshed bed calibration. The service applies
 both the configured laser-center correction and saved probe-to-laser offset.
 When the Pi sends a smaller full-frame preview, E3 first converts the click
-back to the original camera coordinates. Resizing this window does not change
+back to the original camera coordinates. Resizing the view does not change
 the selected bed point. The original source must still match the calibration;
 unknown preview transformations and changed source settings remain blocked.
 The selected point, probe carriage and later laser-return carriage must all
@@ -252,11 +266,12 @@ required; surface-height V2 firmware supports positioning without live telemetry
 
 ## Live view and the probe-to-laser transfer
 
-The focus window includes a live bed view alongside the controls and a next-step
-prompt. The image is the raw camera feed: it preserves aspect ratio and reports
-frame age, stale frames and a lost connection. Ordinary viewing is for visual
-alignment; the explicit Position probe mode adds calibrated selection as above.
-Closing the window ends this view's stream without stopping the shared camera.
+The Machine Z workspace and Machine Setup tab 7 include a live bed view
+alongside the controls and a next-step prompt. The image is the raw camera feed:
+it preserves aspect ratio and reports frame age, stale frames and a lost
+connection. Ordinary viewing is for visual alignment; explicit Position probe
+mode adds calibrated selection as above. View ownership remains with the active
+workspace; ending its observation does not stop the shared camera.
 
 For a narrower teaching surface, open **Machine Setup → 7 · Z / laser focus**
 and enter the measured vector in **Probe / laser XY offset**, from laser center
@@ -268,7 +283,10 @@ not global defaults or physically verified transfer accuracy. Save the measured
 offset explicitly; an unset offset never silently becomes zero.
 
 1. Choose **Home / park + reference**, then remain at the selected clearance.
-2. Use the live view and XY jogs to align the laser over the chosen flat spot.
+2. Use the live view and ordinary Machine XY controls to align the laser over
+   the chosen flat spot at clearance. The focus workspace has no separate XY
+   jog row. For direct camera placement of the probe instead, use the separate
+   Position probe sequence above.
 3. Check the XY path is clear and remove the gauge, then choose **Put probe
    over laser spot**. This shifts the carriage by minus the measured offset.
 4. Inspect the solid flat target under the probe and choose **Measure surface**.
@@ -305,11 +323,11 @@ surface. It never infers sheet thickness by subtracting an assumed bed height.
 
 ## Prepare the machine
 
-Open **E3 DEV TEST**, connect, and use **Machine → Z axis → Surface / laser
-focus…** for daily use, or **Tools → Machine Setup… → 7 · Z / laser focus**
-for probe-offset and gauge calibration. Both show the reported Z, configured
-maximum, selected clearance, reference, calibration and measurement. A reported
-position is not an encoder measurement.
+Open **E3 DEV TEST**, connect, and use **Machine → Z axis · Ender** for daily
+reference and measurement. Use **Tools → Machine Setup… → 7 · Z / laser focus**
+for preview/position, next-job selection, probe offsets and gauge calibration.
+Both show the reported Z, configured maximum, selected clearance, reference,
+calibration and measurement. A reported position is not an encoder measurement.
 
 This workflow requires the new surface-height V2 mainboard firmware and the
 matching Pi companion. Older firmware continues to support its existing
@@ -337,8 +355,8 @@ a tilted or curved surface over an entire job.
 ## Teach the gauge once
 
 Open **Machine Setup → 7 · Z / laser focus**. All the controls in this sequence
-are embedded in that tab; the daily Surface / laser focus window uses the saved
-result and contains no teaching controls.
+are embedded in that tab; the Machine Z workspace uses the saved result and
+contains no teaching or Preview and position section.
 
 The workpiece surface and the gauge have different jobs. Probe the flat
 workpiece's top **without the gauge present**. After measurement, the gauge
@@ -410,6 +428,11 @@ no live homing, surface or motion authority.
 
 ## Position above work, including raised surfaces
 
+Measure in **Machine → Z axis · Ender** or Machine Setup's reference helpers.
+Open **Machine Setup → 7 · Z / laser focus → Preview and position** for the
+gap, preview and movement controls. Switching between these pages does not by
+itself replace the shared measured surface or saved-Z reference.
+
 **Preview target** calculates and displays a destination; it does not move Z.
 The updated Windows client refreshes the Pi's completed-operation status before
 displaying the preview. This prevents the preceding busy snapshot from clearing
@@ -426,12 +449,15 @@ view, and changed focus parameters or machine state still invalidate previews.
 2. Position over the intended flat surface and **Measure surface**. Supports
    and spacers naturally contribute to this reading. Clear the surface result
    whenever the work changes; the machine cannot detect a manually moved piece.
-3. Select the 7, 5 or 3 mm gauge gap. **Preview target** shows the calculated Z
-   against the active maximum without moving. Changing the gap, clearance,
-   measurement or calibration invalidates the previous preview.
-4. **Move to focus** requires the current preview and rechecks the controller
-   position and session before movement. Observe the completed position. An
-   out-of-range target is rejected rather than clamped to a different focus.
+3. In Machine Setup tab 7's **Preview and position**, select the 7, 5 or
+   3 mm gauge gap. **Preview target** shows the calculated Z against the active
+   maximum without moving. Changing the gap, clearance, measurement or
+   calibration invalidates the previous preview.
+4. Remove the gauge and check that the path to the target is clear. Pressing
+   **Move to focus** confirms those conditions; there is no separate checkbox.
+   The action requires the current preview and rechecks controller position
+   and session before movement. Observe the completed position. An out-of-range
+   target is rejected rather than clamped to a different focus.
 5. **Return to clearance** before ordinary XY jogging. A focused position is
    close to the work and is not a fixture-clearance height. If clearance was
    changed while lowered, the return must reach at least the earlier clearance.
@@ -453,12 +479,14 @@ continuation. Clearing a measurement does not remove the clearance restriction.
 ## Use the measured focus for a job
 
 1. Probe the actual work surface and return the laser to the measured spot.
-   Select the desired gap and choose **Preview target**.
+   In **Machine Setup → 7 · Z / laser focus → Preview and position**, select
+   the desired gap and choose **Preview target**.
 2. Confirm that the same flat surface spans the whole job, the gauge is removed,
    and Z travel and the entire XY path are clear at the selected clearance.
-   Choose **Use measured focus for next job**. Its readout shows gap, focus Z
+   Press **Use measured focus for next job** to confirm those adjacent
+   conditions; there is no separate checkbox. Its readout shows gap, focus Z
    and clearance. This selects a one-use job plan; it does not move or emit.
-3. Close the focus window and start the intended job using its normal preview
+3. Close Machine Setup and start the intended job using its normal preview
    and START authorization. If lowered, E3 first lifts before arming. It moves
    XY with output off at clearance, waits for completion, lowers to the measured
    focus Z, verifies it, and only then begins the powered toolpath.

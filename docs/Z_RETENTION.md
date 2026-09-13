@@ -23,12 +23,14 @@ current automated and build verification record.
 3. On the next connection, E3 consumes the saved record and checks the connected
    machine before restoring its Z knowledge. It issues no travel or probing
    command as part of restoration; it enables Z motor hold after the coordinate
-   check. Surface / laser focus shows whether restoration succeeded or why it
-   was rejected. There is no routine startup confirmation dialog.
+   check. **Machine → Z axis · Ender** shows whether restoration succeeded or
+   why it was rejected. There is no routine startup confirmation dialog.
 4. Complete fresh **Home / park XY**. After a valid restore, the combined Home
    button uses this label and parks without probing again. This restores XY
-   readiness while preserving the accepted border datum. Select and measure the current workpiece surface
-   before a new preview or **Use measured focus for next job** selection.
+   readiness while preserving the accepted border datum. Select and measure
+   the current workpiece in **Reference and measure**, then open **Machine
+   Setup → 7 · Z / laser focus → Preview and position** for a new preview
+   or **Use measured focus for next job** selection.
 
 A Windows exit while a Pi-owned job is still running is not a clean idle
 checkpoint. The existing Pi-owned job lifecycle is unchanged: accepted jobs can
@@ -84,10 +86,16 @@ border reference. A changed probe or laser mounting may also require re-teaching
 the gauge fit; retaining its stored value does not verify that the old geometry
 still applies.
 
-The action appears only when the Pi reports retention support and is available
-only with current idle, connected and disarmed state. It is separate from
-**Forget taught offset**. With an older Pi companion, the retention controls are
+The action is in **Machine → Z axis · Ender** and Machine Setup tab 7's
+reference helpers. It appears only when the Pi reports retention support and
+is available only with current idle, connected and disarmed state. It is
+separate from **Forget taught offset**. With an older Pi companion, the retention controls are
 hidden and the existing reference workflow remains in use.
+
+The controls' move into Machine and Machine Setup preserves this retention
+behavior, its stored data and gauge calibration. The separate Surface / laser
+focus dialog is removed; the desktop layout adds no Pi or firmware requirement
+beyond the retention feature described here.
 
 ## Firmware compatibility and qualification
 

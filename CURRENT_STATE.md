@@ -1,5 +1,41 @@
 # Current repository state
 
+## Machine-tab reference controls and Setup-only focus positioning (2026-09-12)
+
+The daily Reference and measure controls, Ender recovery/status, saved-Z
+status/Forget saved Z and live bed view now sit inside Machine → Z axis · Ender.
+The compact layout stacks actions and wraps confirmations to fit the inspector,
+including restored-Z and interrupted-probe recovery states. Machine Setup tab 7
+owns Preview and position alongside the existing probe XY-offset editor,
+7 mm gauge teaching and reference/measurement helpers. The standalone Surface /
+laser focus button and dialog are removed, as is the focus workspace's XY jog row.
+
+The two requested preview/position checkboxes are removed. The explicit Move to
+focus and Use measured focus for next job buttons confirm the physical conditions
+printed beside them. Headroom/path, manual-Z stow/path, recovery and gauge-fit
+confirmations remain. Preview freshness, controller/session checks, bounds,
+clearance, STOP and all backend motion/arming safeguards are unchanged.
+
+This isolated branch builds on authoritative saved-Z code c638b36 and main's
+verification record e3706dc. No machine, firmware, persistence or project code
+changed; retained Home / park XY and Forget saved Z behavior remain intact.
+The main checkout's unrelated console/startup/F103 edits remain untouched.
+Hidden or suspended daily controls release camera ownership and reject stale
+reads/queued actions; Setup owns observation while open. Already dispatched
+reference operations retain their normal guarded completion. Shutdown stops
+observers before the controller, and cannot restart them on dialog cleanup.
+
+Verification: 317 focused Windows offscreen widget/controller tests pass,
+including saved-Z, STOP/session rejection, modal/visibility lifecycle and compact
+width checks. Repository Ruff, compileall and diff whitespace checks pass.
+Daily and Setup layouts were visually inspected from offscreen Qt renders using
+simulated status and an unavailable camera. Full local four-worker validation,
+exact Windows CI and frozen-build verification are in progress. No interactive
+GUI, real camera, physical controller/laser or saved-Z power-cycle test was run.
+Existing saved-Z firmware/Pi installation requirements remain; this desktop
+layout adds no further companion or firmware changes. Evidence: the isolated
+machine-layout worktree's build/layout/ directory.
+
 ## Saved Z integrated and packaged for testing (2026-09-12)
 
 The clean-shutdown Z feature and consolidated daily/setup controls are merged

@@ -134,7 +134,7 @@ from .job_preview import (
     PreparedJobPreview,
     prepare_job_preview,
 )
-from .laser_focus import LaserFocusDialog
+from .laser_focus import LaserFocusWorkspace
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
 from .machine_state import ControllerUiState, project_machine_state
@@ -443,7 +443,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._job_preview_dialog: JobPreviewDialog | None = None
         self._machine_manager_dialog: MachineManagerDialog | None = None
         self._machine_setup_dialog: MachineSetupDialog | None = None
-        self._laser_focus_dialog: LaserFocusDialog | None = None
         self._pending_calibration_capture: dict[str, Any] | None = None
         self._busy = False
         self._controller_busy = False
@@ -1300,7 +1299,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.mainboard_z = MainboardZCoordinator(
             self.machine_panel.z_control, self.controller, self,
         )
-        self.machine_panel.z_control.focusRequested.connect(self.open_laser_focus)
+        self.focus_workspace = LaserFocusWorkspace(
+            self.controller, self.machine_panel.z_control, calibration_mode=False,
+        )
+        self.machine_panel.z_control.attach_focus_workspace(self.focus_workspace)
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
         self.material_panel.applyPresetRequested.connect(self.apply_material_preset)
         self.material_panel.notice.connect(self.show_notice)
@@ -6342,26 +6344,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._machine_manager_dialog = None
             self._refresh_machine_selector()
 
-    def open_laser_focus(self) -> None:
-        existing = self._laser_focus_dialog
-        if existing is not None:
-            existing.raise_()
-            existing.activateWindow()
-            return
-        setup = self._machine_setup_dialog
-        if setup is not None and setup.operation_busy:
-            return
-        dialog = LaserFocusDialog(self.controller, setup or self)
-        self._laser_focus_dialog = dialog
-        dialog.set_machine_status(self._machine_status)
-        try:
-            dialog.exec()
-        finally:
-            dialog.workspace.shutdown(force=self._close_requested)
-            self._laser_focus_dialog = None
-            dialog.deleteLater()
-            self.controller.poll_status()
-
     def open_machine_setup(
         self,
         tab_index: int = 0,
@@ -6369,6 +6351,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         automatic_capture: str | None = None,
         navigation_target: str | None = None,
     ) -> None:
+        focus_workspace = getattr(self, "focus_workspace", None)
+        if focus_workspace is not None and focus_workspace.coordinator.mutation_busy:
+            self.statusBar().showMessage("Wait for the Z operation to finish before opening Machine Setup.")
+            return
         existing = self._machine_setup_dialog
         if existing is not None:
             existing.tabs.setCurrentIndex(int(tab_index))
@@ -6385,51 +6371,58 @@ class E3MainWindow(QtWidgets.QMainWindow):
             existing.activateWindow()
             return
         was_live = self.camera_panel.live_enabled()
-        self.controller.set_live_camera(False)
-        dialog = MachineSetupDialog(
-            self.runtime,
-            self,
-            navigation_only=navigation_target is not None,
-            controller_operation_scope=self.controller.controller_worker_scope,
-            controller=self.controller,
-        )
-        self._machine_setup_dialog = dialog
-        if self._machine_status:
-            dialog.set_machine_status(self._machine_status)
-        dialog.tabs.setCurrentIndex(tab_index)
-        if navigation_target is not None:
-            QtCore.QTimer.singleShot(
-                0,
-                lambda: dialog.focus_navigation_target(navigation_target),
-            )
-        dialog.calibrationChanged.connect(self.controller.poll_status)
-        dialog.calibrationChanged.connect(self.controller.calibration_changed)
-        dialog.calibrationChanged.connect(self._calibration_project_frame_changed)
-        # Build the Preview only after the modal Setup event loop has unwound.
-        # Constructing it synchronously from accept() can strand the first render
-        # behind the closing modal dialog.
-        dialog.registrationJobPrepared.connect(
-            self._load_fine_registration_job,
-            QtCore.Qt.ConnectionType.QueuedConnection,
-        )
-        dialog.validationJobPrepared.connect(
-            self._load_fine_registration_job,
-            QtCore.Qt.ConnectionType.QueuedConnection,
-        )
-        self.controller.set_calibration_review_active(True)
+        dialog = None
+        if focus_workspace is not None:
+            focus_workspace.set_suspended(True)
         try:
+            self.controller.set_live_camera(False)
+            dialog = MachineSetupDialog(
+                self.runtime,
+                self,
+                navigation_only=navigation_target is not None,
+                controller_operation_scope=self.controller.controller_worker_scope,
+                controller=self.controller,
+            )
+            self._machine_setup_dialog = dialog
+            if self._machine_status:
+                dialog.set_machine_status(self._machine_status)
+            dialog.tabs.setCurrentIndex(tab_index)
+            if navigation_target is not None:
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda: dialog.focus_navigation_target(navigation_target),
+                )
+            dialog.calibrationChanged.connect(self.controller.poll_status)
+            dialog.calibrationChanged.connect(self.controller.calibration_changed)
+            dialog.calibrationChanged.connect(self._calibration_project_frame_changed)
+            # Build the Preview only after the modal Setup event loop has unwound.
+            # Constructing it synchronously from accept() can strand the first render
+            # behind the closing modal dialog.
+            dialog.registrationJobPrepared.connect(
+                self._load_fine_registration_job,
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
+            dialog.validationJobPrepared.connect(
+                self._load_fine_registration_job,
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
+            self.controller.set_calibration_review_active(True)
             if automatic_capture is not None:
                 capture = getattr(dialog, automatic_capture)
                 QtCore.QTimer.singleShot(0, capture)
             dialog.exec()
         finally:
-            dialog.shutdown_focus_workspace(force=self._close_requested)
+            if dialog is not None:
+                dialog.shutdown_focus_workspace(force=self._close_requested)
+                if self._machine_setup_dialog is dialog:
+                    self._machine_setup_dialog = None
+                dialog.deleteLater()
             self.controller.set_calibration_review_active(False)
-            if self._machine_setup_dialog is dialog:
-                self._machine_setup_dialog = None
-            dialog.deleteLater()
-        self.controller.set_live_camera(was_live, self.camera_panel.refresh_interval_ms())
-        self.controller.poll_status()
+            if not self._close_requested:
+                self.controller.set_live_camera(was_live, self.camera_panel.refresh_interval_ms())
+                if focus_workspace is not None:
+                    focus_workspace.set_suspended(False)
+                self.controller.poll_status()
 
     def _reconcile_pristine_project_frame(self) -> bool:
         """Move only a disposable empty project into the current coordinate frame."""
@@ -6946,10 +6939,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._cancel_job_preparation("Application is closing")
         self._cancel_job_render()
         self._invalidate_generated_job(cancel_preparation=False)
-        focus_dialog = getattr(self, "_laser_focus_dialog", None)
-        if focus_dialog is not None:
-            focus_dialog.workspace.shutdown(force=True)
-            QtWidgets.QDialog.done(focus_dialog, 0)
+        focus_workspace = getattr(self, "focus_workspace", None)
+        if focus_workspace is not None:
+            focus_workspace.shutdown(force=True)
         machine_setup_dialog = getattr(self, "_machine_setup_dialog", None)
         if machine_setup_dialog is not None:
             try:

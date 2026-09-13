@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — place Z controls in Machine and Machine Setup
+
+- Embed daily reference, measurement, live camera, Ender recovery and saved-Z
+  controls in **Machine → Z axis · Ender** and remove the separate **Surface /
+  laser focus…** button and dialog.
+- Keep the complete **Preview and position** section in **Machine Setup →
+  7 · Z / laser focus**, alongside probe XY offsets and 7 mm gauge teaching.
+- Remove the focus workspace's Position XY jog row and the separate focus-move
+  and flat-job checkboxes. **Move to focus** and **Use measured focus for next
+  job** explicitly confirm the physical conditions stated beside each action.
+  Headroom, manual-Z probe-stowed/path, recovery and gauge-fit confirmations
+  remain, with the existing backend guards.
+- Preserve saved-Z restoration, Home / park XY after an accepted restore and
+  **Forget saved Z**. This desktop layout change introduces no additional Pi or
+  firmware requirement and does not alter saved calibration or retention state.
+
 ## Unreleased — retain known Z after a clean exit
 
 - Save the Pi's verified border datum and Z at or above saved clearance after

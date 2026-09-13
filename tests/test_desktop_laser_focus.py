@@ -14,8 +14,8 @@ from PySide6 import QtCore, QtTest, QtWidgets
 from laser_aligner.desktop.laser_focus import (
     FRESH_SECONDS,
     LaserFocusCoordinator,
-    LaserFocusDialog,
     LaserFocusPanel,
+    LaserFocusWorkspace,
 )
 
 
@@ -131,12 +131,17 @@ def test_missing_controller_contact_minimum_is_not_invented(panel):
 def test_required_confirmations_are_above_their_focus_actions(panel, app):
     panel.resize(1000, 1400)
     app.processEvents()
-    for checkbox, action in (
-        (panel.gauge, panel.teach), (panel.gauge_removed, panel.move),
-    ):
-        assert checkbox.parentWidget() is action.parentWidget()
-        assert checkbox.geometry().bottom() < action.geometry().top()
+    assert panel.gauge.parentWidget() is panel.teach.parentWidget()
+    assert panel.gauge.geometry().bottom() < panel.teach.geometry().top()
     assert panel.move_note.geometry().bottom() < panel.move.geometry().top()
+    assert panel.move_confirmation.geometry().bottom() < panel.move.geometry().top()
+    assert panel.job_confirmation.geometry().bottom() < panel.use_job.geometry().top()
+    assert "Choosing Move to focus confirms" in panel.move_confirmation.text()
+    assert "gauge is removed" in panel.move_confirmation.text()
+    assert "path to the target is clear" in panel.move_confirmation.text()
+    assert "confirms one flat surface across the job" in panel.job_confirmation.text()
+    assert "gauge removed" in panel.job_confirmation.text()
+    assert "clear Z and travel paths" in panel.job_confirmation.text()
 
 
 def test_recovery_prompt_does_not_invite_another_camera_move(panel):
@@ -165,8 +170,7 @@ def xy_recovery_result(**changes):
 def test_xy_recovery_has_separate_fresh_confirmation_and_never_reuses_other_paths(panel, app):
     panel._status = home_required_status()
     panel.set_result(xy_recovery_result())
-    for checkbox in (panel.path_clear, panel.gauge_removed):
-        checkbox.setChecked(True)
+    panel.path_clear.setChecked(True)
     assert panel.xy_recovery_group.isVisible()
     assert not panel.reference.isEnabled()
     assert not panel.recover_xy.isEnabled()
@@ -179,7 +183,6 @@ def test_xy_recovery_has_separate_fresh_confirmation_and_never_reuses_other_path
     panel.recover_xy.click()
     assert calls == [("recover_xy", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0})]
     assert not panel.xy_recovery_clear.isChecked() and not panel.path_clear.isChecked()
-    assert not panel.gauge_removed.isChecked()
     app.processEvents()
     assert panel.xy_recovery_clear.geometry().bottom() < panel.recover_xy.geometry().top()
     assert "ENTIRE XY homing/search/parking path" in panel.xy_recovery_clear.text()
@@ -249,7 +252,7 @@ def test_xy_recovery_success_still_requires_separate_reference_confirmation(coor
     assert item.panel._result["requires_clearance"]
     assert not item.panel.reference.isEnabled()
     assert not item.panel.reference.isEnabled() and not item.panel.move.isEnabled()
-    assert not item.panel.up.isEnabled() and not any(b.isEnabled() for b in item.panel.xy_buttons)
+    assert not item.panel.up.isEnabled() and not item.panel.can_move_probe()
     assert not item.panel.xy_recovery_clear.isChecked()
     item.panel.path_clear.setChecked(True)
     assert item.panel.reference.isEnabled()
@@ -263,12 +266,11 @@ def test_known_z_after_xy_recovery_cannot_use_clearance_instead_of_reference(pan
         current_readback={"fresh": True, "z_known": True, "z_mm": 20.0},
     ))
     confirm(panel)
-    panel.gauge_removed.setChecked(True)
     assert panel.reference.isEnabled()
     assert not panel.return_clearance.isEnabled()
     assert not panel.up.isEnabled() and not panel.down.isEnabled()
     assert panel._reference_only() and not panel.move.isEnabled()
-    assert not any(button.isEnabled() for button in panel.xy_buttons)
+    assert not panel.can_move_probe()
     assert "then reference the border" in panel.next_step.text()
 
 
@@ -397,10 +399,9 @@ def test_actions_are_explicit_and_teach_always_uses_7mm_not_selected_preview_gap
     assert calls[-1][1]["measurement_id"] == "surface-1"
 
 
-def test_preview_must_be_explicit_current_and_gauge_removed_before_move(panel):
+def test_move_click_confirms_physical_path_only_after_explicit_current_preview(panel):
     confirm(panel)
     panel.set_result(result(preview=preview()))  # Status cannot issue local movement authority.
-    panel.gauge_removed.setChecked(True)
     assert not panel.move.isEnabled()
     panel.set_result(result(action="preview", preview=preview()))
     assert panel.move.isEnabled()
@@ -410,20 +411,19 @@ def test_preview_must_be_explicit_current_and_gauge_removed_before_move(panel):
     panel.move.click()
     assert calls == [("move", {"confirmed": True, "clearance_z_mm": 30.0,
                                "gap_mm": 7.0, "preview_id": "preview-1"})]
-    assert not panel.gauge_removed.isChecked()
 
 
-def test_next_job_focus_needs_explicit_preview_and_flat_job_confirmation(panel):
+def test_next_job_focus_click_confirms_flat_surface_only_after_explicit_preview(panel):
     confirm(panel)
-    panel.gauge_removed.setChecked(True)
-    panel.set_result(result(action="preview", preview=preview(), job_focus_available=True))
+    panel.set_result(result(preview=preview(), job_focus_available=True))
     assert not panel.use_job.isEnabled()
-    panel.job_flat.setChecked(True)
+    panel.set_result(result(action="preview", preview=preview(), job_focus_available=True))
     assert panel.use_job.isEnabled()
     calls = []
     panel.actionRequested.connect(lambda action, args: calls.append((action, args)))
     panel.use_job.click()
-    assert calls[0][0] == "use_job" and calls[0][1]["preview_id"] == "preview-1"
+    assert calls == [("use_job", {"confirmed": True, "clearance_z_mm": 30.0,
+                                  "gap_mm": 7.0, "preview_id": "preview-1"})]
     panel.set_result(result(action="preview", preview=preview()))
     assert not panel.use_job.isEnabled()
 
@@ -433,7 +433,6 @@ def test_next_job_focus_needs_explicit_preview_and_flat_job_confirmation(panel):
 def test_edited_or_stale_preview_cannot_authorize_move(panel, changed):
     confirm(panel)
     panel.set_result(result(action="preview", preview=preview()))
-    panel.gauge_removed.setChecked(True)
     assert panel.move.isEnabled()
     if changed == "gap":
         panel.gap.setCurrentIndex(1)
@@ -474,9 +473,6 @@ def test_move_explains_each_confirmation_and_explicit_preview(panel):
     panel.set_result(result(action="preview", preview=preview()))
     assert "Headroom and Z path clear" in panel.move_note.text()
     panel.path_clear.setChecked(True)
-    assert "Gauge removed; path to target clear" in panel.move_note.text()
-    assert "Gauge removed; path to target clear" in panel.next_step.text()
-    panel.gauge_removed.setChecked(True)
     assert panel.move.isEnabled()
     assert "move Z to 16.000 mm" in panel.move_note.text()
     assert panel.next_step.text() == "Next: Choose Move to focus to position the laser."
@@ -498,7 +494,6 @@ def test_move_explains_each_confirmation_and_explicit_preview(panel):
 def test_move_blocking_reason_tracks_current_prerequisite(panel, cause, reason):
     confirm(panel)
     panel.set_result(result(action="preview", preview=preview()))
-    panel.gauge_removed.setChecked(True)
     assert panel.move.isEnabled()
     if cause == "busy":
         panel._busy = True
@@ -558,7 +553,7 @@ def test_contact_floor_unknown_z_calibration_and_clearance_gates(panel):
     assert not panel.down.isEnabled()  # Contact6 minus probe offset-2 gives8.
     assert panel.up.isEnabled()
     assert panel.return_clearance.isEnabled()
-    assert not any(button.isEnabled() for button in panel.xy_buttons)
+    assert not panel.can_move_probe()
     assert panel.reference.isEnabled()  # Home first performs a verified clearance lift.
     panel.set_result(result(calibration_compatible=False))
     assert not panel.preview.isEnabled()
@@ -571,7 +566,7 @@ def test_contact_floor_unknown_z_calibration_and_clearance_gates(panel):
     assert not panel.return_clearance.isEnabled()
     assert not panel.measure.isEnabled()
     assert not panel.preview.isEnabled()
-    assert not any(button.isEnabled() for button in panel.xy_buttons)
+    assert not panel.can_move_probe()
     assert "unknown" in panel.height.text()
 
 
@@ -584,7 +579,7 @@ def test_return_to_clearance_survives_lost_reference_and_retains_prior_minimum(p
     panel.path_clear.setChecked(True)
     assert panel.return_clearance.isEnabled()
     assert panel.reference.isEnabled()  # Uses the retained Z40 clearance before XY.
-    assert not any(button.isEnabled() for button in panel.xy_buttons)
+    assert not panel.can_move_probe()
     panel.clearance.setValue(30)
     assert not panel.return_clearance.isEnabled()
     assert "Return requires Z ≥ 40 mm" in panel.range_note.text()
@@ -660,7 +655,7 @@ class FakeController(QtCore.QObject):
 
 
 @pytest.fixture
-def taught_dialog(app, monkeypatch):
+def taught_workspace(app, monkeypatch):
     from laser_aligner.desktop import focus_bed_view
     from tests.test_desktop_focus_bed_view import Worker, publish
 
@@ -674,7 +669,7 @@ def taught_dialog(app, monkeypatch):
                      "taught_z_mm": 2.8, "taught_contact_z_mm": 5.234},
         preview=preview(target_z_mm=2.8), xy_sequence={"phase": "laser"},
     )
-    dialog = LaserFocusDialog(controller)
+    dialog = LaserFocusWorkspace(controller, calibration_mode=True)
     dialog.coordinator._timer.stop()
     dialog._camera_timer.stop()
     dialog.show()
@@ -686,16 +681,15 @@ def taught_dialog(app, monkeypatch):
     confirm(dialog.panel)
     yield dialog, controller
     assert not dialog.coordinator._mutation
-    dialog.reject()
+    assert dialog.shutdown()
     dialog.deleteLater()
     app.processEvents()
 
 
 @pytest.mark.parametrize("camera_loss", ["stale", "offline"])
-def test_measured_focus_preview_survives_camera_loss_poll_and_explicit_move(taught_dialog, camera_loss):
-    dialog, controller = taught_dialog
+def test_measured_focus_preview_survives_camera_loss_poll_and_explicit_move(taught_workspace, camera_loss):
+    dialog, controller = taught_workspace
     panel, coordinator = dialog.panel, dialog.coordinator
-    panel.gauge_removed.setChecked(True)
     assert panel._preview_id is None and not panel.move.isEnabled()
     panel.preview.click()
     assert coordinator._busy and not panel.clearance.isEnabled()
@@ -733,14 +727,13 @@ def test_measured_focus_preview_survives_camera_loss_poll_and_explicit_move(taug
     assert controller.machine.calls[-1] == ("move", {
         "confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0, "preview_id": "preview-1",
     })
-    assert not panel.gauge_removed.isChecked() and panel._preview_id is None
+    assert panel._preview_id is None
 
 
 @pytest.mark.parametrize("change", ["gap", "clearance", "stop", "session"])
-def test_focus_preview_still_rejects_late_reply_after_authority_changes(taught_dialog, change):
-    dialog, controller = taught_dialog
+def test_focus_preview_still_rejects_late_reply_after_authority_changes(taught_workspace, change):
+    dialog, controller = taught_workspace
     panel, coordinator = dialog.panel, dialog.coordinator
-    panel.gauge_removed.setChecked(True)
     panel.preview.click()
     operation, callbacks = controller.work.pop()
     response = operation()
@@ -768,10 +761,10 @@ def test_focus_preview_still_rejects_late_reply_after_authority_changes(taught_d
 
 
 @pytest.mark.parametrize("queued", [False, True])
-def test_dialog_camera_loss_cancels_selected_xy_request_before_dispatch(taught_dialog, queued):
+def test_workspace_camera_loss_cancels_selected_xy_request_before_dispatch(taught_workspace, queued):
     from tests.test_desktop_focus_bed_view import select
 
-    dialog, controller = taught_dialog
+    dialog, controller = taught_workspace
     panel, coordinator = dialog.panel, dialog.coordinator
     controller.runtime.context.focus_probe_target = lambda *args, **kwargs: camera_target()
     panel.set_result(camera_result(surface=None))
@@ -1038,63 +1031,30 @@ def test_reported_reconnect_activity_does_not_discard_its_own_reply(coordinator)
     assert [action for action, _ in controller.machine.calls] == ["recover"]
 
 
-def test_modal_dialog_preserves_stop_during_work_and_refuses_silent_close(app):
+def test_workspace_preserves_stop_during_work_and_refuses_silent_shutdown(app):
     controller = FakeController()
-    dialog = LaserFocusDialog(controller)
-    dialog.set_machine_status(status())
-    dialog.coordinator._timer.stop()
-    dialog.panel.set_result(result())
-    confirm(dialog.panel)
-    dialog.show()
+    workspace = LaserFocusWorkspace(controller, calibration_mode=True)
+    workspace.set_machine_status(status())
+    workspace.coordinator._timer.stop()
+    workspace.panel.set_result(result())
+    confirm(workspace.panel)
+    workspace.show()
     app.processEvents()
-    dialog.panel.measure.click()
-    assert dialog.stop.isEnabled()
-    dialog.reject()
-    assert dialog.isVisible()
-    dialog.stop.click()
+    workspace.panel.measure.click()
+    assert workspace.stop.isEnabled()
+    assert not workspace.shutdown()
+    assert not workspace.coordinator._closed
+    workspace.stop.click()
     assert controller.stop_calls == 1
     controller.complete()
-    dialog.reject()
-    assert not dialog.isVisible()
-    assert dialog.coordinator._closed
-    dialog.deleteLater()
+    assert workspace.shutdown()
+    assert workspace.coordinator._closed
+    assert not workspace._camera_timer.isActive()
+    assert not workspace.panel._display_timer.isActive()
+    workspace.close()
+    workspace.deleteLater()
     app.processEvents()
 
-
-def test_machine_daily_focus_and_embedded_setup_calibration_without_hardware(app, tmp_path, monkeypatch):
-    from laser_aligner.desktop.machine_setup import MachineSetupDialog
-    from tests.test_desktop_job_async import _dispose, _window
-
-    opened = []
-
-    def focus_exec(dialog):
-        dialog.coordinator._timer.stop()
-        opened.append(dialog.parentWidget())
-        assert dialog.windowTitle() == "Surface / laser focus"
-        assert dialog.panel.clearance.value() == 30
-        return 0
-
-    def setup_exec(dialog):
-        assert dialog.tabs.tabText(6) == "7 · Z / laser focus"
-        assert not hasattr(dialog, "z_probe_panel")
-        assert dialog.focus_workspace.panel.calibration_mode
-        assert dialog.focus_workspace.panel.offset_x is not None
-        assert dialog.focus_workspace.panel.teach is not None
-        return 0
-
-    monkeypatch.setattr(LaserFocusDialog, "exec", focus_exec)
-    monkeypatch.setattr(MachineSetupDialog, "exec", setup_exec)
-    window, errors, _ = _window(tmp_path, monkeypatch)
-    try:
-        window.machine_panel.z_control.focus.click()
-        assert opened == [window]
-        assert window._laser_focus_dialog is None
-        window.open_machine_setup(6)
-        assert len(opened) == 1
-        assert window._machine_setup_dialog is None
-        assert not errors
-    finally:
-        _dispose(app, window)
 
 def camera_target():
     return {"target_machine_xy_mm": [100.0, 120.0], "mapping_signature": "mapping-1"}
@@ -1165,7 +1125,9 @@ def test_camera_position_rejects_unready_machine(panel, reason):
 def test_camera_click_mapping_and_separate_move_are_integrated(app, monkeypatch):
     controller = FakeController()
     controller.runtime.context.focus_probe_target = lambda *args, **kwargs: camera_target()
-    dialog = LaserFocusDialog(controller)
+    dialog = LaserFocusWorkspace(controller, calibration_mode=True)
+    dialog.show()
+    app.processEvents()
     dialog.coordinator._timer.stop()
     dialog._camera_timer.stop()
     dialog.set_machine_status(status())
@@ -1183,7 +1145,7 @@ def test_camera_click_mapping_and_separate_move_are_integrated(app, monkeypatch)
     assert controller.machine.calls == [("position_probe", {
         "confirmed": True, "clearance_z_mm": 30.0, "value": [100.0, 120.0]})]
     assert dialog.panel._camera_target is None
-    dialog.reject()
+    assert dialog.shutdown()
     dialog.deleteLater()
     app.processEvents()
 
@@ -1219,7 +1181,9 @@ def test_queued_camera_move_is_revalidated_before_controller(coordinator, cause)
 def test_camera_calibration_errors_are_shown_inline_without_motion(app, monkeypatch, phase):
     from laser_aligner.errors import CalibrationError
     controller = FakeController()
-    dialog = LaserFocusDialog(controller)
+    dialog = LaserFocusWorkspace(controller, calibration_mode=True)
+    dialog.show()
+    app.processEvents()
     dialog.coordinator._timer.stop()
     dialog._camera_timer.stop()
     dialog.set_machine_status(status())
@@ -1243,7 +1207,7 @@ def test_camera_calibration_errors_are_shown_inline_without_motion(app, monkeypa
     assert "calibration is stale" in dialog.panel.camera_target.text()
     assert dialog.panel._camera_target is None
     assert controller.machine.calls == [] and controller.work == []
-    dialog.reject()
+    assert dialog.shutdown()
     dialog.deleteLater()
     app.processEvents()
 
@@ -1276,7 +1240,7 @@ def test_rejected_click_keeps_pixel_but_revokes_old_move_target(app, monkeypatch
         return camera_target()
     controller.runtime.context.focus_probe_target = mapper
     monkeypatch.setattr(focus_bed_view, "_MonitorThread", Worker)
-    dialog = LaserFocusDialog(controller)
+    dialog = LaserFocusWorkspace(controller, calibration_mode=True)
     dialog.coordinator._timer.stop()
     dialog._camera_timer.stop()
     try:
@@ -1323,7 +1287,7 @@ def test_rejected_click_keeps_pixel_but_revokes_old_move_target(app, monkeypatch
         assert not dialog.panel._camera_point_rejected
         assert not dialog.panel.can_move_probe()
     finally:
-        dialog.reject()
+        assert dialog.shutdown()
         dialog.deleteLater()
         app.processEvents()
 
@@ -1501,7 +1465,6 @@ def test_forget_saved_z_is_explicit_and_keeps_taught_offset(coordinator):
     item, controller = coordinator
     item.panel.set_result(retained_result(action="preview", preview=preview()))
     item.panel.path_clear.setChecked(True)
-    item.panel.gauge_removed.setChecked(True)
     calibration = copy.deepcopy(item.panel._result["calibration"])
     assert item.panel.move.isEnabled()
     assert controller.machine.calls == []
@@ -1512,7 +1475,7 @@ def test_forget_saved_z_is_explicit_and_keeps_taught_offset(coordinator):
     item.panel.forget_z.click()
     assert item._mutation and not item.panel.forget_z.isEnabled()
     assert item.panel._preview_id is None and item.panel._result["surface"] is None
-    assert not item.panel.path_clear.isChecked() and not item.panel.gauge_removed.isChecked()
+    assert not item.panel.path_clear.isChecked()
     controller.complete()
     assert controller.machine.calls == [("forget_z", {"confirmed": True})]
     assert item.panel._result["calibration"] == calibration
@@ -1550,10 +1513,53 @@ def test_calibration_controls_exist_only_in_machine_setup(app, calibration_mode)
         assert not hasattr(panel, "flat_patch")
         assert not hasattr(panel, "home")
         assert not hasattr(panel, "move_probe")
+        assert not hasattr(panel, "xy_buttons")
+        assert not hasattr(panel, "xy_step")
+        assert not hasattr(panel, "xyRequested")
+        assert not hasattr(panel, "_xy")
+        assert not hasattr(panel, "gauge_removed")
+        assert not hasattr(panel, "job_flat")
+        assert panel.preview_group.isHidden() is (not calibration_mode)
         labels = [item.text() for item in panel.findChildren(QtWidgets.QCheckBox)]
-        assert not any("XY transfer path" in label or "Solid, flat patch" in label for label in labels)
+        assert not any(
+            "XY transfer path" in label or "Solid, flat patch" in label
+            or "Gauge removed" in label or "Same flat surface" in label
+            for label in labels
+        )
         assert panel.reference.text() == "Home / park + reference"
     finally:
+        panel.close()
+        panel.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize("calibration_mode", [False, True])
+def test_preview_and_position_are_setup_only_with_no_removed_xy_dispatch(app, calibration_mode):
+    panel = LaserFocusPanel(calibration_mode=calibration_mode)
+    controller = FakeController()
+    coordinator = LaserFocusCoordinator(panel, controller)
+    coordinator._timer.stop()
+    calls = []
+    panel.actionRequested.connect(lambda action, arguments: calls.append((action, arguments)))
+    try:
+        coordinator.set_status(status())
+        panel.set_result(result(action="preview", preview=preview(), job_focus_available=True))
+        panel.path_clear.setChecked(True)
+        panel.show()
+        app.processEvents()
+        assert panel.preview_group.isVisible() is calibration_mode
+        assert panel.preview.isEnabled() is calibration_mode
+        assert panel.move.isEnabled() is calibration_mode
+        assert panel.use_job.isEnabled() is calibration_mode
+        assert panel.measure.isEnabled()
+        assert not hasattr(coordinator, "xy")
+        assert controller.xy_calls == [] and controller.work == []
+        if not calibration_mode:
+            for action in ("preview", "move", "use_job"):
+                panel.request(action)
+            assert calls == [] and controller.work == []
+    finally:
+        coordinator.close()
         panel.close()
         panel.deleteLater()
         app.processEvents()

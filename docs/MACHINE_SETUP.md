@@ -609,25 +609,39 @@ authority.
 
 ## 7. Z / laser focus
 
-This tab embeds the current laser-off focus workspace, including its live bed
-view, reference/measurement helpers, and focus previews. It owns the **Probe /
-laser XY offset** editor and the complete **Teach once with the 7 mm gauge**
-section: teaching jogs, the physical gauge-fit confirmation, Save and Forget.
-Those calibration controls are absent from the daily **Surface / laser focus…**
-window, which continues to display and use the saved offsets.
+This tab contains the complete **Preview and position** section: gap
+selection, **Preview target**, target/prerequisite readouts, **Move to focus**,
+**Use measured focus for next job** and job-focus status. These controls live
+only here, alongside the **Probe / laser XY offset** editor and complete
+**Teach once with the 7 mm gauge** section: teaching jogs, the physical gauge-fit
+confirmation, Save and Forget. Reference/measurement, recovery, saved-Z and live
+bed view helpers allow calibration to be completed within this tab.
+
+Daily **Reference and measure** is embedded in **Machine → Z axis · Ender**
+beside the manual Z controls, using the same saved offsets and shared machine
+state. The separate **Surface / laser focus…** button and dialog are removed.
 
 **Home / park + reference** runs border referencing only after verified XY
-parking and unchanged controller sessions. Recovery keeps its separate operator
-sequence; after Recover XY, the same button becomes **Reference border** and
-does not Home again. **Position probe** enables a camera selection, then the
+parking and unchanged controller sessions. An accepted saved-Z restore changes
+it to **Home / park XY**, preserving the border datum without re-probing.
+**Forget saved Z** retains its existing separate behavior. Recovery keeps its
+separate operator sequence; after Recover XY, the same button becomes
+**Reference border** and does not Home again. **Position probe** enables a camera selection, then the
 same button becomes **Move probe here** for the explicit movement request.
 Selecting a point never moves automatically.
 
-The removed XY transfer-path and flat-patch checkboxes are replaced by physical
-path and target instructions. Headroom/Z-path, gauge-fit, gauge-removal, flat-job
-and recovery confirmations remain. The page shares the existing machine and
-camera services, operation ownership and STOP behavior. It does not change
-firmware, Pi software, calibration persistence or backend motion limits. See
+The focus workspace's **Position XY** jog row is removed. Camera selection and
+probe/laser transfer actions remain; ordinary Machine XY jogging retains its
+existing guards. The separate gauge-removal/target-path and flat-job checkboxes
+are also removed. Before **Move to focus**, remove the gauge and check the Z
+path. Before **Use measured focus for next job**, also verify one flat surface
+across the complete job and clear Z/XY travel paths. Pressing the relevant
+action confirms its adjacent physical conditions. Headroom/Z-path, manual-Z
+probe-stowed/path, recovery and gauge-fit confirmations remain.
+
+The page shares the existing machine and camera services, operation ownership
+and STOP behavior. The layout does not change firmware, Pi software,
+calibration/retention persistence or backend motion limits. See
 [the focus guide](LASER_FOCUS.md) for the calibration sequence and physical
 verification limits.
 

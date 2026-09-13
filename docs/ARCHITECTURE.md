@@ -228,9 +228,15 @@ Pi operation and both G-code pipelines are unchanged.
 ## Laser focus setup boundary
 
 LaserFocusWorkspace shares the focus panel, camera view and coordinator between
-the daily dialog and Machine Setup tab 7. Calibration mode creates the measured
-probe XY offset editor and the complete 7 mm teaching controls only in Machine
-Setup. Both surfaces use AppContext's existing camera and machine services.
+the embedded Machine-tab **Z axis · Ender** reference/measurement workspace and
+Machine Setup tab 7. The separate Surface / laser focus dialog entry point is
+removed. Calibration mode creates the complete **Preview and position**,
+measured probe XY offset editor and 7 mm teaching controls only in Machine
+Setup, which also retains reference and measurement helpers. Both surfaces use
+AppContext's existing camera and machine services. Ender recovery, saved-Z
+status, Home / park XY after a valid restore and Forget saved Z remain part of
+the shared reference workspace; the layout does not alter retention or gauge
+persistence.
 
 The desktop coordinator combines Home/park and reference under one submitted
 operation. It checks fresh Ender readiness, successful primary Home and unchanged
@@ -241,9 +247,12 @@ coordinator tolerates that expected cache gap only for the read and rechecks all
 motion readiness afterwards; it does not invent a ready status. Recovery uses that button for
 reference alone after the separately confirmed XY recovery. The camera button
 changes from Position probe to Move probe here only after a valid preview, and
-requires another explicit press to dispatch motion. Removing the XY-path and
-flat-patch checkboxes does not alter backend request validation; physical
-instructions and the remaining clearance, gauge and job confirmations remain.
+requires another explicit press to dispatch motion. The focus workspace has
+no Position XY jog row. Move to focus and next-job selection use their explicit
+action press to confirm the physical conditions stated beside the buttons,
+replacing their separate checkboxes. Headroom, manual-Z probe-stowed/path,
+recovery and gauge-fit confirmations remain. Backend request validation,
+clearance, bounds, session and STOP guards are unchanged.
 
 FocusBedView emits explicit raw-pixel selection metadata but owns no machine
 access. AppContext.focus_probe_target validates camera/lens/bed provenance and
@@ -253,7 +262,7 @@ typed MachineService position_probe action. The Pi checks physical target and
 both offset carriage endpoints, confirmed Z clearance and normal write/STOP
 invariants. Camera selection never auto-starts a contact cycle or Z descent.
 
-The focus dialog's observational camera pane reuses the bounded latest-frame
+The workspace's observational camera pane reuses the bounded latest-frame
 monitor worker and cannot send motion. Typed focus XY actions run under the
 existing MachineService command/session scope, check Z clearance and both work
 area endpoints, and verify primary XY before reassigning a surface measurement

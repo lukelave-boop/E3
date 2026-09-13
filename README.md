@@ -14,18 +14,24 @@ Existing firmware-bound gauge calibration is preserved but may need one new
 teaching after the firmware update. No retained-Z hardware installation or
 physical power-cycle test has been performed yet. See [saved Z](docs/Z_RETENTION.md).
 
-## Consolidated Z controls
+## Z controls in Machine and Machine Setup
 
-**Surface / laser focus…** combines initial setup into **Home / park +
-reference**. After a valid saved-Z restoration, that button becomes **Home /
-park XY** and parks without probing again. **Position probe** becomes **Move probe here** after a valid camera
-selection; press that same button again to move. The probe XY offset editor and
-entire 7 mm gauge teaching workflow now live in **Tools → Machine Setup… →
-7 · Z / laser focus**. Daily focus uses the saved calibration. The separate XY
-transfer-path and flat-patch checkboxes are removed; physical path/placement
-instructions and the remaining clearance, gauge and job confirmations remain.
-The control consolidation itself preserves saved teaching; the saved-Z feature
-above additionally requires its matching Pi software and firmware. See [the focus guide](docs/LASER_FOCUS.md).
+**Machine → Z axis · Ender** contains daily **Reference and measure**,
+Ender status/recovery, saved-Z controls and the live bed view beside the existing
+manual Z controls. **Home / park + reference** becomes **Home / park XY** after
+an accepted saved-Z restore and parks without probing again. **Position probe**
+becomes **Move probe here** after a valid camera selection; press it again to
+move. The separate **Surface / laser focus…** button/dialog and the focus
+workspace's Position XY jog row are removed.
+
+The whole **Preview and position** section now lives in **Tools → Machine
+Setup… → 7 · Z / laser focus**, alongside probe XY offsets, 7 mm gauge teaching
+and reference/measurement helpers. **Move to focus** and **Use measured focus
+for next job** confirm the physical conditions printed beside those actions;
+the two separate checkboxes are removed. Headroom, manual-Z probe-stowed/path,
+recovery and gauge-fit confirmations remain. This desktop layout preserves
+backend safeguards, calibration and saved-Z behavior, and adds no Pi or firmware
+update beyond the saved-Z feature's existing requirements. See [the focus guide](docs/LASER_FOCUS.md).
 
 ## Focus selection and camera parking
 
@@ -37,10 +43,11 @@ unchanged; this correction needs only the matching Pi update.
 
 ## Measured focus for the next job
 
-In Surface / laser focus, preview the measured surface, confirm that the same
-flat surface spans the job and paths are clear, then choose **Use measured focus
-for next job**. START lifts to clearance, approaches with the laser off, lowers
-to the selected gap, and cuts. Successful completion turns output off and lifts
+In **Machine Setup → 7 · Z / laser focus → Preview and position**, preview
+the measured surface. Check that the same flat surface spans the job, the gauge
+is removed and Z/XY paths are clear, then press **Use measured focus for next
+job** to confirm those conditions. START lifts to clearance, approaches with
+the laser off, lowers to the selected gap, and cuts. Successful completion turns output off and lifts
 before Home / park. Manual Home / park also lifts first when clearance is owed.
 The selection is one use and requires a matching Pi companion. No firmware
 change or re-teaching is needed; establish a fresh reference/measurement after
@@ -50,7 +57,7 @@ The focus-preview client fix refreshes completed-operation status before
 presenting the target, preserving the operator's saved gauge calibration.
 See [current verification and build status](CURRENT_STATE.md).
 
-Surface / laser focus supports the matching firmware's requested **-10 mm below
+Surface measurement supports the matching firmware's requested **-10 mm below
 border** probing limit. The Pi validates its advertised contact range and the
 desktop displays it; older -2 mm firmware remains supported. Normal Z jog and
 focus travel still begin at Z0. Installation and the requested physical retry
@@ -64,7 +71,7 @@ gauge-focus accuracy remain unverified. See [the focus guide](docs/LASER_FOCUS.m
 
 ## Recovery after a failed surface probe
 
-Surface / laser focus provides a separate **Recover XY at current height**
+**Machine → Z axis · Ender** provides a separate **Recover XY at current height**
 action when a retained Z-clearance restriction prevents ordinary Home. After
 reconnecting the controllers, freshly confirm that the probe is physically
 retracted and the entire XY homing/search/parking path is clear at its current
@@ -75,9 +82,9 @@ The physical cause of a generic PROBE_FAILED remains undetermined.
 ## Focus preview readiness
 
 Preview target calculates a Z destination; Move to focus is the separate motion
-action. The focus window explains any missing prerequisite above that button.
-A camera interruption does not invalidate the already measured surface's Z
-preview. See [surface / laser focus](docs/LASER_FOCUS.md).
+action in **Machine Setup → 7 · Z / laser focus**. The page explains any
+missing prerequisite above that button. A camera interruption does not
+invalidate the already measured surface's Z preview. See [surface / laser focus](docs/LASER_FOCUS.md).
 
 ## Z focus workflow compatibility
 
@@ -89,7 +96,7 @@ a firmware update. Reference border also accepts a freshly verified homed Z belo
 
 ## Live Z and honeycomb focus positioning
 
-Surface / laser focus and the Machine-tab Z readout can display executed
+The Machine-tab and Machine Setup Z readouts can display executed
 controller step counts during motion with the matching live-Z firmware and Pi
 companion. Homing readings are labelled unreferenced; stale samples disappear.
 Focus positioning uses both the configured machine rectangle and any explicit
@@ -118,7 +125,7 @@ See [laser focus](docs/LASER_FOCUS.md). This correction needs only a desktop upd
 
 ## Ender connection recovery
 
-Surface / laser focus shows Ender readiness separately from XY homing. An
+**Machine → Z axis · Ender** shows Ender readiness separately from XY homing. An
 explicit Reconnect Ender retries the shared connection and verifies outputs
 off, while retaining configured limits and offsets. It never replays motion.
 Matching Pi support is required; recovery from a firmware halt additionally
@@ -140,25 +147,27 @@ still apply. See [the focus workflow](docs/LASER_FOCUS.md).
 
 ## Laser focus setup
 
-The focus window's **Position probe** mode lets you click the live camera,
+The reference workspace's **Position probe** mode lets you click the live camera,
 review the mapped target and move the probe there at clearance using its saved
 XY offset. It uses current lens/bed calibration and preserves a separate
 Measure surface action. Camera estimates remain on the bed plane; raised work
 requires a visual probe-placement check. See [laser focus](docs/LASER_FOCUS.md).
 
-The focus window includes a live bed view and step guidance. A saved measured
-probe XY offset enables separate probe/laser transfers over the same spot at
+The Machine Z section and Machine Setup tab 7 include a live bed view and step
+guidance. A saved measured probe XY offset enables separate probe/laser transfers over the same spot at
 clearance, with the Pi checking positions and retaining only that measurement.
 See [the focus sequence](docs/LASER_FOCUS.md) for the matching Pi update and
 operator calibration; no additional mainboard flash is needed for this change.
 
-Teach the 7 mm gauge in **Machine Setup → 7 · Z / laser focus**. The Machine
-tab's **Surface / laser focus…** workflow measures a work surface and
-previews/reproduces 7, 5 or 3 mm head gaps using that saved teaching.
+Teach the 7 mm gauge in **Machine Setup → 7 · Z / laser focus**. Measure a work
+surface in **Machine → Z axis · Ender**, then use Machine Setup tab 7's
+**Preview and position** to preview/reproduce 7, 5 or 3 mm head gaps using
+that saved teaching.
 Raised supports contribute to surface elevation without being mistaken for
 material thickness. It requires the matching Pi companion and surface-height
-V2 firmware. This is explicit laser-off calibration/position validation;
-automatic job focus and raised-work camera correction remain separate.
+V2 firmware. Calibration and positioning are explicit laser-off actions;
+**Use measured focus for next job** separately selects the coordinated job
+sequence. Raised-work camera correction remains separate.
 See [the calibration and installation guide](docs/LASER_FOCUS.md).
 
 The [mainboard SD firmware](firmware/marlin_mainboard/README.md) now supports
