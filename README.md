@@ -1,6 +1,6 @@
 # Laser Camera Aligner / E3 Positioning System
 
-A Pi-side focus/cooling deadlock correction is undergoing verification; see
+A tested Pi-side focus/cooling deadlock correction is available; see
 [focus teaching status](docs/LASER_FOCUS.md). It preserves the existing gauge
 calibration and automatic thickness rule. Operator verification remains pending.
 

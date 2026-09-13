@@ -1,6 +1,6 @@
 # Current repository state
 
-## Focus/cooling deadlock correction in progress (2026-09-13)
+## Focus/cooling deadlock correction (2026-09-13)
 
 Operator reports: teaching Z moves twice produced no movement and an unresponsive
 app; SSH later stopped responding. The old boot journal was volatile and lost.
@@ -15,9 +15,26 @@ with cooling and normal owned secondary exchanges. Connection/session/deadline
 checks remain inside the guard, after waiting. The regression also rejects a
 lost monitoring connection without any Z motion. No firmware/calibration change.
 
-Windows focused verification is running; hardware and SSH failure attribution
-remain unverified. Preparing a guarded Pi-only companion compatible with the
-existing E3 DEV TEST 0.7.133; nothing has been installed on the operator's Pi.
+Windows focused verification: 370 focus/cooling/thickness/recovery tests passed,
+plus both final concurrency cases after adding lost-connection rejection. Linux
+WSL Ubuntu 22.04: all 371 final focused cases passed with simulated controllers.
+All six installer acceptance/rejection cases passed on Windows. Repository Ruff,
+compileall and diff checks passed. No GUI or physical hardware tests were run.
+Full Compatibility CI 34766133437 at ef005aa passed: Windows Python 3.12
+6,450 passed / 41 skipped; Windows Python 3.10 5,213 passed / 114 skipped;
+POSIX 632 passed; Ruff passed. The fix is integrated into main; the completed
+feature branch is removed. CI does not physically qualify teaching or explain
+the lost SSH connection.
+
+Pi-only companion `dist/e3-pi-thickness-focus-5f770c81` is frozen at
+`ef005aa236e12d213acfa58b9dfa54d1aaa303b1` and compatible with the existing
+E3 DEV TEST 0.7.133. Its 17 payload files match the exact Git revision; only
+`machine/service.py` differs from the previous 2528c9d0 companion. The third
+accepted predecessor matches that original companion's complete manifest.
+Use its INSTALL.md for read-only preview and guarded backup/apply. The Windows
+EXE and permanent feature pointer are unchanged. No update has been installed
+on the operator's Pi; hardware behavior and SSH failure attribution remain
+unverified.
 
 ## Automatic thickness focus verified and selected (2026-09-13)
 
