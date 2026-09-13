@@ -26,6 +26,7 @@ SAVED_Z = {
     "laser_aligner/machine/remote_service.py": "86d07386235f676467ed710b3901828a796ec45ae278285cde5384457aebb3a3",
     "laser_aligner/machine/pi_job_service.py": "f36f0841b67c48074dacefad05a1de242325675d398ce7eed12301f651d07da3",
     "laser_aligner/machine/pi_machine_server.py": "b37be2d367a1fd19e30abdc977c6db44d269939b1ea70b362ddd3aabd8d9be10",
+    "laser_aligner/machine/pi_job_protocol.py": "62aa7a9a68348cedbb848f2ede93b62797af78e0d4190e67aa56ba9904229328",
     "laser_aligner/remote_node.py": "474325070988bf6e0323a4c8874e843438166ad81e569d9d862de580e7cf7088",
     "laser_aligner/machine/z_limits.py": "c1ccb0ec6f82d7489d49dd50bdaf295a75a20b22117d3cad0ee56298c3b00310",
     "laser_aligner/machine/z_probe.py": "393a2d2c5e791754fed2a14fd706548df4b57bb96cc7fc46ba71d31101c96ece",
@@ -40,6 +41,8 @@ SAVED_Z = {
 # files. Those recorded installations did not replace the desktop remote
 # client. Pin the whole installed combination rather than allow arbitrary mixing.
 # The remote client bytes match Git 050498c0e31d7778c161688c9c232224aceb2717.
+# pi_job_protocol.py was not replaced by those patches; its pinned bytes are
+# identical in every recorded source revision and must accompany today's client.
 RECORDED_INSTALLED_FOCUS_NAME = "installed-e57adbb5-12dbb3d-59c31d7"
 RECORDED_INSTALLED_FOCUS = {
     **INSTALLED_FOCUS,

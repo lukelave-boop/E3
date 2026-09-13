@@ -9,6 +9,16 @@ guards. Qualify the matched Windows/Pi/firmware build physically, including
 up/down travel without missed steps, renewed gauge teaching, repeated surface
 measurement and job focus/clearance. See CURRENT_STATE.md for software evidence.
 
+## First-connected Pi app priority
+
+Implement server-enforced client ownership, negotiated 30-second reservations,
+observer-only desktop controls and non-owner cleanup rejection. Verify competing
+clients, legacy priority, owner handoff, expired/in-flight reservations and global
+STOP through authenticated loopback and Windows offscreen checks. Package the
+combined speed/priority Pi update against the recorded 568b1cc9 installed baseline. Physical
+two-app testing and installation remain pending; no connection-stability claim
+extends to Wi-Fi, Pi power, USB, firmware or hardware faults.
+
 ## Windows update handoff reliability
 
 Separate installer creation from the shutdown deadline and preserve launch

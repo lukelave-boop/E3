@@ -183,14 +183,14 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.stop_button.setEnabled(True)
 
     def _connect_clicked(self) -> None:
-        if self._ui_state.controller_state == "RECONNECT_REQUIRED":
+        if self._ui_state.can_reconnect:
             self.reconnectRequested.emit()
         else:
             self.connectRequested.emit()
 
     def _sync_primary_controls(self) -> None:
         state = self._ui_state.with_busy(self._busy)
-        reconnect_available = state.controller_state == "RECONNECT_REQUIRED"
+        reconnect_available = state.can_control and state.controller_state == "RECONNECT_REQUIRED"
         self.connect_button.setText(
             "Reconnect" if reconnect_available else "Connect"
         )
@@ -253,6 +253,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             if state.remote and not state.status_trusted
             else f"Authoritative controller state: {state.controller_state}."
         )
+        if state.status_trusted and not state.can_control:
+            connection_description += " " + state.control_reason
         if state.submission_visible:
             connection_description = (
                 f"{state.connection_text}. "
@@ -290,6 +292,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
                 "Motion authority is unknown and all controller actions except "
                 "Software STOP are blocked."
             )
+        elif not state.can_control:
+            motion_description = state.control_reason + " Software STOP remains available."
         elif state.controller_state == "RECONNECT_REQUIRED":
             motion_description = (
                 "Controller command ordering is no longer trusted. Reconnect before "

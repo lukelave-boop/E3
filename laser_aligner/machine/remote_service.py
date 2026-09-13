@@ -46,6 +46,7 @@ from .pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROL_OWNER,
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
@@ -70,6 +71,7 @@ from .pi_machine_server import (
     ACTION_JOB_LATEST,
     ACTION_MACHINE_COMMAND,
     ACTION_MACHINE_CONNECT,
+    ACTION_MACHINE_CONTROL_RELEASE,
     ACTION_MACHINE_DISCONNECT,
     ACTION_MACHINE_FOCUS,
     ACTION_MACHINE_JOG,
@@ -279,6 +281,7 @@ class RemoteMachineService:
         self._live_z_poll_count = 0
         self._monitor_stop = threading.Event()
         self._monitor_thread: threading.Thread | None = None
+        self._monitor_requested = False
         self._detached = False
         self._shutdown_started = False
         self._shutdown_idle_disconnect_allowed: bool | None = None
@@ -288,6 +291,12 @@ class RemoteMachineService:
         self._structured_errors_supported = False
         self._coherent_status_supported = False
         self._client_id = str(uuid.uuid4())
+        self._control_ownership_supported = False
+        self._control_owner_id: str | None = None
+        self._control_owner_revision: int | None = None
+        self._control_claimed = False
+        self._control_claim_attempted = False
+        self._control_request_sequence = 0
         self._node_boot_id: str | None = None
         self._node_build: dict[str, str] | None = None
         self._node_capabilities: tuple[str, ...] | None = None
@@ -437,6 +446,9 @@ class RemoteMachineService:
             raise PiJobProtocolError(
                 f"Remote {action} response did not match its request ID"
             )
+        if self._control_ownership_supported:
+            self._response_metadata(response, required=True)
+            self._accept_control_metadata(response)
         if response.get("ok") is False:
             raw_error = response.get("error")
             detail = (
@@ -489,6 +501,47 @@ class RemoteMachineService:
                 f"Remote {action} response omitted an exact success flag"
             )
         return response
+
+    def _accept_control_metadata(self, response: Mapping[str, Any]) -> None:
+        """Operator ownership has its own revision, independent of USB state."""
+        owner = response.get("control_owner_client_id")
+        revision = response.get("control_owner_revision")
+        leased = response.get("control_owner_leased")
+        try:
+            valid_owner = owner is None or (
+                type(owner) is str and str(uuid.UUID(owner)) == owner
+            )
+        except ValueError:
+            valid_owner = False
+        if (not valid_owner or type(revision) is not int or revision < 0
+            or type(leased) is not bool or (owner is None and leased)):
+            raise PiJobProtocolError("Pi returned invalid control ownership metadata")
+        with self._state_lock:
+            if response.get("boot_id") != self._node_boot_id:
+                return
+            if self._control_owner_revision is not None:
+                if revision < self._control_owner_revision:
+                    return
+                if revision == self._control_owner_revision and owner != self._control_owner_id:
+                    raise PiJobProtocolError("Pi control owner changed without a new revision")
+            self._control_owner_id = owner
+            self._control_owner_revision = revision
+            self._control_claimed = owner == self._client_id and not self._detached
+
+    def _control_status_locked(self) -> dict[str, Any]:
+        owned = self._control_claimed and not self._detached
+        in_use = self._control_ownership_supported and self._control_owner_id not in {None, self._client_id}
+        return {
+            "control_ownership_supported": self._control_ownership_supported,
+            "control_owner_client_id": self._control_owner_id,
+            "control_owned": owned,
+            "control_in_use": in_use,
+            "control_status": (
+                "Pi is in use by another E3 app. Disconnect that app first."
+                if in_use else "Connect to take control of the Pi."
+                if self._control_ownership_supported and not owned else None
+            ),
+        }
 
     def _response_metadata(
         self,
@@ -594,6 +647,11 @@ class RemoteMachineService:
                 self._structured_errors_supported = False
                 self._coherent_status_supported = False
                 self._node_capabilities = None
+                self._control_ownership_supported = False
+                self._control_owner_id = None
+                self._control_owner_revision = None
+                self._control_claimed = False
+                self._control_claim_attempted = False
                 self._authorization_epoch += 1
                 self._clear_arm_locked()
             if boot_changed or (
@@ -618,6 +676,8 @@ class RemoteMachineService:
             self._controller_state_revision = state_revision
             self._controller_session_generation = session_generation
             self._controller_state = controller_state
+            if self._control_ownership_supported:
+                self._accept_control_metadata(response)
             self._status_cache.update(
                 {
                     "node_boot_id": boot_id,
@@ -650,12 +710,33 @@ class RemoteMachineService:
             metadata_supported = self._session_metadata_supported
             boot_id = self._node_boot_id
             session_generation = self._controller_session_generation
+            control_supported = self._control_ownership_supported
+            owner_revision = self._control_owner_revision
+            detached = self._detached
+            control_sequence = None
+            if action in {
+                ACTION_MACHINE_CONNECT, ACTION_MACHINE_REPLACE_CONNECTION,
+                ACTION_JOB_START, ACTION_MACHINE_DISCONNECT,
+            }:
+                self._control_request_sequence += 1
+                control_sequence = self._control_request_sequence
+                if action != ACTION_MACHINE_DISCONNECT:
+                    self._control_claim_attempted = True
         if metadata_supported and action in _SESSION_MUTATING_ACTIONS:
             request["client_id"] = self._client_id
+            if control_supported:
+                request["control_lease"] = True
+                if action == ACTION_MACHINE_DISCONNECT:
+                    request["expected_control_owner_revision"] = owner_revision
             if boot_id is not None:
                 request["expected_boot_id"] = boot_id
             if session_generation is not None:
                 request["expected_session_generation"] = session_generation
+        if control_supported and action == ACTION_MACHINE_STATUS and not detached:
+            request["client_id"] = self._client_id
+        if control_supported and action == ACTION_MACHINE_CONTROL_RELEASE:
+            request["client_id"] = self._client_id
+            request["expected_boot_id"] = boot_id
         request_kwargs: dict[str, float] = {"timeout": timeout}
         if deadline is not None:
             request_kwargs["deadline"] = deadline
@@ -671,10 +752,25 @@ class RemoteMachineService:
             # An authenticated reply proves contact, not machine authority.
             with self._state_lock:
                 self._last_node_response_monotonic = time.monotonic()
-            return self._validate_response(
+            result = self._validate_response(
                 response, request_id=request_id, action=action,
             )
+            with self._state_lock:
+                if (control_sequence == self._control_request_sequence
+                        and not control_supported and not self._detached) and action in {
+                    ACTION_MACHINE_CONNECT, ACTION_MACHINE_REPLACE_CONNECTION, ACTION_JOB_START,
+                }:
+                    self._control_claimed = True
+                if (action == ACTION_MACHINE_DISCONNECT
+                        and control_sequence == self._control_request_sequence):
+                    self._control_claimed = False
+                    self._control_claim_attempted = False
+            return result
         except MachineError as exc:
+            if isinstance(exc, _RemoteRequestRejected) and exc.error_code == "controller.in_use":
+                with self._state_lock:
+                    if control_sequence == self._control_request_sequence:
+                        self._control_claim_attempted = False
             LOGGER.warning(
                 "Pi request failed action=%s request=%s elapsed_seconds=%.3f "
                 "timeout_seconds=%.3f error=%s detail=%s",
@@ -792,6 +888,11 @@ class RemoteMachineService:
                 self._coherent_status_supported = (
                     CAPABILITY_PI_COHERENT_STATUS in capabilities
                 )
+                self._control_ownership_supported = CAPABILITY_PI_CONTROL_OWNER in capabilities
+                if self._control_ownership_supported:
+                    if not session_metadata_supported or ACTION_MACHINE_CONTROL_RELEASE not in actions:
+                        raise PiJobProtocolError("Pi control ownership requires session and release support")
+                    self._accept_control_metadata(response)
                 self._capabilities_verified = True
         finally:
             if capability_lock_acquired:
@@ -1257,6 +1358,15 @@ class RemoteMachineService:
                 with self._state_lock:
                     delay = min(self._monitor_interval_seconds, .2) if self._live_z_poll_count else self._monitor_interval_seconds
 
+        # A reattach can clear the stop event after this loop decided to exit.
+        # Retain its identity until here, then start the replacement only after
+        # all observation work in this thread has finished.
+        with self._state_lock:
+            if self._monitor_thread is threading.current_thread():
+                self._monitor_thread = None
+                if not self._monitor_stop.is_set():
+                    self._resume_monitoring_locked()
+
     @contextmanager
     def _live_z_monitor_scope(self, active: bool):
         if active:
@@ -1271,25 +1381,33 @@ class RemoteMachineService:
                     self._live_z_poll_count -= 1
                 self._monitor_wake.set()
 
+    def _resume_monitoring_locked(self) -> None:
+        if not self._monitor_requested or self._detached or self._shutdown_started:
+            return
+        self._monitor_stop.clear()
+        thread = self._monitor_thread
+        if thread is not None and thread.is_alive():
+            return
+        thread = threading.Thread(
+            target=self._monitor_loop,
+            name="remote-machine-status",
+            daemon=True,
+        )
+        self._monitor_thread = thread
+        # Publish and start under the state lock so shutdown cannot mistake an
+        # unstarted thread for a quiescent observer.
+        thread.start()
+
     def start_monitoring(self) -> None:
         with self._state_lock:
             if self._shutdown_started:
+                if self._monitor_thread is not None and not self._monitor_thread.is_alive():
+                    self._monitor_thread = None
                 return
-            thread = self._monitor_thread
-            if thread is not None and thread.is_alive():
-                return
+            self._monitor_requested = True
             self._detached = False
             self._shutdown_idle_disconnect_allowed = None
-            self._monitor_stop.clear()
-            thread = threading.Thread(
-                target=self._monitor_loop,
-                name="remote-machine-status",
-                daemon=True,
-            )
-            self._monitor_thread = thread
-            # Start while holding the state lock so shutdown cannot observe a
-            # published-but-not-yet-started thread and mistake it for quiescent.
-            thread.start()
+            self._resume_monitoring_locked()
 
     def detach(
         self,
@@ -1353,9 +1471,36 @@ class RemoteMachineService:
                 self._shutdown_idle_disconnect_allowed = bool(
                     idle_snapshot and monitor_stopped and not active
                 )
-            if self._monitor_thread is thread:
+            if self._monitor_thread is thread and monitor_stopped:
                 self._monitor_thread = None
         self._mark_monitor_disconnected(None)
+        if not remember_idle_for_shutdown:
+            self._release_control(deadline=deadline)
+
+    def _release_control(self, *, deadline: float | None = None) -> None:
+        """Relinquish operator admission without changing Pi-owned execution."""
+        with self._state_lock:
+            release = self._control_ownership_supported and self._control_claim_attempted
+            owner_revision = self._control_owner_revision
+            self._control_request_sequence += 1
+            self._control_claimed = False
+            self._control_claim_attempted = False
+        if not release:
+            return
+        end = time.monotonic() + 0.25
+        if deadline is not None:
+            end = min(end, deadline)
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return  # The Pi lease expires independently if release cannot arrive.
+        try:
+            self._rpc(
+                ACTION_MACHINE_CONTROL_RELEASE,
+                {"expected_control_owner_revision": owner_revision},
+                timeout=remaining, deadline=end,
+            )
+        except MachineError as exc:
+            LOGGER.info("Pi control release was not confirmed: %s", exc)
 
     def abandon_start_attempt(self) -> None:
         """Drop desktop preparation state without touching possible Pi execution."""
@@ -1404,6 +1549,7 @@ class RemoteMachineService:
             )
             status["arm_phrase"] = self.ARM_PHRASE
             status["pi_owned_execution"] = True
+            status.update(self._control_status_locked())
             return status
 
     def _validate_connection_identity(
@@ -1481,10 +1627,18 @@ class RemoteMachineService:
     ) -> dict[str, Any]:
         self._require_hardware_authority()
         self._validate_connection_identity(port, protocol, baudrate)
-        return self._machine_status_action(
-            ACTION_MACHINE_CONNECT,
-            timeout=_CONNECT_RPC_TIMEOUT_SECONDS,
-        )
+        with self._state_lock:
+            if self._shutdown_started:
+                raise MachineError("Remote machine service is shutting down")
+            self._detached = False
+        try:
+            return self._machine_status_action(
+                ACTION_MACHINE_CONNECT,
+                timeout=_CONNECT_RPC_TIMEOUT_SECONDS,
+            )
+        finally:
+            with self._state_lock:
+                self._resume_monitoring_locked()
 
     def ensure_connected(self) -> dict[str, Any]:
         # The Pi owns the actual connection.  An authenticated idempotent connect
@@ -1493,16 +1647,29 @@ class RemoteMachineService:
 
     def replace_connection(self) -> dict[str, Any]:
         self._require_hardware_authority()
-        return self._machine_status_action(
-            ACTION_MACHINE_REPLACE_CONNECTION,
-            timeout=_CONNECT_RPC_TIMEOUT_SECONDS,
-        )
+        with self._state_lock:
+            if self._shutdown_started:
+                raise MachineError("Remote machine service is shutting down")
+            self._detached = False
+        try:
+            return self._machine_status_action(
+                ACTION_MACHINE_REPLACE_CONNECTION,
+                timeout=_CONNECT_RPC_TIMEOUT_SECONDS,
+            )
+        finally:
+            with self._state_lock:
+                self._resume_monitoring_locked()
 
     def disconnect(self) -> None:
         # Never wait for an upload/START operation while attempting controller
         # cleanup.  Revoking its generation causes every pre-START path to stop
         # at its next bounded RPC boundary; a committed START stays uncertain
         # and therefore remains non-destructive.
+        with self._state_lock:
+            owns_control = self._control_claimed
+        if not owns_control:
+            self.detach()
+            return
         if not self._operation_lock.acquire(blocking=False):
             self.detach()
             return
@@ -1572,7 +1739,13 @@ class RemoteMachineService:
                         )
                     )
                 )
-            if not acquired or not known_idle:
+            with self._state_lock:
+                owns_control = self._control_claimed or (
+                    self._control_ownership_supported
+                    and self._control_owner_id == self._client_id
+                    and self._control_claim_attempted
+                )
+            if not acquired or not known_idle or not owns_control:
                 return
 
             with self._stop_epoch_lock:
@@ -2107,6 +2280,8 @@ class RemoteMachineService:
             }
             if metadata_supported:
                 request["client_id"] = self._client_id
+                if self._control_ownership_supported:
+                    request["control_lease"] = True
                 if boot_id is not None:
                     request["expected_boot_id"] = boot_id
                 if session_generation is not None:

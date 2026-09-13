@@ -17,7 +17,8 @@ def mainboard_harness(server_harness):
     serial, _, fan, _, _ = ready_probe()
     mainboard_serial(serial)
     harness.machine._secondary_air_assist = fan
-    harness.service.connect()
+    connected = helpers._rpc(harness, helpers.ACTION_MACHINE_CONNECT)
+    assert connected["ok"], connected
     return harness, serial
 
 

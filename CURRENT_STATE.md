@@ -2,11 +2,11 @@
 
 ## Faster Z setup travel candidate (2026-09-13)
 
-Work is isolated at .codex-worktrees/z-setup-speed, started from main 7b66881
-and rebased onto authoritative 590b032 to preserve the completed installer
-launch correction. Main-checkout Pi client-priority work remains separate. Probe positioning has a private 1,200 mm/min feed cap;
-Z host moves use 300 mm/min and the compact firmware's 5 mm/s planner ceiling
-prevents a host-only increase from improving actual Z speed.
+Work is isolated at .codex-worktrees/z-setup-speed and integrates Pi client
+priority 92a7a61 and authoritative main 89d4a2e, including the installer launch
+correction. Previously probe positioning had a private 1,200 mm/min feed cap;
+Z host moves used 300 mm/min and the compact firmware's 5 mm/s planner ceiling
+prevented a host-only increase from improving actual Z speed.
 
 The candidate removes that XY cap while keeping all configured feed ceilings,
 uses Z raise 1,200 / lower 600 / fine downward gauge 120 mm/min, and requires
@@ -26,14 +26,95 @@ overspeed capping, settings-load/M203 limits, capability rejection and scoped
 native-cycle limits. Independent host review corrected native callback feed
 invalidation and direction selection for accepted post-contact readback.
 
-The full compatibility gates, final frozen desktop and exact companion/firmware
-package verification are pending. New speed firmware is required; Windows/Pi
-source updates alone cannot lift the previous firmware's 5 mm/s ceiling.
+Speed revision bd60c01 passed Compatibility CI 34756725327: Windows Python 3.12
+desktop 6,315 passed / 31 skipped, Windows Python 3.10 core 5,094 passed /
+103 skipped, POSIX recovery 632 passed, and repository Ruff passed. Exact-source
+WSL Ubuntu 22.04 / Python 3.10.12 focused checks passed 656 with zero skips.
+The initial full run exposed one companion guide assertion; package-specific
+guides corrected it without changing the application or firmware source.
+Compact, mainboard and material firmware CI 34756148519 / 34756149691 /
+34756150844 passed at application/firmware revision 903c63a.
+
+The frozen 0.7.128 speed-only candidate matches all 163 application modules and
+embedded bytecode at 903c63a. It remains unselected. The coordinated remote Pi
+handoff instead uses the priority task's 0.7.132 desktop at 92a7a61: its desktop,
+remote facade and protocol match integrated sources, while the Pi chooses setup
+feeds. Direct/local-controller 0.7.132 still uses the earlier setup feeds.
+Combined companion and final integration verification are in progress.
+Firmware e3-mainboard-f401-usb-a7b5c9de is built and verified against 903c63a,
+including pinned sources, compiled images, updater, archive and manifest hashes.
+Use its application-only USB update instructions with the installed updater.
+New speed firmware is required; Windows/Pi source updates alone cannot lift
+the previous firmware's 5 mm/s ceiling.
 No interactive GUI, real camera, physical controller/laser, speed, missed-step or
 focus-accuracy test has been performed. New firmware identity will require a
 fresh border reference and gauge teaching. No hardware has been operated.
 
+## First-connected Pi app priority (2026-09-13)
+
+The separately verified installer-launch fix landed on main during validation.
+It is integrated before the final feature build; both branches' application
+changes merge without conflicts. The earlier 0.7.126 / 402c56f candidate remains
+unselected; the final build and full CI will use the combined revision.
+
+The operator reports that opening E3 DEV TEST while normal E3 is connected
+causes normal E3 to disconnect. Source inspection confirms two ownership gaps:
+PiMachineServer discarded the supplied client UUID for admission, and a facade
+that only observed globally idle status could disconnect that controller during
+cleanup. The exact launch-time sequence was not physically reproduced or logged.
+
+Implemented first-client ownership in the Pi server, independent of the USB
+session and durable Pi job ownership. Competing control/cleanup requests reject;
+status and authenticated STOP remain available. Updated clients negotiate a
+30-second reservation renewed by identifiable status. Admitted operations pin
+ownership until they unwind. Explicit detach releases only operator admission;
+expiry/release never writes M5, disconnects, or changes accepted job execution.
+Legacy owners do not expire from anonymous polling: they retain control until
+explicit Disconnect or Pi service restart. A crashed legacy owner may therefore
+require an idle service restart before another app can take control.
+
+Updated desktop UI shows PI IN USE / VIEW ONLY, gates ordinary actions, allows
+explicit Connect to an unowned existing controller, and suppresses non-owner
+physical focus polling. Remote cleanup uses its own claim, not global connected
+status; this also protects observer cleanup against older Pi servers. Shared
+remote facade/server behavior affects desktop and browser/core execution; no
+geometry, project schema, motion generation, arming or laser limits changed.
+
+Local Windows verification: 756 focused tests pass, covering authenticated TCP
+competition/STOP, remote cleanup, 65 installer cases, and offscreen desktop
+controls. Repository Ruff, compileall and whitespace checks pass. Linux/Python
+3.10 passed 395 focused tests with zero skips before the final delayed-Disconnect
+guard; exact-source Linux verification, CI and frozen build are in progress. No interactive GUI, camera,
+controller/laser, sustained connection or physical two-app test has been run.
+Pi installation remains pending. Existing untracked scratch artifacts and the
+separate update-launch-deadline worktree are preserved.
+
+
+The first full compatibility run exposed old authenticated fixtures that bypassed
+Connect ownership and stale fault-matrix test names. Test/document-only updates
+preserve the original safety assertions; all 317 directly affected Windows
+cases pass. Frozen application source 402c56f and version 0.7.126 are unchanged.
+Exact frozen-source Linux checks cover 402 cases; all seven real predecessor
+checks were rerun successfully with an explicit Git-directory mapping (65
+installer cases, zero skips). A redundant local full run collected the earlier
+fixtures and was cancelled after its known failures; full CI is the clean gate.
+Offscreen compact/normal control-strip and machine-panel renders were visually
+inspected with synthetic status, with no clipping of the ownership message.
+
 ## Installer launch and shutdown deadline correction (2026-09-13)
+
+Release 0.7.127 at 590b032 published successfully in workflow 34755865547.
+Its Windows installer matched the manifest and GitHub asset size 215,723,437
+and SHA256 53c53e4ae8fc5a7ef7b1add66efed7440e18c8378087fe62fa59ae46a659b071.
+The corrected production launcher, invoked from source, created the real Inno
+process in 8.388 seconds with no injected delay; its visible 0.7.127 setup
+window was observed. That measured creation time exceeds the old four-second
+shutdown deadline and corroborates the reproduced race. The original attempt
+was not logged, so its exact timing remains unknown. The operator must complete
+the open wizard to install this correction; completion is not yet verified.
+Launch and setup logs are retained under build/updater/published in the isolated
+worktree. All updater commits are on origin/main and the feature branch was
+removed; the main checkout's separate active Pi edits were left untouched.
 
 The operator reports regular E3 0.7.13 downloaded an update and closed after
 approval without showing the installer. The cached 7b66881966a5 package matched

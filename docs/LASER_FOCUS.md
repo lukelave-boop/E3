@@ -75,20 +75,22 @@ the physical conditions beside the controls. Headroom/Z-path, manual-Z
 probe-stowed/path, recovery and gauge-fit confirmations remain. Manual
 **Move to focus** in Setup confirms the adjacent gauge-removal and target-path
 conditions. Bounds, clearance, session and STOP checks remain in force.
-Automatic reusable focus requires the matching Pi companion but adds no new
-firmware requirement. Existing saved gauge teaching is preserved. The revised
-workflow has no new physical verification; see
+Automatic reusable focus alone added no new firmware requirement. The combined
+faster-Z companion below requires speed firmware and fresh gauge teaching.
+The revised workflow has no new physical verification; see
 [CURRENT_STATE.md](../CURRENT_STATE.md) for test evidence.
 
 ## Matching desktop and Pi support
 
-Install the matching workpiece-focus Pi companion before using the desktop
-feature build. It advertises `pi-workpiece-focus-v1`; the desktop rejects an
-older Pi for this workflow instead of sending a powered job that omits focus.
-Automatic focus, camera-selected honeycomb positioning and 2/5 mm teaching
-jogs work with the existing surface-height V2 firmware. This application update
-does not need a firmware flash. Live numeric Z and saved-Z restoration retain
-their separate firmware-capability requirements.
+For the coordinated feature build, use E3 DEV TEST 0.7.132 with the combined
+Z-speed/connection-priority Pi companion and matching speed firmware. The
+desktop sends existing typed focus actions; the Pi selects the faster feeds.
+Direct/local-controller operation in that frozen desktop retains the old feeds.
+The Pi advertises `pi-workpiece-focus-v1`; the desktop rejects an older Pi for
+this workflow instead of sending a powered job that omits focus. Earlier
+automatic-focus-only releases worked with surface-height V2 firmware, but the
+new normal Z motion requires `Cap:E3_Z_SETUP_SPEED_V1:1`. Live numeric Z and
+saved-Z restoration retain their separate firmware-capability requirements.
 
 At the confirmed border, Reference border brings a freshly verified, homed Z
 position to the native cycle's Z20 starting point, including after teaching

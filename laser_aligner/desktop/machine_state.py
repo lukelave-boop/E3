@@ -125,6 +125,21 @@ class ControllerUiState:
     operation_busy: bool = False
     submission_phase: str | None = None
     status_refresh_error: bool = False
+    control_ownership_supported: bool = False
+    control_owned: bool = True
+    control_in_use: bool = False
+
+    @property
+    def can_control(self) -> bool:
+        return not self.control_ownership_supported or self.control_owned
+
+    @property
+    def control_reason(self) -> str:
+        if self.can_control:
+            return ""
+        if self.control_in_use:
+            return "Pi is in use by another E3 app. Disconnect that app first."
+        return "Connect to take control of the Pi."
 
     @property
     def status_trusted(self) -> bool:
@@ -141,6 +156,17 @@ class ControllerUiState:
 
     @property
     def can_connect(self) -> bool:
+        if not self.can_control:
+            return (
+                self.status_trusted
+                and not self.control_in_use
+                and not self.operation_busy
+                and not self.job_running
+                and self.controller_state in {
+                    "DISCONNECTED", "FAULTED", "RECONNECT_REQUIRED",
+                    "READY_HOME_REQUIRED", "READY_MOTION",
+                }
+            )
         return (
             self.status_trusted
             and not self.operation_busy
@@ -151,6 +177,7 @@ class ControllerUiState:
     def can_reconnect(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and self.controller_state == "RECONNECT_REQUIRED"
         )
@@ -159,6 +186,7 @@ class ControllerUiState:
     def can_disconnect(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and not self.job_running
             and self.controller_state in {"READY_HOME_REQUIRED", "READY_MOTION"}
@@ -168,6 +196,7 @@ class ControllerUiState:
     def can_home(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and self.allow_motion
             and not self.armed
@@ -179,6 +208,7 @@ class ControllerUiState:
     def can_jog(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and self.allow_motion
             and not self.armed
@@ -191,6 +221,7 @@ class ControllerUiState:
     def can_arm(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and self.allow_motion
             and not self.armed
@@ -208,6 +239,7 @@ class ControllerUiState:
     def can_send_diagnostic(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and not self.armed
             and not self.job_running
@@ -222,6 +254,7 @@ class ControllerUiState:
     def can_recapture_without_homing(self) -> bool:
         return (
             self.status_trusted
+            and self.can_control
             and not self.operation_busy
             and self.allow_motion
             and not self.armed
@@ -252,6 +285,8 @@ class ControllerUiState:
             return _SUBMISSION_LABELS[self.submission_phase]
         if self.remote and not self.status_trusted:
             return "STATUS UNAVAILABLE" if self.node_reachable else "PI NOT RESPONDING"
+        if not self.can_control:
+            return "PI IN USE" if self.control_in_use else "CONNECT TO PI"
         return {
             "DISCONNECTED": "OFFLINE",
             "OPENING": "OPENING",
@@ -273,6 +308,8 @@ class ControllerUiState:
             return text + (" · checking machine status" if self.status_stale else "")
         if self.remote and not self.status_trusted:
             return "Machine status unavailable" if self.node_reachable else "Pi not responding"
+        if not self.can_control:
+            return "Pi in use by another E3 app" if self.control_in_use else "Connect to control Pi"
         return {
             "DISCONNECTED": "Disconnected",
             "OPENING": "Opening controller",
@@ -293,6 +330,8 @@ class ControllerUiState:
             return "CHECKING STATUS" if self.status_stale else "JOB PREPARATION"
         if not self.status_trusted:
             return "STATE UNKNOWN"
+        if not self.can_control:
+            return "VIEW ONLY"
         if self.controller_state == "READY_HOME_REQUIRED":
             return "HOME REQUIRED"
         if self.controller_state == "READY_MOTION":
@@ -309,6 +348,7 @@ class ControllerUiState:
     def motion_text(self) -> str:
         return {
             "STATE UNKNOWN": "State unknown",
+            "VIEW ONLY": "View only",
             "CHECKING STATUS": "Checking machine status",
             "JOB PREPARATION": "Job preparation",
             "HOME REQUIRED": "Home required",
@@ -321,7 +361,7 @@ class ControllerUiState:
 
     @property
     def connection_style(self) -> str:
-        if self.submission_visible:
+        if self.submission_visible or (self.status_trusted and not self.can_control):
             return "statusWarning"
         if not self.status_trusted:
             return "statusBad"
@@ -333,7 +373,7 @@ class ControllerUiState:
 
     @property
     def motion_style(self) -> str:
-        if self.submission_visible:
+        if self.submission_visible or (self.status_trusted and not self.can_control):
             return "statusWarning"
         if self.controller_state == "READY_MOTION" and self.allow_motion and self.status_trusted:
             return "statusWarning"
@@ -347,6 +387,8 @@ class ControllerUiState:
             return f"{label} is unavailable while another machine operation is active."
         if self.remote and not self.status_trusted:
             return f"{label} is unavailable until a fresh Raspberry Pi machine status is received."
+        if not self.can_control:
+            return self.control_reason
         if not self.state_valid:
             return f"{label} is unavailable because the controller reported an invalid state."
         if self.controller_state == "RECONNECT_REQUIRED":
@@ -386,6 +428,8 @@ class ControllerUiState:
         parts.append(str(protocol or "unknown"))
         parts.append("ARMED" if self.armed else "SAFE")
         parts.append(self.compact_motion_text)
+        if self.status_trusted and not self.can_control:
+            parts.append(self.control_reason)
         return " | ".join(parts)
 
 
@@ -444,6 +488,9 @@ def project_machine_state(
             else None
         ),
         status_refresh_error=bool(machine.get("status_refresh_error")),
+        control_ownership_supported=machine.get("control_ownership_supported") is True,
+        control_owned=machine.get("control_owned") is True,
+        control_in_use=machine.get("control_in_use") is True,
     )
 
 
@@ -493,6 +540,8 @@ def running_controller_diagnostics(status: Mapping[str, Any] | None) -> dict[str
     }[projection.controller_state]
     if projection.remote and not projection.status_trusted:
         current_action_required = "Wait for a fresh Pi machine snapshot"
+    elif not projection.can_control:
+        current_action_required = projection.control_reason
     payload: dict[str, object] = {
         "desktop_build": {
             "version": local_build.version,
@@ -508,6 +557,9 @@ def running_controller_diagnostics(status: Mapping[str, Any] | None) -> dict[str
         "node_protocol": _sanitized_value(machine.get("node_protocol")),
         "node_capabilities": _sanitized_value(machine.get("node_capabilities")),
         "monitor_connected": machine.get("monitor_connected"),
+        "control_ownership_supported": projection.control_ownership_supported,
+        "control_owned": projection.control_owned,
+        "control_in_use": projection.control_in_use,
         "node_reachable": projection.node_reachable,
         "status_stale": machine.get("status_stale"),
         "status_error": _sanitized_value(machine.get("status_error")),

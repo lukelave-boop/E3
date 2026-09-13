@@ -43,12 +43,12 @@ hardware has been tested. The physical 20-cycle acceptance run remains required.
 | 34 | Reconnect while worker unwinds | `test_reconnect_can_publish_while_old_job_worker_unwinds` | Deterministic race test |
 | 35 | Stale cleanup close | `test_stale_job_cleanup_cannot_close_replacement_transport` | Deterministic exact-transport ownership test |
 | 36 | Stale worker write | `test_stale_job_worker_cannot_write_replacement_transport` | Deterministic exact-session ownership test |
-| 37 | Repeated Reconnect | `test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected` | Pi RPC automated |
+| 37 | Repeated Reconnect | `test_owner_requests_share_one_replacement_and_stale_disconnect_is_rejected` | Pi RPC automated |
 | 38 | Connect/Reconnect race | `test_connect_and_reconnect_race_share_one_published_session` | Automated |
 | 39 | Reconnect/STOP race | `test_stop_cancels_reconnect_candidate_before_it_can_publish` | Automated |
 | 40 | Home/poll race | `test_home_and_status_poll_are_coherent_and_two_home_requests_exclude` | Automated |
 | 41 | Concurrent Home | `test_home_and_status_poll_are_coherent_and_two_home_requests_exclude` | Automated |
-| 42 | Two desktop clients | `test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected` | Pi RPC automated |
+| 42 | Two desktop clients | `test_second_app_cannot_interrupt_first_app_controller` | Pi RPC automated |
 | 43 | Client closes during job | `test_authenticated_client_disconnect_does_not_stop_accepted_powered_job` | Pi RPC automated |
 | 44 | USB disappears idle, without command/status-triggered RX | `test_idle_transport_fault_revokes_reference_without_status_consuming_rx` | Simulated; physical pending |
 | 45 | USB disappears in job | `test_pi_local_controller_failure_persists_failed_without_auto_retry` | Simulated; physical pending |

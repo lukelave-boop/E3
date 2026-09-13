@@ -191,7 +191,9 @@ def pin_rpc_harness(server_harness, no_pin_wait):
     fan.initialize_off()
     harness.machine._secondary_air_assist = fan
     harness.machine._z_probe = CrealityZProbe(owner, lambda: None)
-    harness.service.connect()
+    connected = helpers._rpc(harness, helpers.ACTION_MACHINE_CONNECT)
+    assert connected["ok"], connected
+    assert connected["control_owner_client_id"] == pin_fields(harness)["client_id"]
     serial.writes.clear()
     harness.transport.commands.clear()
     return harness, serial
@@ -210,7 +212,7 @@ def test_rpc_pin_schema_requires_action_confirmation_and_current_session():
     assert set(SERVER_ACTION_SCHEMAS[ACTION_MACHINE_PROBE_PIN]["required"]) == {
         "pin_action", "confirmed", "client_id", "expected_boot_id", "expected_session_generation",
     }
-    assert SERVER_ACTION_SCHEMAS[ACTION_MACHINE_PROBE_PIN]["optional"] == ()
+    assert SERVER_ACTION_SCHEMAS[ACTION_MACHINE_PROBE_PIN]["optional"] == ("control_lease",)
 
 
 @pytest.mark.parametrize("action", ["inspect", "deploy", "stow"])

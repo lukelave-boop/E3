@@ -2259,6 +2259,7 @@ _TRANSCRIPTS = "tests/test_machine_transcripts.py::"
 _POSIX = "tests/test_serial_posix.py::"
 _SECONDARY = "tests/test_secondary_controller.py::"
 _PI = "tests/test_pi_machine_server.py::"
+_PI_CONTROL = "tests/test_pi_control_ownership.py::"
 _DESKTOP = "tests/test_desktop_reconnect.py::"
 _DESKTOP_STATE = "tests/test_desktop_machine_state.py::"
 
@@ -2299,12 +2300,12 @@ FAULT_MATRIX = (
     FaultMatrixCase(34, "reconnect while worker unwinds", _CORE + "test_reconnect_can_publish_while_old_job_worker_unwinds"),
     FaultMatrixCase(35, "stale cleanup closes new transport", _CORE + "test_stale_job_cleanup_cannot_close_replacement_transport"),
     FaultMatrixCase(36, "stale worker writes new transport", _CORE + "test_stale_job_worker_cannot_write_replacement_transport"),
-    FaultMatrixCase(37, "repeated reconnect clicks", _PI + "test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected"),
+    FaultMatrixCase(37, "repeated reconnect clicks", _PI + "test_owner_requests_share_one_replacement_and_stale_disconnect_is_rejected"),
     FaultMatrixCase(38, "Connect and Reconnect race", _CORE + "test_connect_and_reconnect_race_share_one_published_session"),
     FaultMatrixCase(39, "Reconnect and STOP race", _CORE + "test_stop_cancels_reconnect_candidate_before_it_can_publish"),
     FaultMatrixCase(40, "Home and polling race", _CORE + "test_home_and_status_poll_are_coherent_and_two_home_requests_exclude"),
     FaultMatrixCase(41, "two simultaneous Home requests", _CORE + "test_home_and_status_poll_are_coherent_and_two_home_requests_exclude"),
-    FaultMatrixCase(42, "two desktop clients", _PI + "test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected"),
+    FaultMatrixCase(42, "two desktop clients", _PI_CONTROL + "test_second_app_cannot_interrupt_first_app_controller"),
     FaultMatrixCase(43, "client closes during another job", _PI + "test_authenticated_client_disconnect_does_not_stop_accepted_powered_job"),
     FaultMatrixCase(44, "primary USB disappears idle", _CORE + "test_read_failure_quarantines_exact_session_and_records_command"),
     FaultMatrixCase(45, "primary USB disappears during job", _PI + "test_pi_local_controller_failure_persists_failed_without_auto_retry"),

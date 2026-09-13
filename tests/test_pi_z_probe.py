@@ -25,7 +25,8 @@ def probe_harness(server_harness, monkeypatch):
     machine = harness.machine
     machine._secondary_air_assist = fan
     machine._z_probe = CrealityZProbe(fan.owner, lambda: machine.request_stop(_recover=False))
-    harness.service.connect()
+    connected = helpers._rpc(harness, helpers.ACTION_MACHINE_CONNECT)
+    assert connected["ok"], connected
     harness.service.prepare_photo_position()
     return harness, serial
 

@@ -170,17 +170,19 @@ def native_rpc(server_harness, native_probe):
     serial, probe, fan = native_probe
     harness.machine._secondary_air_assist = fan
     harness.machine._z_probe = probe
-    harness.service.connect()
-    harness.service.prepare_photo_position()
+    connected = helpers._rpc(harness, helpers.ACTION_MACHINE_CONNECT)
+    assert connected["ok"], connected
+    assert connected["control_owner_client_id"] == helpers._session_fields(harness)["client_id"]
+    prepared = helpers._rpc(harness, helpers.ACTION_MACHINE_PREPARE_PHOTO_POSITION)
+    assert prepared["ok"], prepared
     harness.transport.commands.clear()
     return harness, serial
 
 
 def fields(harness, **changes):
-    return dict(client_id=str(uuid.uuid4()), expected_boot_id=harness.service.boot_id,
-                expected_session_generation=harness.machine.status()["controller_session_generation"],
-                operation="native_test", confirmed=True, clearance_z_mm=20,
-                support_height_mm=-1.5, **changes)
+    return {**helpers._session_fields(harness),
+            "operation": "native_test", "confirmed": True, "clearance_z_mm": 20,
+            "support_height_mm": -1.5, **changes}
 
 
 def test_rejected_precheck_keeps_primary_and_secondary_connections(native_rpc, caplog):

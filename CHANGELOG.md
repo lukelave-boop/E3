@@ -12,6 +12,22 @@
 - Provide a guarded Pi companion. The firmware identity change requires fresh
   border reference and gauge teaching; faster physical motion remains unverified.
 
+## Unreleased — preserve the first app's Pi connection
+
+- Reserve Pi control for the first connected E3 app. Competing apps can observe
+  status and use STOP, but cannot reconnect/disconnect or operate its controller.
+- Show PI IN USE / VIEW ONLY in updated desktops and suppress observer focus
+  polling. Cleanup no longer disconnects a controller an app only observed.
+- Release updated clients' reservations on detach, or after 30 seconds without
+  renewal once admitted work has finished. Legacy clients keep their reservation
+  until explicit Disconnect or Pi service restart. Pi-owned jobs continue under
+  their existing execution and STOP rules.
+- Include priority in the guarded faster-Z Pi companion for the exact recorded
+  workpiece-focus baseline; source installation preserves configuration and
+  calibration. Faster Z additionally requires the matching firmware.
+
+## Unreleased — reliable installer launch
+
 - Complete Windows installer creation before starting the desktop shutdown
   deadline, so slow launches are not silently terminated. Failed creation keeps
   E3 open; local launch and installer logs support diagnosis.

@@ -17,6 +17,29 @@ capability reflects the active planner setting. No host EEPROM write, machine
 configuration migration, project schema or calibration-format change is used;
 exact firmware-bound calibration still requires renewed teaching.
 
+## Pi operator connection ownership
+
+PiMachineServer owns operator admission separately from PiJobService's durable
+job ownership and MachineService's controller session. An authenticated client
+UUID can claim admission through Connect, Reconnect, or START. Read-only status,
+camera observation, and focus polling cannot claim it. Competing controller
+requests return controller.in_use before entering PiJobService; same-client
+lifecycle requests retain their existing coalescing and session guards.
+
+The pi-control-owner-v1 capability negotiates control_lease=true, identifiable
+status renewal, and machine.control_release. Ownership revisions reject delayed
+client metadata without changing controller-state revisions. A 30-second lease
+expires only when no admitted operation remains; explicit release also waits
+for admitted work to unwind. Legacy UUID owners have no implicit expiry. STOP
+bypasses ownership and never claims/releases it. Expiry/release has no physical
+side effect and never cancels accepted Pi execution.
+
+RemoteMachineService tracks its own control claim separately from globally
+observed connectivity. Observer cleanup detaches; owning idle cleanup retains
+bounded disconnect. Both browser/core and desktop remote execution use this
+facade and server. The desktop additionally gates its action matrix and focus
+polling while showing actual Pi/controller state. See NETWORK_MACHINE.md.
+
 ## Update launch before committed shutdown
 
 The desktop pre-close hook runs after unsaved-project approval and before the
