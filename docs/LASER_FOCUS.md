@@ -2,6 +2,10 @@
 
 ## Saved honeycomb Z height
 
+Current handoff: **E3 DEV TEST 0.7.150**, paired with installed Pi companion
+**e3-pi-thickness-focus-c8f0fe1d**, revision `ff07860`. Automated Windows/Pi
+checks pass; dimensional and physical operator validation is pending.
+
 Open **Machine Setup → 7 · Z / laser focus → Honeycomb height**. Enter
 **Honeycomb Z relative to border**, then choose **Save honeycomb height**.
 Negative values mean below the border; the accepted setting range is -10 to
@@ -41,7 +45,7 @@ of SSH during a freeze is not explained by the simulated application deadlock.
 
 ## Automatic thickness rule (2026-09-13)
 
-Current handoff: **E3 DEV TEST 0.7.133** with Pi companion
+Earlier handoff: **E3 DEV TEST 0.7.133** with Pi companion
 **e3-pi-thickness-focus-2528c9d0**. Follow its INSTALL.md before testing.
 The earlier 0.7.132 combined handoff below is retained as historical context.
 

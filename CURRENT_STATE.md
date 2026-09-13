@@ -45,7 +45,7 @@ No UI code or feature build was changed for this deferred request.
 ## Invalid thickness disconnect correction (2026-09-13)
 
 
-## Saved honeycomb height (2026-09-13, in development)
+## Saved honeycomb height (2026-09-13, installed feature build)
 
 Operator reports successful manual leveling; latest screenshot is elevation
 -1.532 mm, derived thickness -0.032 mm against the existing -1.500 mm datum.
@@ -58,9 +58,33 @@ saved files reject. Save clears surface/preview/job selection and requires a new
 measurement; it preserves gauge teaching and border reference and sends no
 motion. The daily panel displays the controller's saved datum. Thickness policy
 and capability are v2 so old companions reject before measurement or saving.
-Current source verification/build/deployment are in progress; physical accuracy
-is unverified. The deferred measurement-button grouping and bed survey below
-remain separate next-revision work.
+Verification: 634 focused controller/protocol/job/desktop cases passed, followed
+by all 37 datum-specific acceptance/rejection/offscreen UI cases on the final
+source. All 10 exact-predecessor installer cases passed. Ruff, compileall and
+diff checks passed. The Step 7 editor was rendered offscreen with Windows Segoe
+UI and inspected; no interactive application, camera, probing or laser trial
+was performed. Compatibility CI 34775118723 passed: Windows Python 3.10 has
+5,247 passes/119 skips; Windows Python 3.12 desktop has 6,491 passes/45 skips;
+POSIX controller coverage has 632 passes; Ruff passed.
+
+Frozen E3 DEV TEST 0.7.150, feature Saved honeycomb height, is built from exact
+revision ff0786080eaaaf5f8bb711c36fe0506aa1f2937a. All 163 bundled Python source
+files match that revision. Target: dist/E3-honeycomb-height-0.7.150/E3.exe.
+The permanent pointer is selected using packaging/set_dev_test_feature.py;
+normal launcher and production E3 are unchanged. Pi companion
+e3-pi-thickness-focus-c8f0fe1d is installed after the operator confirmed both
+clients closed and fresh idle/disarmed/disconnected checks. Five source files
+were replaced with adjacent backups; all 17 package hashes verify. Gauge
+calibration, probe XY offset, Z limits, config and cooling drop-in were preserved.
+Service PID 34835 starts and returns authenticated disconnected/disarmed status
+and advertises pi-thickness-focus-v2. Isolated temporary-file persistence and
+positive/negative thickness checks passed on the installed Pi module. No
+hardware connection, homing, probing or laser firing was requested.
+
+The saved honeycomb height remains the previous -1.500 mm until the operator
+explicitly saves a new value in Step 7. Physical accuracy is unverified. Source
+is integrated into main; the completed development branch is removed. The
+measurement-button grouping and bed survey below remain next-revision work.
 
 Initial direct SSH verified all 17 installed files matched
 ef005aa / e3-pi-thickness-focus-5f770c81.

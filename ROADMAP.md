@@ -3,8 +3,8 @@
 ## Saved honeycomb datum follow-up
 
 An explicit saved height editor in Step 7 is implemented for the paired
-desktop/Pi feature build; automated and operator verification are tracked in
-CURRENT_STATE.md. Guided four-corner/center surveying, manual leveling guidance
+desktop/Pi feature build; automated checks pass and the Pi companion is installed; operator physical
+verification remains pending in CURRENT_STATE.md. Guided four-corner/center surveying, manual leveling guidance
 and measurement/return-button regrouping remain pending. Continuous bed mesh
 compensation is separate scope. Small-negative thickness tolerance was canceled.
 
