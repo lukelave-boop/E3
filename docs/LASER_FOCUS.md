@@ -1,5 +1,43 @@
 # Surface height and gauge-taught laser focus
 
+## Automatic thickness rule (2026-09-13)
+
+The daily Workpiece focus selector is replaced by a calculated gap:
+
+```text
+material thickness = measured elevation above border + 1.5 mm - spacers
+laser gap = max(3 mm, 7 mm - material thickness * 2/3)
+target Z = raw probe contact Z + taught 7 mm offset + laser gap - 7 mm
+```
+
+| Material thickness | Calculated gap |
+| --- | --- |
+| 0 mm | 7 mm |
+| 0.2 mm | 6.867 mm |
+| 1.5 mm | 6 mm |
+| 3 mm | 5 mm |
+| 4 mm | 4.333 mm |
+| 6 mm and above | 3 mm |
+
+This is the operator-selected straight line, superseding discrete thickness bands.
+It uses the reported honeycomb height of −1.5 mm relative to the black border.
+Set **Spacers** to zero for material resting directly on the honeycomb, or enter
+the total thickness of all supports beneath the sheet before **Measure surface**.
+The material must present one flat top across the job. Unknown supports must not
+be counted as sheet thickness. A negative derived thickness rejects and blocks
+powered jobs; it is never silently clamped to paper thickness.
+
+The panel shows material thickness, calculated gap and target Z. Clear measurement
+before changing spacer thickness, then measure again. Multiple jobs reuse the
+accepted datum and calculated gap. Setup's manual preview and gauge controls are
+for calibration; they cannot override an automatic workpiece's selected gap.
+
+Use a matching desktop and Pi companion advertising `pi-thickness-focus-v1`.
+The new action has no additional firmware requirement beyond the selected setup
+speed firmware. Existing gauge compatibility and reference checks still apply.
+The reported support datum and this focus rule have not been physically validated
+for focus accuracy or cutting performance. Confirm the actual setup before use.
+
 ## Keep known Z across normal shutdowns
 
 With the matching retained-Z desktop, Pi and firmware, a clean idle Pi
@@ -51,8 +89,9 @@ the gap, calculated focus Z and whether that focus is ready for jobs. Start
 jobs from this Machine-tab workflow; opening Machine Setup, previewing a target
 or pressing a separate selection button is unnecessary. Later jobs reuse the
 measured focus while the workpiece and verified reference remain valid.
-Changing the daily gap to 7, 5 or 3 mm recalculates the selected job height
-without moving Z or probing again. Polling status does not change that gap.
+The daily gap is calculated from thickness by the rule above. Clear the
+measurement before editing spacers, then measure again. Status polling never
+changes the selected gap or spacer thickness.
 
 Open **Tools → Machine Setup… → 7 · Z / laser focus** for manual
 **Preview and position**, **Probe / laser XY offset** and **Teach once with
@@ -349,8 +388,9 @@ on this machine.
 
 Material thickness and surface elevation are different. A 3 mm sheet on a
 30 mm support presents a top surface 33 mm above that support's base, but is
-still a 3 mm sheet for choosing cutting settings. Focus uses the measured top
-surface. It never infers sheet thickness by subtracting an assumed bed height.
+still a 3 mm sheet for choosing cutting settings. Focus Z uses the measured top surface. The daily gap uses sheet thickness
+after subtracting the explicitly selected −1.5 mm honeycomb datum and entered
+spacers. The manual calibration workflow continues to use the probed top directly.
 
 ## Prepare the machine
 
@@ -460,7 +500,7 @@ no live homing, surface or motion authority.
 ## Position above work, including raised surfaces
 
 The normal job workflow uses **Machine → Z axis · Ender → Measure surface**
-and the daily **Workpiece focus** gap. The following manual positioning sequence
+and the automatically calculated **Workpiece focus** gap. The following manual positioning sequence
 is optional: open **Machine Setup → 7 · Z / laser focus → Preview and position**
 to inspect or move to a calculated Z outside a job. Switching between pages
 does not itself replace the shared measured surface or saved-Z reference.
@@ -514,14 +554,15 @@ continuation. Clearing a measurement does not remove the clearance restriction.
 
 1. In **Machine → Z axis · Ender**, establish the reference and selected
    clearance, position the probe over a solid spot on the actual workpiece,
-   and choose **Measure surface**. Supports and spacers contribute to the
-   measured top surface. Measurement automatically selects focus using the
-   taught gauge offset and chosen gap, including when the probe was placed
+   enter total **Spacers**, and choose **Measure surface**. Supports contribute
+   to top elevation but are subtracted when calculating sheet thickness.
+   Measurement automatically selects focus using the taught gauge offset and
+   thickness-derived gap, including when the probe was placed
    through the main view. No separate laser-return, preview or job-selection
    action is needed.
-2. Check **Workpiece focus** for the gap, calculated focus Z and ready status.
-   Choose 7, 5 or 3 mm there if the job needs a different gap. With a current
-   measurement this updates the selected height without motion or re-probing.
+2. Check **Workpiece focus** for material thickness, automatic gap, calculated
+   focus Z and ready status. Clear measurement before changing spacer thickness,
+   then measure the new workpiece again.
    The same flat surface must span the whole job; remove the gauge and check
    the Z travel and entire XY path at clearance.
 3. Start the intended job with its normal preview and START authorization.

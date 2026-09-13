@@ -1,5 +1,16 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Automatic focus from material thickness
+
+Daily **Machine → Z axis · Ender → Measure surface** selects the focus gap automatically:
+`gap_mm = max(3, 7 - 2 * thickness_mm / 3)`. Thickness is measured surface elevation
+above the black border + 1.5 mm − entered spacer thickness. Enter total spacers
+before measuring (zero for material directly on the honeycomb); clear the measurement
+before changing them. The panel shows thickness, automatic gap and target Z.
+The −1.5 mm honeycomb datum is the operator-reported value for this rig, not a
+universal default or a physically verified dimension. This workflow requires the
+matching desktop and Pi thickness-focus update. See [focus setup](docs/LASER_FOCUS.md).
+
 ## Faster Z setup travel
 
 Probe positioning and same-point probe/laser transfers use the configured XY
@@ -66,8 +77,8 @@ workspace's Position XY jog row are removed.
 
 **Measure surface** automatically calculates and selects the focus for every
 job on the same flat workpiece. The daily **Workpiece focus** section shows the
-gap and calculated Z. Changing the gap recalculates the job height without
-moving. Measure again when the material or its supports change.
+material thickness, derived gap and calculated Z. Clear the measurement before
+changing spacer thickness, then measure again when the workpiece or supports change.
 
 Manual **Preview and position** controls live in **Tools → Machine
 Setup… → 7 · Z / laser focus**, alongside probe XY offsets, 7 mm gauge teaching

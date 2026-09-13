@@ -1,5 +1,13 @@
 # Roadmap
 
+## Thickness-derived workpiece focus (2026-09-13)
+
+Implement the operator-selected linear 7-to-3 mm gap over 0-to-6 mm thickness,
+with explicit spacer subtraction and the reported −1.5 mm honeycomb datum.
+Daily focus selection is automatic; gauge teaching remains a calibration action.
+Acceptance/rejection and controller-sequence verification are in progress.
+Physical focus accuracy and material cutting results remain pending.
+
 ## Faster Z setup qualification
 
 Remove the private XY positioning cap and supply direction-dependent Z feeds

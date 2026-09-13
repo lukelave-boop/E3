@@ -4605,7 +4605,7 @@ class MachineService:
                     probe.owner.recover_off(write_guard=guard, deadline=min(deadline, time.monotonic() + 60))
                     secondary_generation = probe.owner.generation
                 with probe.owner._lock:
-                    if self._laser_focus.xy_sequence and action in {"measure", "jog", "teach", "preview", "move"}:
+                    if self._laser_focus.xy_sequence and action in {"measure", "measure_workpiece", "jog", "teach", "preview", "move"}:
                         check_focus_xy(self._jog_position_mm, guard)
 
                     def execute_focus(focus_action):

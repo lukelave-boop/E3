@@ -115,6 +115,7 @@ SERVER_CAPABILITIES = (
     "pi-laser-focus-xy-recovery-v1",
     "pi-job-focus-v1",
     "pi-workpiece-focus-v1",
+    "pi-thickness-focus-v1",
     "pi-creality-z-probe-v1",
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,

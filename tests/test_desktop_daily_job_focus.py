@@ -25,13 +25,14 @@ def workpiece(gap=7.0):
     return {
         "id": f"workpiece-{gap:g}", "gap_mm": gap, "target_z_mm": 16.0 + gap - 7.0,
         "clearance_z_mm": 30.0, "reusable": True, "measurement_id": "surface-1",
-        "calibration_id": "calibration-1",
+        "calibration_id": "calibration-1", "focus_policy": "linear-0-6mm-v1",
+        "material_thickness_mm": (7-gap)*1.5, "spacer_thickness_mm": 0.0,
     }
 
 
 def workpiece_result(**changes):
     payload = result(
-        workpiece_focus_available=True, job_focus_required=True, job_focus_block_reason=None,
+        thickness_focus_available=True, workpiece_focus_available=True, job_focus_required=True, job_focus_block_reason=None,
         job_focus=workpiece(), xy_sequence={"phase": "probe"},
     )
     payload.update(changes)
@@ -70,57 +71,50 @@ def test_daily_measurement_immediately_displays_focus_for_every_job(daily):
     controller.complete()
 
     assert controller.machine.calls == [
-        ("measure", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0}),
+        ("measure_workpiece", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0, "value": 0.0}),
     ]
     assert panel._result["job_focus"]["id"] == "workpiece-7"
-    assert "16.000" in panel.target.text() and "7 mm gap" in panel.target.text()
+    assert "16.000" in panel.target.text() and "7.000 mm" in panel.target.text()
     assert "Every job" in panel.job_note.text() and "30" in panel.job_note.text()
     assert "ready for every job" in panel.next_step.text()
     assert "Return the laser" not in panel.next_step.text()
     assert controller.xy_calls == []
 
 
-def test_gap_before_first_measurement_is_used_without_a_separate_action(daily):
+def test_spacers_are_sent_to_controller_and_locked_after_measurement(daily):
     panel, _, controller = daily
-    panel.gap.setCurrentIndex(panel.gap.findData(5.0))
-    assert controller.work == [] and controller.machine.calls == []
-    controller.machine.payload = workpiece_result(job_focus=workpiece(5.0))
+    assert panel.spacers.isEnabled()
+    panel.spacers.setValue(5.0)
+    payload = workpiece_result(job_focus=workpiece(13/3))
+    payload["job_focus"]["spacer_thickness_mm"] = 5.0
+    controller.machine.payload = payload
     panel.measure.click()
     controller.complete()
     assert controller.machine.calls == [
-        ("measure", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 5.0}),
+        ("measure_workpiece", {"confirmed": True, "clearance_z_mm": 30.0,
+                               "gap_mm": 7.0, "value": 5.0}),
     ]
-    assert "14.000" in panel.target.text() and "5 mm gap" in panel.target.text()
-
-
-@pytest.mark.parametrize("parked", [False, True])
-def test_changing_gap_updates_current_workpiece_without_motion(daily, parked):
-    panel, _, controller = daily
-    payload = workpiece_result(surface=None if parked else result()["surface"])
-    panel.set_result(payload)
-    assert controller.work == []  # Receiving status never changes the chosen gap.
-    panel.gap.setCurrentIndex(panel.gap.findData(5.0))
-    assert len(controller.work) == 1
-    controller.machine.payload = workpiece_result(job_focus=workpiece(5.0))
-    controller.complete()
-    assert controller.machine.calls == [("set_job_gap", {"confirmed": True, "gap_mm": 5.0})]
-    assert "14.000" in panel.target.text() and panel.gap.currentData() == 5.0
+    assert not panel.spacers.isEnabled()
+    assert "4.333 mm" in panel.target.text() and "4.000 mm" in panel.target.text()
+    assert panel.gap.isHidden()
     assert controller.xy_calls == []
 
 
-def test_observing_existing_workpiece_restores_its_gap_without_writing(daily):
+def test_observing_parked_workpiece_restores_spacers_without_writing(daily):
     panel, _, controller = daily
-    panel.set_result(workpiece_result(job_focus=workpiece(3.0), surface=None, reference_ready=False))
-    assert panel.gap.currentData() == 3.0
-    assert "12.000" in panel.target.text()
+    payload = workpiece_result(job_focus=workpiece(13/3), surface=None, reference_ready=False)
+    payload["job_focus"]["spacer_thickness_mm"] = 12.0
+    panel.set_result(payload)
+    assert panel.spacers.value() == 12.0 and not panel.spacers.isEnabled()
+    assert panel.clear_surface.isEnabled()
     assert "ready for every job" in panel.next_step.text()
     assert controller.work == [] and controller.machine.calls == []
 
 
-@pytest.mark.parametrize("change", ["stale", "busy", "armed", "stop", "unsupported", "missing_plan"])
-def test_gap_update_rejects_missing_or_changed_authority(daily, change):
+@pytest.mark.parametrize("change", ["stale", "busy", "armed", "stop", "unsupported"])
+def test_measurement_rejects_missing_or_changed_authority(daily, change):
     panel, coordinator, controller = daily
-    panel.set_result(workpiece_result())
+    panel.set_result(workpiece_result(surface=None, job_focus=None))
     if change == "stale":
         panel._received_at -= FRESH_SECONDS + 1
     elif change == "busy":
@@ -130,26 +124,31 @@ def test_gap_update_rejects_missing_or_changed_authority(daily, change):
     elif change == "stop":
         controller.emergency_stop()
     elif change == "unsupported":
-        panel._result["workpiece_focus_available"] = False
-    elif change == "missing_plan":
-        panel._result["job_focus"] = None
-    panel.gap.setCurrentIndex(panel.gap.findData(5.0))
+        panel._result["thickness_focus_available"] = False
+    panel.request("measure")
     assert controller.work == [] and controller.machine.calls == []
 
 
-@pytest.mark.parametrize("change", ["stop", "gap", "session"])
-def test_cancelled_gap_worker_never_writes(daily, change):
+@pytest.mark.parametrize("change", ["stop", "session"])
+def test_cancelled_measurement_worker_never_writes(daily, change):
     panel, _, controller = daily
-    panel.set_result(workpiece_result())
-    panel.gap.setCurrentIndex(panel.gap.findData(5.0))
+    panel.measure.click()
+    assert len(controller.work) == 1
     if change == "stop":
         controller.emergency_stop()
-    elif change == "gap":
-        panel.gap.setCurrentIndex(panel.gap.findData(3.0))
     else:
         controller.machine.snapshot = status(controller_session_generation=9)
     controller.complete()
     assert controller.machine.calls == []
+
+
+def test_manual_gap_requests_cannot_change_daily_focus(daily):
+    panel, coordinator, controller = daily
+    panel.set_result(workpiece_result())
+    panel.gap.setCurrentIndex(panel.gap.findData(5.0))
+    panel.request("set_job_gap")
+    coordinator.request("set_job_gap", {"confirmed": True, "gap_mm": 5.0})
+    assert controller.work == [] and controller.machine.calls == []
 
 
 @pytest.mark.parametrize("reason", [
@@ -194,6 +193,8 @@ def test_compact_daily_workpiece_focus_fits_the_inspector(daily, app):
     group = panel.preview_group
     assert group.title() == "Workpiece focus"
     assert group.geometry().right() < panel.width()
-    assert panel.gap.geometry().bottom() < panel.target.geometry().top()
+    assert panel.gap.isHidden()
+    assert panel.spacers.geometry().bottom() < panel.thickness_note.geometry().top()
+    assert panel.thickness_note.geometry().bottom() < panel.target.geometry().top()
     assert panel.target.geometry().bottom() < panel.job_note.geometry().top()
     assert panel.job_note.wordWrap()

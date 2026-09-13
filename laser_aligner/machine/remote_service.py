@@ -31,6 +31,7 @@ from .job_focus import program_binding as job_focus_binding
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
+from .laser_focus import THICKNESS_CAPABILITY, validate_thickness_plan
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
@@ -1857,7 +1858,9 @@ class RemoteMachineService:
             attach_job_focus("M5", plan)
             target = finite_number(plan.get("target_z_mm"), "Workpiece focus Z", 0, 80)
             clearance = finite_number(plan.get("clearance_z_mm"), "Workpiece clearance", 20, 80)
-            if target > clearance or plan.get("gap_mm") not in (3, 5, 7):
+            finite_number(plan.get("gap_mm"), "Workpiece gap", 3, 7)
+            validate_thickness_plan(plan)
+            if target >= clearance:
                 raise SafetyError("Pi returned an invalid workpiece focus target")
         except (SafetyError, KeyError) as exc:
             raise PiJobProtocolError(str(exc)) from exc
@@ -2009,6 +2012,10 @@ class RemoteMachineService:
         self._require_controller_session_capability()
         if FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to use taught laser focus")
+        if action == "measure_workpiece" and THICKNESS_CAPABILITY not in (self._node_capabilities or ()):
+            self._job_focus_required = True
+            self._selected_job_focus = None
+            raise MachineError("Update the Pi companion before measuring thickness-based focus")
         if action in {"set_xy_offset", "align_probe", "align_laser"} and FOCUS_XY_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to use probe XY alignment")
         if action == "position_probe" and FOCUS_CLICK_CAPABILITY not in (self._node_capabilities or ()):
@@ -2016,7 +2023,7 @@ class RemoteMachineService:
         if action == "use_job" and JOB_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the Pi companion before selecting measured job focus")
         workpiece_supported = WORKPIECE_FOCUS_CAPABILITY in (self._node_capabilities or ())
-        if action in {"measure", "set_job_gap"} and not workpiece_supported:
+        if action in {"measure", "measure_workpiece", "set_job_gap"} and not workpiece_supported:
             self._job_focus_required = True
             self._selected_job_focus = None
             raise MachineError("Update the Pi companion before measuring automatic workpiece focus")
@@ -2030,13 +2037,22 @@ class RemoteMachineService:
             raise SafetyError("Laser focus requires machine.allow_motion")
         if self.armed or self.pi_owned_job_active:
             raise SafetyError("Laser focus requires an idle machine and disarmed laser")
-        with self._live_z_monitor_scope(action in {"reference", "measure", "jog", "move", "clearance"}):
+        with self._live_z_monitor_scope(action in {"reference", "measure", "measure_workpiece", "jog", "move", "clearance"}):
             response = self._rpc(ACTION_MACHINE_FOCUS, {
                 "control": action, "confirmed": confirmed, "value": value,
                 "clearance_z_mm": clearance_z_mm, "gap_mm": gap_mm,
                 "measurement_id": measurement_id, "preview_id": preview_id,
             }, timeout=_FOCUS_XY_RECOVERY_RPC_TIMEOUT_SECONDS if action == "recover_xy" else 125.0)
         result = self._response_mapping(response, "result")
+        if action == "measure_workpiece" and (
+            result.get("thickness_focus_available") is not True
+            or (result.get("job_focus") is not None
+                and (type(result["job_focus"]) is not dict
+                     or result["job_focus"].get("focus_policy") != "linear-0-6mm-v1"))
+        ):
+            self._job_focus_required = True
+            self._selected_job_focus = None
+            raise PiJobProtocolError("Pi did not confirm thickness-derived workpiece focus")
         if not xy_recovery_supported:
             result["xy_recovery_available"] = False
         readback = result.get("current_readback")
@@ -2087,6 +2103,7 @@ class RemoteMachineService:
                 self._focus_observation_epoch += 1
                 self._cache_workpiece_focus(result)
         result["workpiece_focus_available"] = workpiece_supported
+        result["thickness_focus_available"] = THICKNESS_CAPABILITY in (self._node_capabilities or ())
         if not workpiece_supported and action == "use_job":
             plan = result.get("job_focus")
             if type(plan) is not dict:

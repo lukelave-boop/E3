@@ -1,5 +1,26 @@
 # Architecture
 
+## Thickness-derived daily focus
+
+`machine/laser_focus.py` owns the UI-neutral thickness policy and the typed
+`measure_workpiece` action. Its numeric `value` is total spacer thickness in mm.
+It uses the existing guarded probe sequence, derives sheet thickness from border
+relative surface elevation + 1.5 mm − spacers, and computes `max(3, 7 - 2*t/3)`.
+The operator-selected −1.5 mm honeycomb datum is specific to this rig.
+The plan stores the policy version, thickness, spacer and support values, gap,
+and the existing contact/calibration/session/clearance binding. Job admission
+rechecks the derived values. Invalid thickness cannot retain a previous job plan.
+
+The daily desktop panel sends this action through MachineService or the existing
+Pi facade; the Pi advertises `pi-thickness-focus-v1` and owns the calculation.
+An older Pi is rejected before receiving the new measurement. The gap is read-only
+in daily use. Spacer edits require clearing the measurement; parked jobs retain
+their values. Legacy `measure`, preview and gauge teaching remain available for
+calibration compatibility. They do not alter a selected automatic gap through
+`set_job_gap` or `use_job`. No `.e3laser` schema, G-code allowlist, XY geometry,
+arming or stop semantics change. The shared backend also governs browser jobs;
+no new browser UI is added.
+
 ## Z setup travel feeds
 
 The UI-neutral `machine/setup_motion.py` owns direction-dependent stowed-probe

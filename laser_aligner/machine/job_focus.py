@@ -89,6 +89,12 @@ def selection_snapshot(machine, token):
         raise SafetyError("Job focus selection is stale; measure, preview and select it again")
     if state.xy_recovery_pending_reference:
         raise SafetyError("Reference the border before starting the measured-focus job")
+    from .laser_focus import validate_thickness_plan
+    validate_thickness_plan(plan)
+    if "focus_policy" in plan:
+        expected = plan["contact_z_mm"] + state.calibration["focus_offset_mm"] + plan["gap_mm"] - 7
+        if plan["target_z_mm"] != expected:
+            raise SafetyError("Thickness-derived focus target changed; measure the workpiece again")
     return copy.deepcopy(plan)
 
 

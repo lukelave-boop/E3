@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — thickness-derived workpiece focus
+
+- Replace the daily manual 7/5/3 mm selector with a continuous 7-to-3 mm gap
+  over 0-to-6 mm material thickness, clamped to 3 mm for thicker material.
+- Subtract entered spacers from the probed stack height using this rig's
+  operator-reported honeycomb datum, −1.5 mm relative to the black border.
+- Bind thickness, spacers and the derived gap to reusable controller-owned job
+  focus. Reject negative thickness and manual gap overrides of automatic focus.
+- Require `pi-thickness-focus-v1` for the new measurement action; retain the
+  separate gauge-teaching and legacy manual-positioning protocol in Machine Setup.
+  Physical focus/cutting accuracy is not yet verified.
+
 ## Unreleased — faster Z setup positioning and travel
 
 - Use the configured XY travel feed for probe positioning and probe/laser

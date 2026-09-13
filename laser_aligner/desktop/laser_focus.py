@@ -301,6 +301,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
         self.preview_group = QtWidgets.QGroupBox("Preview and position" if calibration_mode else "Workpiece focus", self)
         focus_layout = QtWidgets.QGridLayout(self.preview_group)
+        self.spacers = MeasurementSpinBox()
+        self.spacers.setRange(0, 80)
+        self.spacers.setDecimals(3)
+        self.spacers.setSuffix(" mm")
+        self.spacers.setPrefix("Spacers: ")
+        self.spacers.setToolTip("Total spacer thickness under the material. Clear measurement before changing this value.")
+        self.thickness_note = QtWidgets.QLabel("Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: −1.5 mm below border.")
+        self.thickness_note.setWordWrap(True)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
             self.gap.addItem(f"{gap:g} mm gap", gap)
@@ -334,14 +342,17 @@ class LaserFocusPanel(QtWidgets.QWidget):
         focus_layout.addWidget(self.job_note, 7, 0, 1, 3)
         if not calibration_mode:
             for control in (self.preview, self.move, self.move_note, self.move_confirmation,
-                            self.use_job, self.job_confirmation):
+                            self.use_job, self.job_confirmation, self.gap):
                 control.hide()
             while focus_layout.count():
                 focus_layout.takeAt(0)
             for row, control in enumerate((
-                self.gap, self.target, self.job_note,
+                self.spacers, self.thickness_note, self.target, self.job_note,
             )):
                 focus_layout.addWidget(control, row, 0)
+        else:
+            self.spacers.hide()
+            self.thickness_note.hide()
         layout.addWidget(self.preview_group)
         footer = QtWidgets.QHBoxLayout()
         self.message = QtWidgets.QLabel("Connect the machine, then refresh focus support.")
@@ -523,18 +534,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._parameters_edited()
 
     def _edit_gap(self, *_args: object) -> None:
-        self._parameters_edited()
-        if not self.calibration_mode:
-            self.request("set_job_gap")
+        if self.calibration_mode:
+            self._parameters_edited()
 
     def _can_set_job_gap(self) -> bool:
-        return bool(
-            not self.calibration_mode and not self._busy and not self._pending
-            and _read_allowed(self._status) and self.fresh()
-            and self._result.get("available") is True
-            and self._result.get("workpiece_focus_available") is True
-            and (self._result.get("job_focus") or {}).get("reusable") is True
-        )
+        return False  # Daily focus is derived on the controller from measured thickness.
 
     def _clearance_value(self) -> float | None:
         if not self.clearance.hasAcceptableInput():
@@ -584,10 +588,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._result = dict(result)
         job_focus = result.get("job_focus")
         if not self.calibration_mode and isinstance(job_focus, Mapping) and job_focus.get("reusable") is True:
-            gap_index = self.gap.findData(job_focus.get("gap_mm"))
-            if gap_index >= 0:
-                blocker = QtCore.QSignalBlocker(self.gap)
-                self.gap.setCurrentIndex(gap_index)
+            spacer = _number(job_focus.get("spacer_thickness_mm"))
+            if spacer is not None and 0 <= spacer <= 80:
+                blocker = QtCore.QSignalBlocker(self.spacers)
+                self.spacers.setValue(spacer)
                 del blocker
         self._failure_message = None
         self.failure_detail.clear()
@@ -846,7 +850,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         return_allowed = return_minimum is None or (clearance is not None and clearance >= return_minimum)
         self.return_clearance.setEnabled(bool(moving and known and z is not None and return_allowed
                                              and clearance is not None and z <= clearance + .05))
-        self.clear_surface.setEnabled(bool(ready and surface))
+        self.clear_surface.setEnabled(bool(ready and (surface or self._result.get("job_focus"))))
         if self.calibration_mode:
             self.forget.setEnabled(bool(ready and self._result.get("calibration")
                                         and self._result.get("calibration_persistent") is True))
@@ -911,6 +915,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
             if job_focus else "Job focus: not selected. Preview the measured surface, then select."
         )
         workpiece_ready = self._sync_workpiece_focus() if not self.calibration_mode else False
+        if not self.calibration_mode:
+            self.spacers.setEnabled(bool(ready and not surface and not job_focus))
+            if self._result.get("thickness_focus_available") is not True:
+                self.measure.setEnabled(False)
         self.move_note.setText(
             f"Move unavailable: {move_block}" if move_block else
             f"Choose Move to focus to move Z to {self._result['preview']['target_z_mm']:.3f} mm."
@@ -973,15 +981,22 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.job_note.setText("Workpiece focus: refresh when the machine is idle.")
             return False
         reason = self._result.get("job_focus_block_reason")
+        if self._result.get("thickness_focus_available") is not True:
+            self.job_note.setText("Thickness-based focus requires the matching Pi companion update.")
+            return False
         if reason:
             self.job_note.setText(f"Jobs blocked: {reason}")
             return False
         if isinstance(plan, Mapping) and plan.get("reusable") is True:
+            thickness = _number(plan.get("material_thickness_mm"))
+            if thickness is None or plan.get("focus_policy") != "linear-0-6mm-v1":
+                self.job_note.setText("Measure the workpiece again to calculate focus from material thickness.")
+                return False
             gap = _number(plan.get("gap_mm"))
             target = _number(plan.get("target_z_mm"))
             clearance = _number(plan.get("clearance_z_mm"))
             if gap is not None and target is not None and clearance is not None:
-                self.target.setText(f"Focus Z: {target:.3f} mm · {gap:g} mm gap")
+                self.target.setText(f"Material: {thickness:.3f} mm · automatic gap: {gap:.3f} mm\nFocus Z: {target:.3f} mm")
                 self.job_note.setText(
                     f"Every job uses this focus and travels at Z{clearance:g} mm. "
                     "Measure again after changing the material or its supports."
@@ -1015,7 +1030,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.clearance.interpretText()
         arguments: dict[str, Any] = {
             "confirmed": True, "clearance_z_mm": float(self.clearance.value()),
-            "gap_mm": 7.0 if action == "teach" else float(self.gap.currentData()),
+            "gap_mm": 7.0 if action == "teach" or not self.calibration_mode else float(self.gap.currentData()),
         }
         if action in {"teach", "jog", "preview", "align_laser"}:
             arguments["measurement_id"] = self._result["surface"]["id"]
@@ -1034,6 +1049,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         if action in {"jog", "home_reference", "home_retained", "reference", "measure", "move", "clearance",
                       "set_xy_offset", "align_probe", "align_laser"}:
             self._reset_checks(self.gauge)
+        if action == "measure" and not self.calibration_mode:
+            if not self.spacers.hasAcceptableInput():
+                return
+            self.spacers.interpretText()
+            arguments["value"] = float(self.spacers.value())
+            action = "measure_workpiece"
         self.actionRequested.emit(action, arguments)
         self.xy_recovery_clear.setChecked(False)
 

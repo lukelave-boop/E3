@@ -1584,7 +1584,7 @@ def test_preview_and_position_are_setup_only_with_no_removed_xy_dispatch(app, ca
     panel.actionRequested.connect(lambda action, arguments: calls.append((action, arguments)))
     try:
         coordinator.set_status(status())
-        panel.set_result(result(action="preview", preview=preview(), job_focus_available=True))
+        panel.set_result(result(action="preview", preview=preview(), job_focus_available=True, thickness_focus_available=True))
         panel.path_clear.setChecked(True)
         panel.show()
         app.processEvents()

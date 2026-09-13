@@ -25,9 +25,13 @@ XY_CAPABILITY = "pi-laser-focus-xy-v1"
 CLICK_CAPABILITY = "pi-laser-focus-click-v1"
 RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
+THICKNESS_CAPABILITY = "pi-thickness-focus-v1"
+# Operator-reported rig datum (2026-09-06), explicitly selected for this workflow.
+HONEYCOMB_HEIGHT_MM = -1.5
+THICKNESS_POLICY = "linear-0-6mm-v1"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap"}
+           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -35,6 +39,26 @@ _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
 
 def focus_calibration_path(config_path: Path) -> Path:
     return config_path.with_name(config_path.name + ".laser-focus.json")
+
+
+def thickness_focus(elevation_mm, spacer_mm):
+    """Derive sheet thickness and gap; negative thickness is invalid, not thin paper."""
+    elevation = finite_number(elevation_mm, "Surface elevation", -100, 100)
+    spacer = finite_number(spacer_mm, "Spacer thickness", 0, 80)
+    thickness = finite_number(elevation - HONEYCOMB_HEIGHT_MM - spacer,
+                              "Material thickness", 0, 100)
+    return dict(focus_policy=THICKNESS_POLICY, material_thickness_mm=thickness,
+                spacer_thickness_mm=spacer, honeycomb_height_mm=HONEYCOMB_HEIGHT_MM,
+                surface_elevation_mm=elevation, gap_mm=max(3.0, 7.0 - thickness * 2.0 / 3.0))
+
+
+def validate_thickness_plan(plan):
+    """Recheck the derived values at remote observation and job admission."""
+    if "focus_policy" not in plan:
+        return
+    derived = thickness_focus(plan.get("surface_elevation_mm"), plan.get("spacer_thickness_mm"))
+    if any(plan.get(key) != value for key, value in derived.items()):
+        raise SafetyError("Thickness-derived focus changed; measure the workpiece again")
 
 
 def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
@@ -47,7 +71,9 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
     finite_number(gap_mm, "Focus gauge gap", 3, 7)
     if gap_mm not in (3, 5, 7):
         raise SafetyError("Select a 3, 5 or 7 mm focus gap")
-    if action == "jog":
+    if action == "measure_workpiece":
+        finite_number(value, "Spacer thickness", 0, 80)
+    elif action == "jog":
         if finite_number(value, "Focus jog", -5, 5) == 0:
             raise SafetyError("Focus jog must be nonzero")
     elif action == "set_xy_offset":
@@ -298,6 +324,10 @@ class LaserFocus:
                 stop_epoch, xy, guard, on_motion_start, on_failure, move_xy=None,
                 laser_spot_offset=(0.0, 0.0), _telemetry_scope):
         validate_request(action, confirmed, value, clearance_z_mm, gap_mm, measurement_id, preview_id)
+        requested_action = action
+        automatic = action == "measure_workpiece"
+        if automatic:
+            action = "measure"
         if self.xy_recovery_pending_reference and action in {"jog", "move", "clearance"}:
             raise SafetyError("Reference the border after XY recovery before moving Z")
         spot_offset = validate_probe_target(laser_spot_offset)
@@ -518,9 +548,18 @@ class LaserFocus:
             self.surface = {"id": str(uuid.uuid4()), "contact_z_mm": contact,
                             "elevation_mm": contact - self.reference["border_z_mm"],
                             "carriage_xy_mm": list(xy), "measured_at": time.time()}
+            derived = None
+            if automatic:
+                # A failed derivation leaves powered jobs blocked, never using the old plan.
+                self.job_focus_block_reason = "Invalid material thickness; check the honeycomb datum and spacers, then measure again"
+                derived = thickness_focus(self.surface["elevation_mm"], value)
+                self.surface.update(derived)
+                gap_mm = derived["gap_mm"]
             self._select_measured_job(firmware=firmware, geometry=geometry, maximum=maximum,
                                       session=session, xy=xy, current=current, clearance=clearance,
                                       gap=gap_mm, compatible=compatible)
+            if derived is not None and self.job_plan is not None:
+                self.job_plan.update(derived)
         elif action in {"jog", "teach", "preview"}:
             known()
             laser_aligned()
@@ -563,6 +602,8 @@ class LaserFocus:
             floor = 0.0
             finite_number(preview["target_z_mm"], "Focus target", floor, maximum)
             if action == "use_job":
+                if "focus_policy" in self.surface:
+                    raise SafetyError("Workpiece focus is calculated from thickness; measure again in the Machine panel")
                 measured_contact = self.surface["contact_z_mm"]
                 if current > clearance + .05 or self.xy_recovery_pending_reference:
                     raise SafetyError("Job focus needs a known Z at or below the selected clearance")
@@ -585,6 +626,8 @@ class LaserFocus:
         elif action == "set_job_gap":
             known()
             plan = self.job_plan
+            if plan is not None and "focus_policy" in plan:
+                raise SafetyError("Workpiece focus is calculated from thickness; measure again to change the workpiece")
             if (plan is None or not compatible or plan["session"] != session
                     or plan["calibration"] != self.calibration
                     or plan["reference"] != self.reference
@@ -618,7 +661,8 @@ class LaserFocus:
             if action == "reference":
                 self.xy_recovery_pending_reference = False
                 self.requires_clearance = False
-        return copy.deepcopy({"action": action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
+        return copy.deepcopy({"action": requested_action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
+                              "thickness_focus_available": True,
                               "workpiece_focus_available": True,
                               "job_focus_required": self.job_focus_required,
                               "job_focus_block_reason": self.job_focus_block_reason if self.job_plan is None else None,

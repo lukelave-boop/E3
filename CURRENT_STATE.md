@@ -1,5 +1,30 @@
 # Current repository state
 
+## Thickness-derived focus in development (2026-09-13)
+
+Active branch codex/thickness-focus implements the operator-confirmed straight
+line: gap=max(3, 7-2*thickness/3) mm. Sheet thickness is probed elevation above
+the black border + 1.5 mm minus entered spacers. The -1.5 mm honeycomb datum
+is the operator-reported value explicitly selected for this rig, not a newly
+verified physical dimension. The daily manual gap selector is removed; the
+panel displays thickness, automatic gap and target Z. Spacer edits require
+clearing the measurement. Negative thickness rejects and removes prior focus.
+
+The Pi-owned measure_workpiece action uses the existing guarded probe cycle and
+binds fractional gaps to reusable jobs. Job admission rechecks derived values;
+manual set_job_gap/use_job cannot override an automatic workpiece. Gauge teaching
+and legacy manual calibration actions remain compatible. This is a shared backend
+change used by desktop and browser jobs, with new controls only in desktop.
+The new desktop requires pi-thickness-focus-v1 for daily measurement. No firmware,
+project schema, bounds, arming, laser, stop, or persisted configuration change.
+
+Initial Windows verification passed 186 focus/desktop cases, including offscreen
+Qt and fake-controller fractional-focus acceptance/rejection. Broader focused
+checks, exact-source Pi companion verification and Compatibility CI are in
+progress. No interactive GUI, real camera, controller/laser, focus accuracy or
+cutting test has been performed. Existing untracked scratch files are preserved.
+The previously selected 0.7.132 feature launcher pointer is unchanged so far.
+
 ## Selected combined Windows/Pi handoff (2026-09-13)
 
 Priority, Z setup speed and the latest updater correction are integrated on
