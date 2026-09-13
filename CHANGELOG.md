@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — recognize the installed Pi focus update combination
+
+- Correct the workpiece-focus companion's predecessor list to include the
+  recorded `e57adbb5` → `12dbb3d` → `59c31d7` targeted Pi updates. Their known
+  earlier `remote_service.py` was omitted from the initial package's baselines.
+- Keep complete file-hash validation, unknown-edit rejection, backups and
+  service-state checks. The replacement companion uses the same application
+  payload; E3 DEV TEST 0.7.120 and firmware do not need rebuilding or changing.
+
 ## Unreleased — use measured workpiece focus automatically
 
 - Machine-tab **Measure surface** now supplies the focus for every job on the

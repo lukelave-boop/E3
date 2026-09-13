@@ -1,5 +1,31 @@
 # Current repository state
 
+## Correct the installed Pi companion baseline (2026-09-12)
+
+The operator's read-only dry run of e3-pi-workpiece-focus-29a79a73 rejected
+remote_service.py with LF SHA256
+d9a8165484133bd720dbb03515590b5de28890ff8f32cf02baa73d7052bf21aa.
+No installation was attempted. The hash exactly matches Git revision 050498c
+and the retained e57adbb5 package. Installation records show the later 12dbb3d
+and 59c31d7 Pi patches replaced only four and two files respectively, leaving
+that remote client unchanged. Reconstructing all 15 paths from the recorded
+manifests matches the bb37be7 baseline except that one file; z_retention.py was
+absent. The first companion incorrectly assumed a complete later Git tree.
+
+The corrected packager adds that exact complete installed combination as a
+third pinned predecessor. Installer validation, service guards and application
+payload are unchanged. Unknown edits still reject. Windows 0.7.120, its frozen
+671b235 application revision, the E3 DEV TEST pointer, firmware and calibration
+remain unchanged. Replacement e3-pi-workpiece-focus-568b1cc9 has all 15 payload
+files byte-identical to 29a79a73; its installer differs only in the authenticated
+manifest hash. The complete added baseline matches the three retained package
+manifests exactly. Windows packaging/upgrade tests pass 43 cases with zero skips,
+including all three real predecessor upgrades/imports and rejection of unknown
+remote-client edits. Ruff and compileall pass. Exact-revision CI/Linux checks
+follow; live installation and physical job focus remain unverified.
+Existing main-checkout edits remain
+separate in the isolated packaging worktree.
+
 ## Automatic workpiece-focus build verified and selected (2026-09-12)
 
 Exact application revision 671b235f272b8a0e910ff5039006c0d431bb9cd8 passed
