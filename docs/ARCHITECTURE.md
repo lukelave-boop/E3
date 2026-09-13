@@ -84,8 +84,9 @@ and unknown edits remain rejected before replacement.
 MachineService owns the workpiece datum. A successful typed measurement with
 compatible gauge calibration creates the plan directly, including when the
 probe carriage is offset from the laser. The contact Z plus taught mounting
-offset and chosen gap determine the job Z. Explicit `set_job_gap` validates and
-rebinds that same datum without motion; status reads never change the gap.
+offset and thickness-derived gap determine daily job Z. Legacy manual calibration
+plans still accept `set_job_gap`; automatic thickness plans reject that override.
+Status reads never change the gap.
 
 The `E3FOCUS` UUID binds canonical job bytes to the datum. Preflight and START
 reject missing/stale bindings once focus is required. A calibrated process
@@ -99,7 +100,7 @@ clearance/XY barrier/Z readback/output sequence. Only successful drained
 completion at verified clearance republishes its reusable plan. Laser-off
 framing verifies clearance without descending. Home/park and ordinary XY jog
 retention similarly validate both sessions, STOP, firmware, reference and Z.
-New measurements and gap changes generate new UUIDs; program authorization and
+New measurements and legacy manual-gap changes generate new UUIDs; program authorization and
 Pi job identity remain specific to each execution. No project schema changes
 or workpiece persistence across controller/Pi restarts are introduced.
 

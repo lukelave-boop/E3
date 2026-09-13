@@ -1,52 +1,58 @@
 # Current repository state
 
-## Thickness-derived focus in development (2026-09-13)
+## Automatic thickness focus verified and selected (2026-09-13)
 
-Active branch codex/thickness-focus implements the operator-confirmed straight
-line: gap=max(3, 7-2*thickness/3) mm. Sheet thickness is probed elevation above
-the black border + 1.5 mm minus entered spacers. The -1.5 mm honeycomb datum
-is the operator-reported value explicitly selected for this rig, not a newly
-verified physical dimension. The daily manual gap selector is removed; the
-panel displays thickness, automatic gap and target Z. Spacer edits require
-clearing the measurement. Negative thickness rejects and removes prior focus.
+The permanent E3 DEV TEST pointer selects **Automatic thickness focus**, Windows
+**0.7.133**, exact application revision
+**7ef632d4246bbe4aab9d64a65b1c55af60aaa2fd**, at
+`dist/E3-thickness-focus-0.7.133/E3.exe`. Adjacent build-info.json matches the
+pointer. The permanent launcher hash remains
+1828b10b2a96e9a032428e650c463d9ab9104bbf4739ed3f05bf3caf7677232b;
+normal E3, its launcher and shortcuts were not replaced.
 
-The Pi-owned measure_workpiece action uses the existing guarded probe cycle and
-binds fractional gaps to reusable jobs. Job admission rechecks derived values;
-manual set_job_gap/use_job cannot override an automatic workpiece. Gauge teaching
-and legacy manual calibration actions remain compatible. This is a shared backend
-change used by desktop and browser jobs, with new controls only in desktop.
-The new desktop requires pi-thickness-focus-v1 for daily measurement. No firmware,
-project schema, bounds, arming, laser, stop, or persisted configuration change.
+The operator-confirmed rule is gap=max(3, 7-2*thickness/3) mm. Sheet thickness
+is probed elevation above the black border + 1.5 mm minus entered spacers.
+The -1.5 mm honeycomb datum is the operator-reported value explicitly selected
+for this rig, not a newly verified dimension. Daily focus displays thickness,
+automatic gap and target Z instead of a manual gap selector. Clear measurement
+before editing spacers. Negative thickness rejects and removes prior focus.
+The Pi-owned measure_workpiece action binds the computed gap to reusable jobs;
+job admission rechecks it and manual gap overrides reject. Gauge teaching and
+legacy manual calibration remain separate. Shared backend changes affect both
+desktop and browser execution; new controls are desktop-only. No new firmware,
+project schema, bounds, arming, laser, stop or persistent configuration change.
 
-Windows verification passed 605 focused cases, including offscreen Qt and
-fake-controller fractional-focus acceptance/rejection. A compact panel render
-with Segoe UI was visually inspected. Ruff and compileall pass. Exact 7ef632d
-source passed 428 focused Linux/Pi cases on WSL Ubuntu 22.04, including
-authenticated requests and real integrated-predecessor upgrade tests. The Pi
-companion is e3-pi-thickness-focus-2528c9d0, with 17 exact-source payload files.
-Four package tests pass after pinning the integrated predecessor hashes for
-shallow CI checkouts; this changes no application code. Compatibility CI and
-the final compatibility rerun are in progress.
+Matching Pi companion **e3-pi-thickness-focus-2528c9d0** is in `dist/`; its
+INSTALL.md supplies exact copy, read-only preview and guarded apply commands.
+All 17 payload files match the frozen revision. It accepts the recorded
+568b1cc9 installation or the integrated speed/priority predecessor at 14c62d0,
+preserves operator data, backs up replaced bytes and rejects unknown edits.
+The desktop requires pi-thickness-focus-v1 for daily measurement. Existing
+setup-speed firmware and gauge/reference compatibility requirements remain.
+Pi installation for this feature is pending; no hardware was operated.
 
-Windows 0.7.133 is frozen at 7ef632d4246bbe4aab9d64a65b1c55af60aaa2fd.
-All 163 collected source and embedded compiled modules plus the entrypoint match
-that revision. The native-library guard passed. EXE SHA256 is
-548e5c116a303145162a4e9650d51fbf1975a2f576ecf4533e27ea0e7518e59c;
-installer SHA256 is 80107a47e7b25f85a17865c2937bb2d607e9724d2256f34b79541b1edcc08248
-(217,234,190 bytes). The preserved bundle is dist/E3-thickness-focus-0.7.133.
+Compatibility CI **34760989302** passed at **6374bb3**: Windows Python 3.12
+**6,448 passed / 39 skipped**, Windows Python 3.10 **5,211 / 112 skipped**,
+POSIX controller/session recovery **632 passed**, and repository Ruff passed.
+Earlier desktop CI exposed five obsolete gap/capability fixture assertions;
+the test-only correction preserves cancellation and stale-response checks and
+passed all 76 related offscreen cases. No runtime source changed after 7ef632d.
+Local Windows focused verification passed 605 cases. Exact 7ef632d source passed
+428 focused Linux/Pi cases on WSL Ubuntu 22.04; final installer checks passed
+four cases on both Windows and Linux, including the real integrated predecessor.
+Compileall and whitespace checks pass. A compact offscreen Segoe UI panel render
+was visually inspected. No interactive GUI, real camera, controller/laser,
+physical focus-accuracy or material-cutting test has been performed.
 
-CI 34760432179 passed Windows Python 3.10 (5,211 / 112 skipped), POSIX recovery
-(632) and Ruff. Windows Python 3.12 passed 6,442 / 39 skipped with five obsolete
-UI-fixture assertions: removed daily-gap cancellation and missing thickness
-capability in lifecycle status. Updated fixtures preserve stale-response,
-pause/cancel and manual-calibration cancellation coverage; all 76 directly
-related offscreen tests pass. This follow-up changes tests and documentation
-only. Four final installer checks also pass on Linux. No application change or
-rebuild was required; a fresh Compatibility CI run is the remaining gate. No interactive GUI, real camera, controller/laser, focus accuracy or
-cutting test has been performed. Existing untracked scratch files are preserved.
-The previously selected 0.7.132 feature launcher pointer is unchanged so far.
+All 163 collected application source modules, all 163 embedded compiled modules
+and the entrypoint match the frozen revision; the native-library guard passed.
+EXE SHA256: 548e5c116a303145162a4e9650d51fbf1975a2f576ecf4533e27ea0e7518e59c.
+Installer SHA256: 80107a47e7b25f85a17865c2937bb2d607e9724d2256f34b79541b1edcc08248
+(217,234,190 bytes), at installer-dist/E3-Setup-thickness-focus-0.7.133.exe.
+Evidence is under build/thickness-focus. Existing untracked scratch files are
+preserved. The 0.7.132 handoff below is superseded for desktop focus testing.
 
-## Selected combined Windows/Pi handoff (2026-09-13)
+## Previous combined Windows/Pi handoff (2026-09-13)
 
 Priority, Z setup speed and the latest updater correction are integrated on
 origin/main through 8e65d9e. Both completed development branches were deleted;

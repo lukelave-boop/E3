@@ -2,6 +2,10 @@
 
 ## Automatic thickness rule (2026-09-13)
 
+Current handoff: **E3 DEV TEST 0.7.133** with Pi companion
+**e3-pi-thickness-focus-2528c9d0**. Follow its INSTALL.md before testing.
+The earlier 0.7.132 combined handoff below is retained as historical context.
+
 The daily Workpiece focus selector is replaced by a calculated gap:
 
 ```text

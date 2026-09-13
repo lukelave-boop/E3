@@ -238,7 +238,7 @@ operator calibration; no additional mainboard flash is needed for this change.
 
 Teach the 7 mm gauge in **Machine Setup → 7 · Z / laser focus**. Measure a work
 surface in **Machine → Z axis · Ender** to set the focus for subsequent jobs.
-The daily gap selector derives 7, 5 or 3 mm head gaps from that saved teaching;
+The daily gap is calculated continuously from measured material thickness;
 Machine Setup tab 7 retains manual **Preview and position** helpers.
 Raised supports contribute to surface elevation without being mistaken for
 material thickness. It requires the matching Pi companion and surface-height
