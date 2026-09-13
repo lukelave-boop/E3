@@ -81,6 +81,8 @@ def audit_profile(path: Path) -> None:
         emulator.mem_write(0xE0042000, (0x10000000 | device).to_bytes(4, "little"))
         emulator.mem_write(0x1FFF7A22, capacity.to_bytes(2, "little"))
         emulator.mem_write(names["_ZN5Probe6offsetE"] + 8, struct.pack("<f", offset))
+        emulator.mem_write(0xE000ED88, struct.pack("<I", 0xF00000))
+        emulator.mem_write(names["_ZN7Planner8settingsE"] + 36, struct.pack("<f", 20.0))
         output = bytearray()
 
         def write_byte(emulator, _address, _size, _data, output=output):
@@ -98,10 +100,17 @@ def audit_profile(path: Path) -> None:
                     "Cap:E3_USB_UPDATER_F401_V1:1", "Cap:E3_COMPACT_F401_V1:1",
                     "Cap:E3_Z_LIMIT_80_V1:1", "Cap:E3_RECOVERY_V1:1",
                     "Cap:E3_SURFACE_HEIGHT_V2:1", "Cap:E3_LIVE_Z_V1:1", "Cap:E3_Z_RESTORE_V1:1",
+                    "Cap:E3_Z_SETUP_SPEED_V1:1",
                     f"E3SG:2 PROBE_Z:{offset:.6f} RETRACT:5.000000 MIN:-10 MAX:65 CEILING:80",
                     "Cap:SDCARD:0", f"E3HW:1 MCU:{device:X} FLASH_KIB:{capacity}")
         if any(part not in text for part in expected):
             raise ValueError(f"Native M115 reported wrong capabilities/hardware: {text}")
+        for limit in (5.0, 10.0, 19.999, 20.001, 40.0, float("nan")):
+            output.clear()
+            emulator.mem_write(names["_ZN7Planner8settingsE"] + 36, struct.pack("<f", limit))
+            call(emulator, names["_ZN10GcodeSuite4M115Ev"])
+            if b"Cap:E3_Z_SETUP_SPEED" in output:
+                raise ValueError("Native M115 promised fast Z with a different active planner ceiling")
     print("Compiled HAL drove PA1/PA7 heater gates and PB4 extrusion STEP low; compiled M115 passed three hardware-ID cases; fake MMIO/UART.")
 
 

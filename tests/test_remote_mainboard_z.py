@@ -162,9 +162,10 @@ def test_authenticated_server_persists_ceiling_and_enforces_jog_at_boundary(z_se
     serial.z = 59
     response = z_rpc(harness, "z_jog", 1)
     assert response["ok"] and response["result"]["z_mm"] == 60
+    serial.writes.clear()
     response = z_rpc(harness, "z_jog", .1)
     assert response["ok"] is False and "configured maximum" in response["error"]
-    assert "G1 Z60.100 F300" not in serial.writes
+    assert not any(line.startswith("G1 Z") for line in serial.writes)
 
 
 def test_authenticated_server_rejects_stale_session_before_serial_or_save(z_server):

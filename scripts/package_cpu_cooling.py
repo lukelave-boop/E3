@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PREVIOUS = {
+    "laser_aligner/machine/setup_motion.py": None,
     "laser_aligner/remote_node.py": "5a0e549c406251e7c0c8fc6e0c6fcc14850f52db800646c1f9d8edc8f88b4a5e",
     "laser_aligner/machine/service.py": "c93b2868a554eca3badc53d0cd1354571707a5b0d0cb52df8a3914a66bf8e3e2",
     "laser_aligner/cpu_cooling.py": None,
@@ -34,6 +35,12 @@ def package(destination):
         template.replace("BUILD_REPLACES_MANIFEST_SHA256", digest), encoding="utf-8", newline="\n",
     )
     (output / "45-e3-cpu-cooling.conf").write_text("[Service]\nEnvironment=E3_CPU_COOLING=1\n", encoding="utf-8")
+    (output / "README.md").write_text(
+        "Current application sources require matching firmware advertising "
+        "`Cap:E3_Z_SETUP_SPEED_V1:1` for normal Z movement. Follow the matching firmware "
+        "package README, then establish a fresh reference, teach the gauge again and measure "
+        "the workpiece. This source installer does not flash firmware.\n", encoding="utf-8",
+    )
     return output
 
 

@@ -1,0 +1,110 @@
+--- a/Marlin/Configuration.h
++++ b/Marlin/Configuration.h
+@@ -962,11 +962,11 @@
+  * Override with M203
+  *                                      X, Y, Z, E0 [, E1[, E2...]]
+  */
+-#define DEFAULT_MAX_FEEDRATE          { 300, 300, 5 } //{ 3000, 3000, 60, 25 }   // 最大进给率
++#define DEFAULT_MAX_FEEDRATE          { 300, 300, 20 } //{ 3000, 3000, 60, 25 }   // 最大进给率
+ 
+ #define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
+ #if ENABLED(LIMITED_MAX_FR_EDITING)
+-  #define MAX_FEEDRATE_EDIT_VALUES    { 600, 600, 10 } // ...or, set your own edit limits
++  #define MAX_FEEDRATE_EDIT_VALUES    { 600, 600, 20 } // ...or, set your own edit limits
+ #endif
+ 
+ /**
+--- a/Marlin/src/gcode/host/M115.cpp
++++ b/Marlin/src/gcode/host/M115.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "../gcode.h"
+ #include "../../module/probe.h"
++#include "../../module/planner.h"
++#include "../../module/e3_z_setup_speed.h"
+ #include "../../inc/MarlinConfig.h"
+ #include "../queue.h"           // for getting the command port
+ 
+@@ -81,6 +83,8 @@
+   SERIAL_ECHOLNPGM(" MIN:-10 MAX:65 CEILING:80");
+   SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
+   SERIAL_ECHOLNPGM("Cap:E3_Z_RESTORE_V1:1");
++  if (e3_z_setup_speed::ready(planner.settings.max_feedrate_mm_s[Z_AXIS]))
++    SERIAL_ECHOLNPGM("Cap:E3_Z_SETUP_SPEED_V1:1");
+   SERIAL_ECHOLNPGM("Cap:E3_USB_UPDATER_F401_V1:1");
+   SERIAL_ECHOLNPGM("Cap:E3_RECOVERY_V1:1");
+   SERIAL_ECHOLNPGM("Cap:E3_LIVE_Z_V1:1");
+--- a/Marlin/src/gcode/calibrate/G28.cpp
++++ b/Marlin/src/gcode/calibrate/G28.cpp
+@@ -25,6 +25,7 @@
+ #include "../gcode.h"
+ 
+ #include "../../module/stepper.h"
++#include "../../module/e3_z_setup_speed.h"
+ #include "../../module/endstops.h"
+ 
+ #if HAS_MULTI_HOTEND
+@@ -219,6 +220,7 @@
+ #endif
+ 
+ void GcodeSuite::G28() {
++  const e3_z_setup_speed::NativeCycle e3_native_speed(planner.settings.max_feedrate_mm_s[Z_AXIS]);
+   #if ENABLED(E3_LIVE_Z_V1)
+     const e3_live_z::HomingScope e3_homing_scope;
+   #endif
+--- a/Marlin/src/gcode/probe/G39.inc
++++ b/Marlin/src/gcode/probe/G39.inc
+@@ -3,6 +3,7 @@
+ #include "../../module/e3_material_height.h"
+ #include "../../module/endstops.h"
+ #include "../../module/planner.h"
++#include "../../module/e3_z_setup_speed.h"
+ #include "../../MarlinCore.h"
+ 
+ // G39: exactly one native fast/retract/slow material cycle at current XY.
+@@ -33,6 +34,7 @@
+     else SERIAL_ERROR_MSG("E3MH:1 PRECONDITION");
+     return;
+   }
++  const e3_z_setup_speed::NativeCycle e3_native_speed(planner.settings.max_feedrate_mm_s[Z_AXIS]);
+   remember_feedrate_scaling_off();
+   const float measured_z = probe.material_height(envelope.clearance, envelope.maximum, envelope.minimum);
+   restore_feedrate_and_scaling();
+--- a/Marlin/src/module/probe.cpp
++++ b/Marlin/src/module/probe.cpp
+@@ -89,6 +89,7 @@
+ #include "../core/debug_out.h"
+ 
+ #include "e3_material_height.h"
++#include "e3_z_setup_speed.h"
+ 
+ Probe probe;
+ 
+@@ -801,6 +802,7 @@
+  * - Return the probed Z position
+  */
+ float Probe::probe_at_point(const_float_t rx, const_float_t ry, const ProbePtRaise raise_after/*=PROBE_PT_NONE*/, const uint8_t verbose_level/*=0*/, const bool probe_relative/*=true*/, const bool sanity_check/*=true*/) {
++  const e3_z_setup_speed::NativeCycle e3_native_speed(planner.settings.max_feedrate_mm_s[Z_AXIS]);
+   DEBUG_SECTION(log_probe, "Probe::probe_at_point", DEBUGGING(LEVELING));
+ 
+   if (DEBUGGING(LEVELING)) {
+--- a/Marlin/src/module/settings.cpp
++++ b/Marlin/src/module/settings.cpp
+@@ -47,6 +47,7 @@
+ 
+ #include "endstops.h"
+ #include "planner.h"
++#include "e3_z_setup_speed.h"
+ #include "stepper.h"
+ #include "temperature.h"
+ 
+@@ -507,6 +508,9 @@
+ #endif
+ 
+ void MarlinSettings::postprocess() {
++  // A prior EEPROM Z5 ceiling must not silently cancel the selected E3 profile.
++  // Preserve all other saved calibration/settings and perform no EEPROM write.
++  e3_z_setup_speed::configure(planner.settings.max_feedrate_mm_s[Z_AXIS]);
+   xyze_pos_t oldpos = current_position;
+ 
+   // steps per s2 needs to be updated to agree with units per s2

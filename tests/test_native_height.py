@@ -250,3 +250,42 @@ def test_changed_support_offset_rejects_without_contact(native_rpc):
     serial.writes.clear()
     assert not rpc(harness, "native_measure", support_height_mm=0)["ok"]
     assert not serial.writes
+
+
+
+@pytest.mark.parametrize("fast,returned,feed", [(True, 5, 1200), (True, 20.025, 600),
+                                               (False, 5, 300), (False, 20.025, 300)])
+def test_native_measure_clearance_feed_uses_verified_post_probe_direction(native_probe, monkeypatch, fast, returned, feed):
+    serial, probe, _ = native_probe
+    caps = ["Cap:E3_Z_SETUP_SPEED_V1:1"] if fast else []
+    serial.overrides["M115"] = ["FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", *caps, "ok"]
+    reference(probe)
+    serial.writes.clear()
+    original = serial.write_line
+
+    def write(line):
+        original(line)
+        if line.startswith("G30 "):
+            serial.z = returned
+
+    monkeypatch.setattr(serial, "write_line", write)
+    result = measure(probe)
+    assert result["kind"] == "native_border_check"
+    assert [line for line in serial.writes if line.startswith("G1 Z")] == [f"G1 Z20.000 F{feed}"]
+    assert serial.z == 20
+
+
+@pytest.mark.parametrize("change", ["speed_capability", "firmware"])
+def test_fast_native_measure_rechecks_speed_firmware_before_contact(native_probe, change):
+    serial, probe, _ = native_probe
+    identity = "FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro"
+    serial.overrides["M115"] = [identity, "Cap:E3_Z_SETUP_SPEED_V1:1", "ok"]
+    reference(probe)
+    serial.writes.clear()
+    serial.overrides["M115"] = (
+        [identity, "ok"] if change == "speed_capability"
+        else [identity + " changed", "Cap:E3_Z_SETUP_SPEED_V1:1", "ok"]
+    )
+    with pytest.raises(MachineError, match="firmware identity changed"):
+        measure(probe)
+    assert not any(line.startswith(("G1 ", "G28 ", "G30 ", "G39")) for line in serial.writes)

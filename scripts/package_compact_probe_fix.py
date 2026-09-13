@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def package(destination: Path) -> Path:
     source = (ROOT / "laser_aligner/machine/z_probe.py").read_bytes().replace(b"\r\n", b"\n")
+    if b"from .setup_motion import" in source:
+        raise ValueError("The current probe source requires the shared setup-motion companion; "
+                         "use scripts/package_z_setup_speed.py instead of this historical single-file patch")
     digest = hashlib.sha256(source).hexdigest()
     template = (ROOT / "firmware/marlin_mainboard_compact/install_pi_support.py").read_text(encoding="utf-8")
     template = template.replace("secondary_startup.py", "z_probe.py")

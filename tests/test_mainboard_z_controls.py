@@ -45,7 +45,7 @@ def test_jog_uses_fresh_position_and_holds_owner_lock(machine_probe):
     owner._execute_acknowledged = locked
     result = machine.mainboard_control("z_jog", -2, confirmed=True)
     assert result["z_mm"] == 33
-    assert "G1 Z33.000 F300" in serial.writes
+    assert "G1 Z33.000 F600" in serial.writes
     assert result["max_z_mm"] == result["hard_max_z_mm"] == 80
     assert result["min_z_mm"] == 20
     assert result["fresh"] and result["available"]
@@ -246,9 +246,9 @@ def test_normal_machine_status_does_not_poll_mainboard_serial(machine_probe):
 def test_stop_interrupts_pending_z_jog_without_a_successful_height(machine_probe):
     machine, serial, _, _ = machine_probe
     mainboard_serial(serial)
-    serial.overrides["G1 Z21.000 F300"] = []
+    serial.overrides["G1 Z21.000 F1200"] = []
     entered = threading.Event()
-    serial.on_write = lambda line: entered.set() if line == "G1 Z21.000 F300" else None
+    serial.on_write = lambda line: entered.set() if line == "G1 Z21.000 F1200" else None
     results, errors = [], []
 
     def move():
@@ -337,3 +337,38 @@ def test_session_change_during_limit_save_cannot_return_fresh_height(machine_pro
         assert machine.settings.mainboard_max_z_mm == store.load(80) == 60
     finally:
         machine._session = original_session
+
+
+@pytest.mark.parametrize("action,value,target,feed", [
+    ("z_jog", .1, 30.1, 1200), ("z_jog", .5, 30.5, 1200),
+    ("z_jog", 5, 35, 1200), ("z_jog", -.1, 29.9, 600),
+    ("z_jog", -5, 25, 600), ("z", 35, 35, 1200), ("z", 25, 25, 600),
+])
+def test_manual_z_speed_is_directional_and_move_still_waits_for_readback(
+    machine_probe, action, value, target, feed,
+):
+    machine, serial, _, _ = machine_probe
+    mainboard_serial(serial)
+    serial.z = 30
+    result = machine.mainboard_control(action, value, confirmed=True)
+    command = f"G1 Z{target:.3f} F{feed}"
+    assert serial.writes.count(command) == 1
+    assert serial.writes[serial.writes.index(command) + 1:] == [
+        "M400", "M114", "M123", "M114",
+    ]
+    assert result["z_mm"] == target and result["fresh"]
+
+
+@pytest.mark.parametrize("action,value", [("z_jog", 1), ("z", 21)])
+@pytest.mark.parametrize("caps", [
+    [], ["Cap:E3_Z_SETUP_SPEED_V1:0"], ["Cap:E3_Z_SETUP_SPEED_V2:1"],
+    ["Cap:E3_Z_SETUP_SPEED_V1:1junk"], ["Cap:E3_Z_SETUP_SPEED_V1:1"] * 2,
+    ["Cap:E3_Z_SETUP_SPEED_V1:1", "Cap:E3_Z_SETUP_SPEED_V1:0"],
+])
+def test_manual_z_requires_exact_setup_speed_capability_before_motion(machine_probe, action, value, caps):
+    machine, serial, _, _ = machine_probe
+    mainboard_serial(serial)
+    serial.overrides["M115"] = ["FIRMWARE_NAME:Marlin", CAPABILITY, *caps, "ok"]
+    with pytest.raises(MachineError, match="setup.speed|setup speed|Z_SETUP_SPEED"):
+        machine.mainboard_control(action, value, confirmed=True)
+    assert not any(line.startswith(("G1 ", "G28 ")) for line in serial.writes)

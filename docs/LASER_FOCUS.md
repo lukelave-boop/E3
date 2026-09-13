@@ -559,6 +559,37 @@ correction for raised work remain separate. Machines that have never entered
 the focus workflow and have no taught focus calibration retain their existing
 job behavior; zero-power programs do not request laser focus.
 
+## Setup travel speeds
+
+**Move probe here**, **Align probe** and **Align laser** now use the configured
+laser travel feed, limited by both machine feed ceilings. There is no separate
+1,200 mm/min setup cap. At the default 3,000 mm/min travel feed this is 2.5 times
+the previous requested speed; lower configured limits still apply.
+
+With the matching Pi companion and Ender firmware, all host-controlled Z lifts
+use 1,200 mm/min (20 mm/s), including initial reference lift, post-measurement
+return, clearance/Home return, manual Z+ and job completion. Normal lowering
+uses 600 mm/min (10 mm/s); sub-millimetre downward gauge fitting uses 120 mm/min
+(2 mm/s). Upward gauge steps use the lift feed. Step distances, bounds,
+stowed-probe checks, completion waits, position readbacks and STOP handling are
+unchanged. These are requested feeds; acceleration and move length affect time.
+
+The previous firmware capped Z at 300 mm/min, so the host update alone cannot
+provide the increased speed. Normal Z moves require the new firmware's exact
+speed capability and reject older firmware before motion. The new firmware
+sets the Z travel ceiling to 20 mm/s after settings load, leaves acceleration
+settings unchanged (default Z: 100 mm/s²), and preserves the native homing/contact cycle's previous effective
+5 mm/s ceiling. Legacy stock-firmware diagnostic commands retain their old
+300 mm/min lift; they are separate from the normal setup workflow.
+
+Install the matching Pi package and firmware kit using their generated
+**INSTALL.md** instructions. The firmware identity change invalidates old
+reference/retention authority and requires a fresh border reference and 7 mm
+gauge teaching. Then validate laser-off positioning, small up/down steps and
+longer unobstructed clearance lifts before measuring and checking gauge fit.
+Record controller, firmware, configuration and results; automated checks do
+not establish that these faster rates avoid missed steps or preserve accuracy.
+
 ## Physical acceptance
 
 First teach using the 7 mm step, then check that a commanded return to that
@@ -576,26 +607,23 @@ pair. Automated tests use simulated transports and offscreen Qt widgets.
 
 ## Pi companion installation
 
-Build the matching companion from the exact feature checkout with
-`python scripts/package_workpiece_focus.py`. It creates a
-`dist/e3-pi-workpiece-focus-…` folder. Open that folder's **INSTALL.md** for
-the exact Windows copy command and Pi dry-run/apply commands using its actual
-package name. The bundled `install_workpiece_focus.py` defaults to read-only.
+Build the matching speed companion from the exact feature checkout with
+`python scripts/package_z_setup_speed.py`. It creates a
+`dist/e3-pi-z-setup-speed-…` folder. Open that folder's **INSTALL.md** for the
+exact Windows copy command and Pi dry-run/apply commands using its package name.
+The bundled `install_z_setup_speed.py` defaults to read-only.
 
-The installer accepts the recorded installed combination of `e57adbb5`, the
-four-file `12dbb3d` job-focus update and the two-file `59c31d7` parking update.
-Those targeted updates left `remote_service.py` at its known earlier revision;
-the complete installed combination has its own pinned file hashes. It also
-accepts the complete pinned main focus predecessor
-`bb37be7621cd7a35ea602b0f8899b87f2339679e` or saved-Z predecessor
-`c638b3683faf83b10bb8483dd53fa8a4726b25c8`, plus already-current files. It
-rejects unknown edits and incompatible mixtures before replacing anything,
-backs up replaced source bytes, and preserves configuration, gauge calibration,
-Z maximum, retained-Z data and cooling settings. Review any rejection rather
-than forcing replacement.
+The installer accepts the recorded installed `568b1cc9` workpiece-focus payload
+(application revision `671b235f272b8a0e910ff5039006c0d431bb9cd8`) and already-current
+files. It validates all 16 payload paths together, including the new shared
+motion module, rejects unknown edits before replacement, and backs up changed
+source bytes. Configuration, gauge calibration files, Z maximum, retained-Z
+data and cooling settings are preserved. Firmware compatibility and fresh
+reference/teaching still must be established as described above.
 
 Apply only with the machine idle, E3 disconnected and the hardware-node service
 inactive. The installer queries service state but neither stops nor starts it;
-INSTALL.md gives those separate operator commands. This update flashes no
-firmware and adds no firmware requirement beyond existing surface-height V2
-support. Saved-Z restoration retains its separate capability requirement.
+**INSTALL.md** gives those separate operator commands. It flashes no firmware.
+Install the separately supplied matching compact firmware kit by its **README**
+procedure before testing normal Z motion. Old firmware cannot deliver the new
+travel speeds and is rejected by the updated Pi's normal Z controls.

@@ -9,6 +9,7 @@ from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
 from ..errors import MachineError, SafetyError
 from .focus_bounds import FocusXYBounds
 from .mainboard import parse_status, validate_max_z
+from .setup_motion import require_z_setup_speed, z_feed_mm_min
 from .z_probe import parse_position
 
 PREFIX = "E3FOCUS"
@@ -219,6 +220,7 @@ def move(machine, context, *, clearance, verify_only=False):
     with owner._lock:
         if "\n".join(send("M115")) != plan["firmware"]:
             raise MachineError("Job focus firmware changed")
+        require_z_setup_speed(plan["firmware"])
         if not parse_status(send("M123"))["z_known"]:
             raise SafetyError("Job focus requires known Z; no automatic recovery")
         current = parse_position(send("M114"))
@@ -242,7 +244,7 @@ def move(machine, context, *, clearance, verify_only=False):
         try:
             send("G21")
             send("G90")
-            send(f"G1 Z{target:.3f} F300")
+            send(f"G1 Z{target:.3f} F{z_feed_mm_min(current, target)}")
             send("M400")
             if abs(parse_position(send("M114")) - target) > .05:
                 raise MachineError("Job focus Z movement was not confirmed")

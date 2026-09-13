@@ -33,6 +33,22 @@ def run(source: Path, toolchain: Path) -> None:
         functions += "\n" + "\n".join(line for line in (source / path).read_text().splitlines()
                                        if not line.startswith("#include"))
     harness = (ROOT / "tests/marlin_material_harness.cpp").read_text().replace("// MARKER", functions)
+    speed_header = source / "Marlin/src/module/e3_z_setup_speed.h"
+    if speed_header.exists():
+        harness = harness.replace("struct { bool leveling_active; } planner;",
+                                  "struct { bool leveling_active; struct { float max_feedrate_mm_s[3]; } settings; } planner;")
+        harness = speed_header.read_text().replace("#pragma once", "") + "\n" + harness
+        harness = harness.replace("void reset() {", "void reset() {\n  planner.settings.max_feedrate_mm_s[Z_AXIS] = 20;")
+        harness = harness.replace("int deploys, stows, touches, lifts, remembers, restores;",
+                                  "int deploys, stows, touches, lifts, remembers, restores;\nbool speed_profile_failed;")
+        harness = harness.replace("++remembers;", "++remembers; speed_profile_failed |= planner.settings.max_feedrate_mm_s[Z_AXIS] != 5;")
+        harness = harness.replace("++restores;", "++restores; speed_profile_failed |= planner.settings.max_feedrate_mm_s[Z_AXIS] != 5;")
+        harness = harness.replace("void GcodeSuite::G39() {", "void GcodeSuite::G39_production() {")
+        harness = harness.replace("struct GcodeSuite { static void G39(); };",
+                                  "struct GcodeSuite { static void G39(); static void G39_production(); };\n"
+                                  "void GcodeSuite::G39() { G39_production(); "
+                                  "speed_profile_failed |= planner.settings.max_feedrate_mm_s[Z_AXIS] != 20; }")
+        harness = harness.replace("  return 0;", "  CHECK(!speed_profile_failed);\n  return 0;")
     serial_source = (source / "Marlin/src/core/serial_base.h").read_text(encoding="utf-8")
     harness = harness.replace("// SERIAL_FLOAT_MARKER",
                               function(serial_source, "NO_INLINE void printFloat("))

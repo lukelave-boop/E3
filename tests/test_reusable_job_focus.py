@@ -55,8 +55,8 @@ def test_measure_in_probe_phase_automatically_focuses_every_job(focus_machine, m
         machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
         wait(machine)
         assert machine._job.error is None
-        assert events.index(("xy", "G0 X100 Y100 F1000")) < events.index(("z", "G1 Z28.000 F300"))
-        assert events.index(("z", "G1 Z28.000 F300")) < events.index(("xy", "M4 S100"))
+        assert events.index(("xy", "G0 X100 Y100 F1000")) < events.index(("z", "G1 Z28.000 F600"))
+        assert events.index(("z", "G1 Z28.000 F600")) < events.index(("xy", "M4 S100"))
         assert focus.state.job_plan["id"] == plan["id"]
         assert focus.serial.z == 30
 

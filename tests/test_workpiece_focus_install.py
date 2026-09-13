@@ -69,7 +69,7 @@ def test_upgrade_preserves_operator_data_backups_and_newlines_and_is_idempotent(
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["applied"] and not result["service_started"]
     assert result["compatible_predecessors"] == [list(PREDECESSORS)[baseline]]
-    assert len(result["files"]) == len(SAVED_Z) == 15
+    assert len(result["files"]) == len(SAVED_Z) == 16
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
@@ -190,7 +190,7 @@ def exact_predecessor_project(tmp_path, baseline):
     for name, source_revision in overrides.items():
         (project / name).write_bytes(subprocess.check_output(
             ["git", "show", f"{source_revision}:{name}"], cwd=ROOT))
-    assert len(PREDECESSORS[baseline]) == 15
+    assert len(PREDECESSORS[baseline]) == 16
     for name, digest in PREDECESSORS[baseline].items():
         target = project / name
         if digest is None:

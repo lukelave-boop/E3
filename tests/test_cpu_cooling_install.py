@@ -32,7 +32,7 @@ def kit(tmp_path, monkeypatch):
 def test_apply_adds_only_expected_files_and_keeps_backup(kit):
     installer, project, bundle = kit
     result = installer.install(project, bundle=bundle, apply=True)
-    assert len(result["files"]) == 4
+    assert len(result["files"]) == 5
     assert not result["service_started"]
     for entry in result["files"]:
         assert entry["status"] == "updated"

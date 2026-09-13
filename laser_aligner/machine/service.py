@@ -90,7 +90,6 @@ _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
 _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
 _FOCUS_OPERATION_TIMEOUT_SECONDS = 120.0
 _FOCUS_XY_RECOVERY_TIMEOUT_SECONDS = 350.0
-_FOCUS_XY_FEED_CEILING_MM_MIN = 1200.0
 _INITIAL_CONNECT_RETRY_DELAY_SECONDS = 0.2
 _CONTROLLER_CONNECT_ATTEMPTS = 3
 _CONTROLLER_CONNECT_DEADLINE_SECONDS = 15.0
@@ -4551,7 +4550,7 @@ class MachineService:
                                self.settings.max_work_feed_mm_min)
                 if any(type(v) not in {int, float} or not math.isfinite(v) or v <= 0 for v in feed_limits):
                     raise SafetyError("Probe alignment needs a positive configured travel feed")
-                feed = min(_FOCUS_XY_FEED_CEILING_MM_MIN, *feed_limits)
+                feed = min(feed_limits)
                 travel_seconds = math.dist(origin, target) * 60.0 / feed
                 completion_timeout = max(float(self.settings.read_timeout), travel_seconds * 1.5 + 5.0)
                 # The final readback performs two coordinate queries and one

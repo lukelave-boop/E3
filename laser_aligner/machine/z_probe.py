@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, replace
 
 from ..errors import MachineError, SafetyError
 from .secondary_controller import CrealityControllerOwner, WriteGuardFactory
+from .setup_motion import Z_RAISE_FEED_MM_MIN, z_feed_mm_min, z_setup_speed_supported
 
 _NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?"
 _POSITION = re.compile(
@@ -140,8 +141,8 @@ class CrealityZProbe:
                 raise MachineError("Creality session changed during probing")
         return lines
 
-    def _raise(self, clearance: float, guard: WriteGuardFactory) -> None:
-        self._execute(f"G1 Z{clearance:.3f} F300", guard)
+    def _raise(self, clearance: float, guard: WriteGuardFactory, *, feed_mm_min: int = 300) -> None:
+        self._execute(f"G1 Z{clearance:.3f} F{feed_mm_min}", guard)
         self._execute("M400", guard)
         actual = parse_position(self._execute("M114", guard))
         if abs(actual - clearance) > 0.05:
@@ -149,6 +150,7 @@ class CrealityZProbe:
 
     def native_cycle_test(
         self, *, guard: WriteGuardFactory, on_motion_start: Callable[[], None] = lambda: None,
+        expected_firmware: str | None = None,
     ) -> dict[str, object]:
         """One operator-confirmed native Z homing cycle, without a height result.
 
@@ -169,6 +171,11 @@ class CrealityZProbe:
             return self._execute(command, guard, motion_possible=False)
 
         firmware = " ".join(precheck("M115"))
+        if expected_firmware is not None and firmware.split() != expected_firmware.split():
+            raise MachineError("Ender firmware changed before the native reference lift")
+        # Keep the historical stock-firmware diagnostic usable. Normal setup
+        # requires the new capability before entering this native cycle.
+        lift_feed = Z_RAISE_FEED_MM_MIN if z_setup_speed_supported(firmware) else 300
         if "marlin" not in firmware.lower() or "ender-3 s1 pro" not in firmware.lower():
             raise MachineError("Expected the existing Ender-3 S1 Pro / Marlin controller")
         expected_homed_z = native_homing_endpoint(firmware)
@@ -193,7 +200,7 @@ class CrealityZProbe:
         precheck("G91")
         self.native_motion_started = True
         on_motion_start()
-        self._execute("G1 Z5.000 F300", guard)
+        self._execute(f"G1 Z5.000 F{lift_feed}", guard)
         self._execute("G90", guard)
         self._execute("M400", guard)
         raised = parse_position(self._execute("M114", guard))
@@ -213,7 +220,8 @@ class CrealityZProbe:
                 f"Native homing did not finish in the expected retracted Z {expected_homed_z:g} mm state; "
                 f"reported Z {homed:.3f} mm, probe input {probe_states!r}. Final Z20 lift was not sent."
             )
-        self._raise(20.0, guard)
+        self._raise(20.0, guard,
+                    feed_mm_min=z_feed_mm_min(homed, 20.0) if z_setup_speed_supported(firmware) else 300)
         return {
             "kind": "native_cycle_test", "command": "G28 Z R0",
             "homed_z_mm": homed, "clearance_z_mm": 20.0,
@@ -271,9 +279,10 @@ class CrealityZProbe:
             return self._execute(command, guard, motion_possible=False)
 
         material_mode = material_height_supported(reference.firmware)
-        if material_mode:
+        fast_lift = z_setup_speed_supported(reference.firmware)
+        if material_mode or fast_lift:
             firmware = " ".join(precheck("M115"))
-            if firmware != reference.firmware or not material_height_supported(firmware):
+            if firmware != reference.firmware or (material_mode and not material_height_supported(firmware)):
                 raise MachineError("Material firmware identity changed; reference the border again")
 
         flags = [line.strip().lower() for line in precheck("M119")]
@@ -308,7 +317,8 @@ class CrealityZProbe:
         returned = parse_position(self._execute("M114", guard))
         if not -2 <= returned <= reference.clearance_z_mm + 0.05:
             raise MachineError("Unexpected post-probe Z; no further move sent")
-        self._raise(reference.clearance_z_mm, guard)
+        self._raise(reference.clearance_z_mm, guard,
+                    feed_mm_min=z_feed_mm_min(returned, reference.clearance_z_mm) if fast_lift else 300)
         if checking_border:
             if abs(contact) > 0.5:
                 raise MachineError("Border contact is not near homed zero; no material reference accepted")

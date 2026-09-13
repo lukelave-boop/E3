@@ -17,6 +17,7 @@ SAVED_Z_REVISION = "c638b3683faf83b10bb8483dd53fa8a4726b25c8"
 # Exact authoritative saved-Z sources; the earlier installed focus correction
 # is independently pinned by package_laser_focus. Never accept arbitrary edits.
 SAVED_Z = {
+    "laser_aligner/machine/setup_motion.py": None,
     "laser_aligner/config.py": "f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58",
     "laser_aligner/machine/mainboard.py": "0388228c3ded64c5b424f6da163d6260bbc90a0f1161b19a8a9c88062cea4eba",
     "laser_aligner/machine/service.py": "79a25bbdc25bc6f16e14ca47ab9f8b425bad67db02b8a51fb73df7e8f0e11b72",
@@ -55,9 +56,10 @@ def installation_guide(folder: Path) -> str:
     windows_source = str(folder.resolve()).replace("'", "''")
     return (
         "# Install the matching workpiece-focus companion\n\n"
-        "This package updates application sources only. It does not flash firmware; "
-        "automatic workpiece focus works with existing surface-height V2 firmware. "
-        "Saved-Z restoration still requires its separate firmware capability.\n\n"
+        "This package updates application sources only. Current sources require the matching "
+        "firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1` for normal Z movement. This installer "
+        "does not flash firmware. Follow the matching firmware package README, then establish "
+        "a fresh reference, teach the gauge again and measure the workpiece.\n\n"
         "Copy the exact folder from Windows PowerShell:\n\n"
         "```powershell\n"
         f"scp -r '{windows_source}' greenhouse-climate@192.168.5.18:/home/greenhouse-climate/\n"
@@ -122,8 +124,8 @@ def package(destination: Path) -> Path:
         "# Automatic workpiece focus Pi companion\n\n"
         "Install this matching companion before using automatic workpiece focus in E3 DEV TEST. "
         "It updates application sources only and does not flash firmware. "
-        "Existing surface-height V2 firmware remains required for measurement; saved-Z restoration "
-        "still requires its separate restore capability.\n\n"
+        "Normal Z movement requires matching firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1`. "
+        "Follow that firmware package README, then reference and teach the gauge again.\n\n"
         "The installer accepts the exact recorded installed Pi combination, the pinned main focus "
         "or saved-Z predecessor, or already "
         "current files. It rejects unknown changes and incompatible mixtures before replacement, "

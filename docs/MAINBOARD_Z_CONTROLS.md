@@ -29,6 +29,13 @@ A click requests one bounded move; it does not home or repeat while held.
 The Pi reads the actual controller position before calculating the jog target.
 Readback is commanded/reported position, not an encoder measurement.
 
+The matching speed firmware and Pi companion request Z+ at 1,200 mm/min and
+Z- at 600 mm/min. Older firmware blocks normal Z travel with an update message;
+its previous 300 mm/min firmware ceiling cannot deliver these rates. Probe
+positioning uses the configured XY travel speed. See
+[setup travel speeds](LASER_FOCUS.md#setup-travel-speeds) for firmware, gauge
+teaching and physical qualification requirements.
+
 The panel shows the active **Z maximum** and a separate editable value. Apply
 saves a value from 20 through 80 mm on the authoritative controller host. It
 cannot be lowered below the current known Z. Saving a limit does not move the

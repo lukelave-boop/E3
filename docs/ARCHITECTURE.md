@@ -1,5 +1,22 @@
 # Architecture
 
+## Z setup travel feeds
+
+The UI-neutral `machine/setup_motion.py` owns direction-dependent stowed-probe
+feeds and exact `Cap:E3_Z_SETUP_SPEED_V1:1` admission. Mainboard manual Z,
+LaserFocus and job focus verify it from their existing fresh M115 exchange
+before motion. Probe returns choose direction from the post-contact readback.
+Native reference lifts use the same raise feed on capable firmware; historical
+stock diagnostic paths retain their original feed. MachineService's shared
+focus XY path uses configured travel/work ceilings without its former private
+1,200 mm/min ceiling. Both desktop and browser execution share the backend.
+
+Firmware supplies a 20 mm/s Z travel ceiling after settings load and preserves
+the previous effective 5 mm/s ceiling throughout native G28/G39 cycles. The
+capability reflects the active planner setting. No host EEPROM write, machine
+configuration migration, project schema or calibration-format change is used;
+exact firmware-bound calibration still requires renewed teaching.
+
 ## Update launch before committed shutdown
 
 The desktop pre-close hook runs after unsaved-project approval and before the

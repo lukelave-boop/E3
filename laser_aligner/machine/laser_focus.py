@@ -16,6 +16,7 @@ from pathlib import Path
 from ..errors import MachineError, SafetyError
 from ..storage import atomic_write_json, strict_json_loads
 from .mainboard import parse_status
+from .setup_motion import require_z_setup_speed, z_feed_mm_min
 from .z_probe import finite_number, parse_position
 
 CAPABILITY = "Cap:E3_SURFACE_HEIGHT_V2:1"
@@ -338,6 +339,8 @@ class LaserFocus:
         _telemetry_scope.enter_context(owner.live_z_stream(
             send, enabled=action in {"reference", "measure", "jog", "move", "clearance"}))
         firmware = "\n".join(identity_lines)
+        if action in {"reference", "measure", "jog", "move", "clearance"}:
+            require_z_setup_speed(firmware)
         board = parse_status(send("M123"))
         current = parse_position(send("M114"))
         if not board["z_known"]:
@@ -374,7 +377,7 @@ class LaserFocus:
                 raise SafetyError("Reference the border before focus positioning")
             stowed()
 
-        def move_to(target, feed=300):
+        def move_to(target, *, fine=False):
             nonlocal current
             finite_number(target, "Focus target Z", 0, maximum)
             self.selected_clearance = clearance
@@ -384,7 +387,7 @@ class LaserFocus:
                 self.requires_clearance = True
             send("G21")
             send("G90")
-            send(f"G1 Z{target:.3f} F{feed}", True)
+            send(f"G1 Z{target:.3f} F{z_feed_mm_min(current, target, fine=fine)}", True)
             send("M400")
             current = parse_position(send("M114"))
             if abs(current - target) > .05:
@@ -395,6 +398,7 @@ class LaserFocus:
             self.requires_clearance = self.xy_recovery_pending_reference or current < clearance - .05
 
         def contact_at(start):
+            nonlocal current
             maximum_contact = start - 15
             send("G21")
             send("G90")
@@ -410,6 +414,7 @@ class LaserFocus:
             returned = parse_position(send("M114"))
             if not contact - geometry["probe_z_mm"] - .1 <= returned <= start + .05:
                 raise MachineError("Unexpected post-probe Z; no further move sent")
+            current = returned
             move_to(start)
             return contact
 
@@ -442,7 +447,8 @@ class LaserFocus:
             if current + 5 > maximum:
                 raise SafetyError("Reference initial lift exceeds the configured ceiling")
             self.requires_clearance = True
-            result = probe.native_cycle_test(guard=guard, on_motion_start=on_motion_start)
+            result = probe.native_cycle_test(guard=guard, on_motion_start=on_motion_start,
+                                             expected_firmware=firmware)
             transcript.extend(result["transcript"])
             board["z_known"] = True
             current = 20.0
@@ -527,9 +533,9 @@ class LaserFocus:
                 target = current + value
                 if target < floor:
                     raise SafetyError("Focus jog would cross the Z travel minimum")
-                # Fine fitting remains slow; approach steps use the already
-                # established clearance/focus travel feed. No move is repeated.
-                move_to(target, 300 if abs(value) >= 1 else 60)
+                # Only sub-millimetre downward fitting uses the fine feed.
+                # Upward steps clear the gauge at the normal lift speed.
+                move_to(target, fine=abs(value) < 1)
             elif action == "teach":
                 if current < floor:
                     raise SafetyError("Taught position is below the Z travel minimum")

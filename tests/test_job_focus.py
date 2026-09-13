@@ -53,11 +53,11 @@ def test_job_clearance_travel_focus_cut_lift_home_order(focus_machine, monkeypat
     wait(machine)
     assert machine._job.error is None
     indices = [events.index(item) for item in [
-        ("z", "G1 Z30.000 F300"), ("xy", "G0 X100 Y100 F1000"),
-        ("z", "G1 Z25.000 F300"), ("xy", "M4 S100"), ("xy", "G1 X105 Y100 F500"),
+        ("z", "G1 Z30.000 F1200"), ("xy", "G0 X100 Y100 F1000"),
+        ("z", "G1 Z25.000 F600"), ("xy", "M4 S100"), ("xy", "G1 X105 Y100 F500"),
     ]]
     assert indices == sorted(indices)
-    lift = max(i for i, e in enumerate(events) if e == ("z", "G1 Z30.000 F300"))
+    lift = max(i for i, e in enumerate(events) if e == ("z", "G1 Z30.000 F1200"))
     assert indices[-1] < lift < events.index(("xy", "$H"))
     assert any(e == ("xy", "M5") for e in events[indices[-1]+1:lift])
     assert not any(line.startswith("E3FOCUS") for _, line in events)
@@ -83,11 +83,11 @@ def test_job_focus_failure_cannot_continue(focus_machine, monkeypatch, failure):
     elif failure == "pin":
         focus.serial.overrides["M119"] = ["z_min: open", "ok"]
     elif failure == "stop_descent":
-        focus.serial.on_write = lambda line: stop_async(machine) if line == "G1 Z25.000 F300" else None
+        focus.serial.on_write = lambda line: stop_async(machine) if line == "G1 Z25.000 F600" else None
     else:
         def corrupt(line):
-            if line == "G1 Z25.000 F300":
-                focus.serial.overrides["G1 Z30.000 F300"] = ["Error:lift rejected", "ok"]
+            if line == "G1 Z25.000 F600":
+                focus.serial.overrides["G1 Z30.000 F1200"] = ["Error:lift rejected", "ok"]
         focus.serial.on_write = corrupt
     machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
     wait(machine)
@@ -228,9 +228,9 @@ def test_manual_home_failed_lift_never_homes(focus_machine, failure):
     if failure == "unknown":
         focus.serial.homed = False
     elif failure == "rejected":
-        focus.serial.overrides["G1 Z30.000 F300"] = ["Error:lift rejected", "ok"]
+        focus.serial.overrides["G1 Z30.000 F1200"] = ["Error:lift rejected", "ok"]
     else:
-        focus.serial.on_write = lambda line: stop_async(machine) if line == "G1 Z30.000 F300" else None
+        focus.serial.on_write = lambda line: stop_async(machine) if line == "G1 Z30.000 F1200" else None
     primary.write_line = Mock(wraps=primary.write_line)
     with pytest.raises(MachineError):
         machine.prepare_photo_position()

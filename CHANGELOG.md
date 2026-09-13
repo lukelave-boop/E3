@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — faster Z setup positioning and travel
+
+- Use the configured XY travel feed for probe positioning and probe/laser
+  transfers, removing their separate 1,200 mm/min cap.
+- Request Z lifts at 1,200 mm/min, lowering at 600 mm/min and sub-millimetre
+  downward gauge fitting at 120 mm/min across setup, manual Z and job focus.
+- Require matching Ender speed firmware, which raises the actual travel
+  ceiling while retaining the native contact/homing cycle's effective feeds.
+  Existing limits, stow, reference, clearance, completion and STOP guards remain.
+- Provide a guarded Pi companion. The firmware identity change requires fresh
+  border reference and gauge teaching; faster physical motion remains unverified.
+
 - Complete Windows installer creation before starting the desktop shutdown
   deadline, so slow launches are not silently terminated. Failed creation keeps
   E3 open; local launch and installer logs support diagnosis.

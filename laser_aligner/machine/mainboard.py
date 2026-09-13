@@ -8,6 +8,7 @@ from contextlib import ExitStack
 
 from ..errors import MachineError, SafetyError
 from .secondary_controller import CrealityControllerOwner, WriteGuardFactory
+from .setup_motion import require_z_setup_speed, z_feed_mm_min
 from .z_limits import HARD_MAX_Z_MM, MIN_Z_MM, Z_LIMIT_CAPABILITY, validate_max_z
 from .z_probe import finite_number, parse_position
 
@@ -90,6 +91,7 @@ def control(
         if action == "z_max" and before["z_known"] and initial_z > float(value):
             raise SafetyError("Maximum Z cannot be below the current acknowledged Z position")
         if moving:
+            require_z_setup_speed(identity)
             target = float(value) if action == "z" else initial_z + float(value)
             # Both the delta and its absolute target are derived/admitted under
             # this owner lock; stale desktop positions have no motion authority.
@@ -104,7 +106,7 @@ def control(
                 raise SafetyError("The expected stowed probe input was not reported")
             execute("G21")
             execute("G90")
-            execute(f"G1 Z{target:.3f} F300")
+            execute(f"G1 Z{target:.3f} F{z_feed_mm_min(initial_z, target)}")
             execute("M400")
             actual = parse_position(execute("M114"))
             if abs(actual - target) > 0.05:

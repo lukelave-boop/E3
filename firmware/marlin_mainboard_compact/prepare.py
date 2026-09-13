@@ -21,6 +21,7 @@ OVERLAYS = {
     "Marlin/src/HAL/STM32/e3_startup.inc": HERE.parent / "marlin_material/overlay/e3_startup.inc",
     "Marlin/src/gcode/temp/e3_mainboard.inc": HERE.parent / "marlin_mainboard/e3_mainboard.inc",
     "Marlin/src/gcode/control/e3_usb_update.inc": HERE / "marlin_usb_update.inc",
+    "Marlin/src/module/e3_z_setup_speed.h": HERE.parent / "marlin_mainboard/e3_z_setup_speed.h",
 }
 
 
@@ -59,6 +60,10 @@ def prepare(source: Path) -> None:
     subprocess.run([*apply, "--whitespace=nowarn", "-"], input=patch, check=True)
     for relative, origin in OVERLAYS.items():
         (source / relative).write_bytes(origin.read_bytes())
+    speed_patch = HERE / "z_setup_speed.patch"
+    if speed_patch.exists():
+        subprocess.run([*apply, "-"],
+                       input=speed_patch.read_bytes().replace(b"\r\n", b"\n"), check=True)
     verify(source)
 
 

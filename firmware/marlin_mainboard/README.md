@@ -4,6 +4,26 @@ Complete SD-installable firmware for the Creality Ender-3 S1 Pro
 STM32F401RET6 / CR4NS200141C13 board, ready for operator physical validation.
 It implements real outputs, unlike the earlier BENCH application.
 
+## Faster Z setup travel
+
+`Cap:E3_Z_SETUP_SPEED_V1:1` identifies the 20 mm/s Z travel profile. The matching
+host requests 1,200 mm/min up, 600 mm/min down and 120 mm/min for downward
+sub-millimetre gauge fitting. Z acceleration remains 100 mm/s² by default.
+Native G28, G39 and ordinary probe-point cycles retain their previous effective
+5 mm/s planner ceiling, including deployment, contact, retract and stow.
+
+Loading EEPROM or defaults replaces only the in-memory Z feed ceiling with
+20 mm/s; other settings, offsets and the EEPROM schema are preserved, with no
+automatic settings write. M203 cannot raise Z above 20 mm/s. M115 advertises the
+new capability only while the active ceiling is exactly 20 mm/s, so a changed
+setting cannot silently leave the host running at its former slow speed.
+
+Install the matching compact firmware and Pi companion before using faster
+setup. The changed firmware identity requires fresh border reference, workpiece
+measurement and gauge teaching. Compiled planner/settings/probe tests use fake
+I/O; the new travel speeds require operator validation on the installed mechanics.
+No motor, probe or laser has been operated for this change.
+
 | Requested function | Firmware support |
 | --- | --- |
 | FAN1 | Independent PC0 PWM, `M106 P1 S0..255`; automatic hotend fan ownership removed |
@@ -76,7 +96,7 @@ provide typed fan and bounded Z controls through the existing shared Pi owner.
 There is no second runtime serial connection. Native probing and pin controls
 continue through `laser_aligner.probe_diagnostic`. Manual Z requires trusted Z,
 a stowed-probe confirmation, 20–80 mm absolute target, and at most 5 mm per
-request at 300 mm/min. It invalidates the material reference. Both fans are
+request using the direction-dependent setup feeds above. It invalidates the material reference. Both fans are
 included in STOP/disarm/disconnect/pre-job cleanup after this profile is identified.
 The existing desktop probe buttons are not the new native CLI workflow.
 

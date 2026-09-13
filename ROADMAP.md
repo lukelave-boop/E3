@@ -1,5 +1,14 @@
 # Roadmap
 
+## Faster Z setup qualification
+
+Remove the private XY positioning cap and supply direction-dependent Z feeds
+with a matching 20 mm/s travel firmware ceiling. Preserve effective native
+probe/homing feeds and all existing admission, bounds, clearance and STOP
+guards. Qualify the matched Windows/Pi/firmware build physically, including
+up/down travel without missed steps, renewed gauge teaching, repeated surface
+measurement and job focus/clearance. See CURRENT_STATE.md for software evidence.
+
 ## Windows update handoff reliability
 
 Separate installer creation from the shutdown deadline and preserve launch

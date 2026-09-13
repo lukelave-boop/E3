@@ -79,7 +79,7 @@ def audit_layout(path):
         settings_size, settings = layouts["planner_settings_t"]
         block_size, block = layouts["block_t"]
         expected_settings = {"axis_steps_per_mm": 16, "max_feedrate_mm_s": 28, "travel_acceleration": 48}
-        expected_block = {"steps": 24, "millimeters": 16, "step_event_count": 40,
+        expected_block = {"nominal_speed_sqr": 4, "steps": 24, "millimeters": 16, "step_event_count": 40,
                           "direction_bits": 72, "acceleration_steps_per_s2": 88}
         if (settings_size != 60 or block_size != 96
                 or any(settings.get(key) != value for key, value in expected_settings.items())
@@ -99,7 +99,8 @@ def float_arguments(uc, values):
 
 
 def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
-             float_acceleration=False, set_position=False, ceiling_rejected=False):
+             float_acceleration=False, set_position=False, ceiling_rejected=False,
+             feed_mm_s=2, max_z_feed_mm_s=10, expected_speed_mm_s=None):
     uc, symbols = load(path)
     uc.mem_write(0xE000ED88, struct.pack("<I", 0xF00000))  # CP10/11 for real hard-float instructions.
     wakeups = []
@@ -133,7 +134,7 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
     call(uc, symbols[P + "4initEv"])
     settings_address = symbols[P + "8settingsE"]
     settings = struct.pack("<4I11f", 1000, 1000, 100, 20000, 80, 80, 400,
-                           100, 100, 10, 300, 300, 300, 0, 0)
+                           100, 100, max_z_feed_mm_s, 300, 300, 300, 0, 0)
     uc.mem_write(settings_address, settings)
     steps_address = symbols[P + "11steps_to_mmE"]
     steps = struct.pack("<3f", 1 / 80, 1 / 80, 1 / 400)
@@ -166,7 +167,7 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
                 violations.append("read beyond XYZ step factors")
 
     uc.hook_add(UC_HOOK_MEM_READ, read_guard)
-    float_arguments(uc, (*xyz, e) if set_position else (*xyz, e, 2, 0))
+    float_arguments(uc, (*xyz, e) if set_position else (*xyz, e, feed_mm_s, 0))
     uc.reg_write(UC_ARM_REG_R0, extruder)
     call(uc, symbols[SET_POSITION if set_position else BUFFER_SEGMENT])
     position = struct.unpack("<4i", uc.mem_read(symbols[P + "8positionE"], 16))
@@ -203,6 +204,10 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
             raise ValueError("E-only input created a motion block")
         return
     block = bytes(uc.mem_read(blocks, 96))
+    if expected_speed_mm_s is not None:
+        nominal_speed_sqr = struct.unpack_from("<f", block, 4)[0]
+        if not math.isclose(nominal_speed_sqr, expected_speed_mm_s ** 2, rel_tol=1e-6):
+            raise ValueError("Planner did not admit/cap the requested Z travel speed")
     native_steps = struct.unpack_from("<3I", block, 24)
     count = struct.unpack_from("<I", block, 40)[0]
     distance = struct.unpack_from("<f", block, 16)[0]
@@ -224,6 +229,10 @@ def scenario(path, functions, *, xyz=(0, 0, 5), e=0, extruder=0, cleaning=False,
 def audit_planner(path: Path) -> None:
     functions = audit_layout(path)
     cases = (
+        *({"xyz": (0, 0, 40), "feed_mm_s": feed, "max_z_feed_mm_s": maximum,
+           "expected_speed_mm_s": expected}
+          for feed, maximum, expected in ((20, 20, 20), (10, 20, 10), (40, 20, 20),
+                                          (20, 5, 5), (4, 5, 4))),
         {"xyz": (0, 0, 80)}, {"xyz": (0, 0, 79.999)},
         {"xyz": (0, 0, -2)},
         *({"xyz": (0, 0, z), "ceiling_rejected": True}

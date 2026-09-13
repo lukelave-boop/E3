@@ -1,5 +1,38 @@
 # Current repository state
 
+## Faster Z setup travel candidate (2026-09-13)
+
+Work is isolated at .codex-worktrees/z-setup-speed, started from main 7b66881
+and rebased onto authoritative 590b032 to preserve the completed installer
+launch correction. Main-checkout Pi client-priority work remains separate. Probe positioning has a private 1,200 mm/min feed cap;
+Z host moves use 300 mm/min and the compact firmware's 5 mm/s planner ceiling
+prevents a host-only increase from improving actual Z speed.
+
+The candidate removes that XY cap while keeping all configured feed ceilings,
+uses Z raise 1,200 / lower 600 / fine downward gauge 120 mm/min, and requires
+the exact new speed firmware capability for normal Z motion. Initial/reference,
+post-contact, clearance and job lifts share the faster raise feed. Native stock
+diagnostics retain their historical feed. The matching compact/mainboard
+firmware supplies a 20 mm/s travel ceiling while preserving the previous
+effective native G28/G39/probe-point cycle ceiling. Shared backend changes affect desktop and browser
+execution. No project schema or installed configuration is changed.
+
+Focused Windows offscreen desktop, main-view positioning, recovery, bounds and
+saved-Z tests passed 426 cases. Pi installer checks passed 85 cases, including
+real reconstruction/upgrade/import of the recorded installed 568b1cc9 package,
+configuration preservation and unknown-edit rejection. Both firmware variants
+compile. Compiled CPU/fake-I/O checks cover actual planner 20/10 mm/s travel,
+overspeed capping, settings-load/M203 limits, capability rejection and scoped
+native-cycle limits. Independent host review corrected native callback feed
+invalidation and direction selection for accepted post-contact readback.
+
+The full compatibility gates, final frozen desktop and exact companion/firmware
+package verification are pending. New speed firmware is required; Windows/Pi
+source updates alone cannot lift the previous firmware's 5 mm/s ceiling.
+No interactive GUI, real camera, physical controller/laser, speed, missed-step or
+focus-accuracy test has been performed. New firmware identity will require a
+fresh border reference and gauge teaching. No hardware has been operated.
+
 ## Installer launch and shutdown deadline correction (2026-09-13)
 
 The operator reports regular E3 0.7.13 downloaded an update and closed after

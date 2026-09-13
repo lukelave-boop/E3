@@ -1,5 +1,16 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Faster Z setup travel
+
+Probe positioning and same-point probe/laser transfers use the configured XY
+travel feed, bounded by the machine feed ceilings. The former 1,200 mm/min
+setup cap is removed. With the matching Pi and Ender firmware, Z lifts use
+1,200 mm/min (20 mm/s), lowering uses 600 mm/min (10 mm/s), and sub-millimetre
+downward gauge fitting uses 120 mm/min. The native contact/homing cycle retains
+its prior effective speed. Bounds, clearance, readbacks and STOP guards remain.
+The firmware update requires a fresh border reference and gauge teaching.
+These rates require physical qualification; see [Z setup travel](docs/LASER_FOCUS.md#setup-travel-speeds).
+
 Windows updates create the verified installer before starting E3's shutdown
 deadline. Launch failure keeps the app open; launch and setup diagnostics remain
 in the update cache. See [updates](docs/UPDATES.md).

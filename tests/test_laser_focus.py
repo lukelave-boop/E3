@@ -19,6 +19,7 @@ from tests.test_secondary_controller import _controller
 machine_probe = helpers.machine_probe
 IDENTITY = ["FIRMWARE_NAME:Marlin 2.0.8.24F4 MACHINE_TYPE:Ender-3 S1 Pro",
             "Cap:E3_MAINBOARD_V1:1", "Cap:E3_COMPACT_F401_V1:1", CAPABILITY,
+            "Cap:E3_Z_SETUP_SPEED_V1:1",
             "E3SG:2 PROBE_Z:0.000000 RETRACT:5.000000 MIN:-2 MAX:65 CEILING:80", "ok"]
 
 
@@ -182,7 +183,7 @@ def test_rereference_from_higher_clearance_returns_via_border20(focus):
     focus.serial.writes.clear()
     focus.run("reference")
     moves = [s for s in focus.serial.writes if s.startswith("G1")]
-    assert moves[0] == "G1 Z20.000 F300"
+    assert moves[0] == "G1 Z20.000 F600"
     assert focus.serial.z == 30
 
 
@@ -195,9 +196,10 @@ def test_reference_from_known_teaching_z_normalizes_at_confirmed_border(focus_ma
     result = machine.focus_control("reference", confirmed=True)
     moves = [line for line in focus.serial.writes if line.startswith(("G1 ", "G28 "))]
     if initial_z == 20:
-        assert moves[0] == "G1 Z5.000 F300"
+        assert moves[0] == "G1 Z5.000 F1200"
     else:
-        assert moves[:2] == ["G1 Z20.000 F300", "G1 Z5.000 F300"]
+        feed = 1200 if initial_z < 20 else 600
+        assert moves[:2] == [f"G1 Z20.000 F{feed}", "G1 Z5.000 F1200"]
     assert moves.count("G28 Z R0") == 1
     assert result["reference_ready"] and result["current_readback"]["z_mm"] == 30.
     assert not result["requires_clearance"]
@@ -245,10 +247,10 @@ def test_reference_normalization_rejects_invalid_authority_without_motion(focus_
 def test_reference_normalization_verifies_initial_raise_before_native_homing(focus_machine):
     machine, focus, _ = focus_machine
     focus.serial.homed, focus.serial.z = True, 6.
-    focus.serial.overrides["G1 Z20.000 F300"] = ["ok"]
+    focus.serial.overrides["G1 Z20.000 F1200"] = ["ok"]
     with pytest.raises(MachineError, match="movement was not confirmed"):
         machine.focus_control("reference", confirmed=True)
-    assert focus.serial.writes.count("G1 Z20.000 F300") == 1
+    assert focus.serial.writes.count("G1 Z20.000 F1200") == 1
     assert "G28 Z R0" not in focus.serial.writes
     assert focus.state.reference is None and focus.state.requires_clearance
 
@@ -517,9 +519,9 @@ def test_service_stop_interrupts_pending_focus_move(focus_machine):
     machine, focus, _ = focus_machine
     machine.focus_control("reference", confirmed=True)
     result = machine.focus_control("measure", confirmed=True)
-    focus.serial.overrides["G1 Z29.000 F300"] = []
+    focus.serial.overrides["G1 Z29.000 F600"] = []
     entered = threading.Event()
-    focus.serial.on_write = lambda line: entered.set() if line == "G1 Z29.000 F300" else None
+    focus.serial.on_write = lambda line: entered.set() if line == "G1 Z29.000 F600" else None
     results, errors = [], []
     def move():
         try:
@@ -995,12 +997,13 @@ def test_focus_xy_waits_for_delayed_planner_completion_beyond_ordinary_ack_timeo
 
 
 @pytest.mark.parametrize("travel,max_travel,max_work,expected", [
-    (3000., 6000., 3000., 1200.),
+    (3000., 6000., 3000., 3000.),
+    (6000., 6000., 7000., 6000.),
     (700., 6000., 3000., 700.),
     (500., 500., 3000., 500.),
     (3000., 6000., 400., 400.),
 ])
-def test_focus_xy_feed_respects_configured_and_focus_ceilings(
+def test_focus_xy_feed_respects_configured_travel_and_work_ceilings(
     focus_machine, travel, max_travel, max_work, expected,
 ):
     machine, _focus, _primary = focus_machine
@@ -1312,7 +1315,10 @@ def test_readonly_focus_status_does_not_publish_probe_activity(focus_machine):
     assert not worker.is_alive() and results[0]["available"]
 
 
-@pytest.mark.parametrize("step,feed", [(-5, 300), (-2, 300), (-1, 300), (-.5, 60), (-.1, 60), (5, 300)])
+@pytest.mark.parametrize("step,feed", [
+    (-5, 600), (-2, 600), (-1, 600), (-.5, 120), (-.1, 120),
+    (.1, 1200), (.5, 1200), (1, 1200), (2, 1200), (5, 1200),
+])
 def test_teaching_approach_steps_keep_completion_and_readback(focus, step, feed):
     token = measured(focus)
     focus.serial.writes.clear()
@@ -1375,3 +1381,117 @@ def test_teach_below_probe_contact_persists_negative_offset_and_focuses_raised_s
     assert preview["target_z_mm"] == 23
     moved = focus.run("move", clearance_z_mm=45, preview_id=preview["id"])
     assert moved["current_readback"]["z_mm"] == 23
+
+
+@pytest.mark.parametrize("action", ["reference", "measure", "jog", "move", "clearance"])
+@pytest.mark.parametrize("caps", [
+    [], ["Cap:E3_Z_SETUP_SPEED_V1:0"], ["Cap:E3_Z_SETUP_SPEED_V2:1"],
+    ["Cap:E3_Z_SETUP_SPEED_V1:1junk"], ["Cap:E3_Z_SETUP_SPEED_V1:1"] * 2,
+    ["Cap:E3_Z_SETUP_SPEED_V1:1", "Cap:E3_Z_SETUP_SPEED_V1:0"],
+])
+def test_focus_requires_exact_setup_speed_capability_before_any_z_motion(focus, action, caps):
+    token = taught(focus)
+    preview = focus.run("preview", measurement_id=token)["preview"]["id"]
+    focus.serial.overrides["M115"] = [
+        line for line in IDENTITY if not line.startswith("Cap:E3_Z_SETUP_SPEED")
+    ][:-1] + caps + ["ok"]
+    focus.serial.writes.clear()
+    with pytest.raises(MachineError, match="setup.speed|setup speed|Z_SETUP_SPEED"):
+        focus.run(action, value=-.1 if action == "jog" else None,
+                  measurement_id=token, preview_id=preview)
+    assert not any(line.startswith(("G1 ", "G28 ", "G39 ")) for line in focus.serial.writes)
+
+
+def test_old_surface_firmware_remains_observable_without_motion(focus):
+    focus.serial.overrides["M115"] = [
+        line for line in IDENTITY if not line.startswith("Cap:E3_Z_SETUP_SPEED")
+    ]
+    result = focus.run("status")
+    assert result["available"]
+    assert not any(line.startswith(("G1 ", "G28 ", "G39 ")) for line in focus.serial.writes)
+
+
+@pytest.mark.parametrize("returned,feed", [(10, 1200), (30.025, 600)])
+def test_measured_return_uses_fresh_post_probe_z_for_travel_direction(focus, monkeypatch, returned, feed):
+    focus.run("reference")
+    focus.serial.writes.clear()
+    original = focus.serial.write_line
+
+    def write(line):
+        original(line)
+        if line.startswith("G39 "):
+            focus.serial.z = returned
+
+    monkeypatch.setattr(focus.serial, "write_line", write)
+    result = focus.run("measure")
+    probe_index = focus.serial.writes.index("G39 C30.000 H15.000")
+    after_probe = focus.serial.writes[probe_index + 1:]
+    assert after_probe[:4] == ["M119", "M123", "M114", "G21"]
+    # G39 changes Z independently; the accepted readback determines direction.
+    assert [line for line in after_probe if line.startswith("G1 Z")] == [f"G1 Z30.000 F{feed}"]
+    assert result["current_readback"]["z_mm"] == 30
+    assert not result["requires_clearance"]
+
+
+@pytest.mark.parametrize("start_z,expected_feed", [(15, 1200), (25, 600)])
+def test_preview_focus_uses_actual_travel_direction(focus, start_z, expected_feed):
+    token = taught(focus)
+    focus.serial.z = start_z
+    preview = focus.run("preview", measurement_id=token)["preview"]["id"]
+    focus.serial.writes.clear()
+    result = focus.run("move", preview_id=preview)
+    assert result["current_readback"]["z_mm"] == 20
+    assert [line for line in focus.serial.writes if line.startswith("G1 Z")] == [
+        f"G1 Z20.000 F{expected_feed}",
+    ]
+
+
+@pytest.mark.parametrize("change", ["speed_capability", "firmware"])
+def test_reference_rechecks_firmware_before_native_lift(focus, monkeypatch, change):
+    original = focus.serial.write_line
+    reads = 0
+
+    def write(line):
+        nonlocal reads
+        if line == "M115":
+            reads += 1
+            if reads == 2:
+                focus.serial.overrides["M115"] = [
+                    item.replace("2.0.8.24F4", "2.0.8.changed") if change == "firmware" else item
+                    for item in IDENTITY
+                    if change != "speed_capability" or not item.startswith("Cap:E3_Z_SETUP_SPEED")
+                ]
+        original(line)
+
+    monkeypatch.setattr(focus.serial, "write_line", write)
+    with pytest.raises(MachineError, match="firmware changed"):
+        focus.run("reference")
+    assert reads == 2
+    assert not any(line.startswith(("G1 ", "G28 ", "G39 ")) for line in focus.serial.writes)
+    assert focus.state.reference is None
+
+
+def test_focus_xy_invalid_travel_configuration_rejects_before_moving(focus_machine, monkeypatch):
+    machine, focus, primary = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    machine.focus_control("set_xy_offset", confirmed=True, value=[3.302, 38.608])
+    machine.laser_settings.travel_feed_mm_min = 6001
+    machine.settings.max_travel_feed_mm_min = 6000
+    commands = []
+    original = primary.write_line
+    monkeypatch.setattr(primary, "write_line", lambda line: (commands.append(line), original(line))[1])
+    focus.serial.writes.clear()
+    with pytest.raises(SafetyError, match="travel ceiling"):
+        machine.focus_control("position_probe", confirmed=True, value=[80.177, 205.775])
+    assert not any(line.startswith(("G0 ", "G1 ")) for line in commands)
+    assert not any(line.startswith(("G1 ", "G28 ", "G39 ")) for line in focus.serial.writes)
+
+
+
+def test_machine_reference_keeps_both_native_lifts_fast_after_motion_invalidation(focus_machine):
+    machine, focus, _ = focus_machine
+    result = machine.focus_control("reference", confirmed=True)
+    assert [line for line in focus.serial.writes if line.startswith("G1 Z")] == [
+        "G1 Z5.000 F1200", "G1 Z20.000 F1200", "G1 Z20.000 F1200", "G1 Z30.000 F1200",
+    ]
+    assert result["reference_ready"] and result["current_readback"]["z_mm"] == 30

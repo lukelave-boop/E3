@@ -34,7 +34,8 @@ def assemble(updater: bytes, image: bytes) -> bytes:
     if stack != 0x20010000 or not reset & 1 or not 0x08010000 <= reset & ~1 < 0x08020000:
         raise ValueError("Invalid retained-updater entry vectors")
     payload = validate_image(image)
-    capabilities = (b"Cap:E3_MAINBOARD_V1:1", b"Cap:E3_MATERIAL_HEIGHT_V1:1", b"Cap:E3_Z_RESTORE_V1:1")
+    capabilities = (b"Cap:E3_MAINBOARD_V1:1", b"Cap:E3_MATERIAL_HEIGHT_V1:1",
+                    b"Cap:E3_Z_RESTORE_V1:1", b"Cap:E3_Z_SETUP_SPEED_V1:1")
     if any(capability + b"\n\0" not in payload for capability in capabilities):
         raise ValueError("The application is missing a required mainboard / material / restore capability")
     combined = updater + image

@@ -38,6 +38,7 @@ def prepare(source: Path) -> None:
     overlays = {source / "Marlin/src" / folder / name: MATERIAL / "overlay" / name
                 for name, folder in OVERLAYS.items()}
     overlays[source / "Marlin/src/gcode/temp/e3_mainboard.inc"] = HERE / "e3_mainboard.inc"
+    overlays[source / "Marlin/src/module/e3_z_setup_speed.h"] = HERE / "e3_z_setup_speed.h"
     for target, origin in overlays.items():
         if target.exists() and target.read_bytes() != origin.read_bytes():
             raise ValueError(f"Preserving existing overlay: {target}")
@@ -46,6 +47,9 @@ def prepare(source: Path) -> None:
         subprocess.run(["git", "-C", str(source), "apply", "--whitespace=nowarn", str(patch)], check=True)
     for target, origin in overlays.items():
         target.write_bytes(origin.read_bytes())
+    patch = (HERE / "z_setup_speed.patch").read_bytes().replace(b"\r\n", b"\n")
+    subprocess.run(["git", "-C", str(source), "apply", "--ignore-space-change", "-"],
+                   input=patch, check=True)
     verify(source)
 
 

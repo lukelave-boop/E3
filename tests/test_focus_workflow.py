@@ -40,7 +40,7 @@ def position_and_measure(machine, primary, *, clearance=30.0):
 
 
 @pytest.mark.parametrize("step", [2.0, 5.0])
-def test_complete_teaching_workflow_without_new_firmware(focus_machine, step):
+def test_complete_teaching_workflow_without_live_z_firmware(focus_machine, step):
     machine, setup, primary = focus_machine
     machine.settings.work_area = WorkArea(10.0, 210.0, 10.0, 210.0)
     machine.settings.mainboard_max_z_mm = 40.0

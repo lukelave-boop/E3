@@ -22,7 +22,8 @@ def mainboard_serial(serial):
             return original(line)
         if line == "M115":
             serial.writes.append(line)
-            serial.responses.extend(["FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", CAPABILITY, "ok"])
+            serial.responses.extend(["FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", CAPABILITY,
+                                     "Cap:E3_Z_SETUP_SPEED_V1:1", "ok"])
         elif line == "M123":
             serial.writes.append(line)
             serial.responses.extend([f"E3MB:1 FAN1:{state['fan1']} FAN2:{state['fan2']} Z_KNOWN:{int(state['known'])}", "ok"])
@@ -100,7 +101,7 @@ def test_verified_bounded_z_move_invalidates_material_reference(machine_probe):
     mainboard_serial(serial)
     result = machine.mainboard_control("z", 25, confirmed=True)
     assert result["z_mm"] == 25
-    assert "G1 Z25.000 F300" in serial.writes
+    assert "G1 Z25.000 F1200" in serial.writes
     assert machine._z_probe.reference is None
     assert "G28" not in serial.writes
 

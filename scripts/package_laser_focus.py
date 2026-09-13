@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # Authoritative main after the recorded installed focus/park correction. Accept
 # exactly this predecessor or the bundled bytes; preserve all unknown edits.
 PREVIOUS_REVISION = "bb37be7621cd7a35ea602b0f8899b87f2339679e"
-PREVIOUS = {'laser_aligner/config.py': 'f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58',
+PREVIOUS = {"laser_aligner/machine/setup_motion.py": None,
+ 'laser_aligner/config.py': 'f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58',
  'laser_aligner/machine/mainboard.py': '0388228c3ded64c5b424f6da163d6260bbc90a0f1161b19a8a9c88062cea4eba',
  'laser_aligner/machine/service.py': 'bbf981708069a2b59ecb39a2facf037474b882755e1a91bebc1cb173676e9dac',
  'laser_aligner/machine/remote_service.py': 'a3df665796ad3a77110b00fbd523243c34bcdb964c9ec9cdd2bd4f69c9d4f47e',
@@ -47,10 +48,14 @@ def package(destination: Path) -> Path:
                  .replace("CPU cooling support not installed", "Laser-focus support not installed"))
     (folder / "install_laser_focus.py").write_text(installer, encoding="utf-8", newline="\n")
     guide = (ROOT / "docs/LASER_FOCUS.md").read_text(encoding="utf-8")
-    (folder / "README.md").write_text(guide.replace("__PI_PACKAGE__", folder.name),
-                                      encoding="utf-8", newline="\n")
+    (folder / "README.md").write_text(
+        "Current sources require matching firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1` "
+        "for normal Z movement. Follow the matching firmware package README, then establish a "
+        "fresh reference, teach the gauge again and measure the workpiece.\n\n"
+        + guide.replace("__PI_PACKAGE__", folder.name),
+        encoding="utf-8", newline="\n")
     (folder / "ENDER_RECOVERY.md").write_text((ROOT / "docs/ENDER_RECOVERY.md").read_text(encoding="utf-8"),
-                                               encoding="utf-8", newline="\n")
+                 encoding="utf-8", newline="\n")
     return folder
 
 

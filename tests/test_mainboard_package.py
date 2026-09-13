@@ -15,6 +15,7 @@ def images(monkeypatch):
     payload = struct.pack("<II", 0x20010000, 0x08020395) + b"\x00\xbf" * 8
     payload += b"Cap:E3_MAINBOARD_V1:1\n\0Cap:E3_MATERIAL_HEIGHT_V1:1\n\0"
     payload += b"Cap:E3_Z_RESTORE_V1:1\n\0"
+    payload += b"Cap:E3_Z_SETUP_SPEED_V1:1\n\0"
     payload = payload.ljust(408, b"\xff")
     return updater, pack_image(payload)
 
@@ -47,5 +48,13 @@ def test_corruption_and_wrong_application_reject(images, change):
 def test_missing_or_changed_restore_capability_rejects(images, replacement):
     updater, app = images
     payload = package.validate_image(app).replace(b"Cap:E3_Z_RESTORE_V1:1\n\0", replacement)
+    with pytest.raises(ValueError, match="capability"):
+        package.assemble(updater, pack_image(payload.ljust(408, b"\xff")))
+
+
+@pytest.mark.parametrize("replacement", [b"", b"Cap:E3_Z_SETUP_SPEED_V1:10\n\0", b"Cap:E3_Z_SETUP_SPEED_V2:1\n\0"])
+def test_missing_or_changed_setup_speed_capability_rejects(images, replacement):
+    updater, app = images
+    payload = package.validate_image(app).replace(b"Cap:E3_Z_SETUP_SPEED_V1:1\n\0", replacement)
     with pytest.raises(ValueError, match="capability"):
         package.assemble(updater, pack_image(payload.ljust(408, b"\xff")))

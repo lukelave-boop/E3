@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # Operator Pi: 5f52e40 plus the verified startup, compact probe, and CPU cooling kits.
 PREVIOUS = {
+    "laser_aligner/machine/setup_motion.py": None,
     'laser_aligner/config.py': '030ac6d207174556993c1676514da49f0678c5d820891bc51efd3a3277f89416',
     'laser_aligner/machine/mainboard.py': 'bec87d2d3e9e8c9c8ffc4c78bca02e7b9e842c6e0abdefb1585da95c5c8f88bd',
     'laser_aligner/machine/service.py': '8b13d43abea5324daac2c972f8ce7d1edfd25f105f0b54df31f3a6c32a6c4aea',
@@ -40,7 +41,11 @@ def package(destination: Path) -> Path:
                  .replace("CPU cooling support not installed", "Z-control support not installed"))
     (folder / "install_z_controls.py").write_text(installer, encoding="utf-8", newline="\n")
     guide = (ROOT / "docs/MAINBOARD_Z_CONTROLS.md").read_text(encoding="utf-8")
-    (folder / "README.md").write_text(guide.replace("__PI_PACKAGE__", folder.name), encoding="utf-8")
+    (folder / "README.md").write_text(
+        "Current sources require matching firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1` "
+        "for normal Z movement. Follow the matching firmware package README, then establish a "
+        "fresh reference, teach the gauge again and measure the workpiece.\n\n"
+        + guide.replace("__PI_PACKAGE__", folder.name), encoding="utf-8")
     return folder
 
 

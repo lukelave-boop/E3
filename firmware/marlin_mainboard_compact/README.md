@@ -1,5 +1,22 @@
 # Compact F401 mainboard with USB updates
 
+## Faster Z setup candidate
+
+This package includes `Cap:E3_Z_SETUP_SPEED_V1:1`: a 20 mm/s Z planner travel
+ceiling, with the matching Pi requesting 1,200 mm/min up, 600 mm/min down and
+120 mm/min for downward sub-millimetre gauge fitting. Native G28/G39 and ordinary
+probe-point cycles retain the old effective 5 mm/s ceiling. Acceleration and
+probe timing/retracts are unchanged.
+
+EEPROM loading applies the new ceiling in RAM while preserving all other
+settings and offsets; no automatic settings write is made. M203 edits cannot
+exceed 20 mm/s. M115 reports the capability only at the exact active 20 mm/s
+ceiling. Install the matching Pi companion as well, then perform fresh border
+reference, workpiece measurement and gauge teaching after this firmware identity
+change. Observe upward/downward travel and native probing on the installed
+mechanics before relying on this candidate. Automated tests use fake hardware;
+no physical speed, contact accuracy or stopping validation has been performed.
+
 ## Retained Z after clean E3 shutdown
 
 This profile advertises `Cap:E3_Z_RESTORE_V1:1` and the guarded, non-motion

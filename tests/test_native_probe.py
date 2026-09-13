@@ -39,7 +39,8 @@ class NativeSerial(FakeSerial):
             self.relative = True
         elif line == "G90":
             self.relative = False
-        elif line in {"G1 Z5.000 F300", "G1 Z20.000 F300"}:
+        elif line in {"G1 Z5.000 F300", "G1 Z20.000 F300",
+                      "G1 Z5.000 F1200", "G1 Z20.000 F1200", "G1 Z20.000 F600"}:
             target = float(line.split()[1][1:])
             self.z = self.z + target if self.relative else target
         elif line == "G28 Z R0":
@@ -353,3 +354,48 @@ def test_compact_endpoint_through_machine_service_keeps_connection_and_finishes_
     assert serial.z == 20
     assert harness.machine.status()["connected"]
     assert serial.writes.count("G28 Z R0") == 1
+
+
+@pytest.mark.parametrize("caps,feed", [
+    (["Cap:E3_Z_SETUP_SPEED_V1:1"], 1200), ([], 300),
+    (["Cap:E3_Z_SETUP_SPEED_V1:0"], 300), (["Cap:E3_Z_SETUP_SPEED_V2:1"], 300),
+    (["Cap:E3_Z_SETUP_SPEED_V1:1junk"], 300),
+    (["Cap:E3_Z_SETUP_SPEED_V1:1"] * 2, 300),
+])
+def test_native_diagnostic_only_accelerates_for_exact_setup_speed_capability(native_probe, caps, feed):
+    serial, probe, _ = native_probe
+    serial.overrides["M115"] = [
+        "FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", *caps, "ok",
+    ]
+    run(probe)
+    assert [line for line in serial.writes if line.startswith("G1 Z")] == [
+        f"G1 Z5.000 F{feed}", f"G1 Z20.000 F{feed}",
+    ]
+    assert serial.z == 20
+
+
+
+def test_native_speed_survives_reference_invalidation_at_motion_start(native_probe):
+    serial, probe, _ = native_probe
+    serial.overrides["M115"] = [
+        "FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", "Cap:E3_Z_SETUP_SPEED_V1:1", "ok",
+    ]
+    probe.native_cycle_test(guard=nullcontext, on_motion_start=probe.invalidate)
+    assert [line for line in serial.writes if line.startswith("G1 Z")] == [
+        "G1 Z5.000 F1200", "G1 Z20.000 F1200",
+    ]
+    assert serial.z == 20 and probe.reference is None
+
+
+@pytest.mark.parametrize("capability", [[], ["Cap:E3_COMPACT_F401_V1:1"]])
+def test_fast_native_homing_does_not_accept_a_clearance_as_its_homing_endpoint(native_probe, capability):
+    serial, probe, _ = native_probe
+    serial.overrides["M115"] = [
+        "FIRMWARE_NAME:Marlin MACHINE_TYPE:Ender-3 S1 Pro", *capability,
+        "Cap:E3_Z_SETUP_SPEED_V1:1", "ok",
+    ]
+    serial.home_z = 20.2
+    with pytest.raises(MachineError, match="expected retracted Z"):
+        run(probe)
+    assert [line for line in serial.writes if line.startswith("G1 Z")] == ["G1 Z5.000 F1200"]
+    assert probe.reference is None

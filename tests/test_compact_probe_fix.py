@@ -4,11 +4,20 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_compact_probe_fix
 from scripts.package_compact_probe_fix import ROOT, package
 
 
 @pytest.fixture
-def kit(tmp_path):
+def kit(tmp_path, monkeypatch):
+    historical_root = tmp_path / "historical-source"
+    source = historical_root / "laser_aligner/machine/z_probe.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"# independent historical probe implementation\n")
+    template = historical_root / "firmware/marlin_mainboard_compact/install_pi_support.py"
+    template.parent.mkdir(parents=True)
+    template.write_bytes((ROOT / template.relative_to(historical_root)).read_bytes())
+    monkeypatch.setattr(package_compact_probe_fix, "ROOT", historical_root)
     path = package(tmp_path / "dist")
     spec = importlib.util.spec_from_file_location("probe_fix_installer", path / "install_probe_fix.py")
     module = importlib.util.module_from_spec(spec)
@@ -19,10 +28,16 @@ def kit(tmp_path):
     old = b"# previous operator source fixture\n"
     module.ACCEPTED_SOURCE_SHA256[hashlib.sha256(old).hexdigest()] = "test fixture"
     assert module.DESIRED_SHA256 == hashlib.sha256(
-        (ROOT / "laser_aligner/machine/z_probe.py").read_bytes().replace(b"\r\n", b"\n")
+        source.read_bytes()
     ).hexdigest()
     target.write_bytes(old)
     return module, project, target, old, path
+
+
+def test_current_probe_source_requires_complete_setup_speed_companion(tmp_path):
+    with pytest.raises(ValueError, match="use scripts/package_z_setup_speed.py"):
+        package(tmp_path / "dist")
+    assert not (tmp_path / "dist").exists()
 
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n"])

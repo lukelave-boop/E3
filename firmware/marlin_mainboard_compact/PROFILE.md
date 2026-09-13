@@ -1,5 +1,27 @@
 # Compact F401 auxiliary application
 
+## Z setup travel speed
+
+The supplemental `z_setup_speed.patch` and shared `e3_z_setup_speed.h` set the
+default and editable maximum Z feed to 20 mm/s. Settings postprocessing replaces
+only the in-memory Z maximum after reset or EEPROM loading; it preserves the
+existing E31 schema and all other saved values and makes no EEPROM write.
+M115 emits `Cap:E3_Z_SETUP_SPEED_V1:1` only when the current Z maximum equals
+20 mm/s. A lower M203 edit therefore prevents the host from promising fast travel.
+
+G28, G39 and ordinary probe-point operations scope the planner ceiling to the
+previous effective 5 mm/s, restoring the prior maximum on all returns, including
+nested calls. Nominal native fast/slow/homing feeds, timing, retract distance,
+acceleration, trust checks and stop behavior remain unchanged. The host uses
+20 mm/s up, 10 mm/s down and 2 mm/s for fine downward gauge fitting.
+
+The compiled speed audit checks prior EEPROM ceilings, M203 limits and scoped
+restoration; planner tests verify requested feeds and capping. M115 tests omit
+the capability for mismatched/nonfinite limits. Native G39 success/failure cases
+also verify the temporary ceiling and restoration. These are fake-I/O checks;
+new-speed physical qualification is pending and requires a new reference and
+gauge teaching for the changed firmware identity.
+
 ## Guarded retained Z adoption
 
 `Cap:E3_Z_RESTORE_V1:1` adds `M124 Z<decimal>` for E3's consumed clean-shutdown
@@ -109,7 +131,7 @@ The vendor EEPROM presence check remains: it may write the reserved test byte
 at address 0x00. This is separate from the settings payload at offset 100.
 
 The source is pinned by `prepare.py`, the complete `compact.patch`, and
-`source-files.json`. Preparation rejects an unexpected source revision, changed
+`z_setup_speed.patch`, and `source-files.json`. Preparation rejects an unexpected source revision, changed
 reviewed files and unrelated modifications. It was checked on a separate fresh
 local clone as well as the prepared build tree.
 
