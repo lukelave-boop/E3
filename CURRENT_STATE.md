@@ -1,5 +1,37 @@
 # Current repository state
 
+## Selected combined Windows/Pi handoff (2026-09-13)
+
+Priority, Z setup speed and the latest updater correction are integrated on
+origin/main through 8e65d9e. Both completed development branches were deleted;
+the detached worktrees and their exact build/install artifacts are retained.
+The permanent E3 DEV TEST pointer now selects **Pi priority and faster Z setup**,
+Windows **0.7.132**, exact revision
+**92a7a6149713c7218fdc49de42336d660f24c48a**, at
+`.codex-worktrees/pi-first-priority-integrated/dist/E3/E3.exe`.
+Pointer version/revision match adjacent build-info.json. The permanent launcher
+SHA256 remains 1828b10b2a96e9a032428e650c463d9ab9104bbf4739ed3f05bf3caf7677232b;
+the normal E3 launcher and shortcuts were not changed.
+
+The guarded Windows build passed verification of all 162 collected source
+modules, all 162 embedded compiled modules, the entrypoint, metadata and native
+library guard. EXE SHA256 is
+65a6f0dd24dcc524bfdea692004e0158c835cccf795ec3e729c863415d4199d2;
+installer SHA256 is
+757b1cad801ee281d4e9417032746bc0ef20c4aaf84801650aa71468979ef0c1
+(217,217,721 bytes). Evidence is under that worktree's `build/priority/`.
+Cross-version acceptance uses archived client source verified to match this
+bundle; the packaged GUI itself has not been launched for interactive testing.
+
+Use the single combined Pi companion **e3-pi-z-setup-speed-c7318c6e** and matching
+**e3-mainboard-f401-usb-a7b5c9de** firmware in the z-setup-speed worktree's `dist/`.
+The earlier priority-only 9493b885 and speed-only 42da33fe kits are superseded
+for this handoff. The combined INSTALL.md and firmware README give the exact
+guarded installation and operator checks. Pi/firmware installation and physical
+two-app, motion and laser verification remain pending. Final combined CI and
+Linux results are recorded below; operator data and existing scratch files
+were preserved.
+
 ## Faster Z setup travel candidate (2026-09-13)
 
 Work is isolated at .codex-worktrees/z-setup-speed and integrates Pi client
@@ -74,10 +106,10 @@ fresh border reference and gauge teaching. No hardware has been operated.
 
 ## First-connected Pi app priority (2026-09-13)
 
-The separately verified installer-launch fix landed on main during validation.
-It is integrated before the final feature build; both branches' application
-changes merge without conflicts. The earlier 0.7.126 / 402c56f candidate remains
-unselected; the final build and full CI will use the combined revision.
+The separately verified installer-launch fix landed on main during validation
+and is included in the selected 0.7.132 / 92a7a61 build. The earlier
+0.7.126 / 402c56f candidate remains unselected. The combined Pi speed companion
+uses exactly the same priority server, protocol and remote client modules.
 
 The operator reports that opening E3 DEV TEST while normal E3 is connected
 causes normal E3 to disconnect. Source inspection confirms two ownership gaps:
@@ -104,10 +136,11 @@ geometry, project schema, motion generation, arming or laser limits changed.
 
 Local Windows verification: 756 focused tests pass, covering authenticated TCP
 competition/STOP, remote cleanup, 65 installer cases, and offscreen desktop
-controls. Repository Ruff, compileall and whitespace checks pass. Linux/Python
-3.10 passed 395 focused tests with zero skips before the final delayed-Disconnect
-guard; exact-source Linux verification, CI and frozen build are in progress. No interactive GUI, camera,
-controller/laser, sustained connection or physical two-app test has been run.
+controls. Repository Ruff and compileall pass. Source whitespace checks pass;
+the firmware patch retains required unified-diff context markers on blank lines.
+Exact priority-source Linux verification passed 402 focused cases, including
+all real predecessor checks after explicit Git mapping. No interactive GUI,
+camera, controller/laser, sustained connection or physical two-app test has run.
 Pi installation remains pending. Existing untracked scratch artifacts and the
 separate update-launch-deadline worktree are preserved.
 
@@ -115,13 +148,19 @@ separate update-launch-deadline worktree are preserved.
 The first full compatibility run exposed old authenticated fixtures that bypassed
 Connect ownership and stale fault-matrix test names. Test/document-only updates
 preserve the original safety assertions; all 317 directly affected Windows
-cases pass. Frozen application source 402c56f and version 0.7.126 are unchanged.
+cases pass. These test-only corrections did not change the priority runtime.
 Exact frozen-source Linux checks cover 402 cases; all seven real predecessor
 checks were rerun successfully with an explicit Git-directory mapping (65
 installer cases, zero skips). A redundant local full run collected the earlier
 fixtures and was cancelled after its known failures; full CI is the clean gate.
 Offscreen compact/normal control-strip and machine-panel renders were visually
 inspected with synthetic status, with no clipping of the ownership message.
+The selected 92a7a61 application's CI passed 6,287 desktop cases and 617 POSIX
+cases. Its core run had one benign telemetry acceptance failure at the fixture's
+20 ms scheduling deadline (5,047 passed); test-only 8dc0af8 gives that positive
+exchange 0.5 seconds while preserving fault-injection deadlines. All 30 focused
+acceptance/timeout checks passed, followed by the entirely passing combined CI
+34757562565 recorded above. Runtime controller timeout settings are unchanged.
 
 ## Installer launch and shutdown deadline correction (2026-09-13)
 
