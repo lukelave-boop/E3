@@ -2,6 +2,19 @@
 
 ## Installer launch and shutdown deadline correction (2026-09-13)
 
+Release 0.7.127 at 590b032 published successfully in workflow 34755865547.
+Its Windows installer matched the manifest and GitHub asset size 215,723,437
+and SHA256 53c53e4ae8fc5a7ef7b1add66efed7440e18c8378087fe62fa59ae46a659b071.
+The corrected production launcher, invoked from source, created the real Inno
+process in 8.388 seconds with no injected delay; its visible 0.7.127 setup
+window was observed. That measured creation time exceeds the old four-second
+shutdown deadline and corroborates the reproduced race. The original attempt
+was not logged, so its exact timing remains unknown. The operator must complete
+the open wizard to install this correction; completion is not yet verified.
+Launch and setup logs are retained under build/updater/published in the isolated
+worktree. All updater commits are on origin/main and the feature branch was
+removed; the main checkout's separate active Pi edits were left untouched.
+
 The operator reports regular E3 0.7.13 downloaded an update and closed after
 approval without showing the installer. The cached 7b66881966a5 package matched
 the published SHA-256 and size; a direct launch opened its 0.7.125 wizard, and
