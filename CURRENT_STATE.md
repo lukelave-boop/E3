@@ -26,22 +26,37 @@ and focus workers exclude one another; all exits stop observers and camera
 view ownership. No Pi files, firmware, machine configuration or saved teaching
 were changed. This affects the desktop pipeline, not browser generation.
 
-Verification: 628 focused Windows tests passed across focus, job, remote and
-desktop/setup behavior. Follow-up real RemoteMachineService/FakePi regression
-checks cover the post-Home cache refresh: 114 controls/remote tests and 192
-desktop/setup tests passed after that correction. Ruff and compileall passed. The daily
-layout and embedded calibration layout were visually inspected from offscreen
-renders. First Fast CI 34725845234 passed all non-Windows jobs, then reported
-5,815 passed, 25 skipped and three obsolete telemetry tests expecting teaching
-buttons in the daily panel. Those tests now cover daily, setup and Machine-tab
-telemetry independently. Application code is unchanged from frozen 7402dec.
-The frozen EXE verifies all 160 bundled source/compiled modules at that revision;
-version 0.7.110. The corrected full Windows CI run and launcher handoff are pending. No interactive GUI, real camera, controller,
-laser or new physical accuracy test has been performed. The prior operator
-verification below applies to its named build, not these combined controls.
-The feature is isolated on codex/marlin-material-focus-controls so unrelated
-console/startup/F103 work in the main checkout remains preserved.
+Verification: 628 focused Windows tests passed; the remote correction then
+passed 114 controls/remote and 192 desktop/setup checks. Telemetry coverage now
+includes both daily and calibration panels (44 tests passed). Full local Windows
+Python 3.14 verification passed 5,818 tests with 29 platform/privilege skips using
+four workers. Ruff and compileall passed. Fast Development CI 34726398706 at
+55d3984 passed all jobs: Windows Python 3.12, 5,822 passed / 25 skipped; POSIX,
+503 passed; dependency/bytecode and Ruff passed. The first CI attempt exposed
+three obsolete test assumptions about teaching buttons in the daily panel;
+only tests and this record changed after the frozen application revision.
 
+The daily and embedded calibration layouts were visually inspected from offscreen
+Qt renders. The combined Home/reference sequence also passed the authenticated
+loopback RemoteMachineService/PiMachineServer/PiJobService/MachineService path with
+simulated primary and Ender controllers; both status stages remained observational.
+No interactive GUI, real camera, controller, laser or new physical accuracy test
+was performed. Prior operator verification below applies to its named build.
+
+Windows 0.7.110 is packaged at exact application revision
+7402dec677ec866088dabcebd71dea12e248dd23. All 160 bundled source and compiled
+application modules match that clean source. The installer and native-library
+bundle guard passed. The permanent E3 DEV TEST pointer now selects Consolidated
+Z controls at .codex-worktrees/focus-controls/dist/E3/E3.exe, matching adjacent
+build metadata. The launcher/shortcut and production E3 were not replaced.
+Evidence: .codex-worktrees/focus-controls/build/focus-controls/ (build verification,
+CI summary/logs, full local test log, offscreen renders and previous pointer).
+
+The feature remains on codex/marlin-material-focus-controls for operator testing.
+Unrelated console/startup/F103 work and concurrent Z-retention/firmware edits in
+the main checkout are preserved; they are not included in this frozen build.
+Compatibility CI and coordinated integration remain required before merging this
+feature with that ongoing work and retiring its branch.
 
 ## Operator-confirmed focus workflow and branch integration (2026-09-12)
 
