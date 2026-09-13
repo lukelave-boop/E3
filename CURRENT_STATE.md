@@ -26,7 +26,23 @@ authenticated requests and real integrated-predecessor upgrade tests. The Pi
 companion is e3-pi-thickness-focus-2528c9d0, with 17 exact-source payload files.
 Four package tests pass after pinning the integrated predecessor hashes for
 shallow CI checkouts; this changes no application code. Compatibility CI and
-the guarded Windows 0.7.133 build are in progress. No interactive GUI, real camera, controller/laser, focus accuracy or
+the final compatibility rerun are in progress.
+
+Windows 0.7.133 is frozen at 7ef632d4246bbe4aab9d64a65b1c55af60aaa2fd.
+All 163 collected source and embedded compiled modules plus the entrypoint match
+that revision. The native-library guard passed. EXE SHA256 is
+548e5c116a303145162a4e9650d51fbf1975a2f576ecf4533e27ea0e7518e59c;
+installer SHA256 is 80107a47e7b25f85a17865c2937bb2d607e9724d2256f34b79541b1edcc08248
+(217,234,190 bytes). The preserved bundle is dist/E3-thickness-focus-0.7.133.
+
+CI 34760432179 passed Windows Python 3.10 (5,211 / 112 skipped), POSIX recovery
+(632) and Ruff. Windows Python 3.12 passed 6,442 / 39 skipped with five obsolete
+UI-fixture assertions: removed daily-gap cancellation and missing thickness
+capability in lifecycle status. Updated fixtures preserve stale-response,
+pause/cancel and manual-calibration cancellation coverage; all 76 directly
+related offscreen tests pass. This follow-up changes tests and documentation
+only. Four final installer checks also pass on Linux. No application change or
+rebuild was required; a fresh Compatibility CI run is the remaining gate. No interactive GUI, real camera, controller/laser, focus accuracy or
 cutting test has been performed. Existing untracked scratch files are preserved.
 The previously selected 0.7.132 feature launcher pointer is unchanged so far.
 

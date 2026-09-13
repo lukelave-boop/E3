@@ -30,8 +30,8 @@ def app():
 
 
 @pytest.fixture
-def combined(app):
-    panel = LaserFocusPanel()
+def combined(app, request):
+    panel = LaserFocusPanel(calibration_mode=getattr(request, "param", False))
     controller = FakeController()
     coordinator = LaserFocusCoordinator(panel, controller)
     coordinator._timer.stop()
@@ -133,7 +133,7 @@ def test_own_home_status_updates_do_not_cancel_its_reference(combined):
     assert events == ["home", "reference"]
 
 
-@pytest.mark.parametrize("change", ["stop", "session", "ender", "clearance", "gap", "disconnect", "not_ready"])
+@pytest.mark.parametrize("change", ["stop", "session", "ender", "clearance", "disconnect", "not_ready"])
 def test_changed_authority_between_home_and_reference_blocks_descent(combined, change):
     panel, coordinator, controller = combined
     events = []
@@ -147,8 +147,6 @@ def test_changed_authority_between_home_and_reference_blocks_descent(combined, c
             controller.machine.payload["ender"]["generation"] = 5
         elif change == "clearance":
             panel.clearance.setValue(40.0)
-        elif change == "gap":
-            panel.gap.setCurrentIndex(1)
         elif change == "disconnect":
             controller.machine.snapshot = status(connected=False, controller_state="DISCONNECTED")
         else:
@@ -165,6 +163,21 @@ def test_changed_authority_between_home_and_reference_blocks_descent(combined, c
     assert not panel.measure.isEnabled()
     coordinator.tick()
     assert controller.work == []
+
+
+@pytest.mark.parametrize("combined", [False, True], indirect=True)
+def test_gap_changes_invalidate_reference_only_in_manual_calibration(combined):
+    panel, _, controller = combined
+    events = []
+    install_home(controller, events, lambda: panel.gap.setCurrentIndex(1))
+    panel.reference.click()
+    controller.complete()
+    if panel.calibration_mode:
+        assert events == ["home"] and motion_calls(controller) == []
+    else:
+        assert panel.gap.isHidden()
+        assert events == ["home", "reference"]
+        assert motion_calls(controller)[0][1]["gap_mm"] == 7.0
 
 
 def test_stop_before_combined_worker_starts_prevents_home(combined):

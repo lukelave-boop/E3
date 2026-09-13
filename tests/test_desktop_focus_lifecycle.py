@@ -40,6 +40,7 @@ def workspace_factory(app, monkeypatch):
 
     def create(*, calibration_mode=False):
         controller = FakeController()
+        controller.machine.payload = result(thickness_focus_available=True)
         controller.runtime.context.camera = SimpleNamespace(monitor_frames=lambda **kwargs: iter(()))
         controller.runtime.context.focus_probe_target = lambda *args, **kwargs: camera_target()
         workspace = LaserFocusWorkspace(controller, calibration_mode=calibration_mode)
@@ -50,7 +51,7 @@ def workspace_factory(app, monkeypatch):
         workspace.coordinator._timer.stop()
         workspace._camera_timer.stop()
         workspace.set_machine_status(status())
-        workspace.panel.set_result(result())
+        workspace.panel.set_result(controller.machine.payload)
         confirm(workspace.panel)
         return workspace, controller
 
@@ -127,7 +128,7 @@ def test_pause_cancels_action_queued_behind_read_without_replay(workspace_factor
     assert [action for action, _ in controller.machine.calls] == ["status"]
     panel.measure.click()
     controller.complete()
-    assert [action for action, _ in controller.machine.calls] == ["status", "measure"]
+    assert [action for action, _ in controller.machine.calls] == ["status", "measure_workpiece"]
 
 
 @pytest.mark.parametrize("action", ["home_reference", "home_retained", "reference"])
