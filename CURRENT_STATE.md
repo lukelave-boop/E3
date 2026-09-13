@@ -16,7 +16,7 @@ printed beside them. Headroom/path, manual-Z stow/path, recovery and gauge-fit
 confirmations remain. Preview freshness, controller/session checks, bounds,
 clearance, STOP and all backend motion/arming safeguards are unchanged.
 
-This isolated branch builds on authoritative saved-Z code c638b36 and main's
+This layout builds on authoritative saved-Z code c638b36 and main's
 verification record e3706dc. No machine, firmware, persistence or project code
 changed; retained Home / park XY and Forget saved Z behavior remain intact.
 The main checkout's unrelated console/startup/F103 edits remain untouched.
@@ -29,12 +29,31 @@ Verification: 317 focused Windows offscreen widget/controller tests pass,
 including saved-Z, STOP/session rejection, modal/visibility lifecycle and compact
 width checks. Repository Ruff, compileall and diff whitespace checks pass.
 Daily and Setup layouts were visually inspected from offscreen Qt renders using
-simulated status and an unavailable camera. Full local four-worker validation,
-exact Windows CI and frozen-build verification are in progress. No interactive
-GUI, real camera, physical controller/laser or saved-Z power-cycle test was run.
-Existing saved-Z firmware/Pi installation requirements remain; this desktop
-layout adds no further companion or firmware changes. Evidence: the isolated
-machine-layout worktree's build/layout/ directory.
+simulated status and an unavailable camera. The local four-worker run finished
+with 5,970 passes and 29 platform skips; its three failures were the then-unfixed
+compact recovery width and two version assertions caused by committing during
+the run. All three pass on the frozen revision (23 focused follow-up checks).
+Local Python is 3.14.4; the supported-version CI below is the complete clean gate.
+
+Exact application revision 70530bdc98f2792562325eef90e9876a041b9e52 passed
+Compatibility CI 34728615260: Windows Python 3.12 desktop, 5,976 passed /
+26 skipped; Windows Python 3.10 core, 4,874 passed / 94 skipped; focused POSIX,
+617 passed; repository Ruff passed. Fast Development CI 34728612595 also passed
+all jobs, including the same 5,976-test Windows desktop suite. Only this
+verification record changed after the tested application revision.
+
+Windows 0.7.116 is frozen from exact source 70530bd. All 161 collected application
+source modules and their embedded compiled modules match that clean revision.
+The executable, installer and native-library bundle guard passed. The permanent
+E3 DEV TEST pointer selects Machine layout with saved Z at
+.codex-worktrees/machine-layout/dist/E3/E3.exe, with matching adjacent metadata.
+The permanent launcher, shortcut and production E3 were not replaced.
+
+No interactive GUI, real camera, physical controller/laser or saved-Z power-cycle
+test was run. Existing saved-Z firmware/Pi installation requirements remain;
+this desktop layout adds no further companion or firmware changes. Evidence:
+.codex-worktrees/machine-layout/build/layout/ (test and CI logs, offscreen renders,
+source/build verification, previous launcher pointer and pre-existing-edit backups).
 
 ## Saved Z integrated and packaged for testing (2026-09-12)
 
