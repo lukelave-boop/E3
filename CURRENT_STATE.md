@@ -1,5 +1,46 @@
 # Current repository state
 
+## Automatic workpiece-focus build verified and selected (2026-09-12)
+
+Exact application revision 671b235f272b8a0e910ff5039006c0d431bb9cd8 passed
+Compatibility CI 34733993415: Windows Python 3.12 desktop, 6,145 passed /
+28 skipped; Windows Python 3.10 core, 4,932 passed / 99 skipped; focused POSIX,
+617 passed; repository Ruff passed. Only this verification record changed after
+that application revision.
+
+The final local Windows focused run passed 1,082 tests. Offscreen Qt checks
+include compact ready/blocked views of daily Workpiece focus. A separate real
+authenticated TCP loopback exercised RemoteMachineService → PiMachineServer →
+PiJobService → MachineService with fake primary/Ender controllers: two jobs
+focused at Z28 from one measurement; a fresh client recovered the retained datum;
+a new measurement changed the third job to Z26. All positive-output commands
+followed completed XY approach at the expected Z, and jobs returned to Z30.
+No preview/use_job request was issued. This is software verification, not
+physical motion or dimensional validation.
+
+A fresh exact-source archive passed 510 focused Linux/Pi tests with zero skips
+under WSL Ubuntu 22.04 / Python 3.11.15, including actual upgrades/imports from
+both pinned companion predecessors. Local Windows Python is 3.14.4. Ruff,
+compileall and whitespace checks pass. The optional CI workflow extension was
+removed because the GitHub login lacks workflow-edit scope; the unchanged
+compatibility workflow and separate focused Linux run provide the recorded gates.
+
+Windows 0.7.120 is frozen from that application revision. All 162 application
+source and embedded compiled modules match it; executable/installer hashes and
+the native-library bundle guard passed. E3 DEV TEST selects Automatic workpiece
+focus at .codex-worktrees/daily-job-focus/dist/E3/E3.exe with matching metadata.
+The permanent launcher, shortcut and production E3 were not replaced.
+
+Matching Pi companion e3-pi-workpiece-focus-29a79a73 is under that worktree's
+dist directory. All 15 payload files match the frozen revision; INSTALL.md
+contains exact copy, dry-run and guarded installation commands. Pi installation
+is pending with the operator; no new firmware or gauge teaching is required by
+this correction. Establish a fresh reference/measurement after updating the Pi.
+No interactive GUI, real camera, physical controller/laser or focus accuracy
+test was performed. Evidence is under build/daily-focus in the frozen worktree,
+including test/CI logs, synthetic Qt renders, source/bundle/package verification,
+the previous pointer and byte-for-byte preservation previews for main's edits.
+
 ## Automatic reusable workpiece focus correction (2026-09-12)
 
 The operator reports that completing only Machine-tab reference/measurement
@@ -34,8 +75,8 @@ Read-only SSH reached 192.168.5.18 but key authentication was rejected; live Pi
 hashes and installation remain unverified.
 
 Focused Windows fake-controller, remote-protocol and offscreen-widget checks
-are in progress; exact frozen-source CI/build verification will be recorded
-below when complete. No interactive GUI, real camera, controller/laser or
+passed; exact frozen-source CI/build verification is recorded above.
+No interactive GUI, real camera, controller/laser or
 physical focus accuracy test has been performed. Root console/startup/F103
 working-tree edits remain separate in the main checkout.
 
