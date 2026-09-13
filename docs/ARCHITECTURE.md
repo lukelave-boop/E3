@@ -1,5 +1,15 @@
 # Architecture
 
+## Pi companion predecessor identity
+
+The workpiece-focus installer validates complete known predecessor maps.
+Installed identity can describe a recorded combination of targeted packages:
+the e57adbb5 base plus four 12dbb3d files and two 59c31d7 files left the Pi's
+remote client at its earlier known bytes. That complete combination is pinned
+separately from the full bb37be7 and c638b36 Git trees. Per-file candidates must
+still intersect to a single supported combination; arbitrary mixed sources
+and unknown edits remain rejected before replacement.
+
 ## Reusable measured workpiece focus
 
 MachineService owns the workpiece datum. A successful typed measurement with

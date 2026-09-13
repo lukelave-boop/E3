@@ -33,7 +33,20 @@ SAVED_Z = {
     "laser_aligner/machine/job_focus.py": "cb1d8d1e3d918f66d943b5b8930d09bb482af1ccec2f43047584cbb6bc1a4397",
     "laser_aligner/machine/z_retention.py": "f6f5ac717b12272365b8635b4c4874824e644d42594a99e0e7c94b1dd88ee812",
 }
-PREDECESSORS = {INSTALLED_FOCUS_REVISION: INSTALLED_FOCUS, SAVED_Z_REVISION: SAVED_Z}
+# The Pi received e57adbb5, then only the four 12dbb3d files and two 59c31d7
+# files. Those recorded installations did not replace the desktop remote
+# client. Pin the whole installed combination rather than allow arbitrary mixing.
+# The remote client bytes match Git 050498c0e31d7778c161688c9c232224aceb2717.
+RECORDED_INSTALLED_FOCUS_NAME = "installed-e57adbb5-12dbb3d-59c31d7"
+RECORDED_INSTALLED_FOCUS = {
+    **INSTALLED_FOCUS,
+    "laser_aligner/machine/remote_service.py": "d9a8165484133bd720dbb03515590b5de28890ff8f32cf02baa73d7052bf21aa",
+}
+PREDECESSORS = {
+    INSTALLED_FOCUS_REVISION: INSTALLED_FOCUS,
+    SAVED_Z_REVISION: SAVED_Z,
+    RECORDED_INSTALLED_FOCUS_NAME: RECORDED_INSTALLED_FOCUS,
+}
 
 
 def installation_guide(folder: Path) -> str:
@@ -111,7 +124,8 @@ def package(destination: Path) -> Path:
         "It updates application sources only and does not flash firmware. "
         "Existing surface-height V2 firmware remains required for measurement; saved-Z restoration "
         "still requires its separate restore capability.\n\n"
-        "The installer accepts the exact installed focus correction or saved-Z predecessor, or already "
+        "The installer accepts the exact recorded installed Pi combination, the pinned main focus "
+        "or saved-Z predecessor, or already "
         "current files. It rejects unknown changes and incompatible mixtures before replacement, "
         "preserves configuration/calibration and backs up replaced source bytes. It neither stops "
         "nor starts the service. First run without --apply to inspect the planned changes. "

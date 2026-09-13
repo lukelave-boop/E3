@@ -1,5 +1,42 @@
 # Current repository state
 
+## Correct the installed Pi companion baseline (2026-09-12)
+
+The operator's read-only dry run of e3-pi-workpiece-focus-29a79a73 rejected
+remote_service.py with LF SHA256
+d9a8165484133bd720dbb03515590b5de28890ff8f32cf02baa73d7052bf21aa.
+No installation was attempted. The hash exactly matches Git revision 050498c
+and the retained e57adbb5 package. Installation records show the later 12dbb3d
+and 59c31d7 Pi patches replaced only four and two files respectively, leaving
+that remote client unchanged. Reconstructing all 15 paths from the recorded
+manifests matches the bb37be7 baseline except that one file; z_retention.py was
+absent. The first companion incorrectly assumed a complete later Git tree.
+
+The corrected packager adds that exact complete installed combination as a
+third pinned predecessor. Installer validation, service guards and application
+payload are unchanged. Unknown edits still reject. Windows 0.7.120, its frozen
+671b235 application revision, the E3 DEV TEST pointer, firmware and calibration
+remain unchanged. Replacement e3-pi-workpiece-focus-568b1cc9 has all 15 payload
+files byte-identical to 29a79a73; its installer differs only in the authenticated
+manifest hash. The complete added baseline matches the three retained package
+manifests exactly. Windows packaging/upgrade tests pass 43 cases with zero skips,
+including all three real predecessor upgrades/imports and rejection of unknown
+remote-client edits. Ruff and compileall pass. Exact revision 86b6ec47 also
+passed all 43 installer tests with zero skips on WSL Ubuntu 22.04 / Python
+3.11.15, using a fresh Git archive and temporary environment. Compatibility
+CI 34735197073 passed: Windows Python 3.12 desktop 6,157 passed / 30 skipped;
+Windows Python 3.10 core 4,944 passed / 101 skipped; POSIX controller/session
+617 passed; repository Ruff passed. Independent package review found no issues.
+
+The operator subsequently supplied successful dry-run and apply output for
+568b1cc9: the recorded installed combination was accepted, nine files were
+updated (eight existing files backed up), and six were already current. The
+following systemctl start command returned without an error. This records
+operator-reported source installation, not sustained service health or physical
+job-focus verification; those remain unverified.
+Existing main-checkout edits remain
+separate in the isolated packaging worktree.
+
 ## Automatic workpiece-focus build verified and selected (2026-09-12)
 
 Exact application revision 671b235f272b8a0e910ff5039006c0d431bb9cd8 passed

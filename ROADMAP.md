@@ -1,5 +1,13 @@
 # Roadmap
 
+## Workpiece-focus companion compatibility
+
+Recognize the exact recorded Pi combination of the e57adbb5 base and targeted
+12dbb3d/59c31d7 updates. Test its full predecessor hashes and upgrade/import
+path, including rejection of unknown edits. Keep this packaging correction
+separate from the verified 0.7.120 executable and unchanged application payload.
+Physical installation and focus qualification remain operator tasks.
+
 ## Automatic workpiece focus
 
 Machine-tab measurement supplies reusable job focus directly. The Pi must

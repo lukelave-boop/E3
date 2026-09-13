@@ -582,7 +582,11 @@ Build the matching companion from the exact feature checkout with
 the exact Windows copy command and Pi dry-run/apply commands using its actual
 package name. The bundled `install_workpiece_focus.py` defaults to read-only.
 
-The installer accepts the complete pinned installed-focus predecessor
+The installer accepts the recorded installed combination of `e57adbb5`, the
+four-file `12dbb3d` job-focus update and the two-file `59c31d7` parking update.
+Those targeted updates left `remote_service.py` at its known earlier revision;
+the complete installed combination has its own pinned file hashes. It also
+accepts the complete pinned main focus predecessor
 `bb37be7621cd7a35ea602b0f8899b87f2339679e` or saved-Z predecessor
 `c638b3683faf83b10bb8483dd53fa8a4726b25c8`, plus already-current files. It
 rejects unknown edits and incompatible mixtures before replacing anything,

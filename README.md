@@ -42,6 +42,11 @@ backend safeguards, calibration and saved-Z behavior. Automatic reusable focus
 requires the matching Pi companion; no new firmware or gauge teaching is needed
 for this correction. See [the focus guide](docs/LASER_FOCUS.md).
 
+The companion installer also recognizes the recorded Pi installation assembled
+from targeted focus updates. A rejection of the known earlier remote-client
+file by the first 0.7.120 companion is corrected in the replacement package;
+the Windows executable and application payload remain unchanged.
+
 ## Focus selection and camera parking
 
 After measuring the workpiece, successful Home / park

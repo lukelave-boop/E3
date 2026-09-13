@@ -1,4 +1,4 @@
-"""The reusable-focus companion admits two pinned baselines without losing edits."""
+"""The reusable-focus companion admits recorded baselines without losing edits."""
 import hashlib
 import importlib.util
 import io
@@ -11,7 +11,17 @@ from pathlib import Path
 
 import pytest
 
-from scripts.package_workpiece_focus import PREDECESSORS, ROOT, SAVED_Z, package
+from scripts.package_workpiece_focus import (
+    INSTALLED_FOCUS_REVISION,
+    PREDECESSORS,
+    RECORDED_INSTALLED_FOCUS_NAME,
+    ROOT,
+    SAVED_Z,
+    package,
+)
+
+RECORDED_REMOTE_REVISION = "050498c0e31d7778c161688c9c232224aceb2717"
+REMOTE_SERVICE = "laser_aligner/machine/remote_service.py"
 
 
 def load_installer(bundle):
@@ -21,7 +31,7 @@ def load_installer(bundle):
     return installer
 
 
-@pytest.fixture(params=[0, 1], ids=["installed-focus", "saved-z"])
+@pytest.fixture(params=range(len(PREDECESSORS)), ids=list(PREDECESSORS))
 def kit(tmp_path, monkeypatch, request):
     bundle = package(tmp_path / "dist")
     installer = load_installer(bundle)
@@ -87,14 +97,16 @@ def test_already_updated_files_allow_retry_from_the_same_predecessor(kit):
 def test_mixed_known_predecessors_reject_before_any_replacement(kit):
     installer, project, bundle, originals, baseline = kit
     relative = "laser_aligner/machine/service.py"
-    (project / relative).write_bytes(originals[1 - baseline][relative])
+    other_baseline = (baseline + 1) % len(originals)
+    (project / relative).write_bytes(originals[other_baseline][relative])
     with pytest.raises(ValueError, match="mixed predecessor revisions"):
         installer.install(project, bundle=bundle, apply=True)
-    assert (project / relative).read_bytes() == originals[1 - baseline][relative]
+    assert (project / relative).read_bytes() == originals[other_baseline][relative]
     assert not list(project.rglob("*.e3-backup-*"))
 
 
-@pytest.mark.parametrize("relative", ["laser_aligner/machine/service.py", "laser_aligner/machine/z_retention.py"])
+@pytest.mark.parametrize("relative", ["laser_aligner/machine/service.py", REMOTE_SERVICE,
+                                      "laser_aligner/machine/z_retention.py"])
 def test_unknown_local_edit_rejects_before_any_replacement(kit, relative):
     installer, project, bundle, originals, baseline = kit
     (project / relative).write_bytes(b"# operator changes\n")
@@ -161,32 +173,67 @@ def test_package_pins_complete_baselines_and_copies_only_application_sources(tmp
     assert "[INSTALL.md](INSTALL.md)" in (bundle / "README.md").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("revision", PREDECESSORS)
-def test_exact_git_predecessor_upgrade_imports_without_hardware(tmp_path, monkeypatch, revision):
-    if shutil.which("git") is None or subprocess.run(
-        ["git", "cat-file", "-e", revision], cwd=ROOT, capture_output=True,
-    ).returncode:
-        pytest.skip("The pinned main revision is required for the real predecessor fixture")
+def exact_predecessor_project(tmp_path, baseline):
+    revision = INSTALLED_FOCUS_REVISION if baseline == RECORDED_INSTALLED_FOCUS_NAME else baseline
+    overrides = {REMOTE_SERVICE: RECORDED_REMOTE_REVISION} if baseline == RECORDED_INSTALLED_FOCUS_NAME else {}
+    for required_revision in {revision, *overrides.values()}:
+        if shutil.which("git") is None or subprocess.run(
+            ["git", "cat-file", "-e", required_revision], cwd=ROOT, capture_output=True,
+        ).returncode:
+            pytest.skip("The pinned source revisions are required for the real predecessor fixture")
     source = subprocess.check_output(["git", "archive", "--format=zip", revision, "laser_aligner"], cwd=ROOT)
     project = (tmp_path / "pinned-main").resolve()
     project.mkdir()
     with zipfile.ZipFile(io.BytesIO(source)) as archive:
         assert all((project / item.filename).resolve().is_relative_to(project) for item in archive.infolist())
         archive.extractall(project)
-    for name, digest in PREDECESSORS[revision].items():
+    for name, source_revision in overrides.items():
+        (project / name).write_bytes(subprocess.check_output(
+            ["git", "show", f"{source_revision}:{name}"], cwd=ROOT))
+    assert len(PREDECESSORS[baseline]) == 15
+    for name, digest in PREDECESSORS[baseline].items():
         target = project / name
         if digest is None:
             assert not target.exists()
         else:
             assert hashlib.sha256(target.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == digest
+    return project
+
+
+def source_snapshot(project):
+    return {path.relative_to(project).as_posix(): path.read_bytes()
+            for path in project.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize("baseline", PREDECESSORS)
+def test_exact_git_predecessor_upgrade_imports_without_hardware(tmp_path, monkeypatch, baseline):
+    project = exact_predecessor_project(tmp_path, baseline)
     bundle = package(tmp_path / "dist")
     installer = load_installer(bundle)
     monkeypatch.setattr(installer, "inactive", lambda: None)  # Isolated fixture, no real service.
+    original = source_snapshot(project)
+    preview = installer.install(project, bundle=bundle)
+    assert not preview["applied"] and not preview["service_started"]
+    assert preview["compatible_predecessors"] == [baseline]
+    assert source_snapshot(project) == original
+    assert not list(project.rglob("*.e3-backup-*"))
     result = installer.install(project, bundle=bundle, apply=True)
     assert not result["service_started"]
     assert all(entry["status"] == "already_current" for entry in installer.install(project, bundle=bundle)["files"])
-    subprocess.run([sys.executable, "-c",
-                    "import laser_aligner.machine.service, laser_aligner.machine.z_retention, "
-                    "laser_aligner.machine.job_focus, laser_aligner.machine.pi_job_service, "
-                    "laser_aligner.machine.pi_machine_server, laser_aligner.remote_node"],
+    modules = [name.removesuffix(".py").replace("/", ".") for name in SAVED_Z]
+    subprocess.run([sys.executable, "-c", "import " + ", ".join(modules)],
                    cwd=project, check=True, capture_output=True)
+
+
+def test_recorded_composition_still_rejects_unknown_remote_service_edits(tmp_path, monkeypatch):
+    project = exact_predecessor_project(tmp_path, RECORDED_INSTALLED_FOCUS_NAME)
+    bundle = package(tmp_path / "dist")
+    installer = load_installer(bundle)
+    monkeypatch.setattr(installer, "inactive", lambda: None)
+    target = project / REMOTE_SERVICE
+    target.write_bytes(target.read_bytes() + b"\n# operator modification\n")
+    original = source_snapshot(project)
+    with pytest.raises(ValueError, match="unknown local changes: laser_aligner/machine/remote_service.py"):
+        installer.install(project, bundle=bundle, apply=True)
+    assert source_snapshot(project) == original
+    assert not list(project.rglob("*.e3-backup-*"))
