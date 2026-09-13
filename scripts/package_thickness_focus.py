@@ -56,6 +56,17 @@ REJECTION = {
 }
 
 
+HONEYCOMB_REVISION = "ff0786080eaaaf5f8bb711c36fe0506aa1f2937a"
+HONEYCOMB = {
+    **REJECTION,
+    "laser_aligner/machine/service.py": "c64b4204e25d02d30a7d9a3c7ca2690ed910cfee773f01682fc11741458df713",
+    "laser_aligner/machine/remote_service.py": "5fecaffd0a2c3d07730762d7fb3d2c89646007cf2e15db702431db679e412866",
+    "laser_aligner/machine/pi_machine_server.py": "5484c224a36735eaf666630e156793f9c9e7e4cbfe24e9680a2d0f923bce443a",
+    "laser_aligner/machine/laser_focus.py": "4ec7837e4d036eac76f33198672a6bf07bdfc21f4c746587480bb411b80b18e9",
+    "laser_aligner/machine/job_focus.py": "fa1b63ea9c49163d27746c7ecfdeb21dee1a67c5d050fb06e6af29e232bfd906",
+}
+
+
 def source(revision, name):
     return subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT).replace(b"\r\n", b"\n")
 
@@ -73,6 +84,7 @@ def package(destination, revision, version):
             {"revision": THICKNESS_REVISION, "files": THICKNESS},
             {"revision": COOLING_REVISION, "files": COOLING},
             {"revision": REJECTION_REVISION, "files": REJECTION},
+            {"revision": HONEYCOMB_REVISION, "files": HONEYCOMB},
         ],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
@@ -93,6 +105,9 @@ def package(destination, revision, version):
     guide = f"""# Install automatic thickness-derived focus
 
 Use E3 DEV TEST {version} with this exact Pi companion, revision `{revision}`.
+This companion corrects the observed Home/park and job-completion cooling
+deadlock by acquiring Ender before STOP/write gates. It remains compatible
+with the existing saved-honeycomb-height Windows 0.7.150 build.
 The companion keeps invalid thickness blocked after a verified clearance return
 without emergency-stopping the controllers. It reports the measured elevation,
 datum and spacers for correction, and retains the focus/cooling lock-order fix.
@@ -107,7 +122,8 @@ or gauge teaching. A firmware identity change still requires reference and teach
 Accepted predecessors: the recorded installed 568b1cc9 companion or the integrated
 speed/priority sources at `{INTEGRATED_REVISION}`, or the thickness-focus sources
 at `{THICKNESS_REVISION}`, the cooling fix at `{COOLING_REVISION}`, or the installed
-invalid-thickness correction at `{REJECTION_REVISION}`.
+invalid-thickness correction at `{REJECTION_REVISION}`, or the installed saved
+honeycomb height build at `{HONEYCOMB_REVISION}`.
 Unknown edits reject. Operator
 configuration, calibration and saved-Z data are preserved; replaced sources are
 backed up. Default installation is a read-only preview.

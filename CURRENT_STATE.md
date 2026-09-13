@@ -1,5 +1,28 @@
 # Current repository state
 
+## Captured Home/cooling deadlock (2026-09-13, correction in progress)
+
+After operator use of saved-height build 0.7.150, the desktop reports Pi timeout
+and failed software STOP. Read-only SSH at 13:28 finds Pi uptime four minutes,
+service PID758 alive, and last completed RPCs at 13:27:24 after primary $H.
+Nonblocking py-spy stacks capture Home preserve_through_park.guard waiting for
+Ender.ready while holding secondary write gate and STOP epoch lock; CPU cooling
+holds Ender and waits on those gates. Status and STOP threads wait on the STOP
+epoch lock. Camera and serial reader threads remain alive. This is a captured
+application lock inversion, not evidence of a Wi-Fi outage. The earlier teaching
+fix missed this shared Home path.
+
+Correction acquires Ender before the write/STOP gates in Home preservation,
+job Z movement and completed-job focus retention. The last path also called
+the locking readiness check from inside the gates. No motion sequence, bounds,
+datum, protocol or desktop UI changes. Deterministic fake-controller regression
+forces cooling overlap after $H is written; it fails on the installed source
+and passes after correction. The same coverage exercises completed-job retention
+and verifies both success and real request_stop cancellation. Deployment and
+broader verification pending. Live service remains untouched pending physical
+stopped/laser-off confirmation. Stack/log captures are ignored local artifacts.
+
+
 ## Paper measurement datum mismatch (2026-09-13)
 
 Operator confirms paper is directly on bare honeycomb, with spacers 0.000 mm.

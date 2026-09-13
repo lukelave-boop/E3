@@ -1,5 +1,17 @@
 # Architecture
 
+## Home/job focus and cooling lock order
+
+Every job-focus guard that checks Ender readiness acquires the Ender owner lock
+before the secondary write gate and STOP epoch lock. This includes the guard
+used by the primary Home cancellation callback, and successful job-completion
+retention. Cooling already holds Ender before requesting those gates. Reversing
+that order deadlocks Home and cooling and also blocks status/STOP on the epoch
+lock. Pure generation reads are nonblocking; ready/fault checks take Ender.
+Regression tests force Home and completion overlap with cooling and verify
+successful completion and STOP invalidation, using fake controllers only.
+
+
 ## Saved honeycomb datum
 
 LaserFocus owns a schema-1 `<focus-path-stem>-honeycomb.json` sidecar bound to

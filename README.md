@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+A captured Pi Home/cooling deadlock correction covers Home / park and job
+completion while retaining measured focus. It preserves the Windows 0.7.150
+interface and saved calibration. See [focus status](docs/LASER_FOCUS.md).
+
+
 Invalid thickness after a completed probe/clearance cycle now blocks jobs with
 numeric diagnostics while retaining the controller connection. Correct the datum,
 spacers or probe location and measure again; see [focus setup](docs/LASER_FOCUS.md).

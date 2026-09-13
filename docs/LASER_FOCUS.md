@@ -1,5 +1,16 @@
 # Surface height and gauge-taught laser focus
 
+## Home / park timeout correction
+
+A directly captured Pi deadlock after Home blocked status and software STOP:
+the Home focus-preservation guard and CPU cooling acquired shared locks in
+opposite orders. The correction covers Home preservation and completed-job
+focus retention and remains compatible with E3 DEV TEST 0.7.150. It changes no
+saved height, gauge teaching, movement sequence or firmware. Physical retesting
+is required after installation; automated concurrency tests do not qualify
+hardware stopping. See CURRENT_STATE.md for deployment status.
+
+
 ## Saved honeycomb Z height
 
 Current handoff: **E3 DEV TEST 0.7.150**, paired with installed Pi companion

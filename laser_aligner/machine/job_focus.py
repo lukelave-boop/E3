@@ -115,7 +115,8 @@ def preserve_through_park(machine, *, lift=True):
 
     @contextmanager
     def guard():
-        with machine._secondary_write_gate, machine._stop_epoch_lock:
+        # Never wait for Ender while holding the STOP gate; cooling owns Ender first.
+        with probe.owner._lock, machine._secondary_write_gate, machine._stop_epoch_lock:
             if (machine._stop_epoch != plan["session"][2]
                 or not machine._same_controller_session(machine._session, session)
                 or machine._z_probe is not probe or not probe.owner.ready
@@ -194,7 +195,8 @@ def move(machine, context, *, clearance, verify_only=False):
 
     @contextmanager
     def guard():
-        with machine._secondary_write_gate, machine._stop_epoch_lock:
+        # Never wait for Ender while holding the STOP gate; cooling owns Ender first.
+        with probe.owner._lock, machine._secondary_write_gate, machine._stop_epoch_lock:
             if (context.stop_event.is_set() or machine._active_job_context is not context
                 or not machine._same_controller_session(machine._session, context.session)
                 or machine._stop_epoch != plan["session"][2]
@@ -273,7 +275,10 @@ def retain_after_job(machine, context, xy):
         return
     move(machine, context, clearance=True, verify_only=True)
     state = machine._laser_focus
-    with machine._secondary_write_gate, machine._stop_epoch_lock:
+    probe = machine._z_probe
+    if probe is None:
+        raise MachineError("Workpiece focus lost its Ender controller at job completion")
+    with probe.owner._lock, machine._secondary_write_gate, machine._stop_epoch_lock:
         check_context(machine, context)
         if (context.stop_event.is_set() or machine._active_job_context is not context
                 or not machine._same_controller_session(machine._session, context.session)

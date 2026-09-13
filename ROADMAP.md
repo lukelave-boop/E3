@@ -1,5 +1,13 @@
 # Roadmap
 
+## Home/cooling concurrency correction
+
+The lock inversion captured on the Pi is corrected across Home and job-focus
+completion. Deterministic concurrency coverage includes STOP cancellation;
+broader verification and deployment are tracked in CURRENT_STATE.md. Physical
+Home/park and job-completion testing remains operator qualification.
+
+
 ## Saved honeycomb datum follow-up
 
 An explicit saved height editor in Step 7 is implemented for the paired

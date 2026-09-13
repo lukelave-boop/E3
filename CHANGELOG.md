@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - Home/cooling deadlock correction
+
+- Correct the captured lock inversion between Home focus preservation and
+  CPU cooling that also blocked status and software STOP.
+- Apply the same Ender-before-gates order during job Z moves and completion.
+- Add deterministic overlap tests for normal completion and STOP cancellation.
+  Preserve the saved-height Windows 0.7.150 protocol and all motion bounds.
+
+
 ## Unreleased - editable saved honeycomb height
 
 - Add signed honeycomb height relative to border with an explicit Save button
