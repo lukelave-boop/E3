@@ -275,6 +275,7 @@ def test_pi_owned_upload_retains_exact_focus_binding(focus_machine, tmp_path, mo
     settings.port = f"e3bridge://127.0.0.1:{server.bound_port}"
     remote = RemoteMachineService(settings, copy.deepcopy(machine.laser_settings), hardware_enabled=True)
     try:
+        remote.connect()
         remote._refresh_once()
         plan = select(remote)
         remote.prepare_photo_position()  # Normal camera/park operation before START.

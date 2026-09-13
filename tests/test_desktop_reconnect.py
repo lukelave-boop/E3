@@ -26,6 +26,7 @@ from laser_aligner.machine.pi_job_protocol import (
     PROTOCOL_VERSION,
 )
 from laser_aligner.machine.pi_machine_server import (
+    ACTION_MACHINE_CONNECT,
     ACTION_MACHINE_DISCONNECT,
     ACTION_SERVICE_CAPABILITIES,
     SERVER_ACTION_SCHEMAS,
@@ -175,15 +176,17 @@ def test_desktop_disconnect_rebinds_remote_cleanup_after_revoking_worker_generat
     )
     requests: list[dict[str, Any]] = []
     boot_id = "00000000-0000-4000-8000-000000000002"
+    connected = False
+    state_revision = 1
 
     def metadata() -> dict[str, Any]:
         return {
             "protocol_version": PROTOCOL_VERSION,
             "boot_id": boot_id,
             "build": {"version": "test", "revision": "test"},
-            "state_revision": 1,
+            "state_revision": state_revision,
             "controller_session_generation": 0,
-            "controller_state": "DISCONNECTED",
+            "controller_state": "READY_HOME_REQUIRED" if connected else "DISCONNECTED",
         }
 
     def request_response(
@@ -194,6 +197,7 @@ def test_desktop_disconnect_rebinds_remote_cleanup_after_revoking_worker_generat
         *,
         timeout: float,
     ) -> dict[str, Any]:
+        nonlocal connected, state_revision
         assert (host, port) == ("pi.test", 9876)
         assert token == "desktop-disconnect-regression-token"
         assert timeout > 0.0
@@ -211,9 +215,11 @@ def test_desktop_disconnect_rebinds_remote_cleanup_after_revoking_worker_generat
                 ],
                 "actions": SERVER_ACTION_SCHEMAS,
             }
-        assert request["action"] == ACTION_MACHINE_DISCONNECT
+        assert request["action"] in {ACTION_MACHINE_CONNECT, ACTION_MACHINE_DISCONNECT}
+        connected = request["action"] == ACTION_MACHINE_CONNECT
+        state_revision += 1
         status = machine.status()
-        status["connected"] = False
+        status["connected"] = connected
         return {
             "ok": True,
             "request_id": request["request_id"],
@@ -222,6 +228,8 @@ def test_desktop_disconnect_rebinds_remote_cleanup_after_revoking_worker_generat
         }
 
     monkeypatch.setattr(remote_service_module, "request_response", request_response)
+    machine.connect()
+    assert machine.connected
     controller = _controller(machine)
     errors: list[str] = []
     notices: list[str] = []
@@ -234,6 +242,7 @@ def test_desktop_disconnect_rebinds_remote_cleanup_after_revoking_worker_generat
 
     actions = [request["action"] for request in requests]
     assert machine.operation_generation() == queued_generation + 1
+    assert actions.count(ACTION_MACHINE_CONNECT) == 1
     assert actions.count(ACTION_MACHINE_DISCONNECT) == 1
     assert errors == []
     assert notices == ["Controller disconnected"]
