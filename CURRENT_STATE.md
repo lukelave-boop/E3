@@ -1,5 +1,39 @@
 # Current repository state
 
+## First-connected Pi app priority (2026-09-13)
+
+The operator reports that opening E3 DEV TEST while normal E3 is connected
+causes normal E3 to disconnect. Source inspection confirms two ownership gaps:
+PiMachineServer discarded the supplied client UUID for admission, and a facade
+that only observed globally idle status could disconnect that controller during
+cleanup. The exact launch-time sequence was not physically reproduced or logged.
+
+Implemented first-client ownership in the Pi server, independent of the USB
+session and durable Pi job ownership. Competing control/cleanup requests reject;
+status and authenticated STOP remain available. Updated clients negotiate a
+30-second reservation renewed by identifiable status. Admitted operations pin
+ownership until they unwind. Explicit detach releases only operator admission;
+expiry/release never writes M5, disconnects, or changes accepted job execution.
+Legacy owners do not expire from anonymous polling: they retain control until
+explicit Disconnect or Pi service restart. A crashed legacy owner may therefore
+require an idle service restart before another app can take control.
+
+Updated desktop UI shows PI IN USE / VIEW ONLY, gates ordinary actions, allows
+explicit Connect to an unowned existing controller, and suppresses non-owner
+physical focus polling. Remote cleanup uses its own claim, not global connected
+status; this also protects observer cleanup against older Pi servers. Shared
+remote facade/server behavior affects desktop and browser/core execution; no
+geometry, project schema, motion generation, arming or laser limits changed.
+
+Local Windows verification: 756 focused tests pass, covering authenticated TCP
+competition/STOP, remote cleanup, 65 installer cases, and offscreen desktop
+controls. Repository Ruff, compileall and whitespace checks pass. Linux/Python
+3.10 passed 395 focused tests with zero skips before the final delayed-Disconnect
+guard; exact-source Linux verification, CI and frozen build are in progress. No interactive GUI, camera,
+controller/laser, sustained connection or physical two-app test has been run.
+Pi installation remains pending. Existing untracked scratch artifacts and the
+separate update-launch-deadline worktree are preserved.
+
 ## Correct the installed Pi companion baseline (2026-09-12)
 
 The operator's read-only dry run of e3-pi-workpiece-focus-29a79a73 rejected

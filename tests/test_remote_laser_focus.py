@@ -267,13 +267,13 @@ def focus_server(server_harness, focus):  # noqa: F811
     harness.machine._secondary_air_assist = focus.fan
     harness.machine._z_probe = focus.probe
     harness.machine._laser_focus = focus.state
-    harness.service.connect()
+    assert helpers._rpc(harness, "machine.connect")["ok"]
     harness.service.prepare_photo_position()
     return harness, focus
 
 
 def rpc(harness, action, **kwargs):
-    values = dict(client_id=str(uuid.uuid4()), expected_boot_id=harness.service.boot_id,
+    values = dict(client_id="00000000-0000-4000-8000-000000000001", expected_boot_id=harness.service.boot_id,
                   expected_session_generation=harness.machine.status()["controller_session_generation"],
                   control=action, confirmed=action != "status", value=None, clearance_z_mm=30.,
                   gap_mm=7., measurement_id=None, preview_id=None)

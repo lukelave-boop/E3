@@ -48,6 +48,55 @@ pre-START upload already owns preparation, or if execution is accepted or
 ownership-uncertain, Disconnect instead detaches the monitoring client and sends
 neither controller Disconnect nor STOP.
 
+## First-connected app priority
+
+The connection-priority companion advertises `pi-control-owner-v1`. The first
+client UUID admitted through Connect, Reconnect or START reserves control;
+merely launching an app, reading status or opening focus controls does not.
+Another app gets `controller.in_use` before controller work, including attempts
+to Connect, Reconnect, Disconnect, Home, jog, focus, command, hold or START.
+Read-only machine/job observation and authenticated STOP remain available.
+STOP neither claims nor releases control.
+
+To switch apps, Disconnect in the owner and then Connect in the other app.
+Updated desktops show **PI IN USE** for another owner and **VIEW ONLY** when no
+app owns the Pi. Actual controller connectivity/reference status is still shown.
+Closing an observer only detaches it. Closing an owning idle app attempts the
+existing bounded controller disconnect; detaching from an accepted job releases
+operator admission without cancelling the job.
+
+New clients send the exact `control_lease=true` flag on control requests and
+identify themselves on normal `machine.status` polls. Only the current owner's
+polls renew its 30-second reservation. Short RPC sockets are not ownership
+lifetimes. Failed/foreign requests, anonymous polls and camera activity cannot
+renew or acquire it. In-flight ordinary operations and stepper holds pin the
+owner until they finish, even if the lease expires meanwhile. Explicit
+`machine.control_release` checks the client and Pi boot identity and defers
+release until admitted work unwinds. Neither release nor lease expiry changes
+controller state or writes to hardware. Accepted Pi jobs keep running locally;
+their normal active-job admission and STOP rules still apply.
+
+Older clients already identify controller requests but do not identify status
+polls. Their ownership deliberately has no timeout: another app cannot steal
+control just because the old app is idle. Use the owner's Disconnect to release
+it. If that older app crashes without Disconnect, an idle Pi service restart is
+required to clear its ownership; do not restart the service during a job.
+Updating the desktop adds automatic lease recovery, but updating the Pi is
+required to enforce priority between all apps. The updated desktop also avoids
+observer cleanup disconnects when used with an older Pi; an older Pi cannot
+enforce exclusive control between apps.
+
+`scripts/package_pi_control_priority.py` creates a hash-checked three-module
+companion for the exact recorded 568b1cc9 workpiece-focus installation. Follow
+its generated INSTALL.md for dry-run and idle service-stop/apply/start commands.
+It does not modify settings, calibration, firmware or the permanent launcher.
+
+Cleanup requests from updated apps also bind the operator ownership revision.
+A delayed release or idle Disconnect cannot clear a newer same-app Connect or
+Reconnect, even when its underlying controller session did not change. Explicit
+reattachment resumes the app's existing status monitoring without overlapping
+polling threads.
+
 ## Transport, dialect, and profile separation
 
 `E3MACHINE/2` is a bounded, high-level JSON protocol. It is deliberately
@@ -98,7 +147,7 @@ realtime-position sampling, and every other ordinary machine operation before
 acquiring it. The Pi deliberately keeps `_ordinary_lock` for the full held
 session. A conflicting Home, Jog, Start, command, or second hold from another
 connection is rejected busy at admission rather than queued for later motion.
-Connect/Reconnect are the exception: simultaneous lifecycle requests join one
+Connect/Reconnect are the exception: simultaneous same-owner lifecycle requests join one
 Pi-owned fresh-session operation and observe its same result. Monitoring needs
 no lease. STOP needs no lease, bypasses ordinary ownership, and can cancel an
 active hold or recovery.

@@ -1404,14 +1404,16 @@ def test_idle_disconnect_may_release_the_pi_controller(
     fake = FakePi()
     _install_fake(monkeypatch, fake)
     service = _service()
+    service.connect()
+    fake.requests.clear()
+    fake.timeouts.clear()
 
     service.disconnect()
 
     assert [request["action"] for request in fake.requests] == [
-        ACTION_SERVICE_CAPABILITIES,
         ACTION_MACHINE_DISCONNECT,
     ]
-    assert fake.timeouts == [130.0, 130.0]
+    assert fake.timeouts == [130.0]
     assert service.connected is False
 
 
@@ -1421,6 +1423,9 @@ def test_shutdown_idle_reachable_uses_short_disconnect_budget_and_detaches(
     fake = FakePi()
     _install_fake(monkeypatch, fake)
     service = _service()
+    service.connect()
+    fake.requests.clear()
+    fake.timeouts.clear()
     with service._state_lock:
         service._status_cache["status_stale"] = False
     started = time.monotonic()
@@ -1429,10 +1434,9 @@ def test_shutdown_idle_reachable_uses_short_disconnect_budget_and_detaches(
 
     assert time.monotonic() - started < 1.0
     assert [request["action"] for request in fake.requests] == [
-        ACTION_SERVICE_CAPABILITIES,
         ACTION_MACHINE_DISCONNECT,
     ]
-    assert len(fake.timeouts) == 2
+    assert len(fake.timeouts) == 1
     assert all(0.0 < timeout <= 0.75 for timeout in fake.timeouts)
     assert ACTION_JOB_STOP not in [request["action"] for request in fake.requests]
     assert service.connected is False
@@ -1443,6 +1447,7 @@ def test_shutdown_capability_and_unreachable_disconnect_share_one_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _service()
+    service._control_claimed = True  # Previously connected; capabilities need refreshing.
     with service._state_lock:
         service._status_cache["status_stale"] = False
     monkeypatch.setattr(
@@ -1720,6 +1725,9 @@ def test_stop_during_idle_disconnect_still_invalidates_cleanup_generation(
     fake.before_request = block_disconnect
     _install_fake(monkeypatch, fake)
     service = _service()
+    service.connect()
+    fake.requests.clear()
+    fake.timeouts.clear()
     requested_generation = service.operation_generation()
     errors: list[BaseException] = []
 
@@ -1744,7 +1752,6 @@ def test_stop_during_idle_disconnect_still_invalidates_cleanup_generation(
     assert "cancelled by software STOP" in str(errors[0])
     actions = [request["action"] for request in fake.requests]
     assert actions == [
-        ACTION_SERVICE_CAPABILITIES,
         ACTION_MACHINE_DISCONNECT,
         ACTION_JOB_STOP,
     ]
@@ -1992,12 +1999,12 @@ def test_runtime_stop_disconnects_idle_remote_machine(
     assert isinstance(runtime.context.machine, RemoteMachineService)
     monkeypatch.setattr(runtime.context.machine, "start_monitoring", lambda: None)
     runtime.start()
+    runtime.context.machine.connect()
     fake.requests.clear()
 
     runtime.stop()
 
     assert [request["action"] for request in fake.requests] == [
-        ACTION_SERVICE_CAPABILITIES,
         ACTION_MACHINE_DISCONNECT,
     ]
 

@@ -140,7 +140,7 @@ def z_server(server_harness, tmp_path):
     harness.machine._secondary_air_assist = fan
     harness.machine._z_probe = probe
     harness.machine._mainboard_z_limits = MainboardZLimits(tmp_path / "pi-z.json", "")
-    harness.service.connect()
+    assert server_helpers._rpc(harness, "machine.connect")["ok"]
     return harness, serial
 
 

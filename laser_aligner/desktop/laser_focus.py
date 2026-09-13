@@ -920,6 +920,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 control.setEnabled(idle)
         self.refresh.setEnabled(idle)
         self.next_step.setText(
+            projection.control_reason if projection.status_trusted and not projection.can_control else
             "Next: Wait for controller recovery, then Home / park XY."
             if machine_payload(self._status).get("controller_state") in {"RECOVERING", "OPENING", "SYNCHRONIZING", "STOPPING"} else
             "Next: Connect the controller before focus setup." if not _read_allowed(self._status) else
@@ -1141,6 +1142,7 @@ class LaserFocusCoordinator(QtCore.QObject):
         became_readable = _read_allowed(machine) and not _read_allowed(self._status)
         own_activity = self._mutation and project_machine_state(machine).can_send_diagnostic
         if (self._mutation and self._home_refresh_pending and machine.get("status_stale") is True
+                and project_machine_state(machine).can_control
                 and machine.get("controller_state") in {"READY_HOME_REQUIRED", "READY_MOTION"}
                 and machine.get("connected") is True and not machine.get("armed")
                 and not (machine.get("job") or {}).get("running")):

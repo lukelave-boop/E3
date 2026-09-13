@@ -1,5 +1,20 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## First-connected app keeps Pi control
+
+With the connection-priority Pi companion, the first E3 app to connect retains
+control. A second normal E3 or E3 DEV TEST instance can view status and use STOP,
+but cannot replace/disconnect the first app's connection or operate the machine.
+Updated desktops show **PI IN USE** or **VIEW ONLY**. Disconnect the first app,
+then Connect in the other app to transfer control.
+
+Updated apps renew a 30-second reservation through normal status polling; a
+lost reservation does not stop a Pi-owned job or change controller state.
+Older desktops retain priority until explicit Disconnect or Pi service restart,
+since they do not send identifiable status renewals. Full protection requires
+the Pi companion; updated desktop cleanup also avoids disconnecting controllers
+it has only observed on an older Pi. See [connection ownership](docs/NETWORK_MACHINE.md#first-connected-app-priority).
+
 ## Saved Z after a normal shutdown
 
 The retained-Z feature preserves a verified border reference and Z coordinate

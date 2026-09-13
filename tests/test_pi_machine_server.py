@@ -717,7 +717,7 @@ def _session_fields(harness: ServerHarness) -> dict[str, Any]:
     }
 
 
-def test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected(
+def test_owner_requests_share_one_replacement_and_stale_disconnect_is_rejected(
     server_harness: ServerHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -749,7 +749,7 @@ def test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected(
             _rpc(
                 server_harness,
                 ACTION_MACHINE_REPLACE_CONNECTION,
-                client_id=str(uuid.uuid4()),
+                client_id=_session_fields(server_harness)["client_id"],
                 expected_boot_id=server_harness.service.boot_id,
                 expected_session_generation=initial_generation,
             )
@@ -778,7 +778,7 @@ def test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected(
     stale = _rpc(
         server_harness,
         ACTION_MACHINE_DISCONNECT,
-        client_id=str(uuid.uuid4()),
+        client_id=_session_fields(server_harness)["client_id"],
         expected_boot_id=server_harness.service.boot_id,
         expected_session_generation=initial_generation,
     )
@@ -832,7 +832,7 @@ def test_reserved_admission_remains_available_for_stop(
             server_harness.server._slots.release()
 
 
-def test_two_clients_share_one_lifecycle_failure(
+def test_owner_requests_share_one_lifecycle_failure(
     server_harness: ServerHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -863,7 +863,7 @@ def test_two_clients_share_one_lifecycle_failure(
             _rpc(
                 server_harness,
                 ACTION_MACHINE_REPLACE_CONNECTION,
-                client_id=str(uuid.uuid4()),
+                client_id=_session_fields(server_harness)["client_id"],
                 expected_boot_id=server_harness.service.boot_id,
                 expected_session_generation=initial_generation,
             )

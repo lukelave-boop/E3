@@ -1085,7 +1085,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
             )
         )
         state = self._machine_ui_state
-        if state.controller_state == "RECONNECT_REQUIRED":
+        if not state.can_control:
+            self.machine_connection_button.setText("Connect machine")
+            enabled = state.can_connect
+        elif state.controller_state == "RECONNECT_REQUIRED":
             self.machine_connection_button.setText("Reconnect machine")
             enabled = state.can_reconnect
         elif state.can_disconnect or state.controller_state in {

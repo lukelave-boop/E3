@@ -64,6 +64,7 @@ def test_companion_includes_complete_retention_lifecycle_and_new_module_is_absen
     entries = {entry["path"]: entry for entry in manifest["files"]}
     required = {"laser_aligner/machine/z_retention.py", "laser_aligner/machine/job_focus.py",
                 "laser_aligner/machine/service.py", "laser_aligner/machine/pi_job_service.py",
+                "laser_aligner/machine/pi_job_protocol.py",
                 "laser_aligner/machine/secondary_controller.py", "laser_aligner/remote_node.py"}
     assert required <= entries.keys()
     assert manifest["predecessor_revision"] == PREVIOUS_REVISION
@@ -124,10 +125,11 @@ def test_package_applies_to_exact_main_predecessor_and_imports_without_hardware(
                    cwd=project, check=True, capture_output=True)
 
 
-def test_unknown_local_edit_rejects_before_any_file_is_replaced(kit):
+@pytest.mark.parametrize("relative", ["laser_aligner/machine/service.py", "laser_aligner/machine/pi_job_protocol.py"])
+def test_unknown_local_edit_rejects_before_any_file_is_replaced(kit, relative):
     installer, project, bundle = kit
     original = (project / "laser_aligner/config.py").read_bytes()
-    (project / "laser_aligner/machine/service.py").write_text("operator changes")
+    (project / relative).write_text("operator changes")
     with pytest.raises(ValueError, match="unknown local changes"):
         installer.install(project, bundle=bundle, apply=True)
     assert (project / "laser_aligner/config.py").read_bytes() == original

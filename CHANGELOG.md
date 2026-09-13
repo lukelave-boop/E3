@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — preserve the first app's Pi connection
+
+- Reserve Pi control for the first connected E3 app. Competing apps can observe
+  status and use STOP, but cannot reconnect/disconnect or operate its controller.
+- Show PI IN USE / VIEW ONLY in updated desktops and suppress observer focus
+  polling. Cleanup no longer disconnects a controller an app only observed.
+- Release updated clients' reservations on detach, or after 30 seconds without
+  renewal once admitted work has finished. Legacy clients keep their reservation
+  until explicit Disconnect or Pi service restart. Pi-owned jobs continue under
+  their existing execution and STOP rules.
+- Add a guarded three-module Pi companion update for the exact recorded
+  workpiece-focus baseline; configuration, calibration and firmware are preserved.
+
 ## Unreleased — recognize the installed Pi focus update combination
 
 - Correct the workpiece-focus companion's predecessor list to include the

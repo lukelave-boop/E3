@@ -12,6 +12,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,12 +30,14 @@ from .pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROL_OWNER,
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     CAPABILITY_PI_STRUCTURED_ERRORS,
     ERROR_CONTROLLER_BUSY,
+    ERROR_CONTROLLER_IN_USE,
     ERROR_CONTROLLER_REJECTED,
     ERROR_CONTROLLER_STALE_SESSION,
     ERROR_INTERNAL,
@@ -69,6 +72,7 @@ ACTION_MACHINE_STATUS = "machine.status"
 ACTION_MACHINE_CONNECT = "machine.connect"
 ACTION_MACHINE_REPLACE_CONNECTION = "machine.replace_connection"
 ACTION_MACHINE_DISCONNECT = "machine.disconnect"
+ACTION_MACHINE_CONTROL_RELEASE = "machine.control_release"
 ACTION_MACHINE_PREPARE_PHOTO_POSITION = "machine.prepare_photo_position"
 ACTION_MACHINE_PREPARE_JOB_START = "machine.prepare_job_start"
 ACTION_MACHINE_JOG = "machine.jog"
@@ -87,6 +91,7 @@ MACHINE_ACTIONS = frozenset(
         ACTION_MACHINE_CONNECT,
         ACTION_MACHINE_REPLACE_CONNECTION,
         ACTION_MACHINE_DISCONNECT,
+        ACTION_MACHINE_CONTROL_RELEASE,
         ACTION_MACHINE_PREPARE_PHOTO_POSITION,
         ACTION_MACHINE_PREPARE_JOB_START,
         ACTION_MACHINE_JOG,
@@ -117,6 +122,7 @@ SERVER_CAPABILITIES = (
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_STRUCTURED_ERRORS,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROL_OWNER,
     "same-channel-stepper-hold-v1",
 )
 
@@ -147,8 +153,13 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
     },
     ACTION_MACHINE_STATUS: {
         "required": (),
-        "optional": (),
+        "optional": ("client_id",),
         "response": ("status", "active_job", "latest_job"),
+    },
+    ACTION_MACHINE_CONTROL_RELEASE: {
+        "required": ("client_id", "expected_boot_id", "expected_control_owner_revision"),
+        "optional": (),
+        "response": ("released",),
     },
     ACTION_MACHINE_CONNECT: {
         "required": (),
@@ -162,7 +173,7 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
     },
     ACTION_MACHINE_DISCONNECT: {
         "required": (),
-        "optional": (),
+        "optional": ("expected_control_owner_revision",),
         "response": ("status",),
     },
     ACTION_MACHINE_PREPARE_PHOTO_POSITION: {
@@ -305,6 +316,7 @@ _MAX_COMMAND_TIMEOUT_SECONDS = 120.0
 _MAX_REALTIME_TIMEOUT_SECONDS = 10.0
 _MAX_ERROR_CHARACTERS = 512
 _SHUTDOWN_JOIN_SECONDS = 2.0
+_CONTROL_LEASE_SECONDS = 30.0
 
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
@@ -335,12 +347,20 @@ for _session_action in _SESSION_MUTATING_ACTIONS:
         *tuple(_session_schema["required"]),
         *_SESSION_CONTEXT_FIELDS,
     )
+    _session_schema["optional"] = (
+        *tuple(_session_schema["optional"]),
+        "control_lease",
+    )
+_CONTROL_CLAIM_ACTIONS = frozenset(
+    {ACTION_MACHINE_CONNECT, ACTION_MACHINE_REPLACE_CONNECTION, ACTION_JOB_START}
+)
 _SHUTDOWN_ALLOWED_ACTIONS = _MONITOR_ACTIONS | frozenset(
-    {ACTION_SERVICE_CAPABILITIES, ACTION_JOB_STOP}
+    {ACTION_SERVICE_CAPABILITIES, ACTION_JOB_STOP, ACTION_MACHINE_CONTROL_RELEASE}
 )
 _ERROR_CODES = frozenset(
     {
         ERROR_CONTROLLER_BUSY,
+        ERROR_CONTROLLER_IN_USE,
         ERROR_CONTROLLER_REJECTED,
         ERROR_CONTROLLER_STALE_SESSION,
         ERROR_INTERNAL,
@@ -444,6 +464,14 @@ class PiMachineServer:
         self._replay_lock = threading.Lock()
         self._replay: OrderedDict[str, _ReplayEntry] = OrderedDict()
         self._lease_ids: OrderedDict[str, None] = OrderedDict()
+        self._control_lock = threading.Lock()
+        self._control_clock = time.monotonic
+        self._control_owner: str | None = None
+        self._control_deadline: float | None = None
+        self._control_inflight = 0
+        self._control_confirmed = False
+        self._control_release_pending = False
+        self._control_revision = 0
         self._build = {
             "version": application_version(),
             "revision": build_revision(),
@@ -485,12 +513,14 @@ class PiMachineServer:
     def _status(self) -> dict[str, Any]:
         status = self.service.status()
         status["monitoring_requests_in_flight"] = self._monitor_count()
+        status.update(self._control_metadata())
         return status
 
     def _snapshot(self) -> dict[str, Any]:
         snapshot = self.service.monitor_snapshot()
         status = dict(snapshot["status"])
         status["monitoring_requests_in_flight"] = self._monitor_count()
+        status.update(self._control_metadata())
         snapshot["status"] = status
         return snapshot
 
@@ -499,7 +529,121 @@ class PiMachineServer:
             "protocol_version": PROTOCOL_VERSION,
             "build": dict(self._build),
             **self.service.response_metadata(),
+            **self._control_metadata(),
         }
+
+    def _clear_control_owner_locked(self) -> None:
+        self._control_owner = None
+        self._control_deadline = None
+        self._control_confirmed = False
+        self._control_release_pending = False
+        self._control_revision += 1
+
+    def _expire_control_owner_locked(self) -> None:
+        # Operator ownership never controls Pi-owned execution. Expiry changes
+        # bookkeeping only, and admitted work pins its owner until it unwinds.
+        if (self._control_owner is not None and not self._control_inflight
+                and self._control_deadline is not None
+                and self._control_clock() >= self._control_deadline):
+            self._clear_control_owner_locked()
+
+    def _control_metadata(self) -> dict[str, Any]:
+        with self._control_lock:
+            self._expire_control_owner_locked()
+            return {
+                "control_owner_client_id": self._control_owner,
+                "control_owner_leased": self._control_deadline is not None,
+                "control_owner_revision": self._control_revision,
+                "control_owner_lease_seconds": _CONTROL_LEASE_SECONDS,
+            }
+
+    @staticmethod
+    def _control_in_use(*, unclaimed: bool = False) -> PiJobServiceError:
+        return PiJobServiceError(
+            "Connect this E3 app before controlling the Pi."
+            if unclaimed else
+            "Another E3 app retains control of this Pi. Disconnect that app first; "
+            "this app can still monitor and use STOP.",
+            code=ERROR_CONTROLLER_IN_USE,
+            retryable=False,
+        )
+
+    def _renew_control_owner(self, client_id: str | None) -> None:
+        with self._control_lock:
+            self._expire_control_owner_locked()
+            if (client_id is not None and self._control_owner == client_id
+                    and self._control_deadline is not None
+                    and not self._control_release_pending):
+                self._control_deadline = self._control_clock() + _CONTROL_LEASE_SECONDS
+
+    def _require_control_revision_locked(self, expected_revision: int) -> None:
+        if self._control_revision != expected_revision:
+            raise PiJobServiceError(
+                "Pi control ownership changed before this app's cleanup could run",
+                code=ERROR_CONTROLLER_STALE_SESSION,
+                retryable=False,
+                action_required="refresh_status",
+            )
+
+    def _release_control_owner(self, client_id: str, expected_revision: int) -> bool:
+        with self._control_lock:
+            self._expire_control_owner_locked()
+            if self._control_owner != client_id:
+                raise self._control_in_use(unclaimed=self._control_owner is None)
+            self._require_control_revision_locked(expected_revision)
+            if self._control_inflight:
+                self._control_release_pending = True
+                return False
+            self._clear_control_owner_locked()
+            return True
+
+    @contextmanager
+    def _control_operation(
+        self, client_id: str, action: str, leased: bool,
+        *, expected_revision: int | None = None,
+    ):
+        with self._control_lock:
+            self._expire_control_owner_locked()
+            existing_owner = self._control_owner is not None
+            if self._control_owner is None:
+                if action not in _CONTROL_CLAIM_ACTIONS:
+                    raise self._control_in_use(unclaimed=True)
+                self._control_owner = client_id
+                self._control_confirmed = False
+                self._control_revision += 1
+                self._control_deadline = (
+                    self._control_clock() + _CONTROL_LEASE_SECONDS if leased else None
+                )
+            if self._control_owner != client_id or self._control_release_pending:
+                raise self._control_in_use()
+            if expected_revision is not None:
+                self._require_control_revision_locked(expected_revision)
+            if existing_owner and action in {
+                ACTION_MACHINE_CONNECT, ACTION_MACHINE_REPLACE_CONNECTION,
+            }:
+                # Each admitted connection request establishes a fresh claim
+                # incarnation, even when the serial connection is already ready.
+                # A delayed release from before this request cannot clear it.
+                # RPC replay returns its stored response without re-admission.
+                self._control_revision += 1
+            self._control_inflight += 1
+        succeeded = False
+        try:
+            yield
+            succeeded = True
+        finally:
+            with self._control_lock:
+                self._control_inflight -= 1
+                if succeeded:
+                    self._control_confirmed = True
+                    if action == ACTION_MACHINE_DISCONNECT:
+                        self._control_release_pending = True
+                    elif self._control_deadline is not None:
+                        self._control_deadline = self._control_clock() + _CONTROL_LEASE_SECONDS
+                if not self._control_inflight and (
+                    self._control_release_pending or not self._control_confirmed
+                ):
+                    self._clear_control_owner_locked()
 
     @staticmethod
     def _request_id_for_error(request: Mapping[str, Any]) -> str | None:
@@ -611,22 +755,41 @@ class PiMachineServer:
             "policy_diagnostic": request.get("execution_policy_diagnostic"),
         }
 
-    def _dispatch(self, request: Mapping[str, Any], action: str) -> dict[str, Any]:
+    def _validate_context(
+        self, request: Mapping[str, Any], action: str,
+    ) -> tuple[str | None, str | None, int | None]:
         self._validate_schema(request, action)
-        _client_id, expected_boot_id, expected_generation = self._request_context(
+        client_id, expected_boot_id, expected_generation = self._request_context(
             request
         )
         if action in _SESSION_MUTATING_ACTIONS:
             if (
-                _client_id is None
+                client_id is None
                 or expected_boot_id is None
                 or expected_generation is None
             ):
                 raise PiJobProtocolError(
                     "Controller mutation requires client/session context"
                 )
+            if "control_lease" in request:
+                _exact_bool(request["control_lease"], "control_lease")
+            if action == ACTION_MACHINE_DISCONNECT and "expected_control_owner_revision" in request:
+                validate_session_generation(
+                    request["expected_control_owner_revision"],
+                    label="expected_control_owner_revision",
+                )
+        elif action == ACTION_MACHINE_CONTROL_RELEASE:
+            if client_id is None or expected_boot_id is None or expected_generation is not None:
+                raise PiJobProtocolError("Control release requires client, Pi boot and control revision without session expectations")
+            validate_session_generation(
+                request.get("expected_control_owner_revision"),
+                label="expected_control_owner_revision",
+            )
+        elif action == ACTION_MACHINE_STATUS:
+            if expected_generation is not None or expected_boot_id is not None:
+                raise PiJobProtocolError("Machine status accepts client identity without session expectations")
         elif (
-            _client_id is not None
+            client_id is not None
             or expected_generation is not None
             or expected_boot_id is not None
         ):
@@ -640,6 +803,33 @@ class PiMachineServer:
                 retryable=True,
                 action_required="refresh_status",
             )
+        return client_id, expected_boot_id, expected_generation
+
+    def _dispatch(self, request: Mapping[str, Any], action: str) -> dict[str, Any]:
+        client_id, _boot_id, _generation = self._validate_context(request, action)
+        if action == ACTION_MACHINE_CONTROL_RELEASE:
+            assert client_id is not None
+            return {"released": self._release_control_owner(
+                client_id, request["expected_control_owner_revision"],
+            )}
+        if action in _SESSION_MUTATING_ACTIONS:
+            assert client_id is not None
+            with self._control_operation(
+                client_id, action, request.get("control_lease") is True,
+                expected_revision=request.get("expected_control_owner_revision"),
+            ):
+                return self._dispatch_action(request, action)
+        if action == ACTION_MACHINE_STATUS:
+            # Renew only an already-owned successful status observation. The
+            # request cannot acquire or revive an expired control lease.
+            body = self._dispatch_action(request, action)
+            self._renew_control_owner(client_id)
+            body["status"].update(self._control_metadata())
+            return body
+        return self._dispatch_action(request, action)
+
+    def _dispatch_action(self, request: Mapping[str, Any], action: str) -> dict[str, Any]:
+        _client_id, _boot_id, expected_generation = self._request_context(request)
         if action not in _SHUTDOWN_ALLOWED_ACTIONS:
             self.service.require_accepting_requests(action)
         if action == ACTION_SERVICE_CAPABILITIES:
@@ -925,9 +1115,14 @@ class PiMachineServer:
                         "state_revision": status["state_revision"],
                         "controller_session_generation": status["controller_session_generation"],
                         "controller_state": status["controller_state"],
+                        **{key: value for key, value in status.items()
+                           if key.startswith("control_owner_")},
                     }
                 else:
                     metadata = self._response_metadata()
+                    if isinstance(body.get("status"), dict):
+                        body["status"].update({key: value for key, value in metadata.items()
+                                               if key.startswith("control_owner_")})
                 response = {
                     "ok": True,
                     "request_id": request_id,
@@ -964,22 +1159,17 @@ class PiMachineServer:
         try:
             request_id = validate_request_id(request.get("request_id"))
             error_request_id = request_id
-            self._validate_schema(request, ACTION_MACHINE_STEPPER_HOLD)
-            _client_id, expected_boot_id, expected_generation = self._request_context(
-                request
+            client_id, _expected_boot_id, expected_generation = self._validate_context(
+                request, ACTION_MACHINE_STEPPER_HOLD,
             )
-            if expected_boot_id is not None and expected_boot_id != self.service.boot_id:
-                raise PiJobServiceError(
-                    "Pi process restarted before the stepper hold could run",
-                    code=ERROR_CONTROLLER_STALE_SESSION,
-                    retryable=True,
-                    action_required="refresh_status",
-                )
+            assert client_id is not None
             self.service.require_accepting_requests(ACTION_MACHINE_STEPPER_HOLD)
             self._claim_lease_request(request_id)
             lease_id = str(uuid.uuid4())
             release_request_id: str | None = None
-            with self.service.temporary_stepper_hold(
+            with self._control_operation(
+                client_id, ACTION_MACHINE_STEPPER_HOLD, request.get("control_lease") is True,
+            ), self.service.temporary_stepper_hold(
                 expected_session_generation=expected_generation,
             ):
                 channel.send_json(
@@ -1188,6 +1378,7 @@ __all__ = [
     "ACTION_MACHINE_COMMAND",
     "ACTION_MACHINE_CONNECT",
     "ACTION_MACHINE_DISCONNECT",
+    "ACTION_MACHINE_CONTROL_RELEASE",
     "ACTION_MACHINE_JOG",
     "ACTION_MACHINE_PROBE_PIN",
     "ACTION_MACHINE_PROBE_Z",

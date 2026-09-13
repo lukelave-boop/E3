@@ -22,6 +22,7 @@ from scripts.package_workpiece_focus import (
 
 RECORDED_REMOTE_REVISION = "050498c0e31d7778c161688c9c232224aceb2717"
 REMOTE_SERVICE = "laser_aligner/machine/remote_service.py"
+PI_JOB_PROTOCOL = "laser_aligner/machine/pi_job_protocol.py"
 
 
 def load_installer(bundle):
@@ -69,7 +70,7 @@ def test_upgrade_preserves_operator_data_backups_and_newlines_and_is_idempotent(
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["applied"] and not result["service_started"]
     assert result["compatible_predecessors"] == [list(PREDECESSORS)[baseline]]
-    assert len(result["files"]) == len(SAVED_Z) == 15
+    assert len(result["files"]) == len(SAVED_Z) == 16
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
@@ -105,7 +106,7 @@ def test_mixed_known_predecessors_reject_before_any_replacement(kit):
     assert not list(project.rglob("*.e3-backup-*"))
 
 
-@pytest.mark.parametrize("relative", ["laser_aligner/machine/service.py", REMOTE_SERVICE,
+@pytest.mark.parametrize("relative", ["laser_aligner/machine/service.py", REMOTE_SERVICE, PI_JOB_PROTOCOL,
                                       "laser_aligner/machine/z_retention.py"])
 def test_unknown_local_edit_rejects_before_any_replacement(kit, relative):
     installer, project, bundle, originals, baseline = kit
@@ -158,6 +159,7 @@ def test_package_pins_complete_baselines_and_copies_only_application_sources(tmp
     for previous in manifest["predecessors"]:
         assert previous["files"].keys() == SAVED_Z.keys()
     assert all(path.startswith("laser_aligner/") for path in SAVED_Z)
+    assert PI_JOB_PROTOCOL in SAVED_Z
     guide = (bundle / "LASER_FOCUS.md").read_text(encoding="utf-8")
     assert "__PI_PACKAGE__" not in guide
     assert "install_laser_focus.py" not in guide
@@ -190,7 +192,7 @@ def exact_predecessor_project(tmp_path, baseline):
     for name, source_revision in overrides.items():
         (project / name).write_bytes(subprocess.check_output(
             ["git", "show", f"{source_revision}:{name}"], cwd=ROOT))
-    assert len(PREDECESSORS[baseline]) == 15
+    assert len(PREDECESSORS[baseline]) == 16
     for name, digest in PREDECESSORS[baseline].items():
         target = project / name
         if digest is None:

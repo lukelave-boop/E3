@@ -1,5 +1,15 @@
 # Roadmap
 
+## First-connected Pi app priority
+
+Implement server-enforced client ownership, negotiated 30-second reservations,
+observer-only desktop controls and non-owner cleanup rejection. Verify competing
+clients, legacy priority, owner handoff, expired/in-flight reservations and global
+STOP through authenticated loopback and Windows offscreen checks. Package the
+three-module Pi update against the recorded 568b1cc9 installed baseline. Physical
+two-app testing and installation remain pending; no connection-stability claim
+extends to Wi-Fi, Pi power, USB, firmware or hardware faults.
+
 ## Workpiece-focus companion compatibility
 
 Recognize the exact recorded Pi combination of the e57adbb5 base and targeted
