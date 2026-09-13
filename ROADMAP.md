@@ -1,5 +1,11 @@
 # Roadmap
 
+## Windows update handoff reliability
+
+Separate installer creation from the shutdown deadline and preserve launch
+diagnostics. Cover slow and failed launches, bounded teardown, and frozen
+Windows process creation. Original operator failure timing remains unknown.
+
 ## Workpiece-focus companion compatibility
 
 Recognize the exact recorded Pi combination of the e57adbb5 base and targeted

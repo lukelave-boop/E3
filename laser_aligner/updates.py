@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import ntpath
 import os
@@ -15,6 +16,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -434,6 +436,23 @@ def _start_external_windows_process(
     return process
 
 
+def _record_installer_launch(path: Path, stage: str, **details: Any) -> None:
+    """Retain local launch evidence without allowing diagnostics to block updates."""
+    record = {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "stage": stage,
+        "installer": path.name,
+        "parent_pid": os.getpid(),
+        **details,
+    }
+    try:
+        path.with_suffix(".launch.json").write_text(
+            json.dumps(record, indent=2), encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def _launch_windows_installer(path: Path) -> None:
     resolved = path.expanduser().resolve()
     if resolved.suffix.lower() != ".exe":
@@ -442,17 +461,30 @@ def _launch_windows_installer(path: Path) -> None:
         raise UpdateError(
             f"Downloaded Windows update package does not exist: {resolved}"
         )
-    _start_external_windows_process(
-        [
-            str(resolved),
-            "/SP-",
-            "/CLOSEAPPLICATIONS",
-            "/RESTARTAPPLICATIONS",
-            "/NORESTART",
-        ],
-        cwd=resolved.parent,
-        environment=_windows_installer_environment(),
-        description="Windows update installer",
+    _record_installer_launch(resolved, "starting")
+    started = time.monotonic()
+    try:
+        process = _start_external_windows_process(
+            [
+                str(resolved),
+                "/SP-",
+                "/CLOSEAPPLICATIONS",
+                "/RESTARTAPPLICATIONS",
+                "/NORESTART",
+                f"/LOG={resolved.with_suffix('.setup.log')}",
+            ],
+            cwd=resolved.parent,
+            environment=_windows_installer_environment(),
+            description="Windows update installer",
+        )
+    except Exception as exc:
+        _record_installer_launch(
+            resolved, "failed", error=str(exc), elapsed_seconds=time.monotonic() - started,
+        )
+        raise
+    _record_installer_launch(
+        resolved, "created", child_pid=getattr(process, "pid", None),
+        elapsed_seconds=time.monotonic() - started,
     )
 
 

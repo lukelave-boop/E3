@@ -1,5 +1,27 @@
 # Current repository state
 
+## Installer launch and shutdown deadline correction (2026-09-13)
+
+The operator reports regular E3 0.7.13 downloaded an update and closed after
+approval without showing the installer. The cached 7b66881966a5 package matched
+the published SHA-256 and size; a direct launch opened its 0.7.125 wizard, and
+the installed build metadata subsequently confirmed 0.7.125. The original
+attempt produced no retained launch evidence, so its exact failure is unknown.
+
+A production MainWindow subprocess regression reproduces a matching defect:
+the shutdown watchdog was armed before external process creation. A launch
+delayed beyond the shutdown budget was terminated before creating the child.
+The pre-fix test failed with no launch marker. Creation now completes after
+unsaved-project approval but before committing Close or arming the watchdog.
+Creation failure leaves the desktop running and reports the error; successful
+creation still enters the unchanged bounded teardown. Local launch-stage JSON
+and an explicit Inno Setup log are retained alongside the downloaded package.
+
+Focused Windows updater/handoff/watchdog tests pass 47 cases, including slow
+launch, failed launch without teardown, and the ordinary stuck-worker deadline.
+Frozen-process verification and compatibility CI follow. No controller, motion,
+laser or user configuration changes are part of this correction.
+
 ## Correct the installed Pi companion baseline (2026-09-12)
 
 The operator's read-only dry run of e3-pi-workpiece-focus-29a79a73 rejected

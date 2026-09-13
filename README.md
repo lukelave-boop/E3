@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Windows updates create the verified installer before starting E3's shutdown
+deadline. Launch failure keeps the app open; launch and setup diagnostics remain
+in the update cache. See [updates](docs/UPDATES.md).
+
 ## Saved Z after a normal shutdown
 
 The retained-Z feature preserves a verified border reference and Z coordinate

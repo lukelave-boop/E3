@@ -136,9 +136,9 @@ class _AutoClosePreparedWindow(_PreparedWindow):
         before_shutdown_cleanup=None,
     ) -> bool:
         self.events.append("prepare")
-        self._close_requested = True
         if before_shutdown_cleanup is not None:
             before_shutdown_cleanup()
+        self._close_requested = True
         self.controller.active = True
         return True
 
@@ -432,7 +432,8 @@ def test_verified_installer_is_spawned_before_slow_bounded_teardown(
     assert not window.isVisible()
 
 
-def test_production_update_launches_before_blocked_close_preparation() -> None:
+@pytest.mark.parametrize("launch_delay", [0.0, 0.8])
+def test_production_update_launches_before_blocked_close_preparation(launch_delay) -> None:
     script = """
 import os
 import time
@@ -453,9 +454,13 @@ window._closing = False
 window._confirm_discard_changes = lambda: True
 window._save_window_state = lambda: time.sleep(30.0)
 window.shutdownStarted.connect(arm_process_exit_watchdog)
-update_ui.launch_downloaded_update = lambda _path: print("LAUNCHED", flush=True)
+def launch(_path):
+    time.sleep(LAUNCH_DELAY)
+    print("LAUNCHED", flush=True)
+update_ui.launch_downloaded_update = launch
 update_ui._request_downloaded_update_handoff(window, Path("verified-E3-Setup.exe"))
 """
+    script = script.replace("LAUNCH_DELAY", repr(launch_delay))
     process = subprocess.Popen(
         [sys.executable, "-c", script],
         stdout=subprocess.PIPE,
@@ -560,8 +565,8 @@ def test_failed_deferred_launch_is_not_closed_by_background_drain_timer(
     monkeypatch.setattr(update_ui, "launch_downloaded_update", fail)
     monkeypatch.setattr(
         update_ui,
-        "_show_terminal_handoff_failure",
-        lambda path, error: dialogs.append((path, error)),
+        "_show_handoff_failure",
+        lambda parent, error: dialogs.append((parent, error)),
     )
     monkeypatch.setattr(qt_application, "quit", lambda: quits.append("quit"))
 
@@ -571,12 +576,37 @@ def test_failed_deferred_launch_is_not_closed_by_background_drain_timer(
     )
     qt_application.processEvents()
 
-    assert window.events[:2] == [
-        "prepare",
-        "close",
-    ]
-    assert not window.isVisible()
-    assert quits == ["quit"]
+    assert window.events == ["prepare"]
+    assert window.isVisible()
+    assert window._close_requested is False
+    assert quits == []
     assert len(dialogs) == 1
-    assert dialogs[0][0] == tmp_path / "E3-Setup.exe"
+    assert dialogs[0][0] is window
     assert "simulated deferred installer launch failure" in str(dialogs[0][1])
+
+
+def test_production_launch_failure_does_not_commit_close(qt_application, monkeypatch, tmp_path):
+    from laser_aligner.desktop.main_window import E3MainWindow
+
+    window = E3MainWindow.__new__(E3MainWindow)
+    QtWidgets.QMainWindow.__init__(window)
+    window._close_requested = False
+    window._closing = False
+    window._confirm_discard_changes = lambda: True
+    window._save_window_state = lambda: pytest.fail("cleanup began after failed launch")
+    shutdowns = []
+    window.shutdownStarted.connect(shutdowns.append)
+    errors = []
+
+    def fail(path):
+        raise OSError("launch blocked")
+
+    monkeypatch.setattr(update_ui, "launch_downloaded_update", fail)
+    monkeypatch.setattr(update_ui, "_show_handoff_failure",
+                        lambda parent, error: errors.append((parent, error)))
+    update_ui._request_downloaded_update_handoff(window, tmp_path / "setup.exe")
+    assert not window._close_requested
+    assert not window._closing
+    assert shutdowns == []
+    assert errors[0][0] is window
+    assert str(errors[0][1]) == "launch blocked"

@@ -303,25 +303,18 @@ def _request_downloaded_update_handoff(
 
     prepare_close = getattr(window, "_prepare_close_request", None)
     if callable(prepare_close):
-        installer_launched = False
-        launch_error: Exception | None = None
-
-        def launch_before_shutdown_cleanup() -> None:
-            nonlocal installer_launched, launch_error
-            try:
-                launch_downloaded_update(path)
-            except Exception as exc:
-                launch_error = exc
-            else:
-                installer_launched = True
-
-        if not prepare_close(
-            before_shutdown_cleanup=launch_before_shutdown_cleanup
-        ):
+        try:
+            accepted = prepare_close(
+                before_shutdown_cleanup=lambda: launch_downloaded_update(path)
+            )
+        except Exception as exc:
+            _show_handoff_failure(window, exc)
+            return
+        if not accepted:
             return
         window._e3_update_close_prepared = True  # type: ignore[attr-defined]
-        window._e3_update_installer_launched = installer_launched  # type: ignore[attr-defined]
-        window._e3_update_installer_launch_error = launch_error  # type: ignore[attr-defined]
+        window._e3_update_installer_launched = True  # type: ignore[attr-defined]
+        window._e3_update_installer_launch_error = None  # type: ignore[attr-defined]
     # CloseEvent now cancels producers, drains workers for a bounded slice, and
     # tears down the runtime under one absolute deadline. Waiting for arbitrary
     # workers here would bypass that contract and could let the process watchdog
