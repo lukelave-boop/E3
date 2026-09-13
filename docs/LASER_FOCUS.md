@@ -2,6 +2,10 @@
 
 ## Home / park timeout correction
 
+Tested Pi-only companion **e3-pi-thickness-focus-1ccd58e0** (`de6cdc1`) is staged,
+not yet installed; physical-state confirmation is required to restart the hung
+service. Existing **E3 DEV TEST 0.7.150** and saved calibration stay compatible.
+
 A directly captured Pi deadlock after Home blocked status and software STOP:
 the Home focus-preservation guard and CPU cooling acquired shared locks in
 opposite orders. The correction covers Home preservation and completed-job
