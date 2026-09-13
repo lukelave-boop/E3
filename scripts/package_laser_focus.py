@@ -27,6 +27,54 @@ PREVIOUS = {"laser_aligner/machine/setup_motion.py": None,
  'laser_aligner/machine/z_retention.py': None}
 
 
+def packaged_focus_guide(guide: str, *, installer_name: str, predecessors: str) -> str:
+    """Keep shared workflow guidance but bind installation to this actual kit."""
+    before, heading, section = guide.partition("## Pi companion installation\n")
+    if not heading:
+        raise ValueError("The focus guide must contain its Pi companion installation section")
+    _, next_heading, after = section.partition("\n## ")
+    installation = (
+        f"Use [INSTALL.md](INSTALL.md) in this package for its exact copy, dry-run and apply commands. "
+        f"The bundled `{installer_name}` defaults to read-only and accepts {predecessors}, "
+        "or already-current payload files. Unknown changes reject before replacement; changed "
+        "existing sources receive byte-for-byte backups. Configuration, calibration files, "
+        "travel limits and cooling settings are preserved.\n\n"
+        "Apply only with the machine idle, E3 disconnected and the hardware-node service inactive. "
+        "The installer neither stops nor starts the service and flashes no firmware. "
+        "Install the separately supplied matching speed firmware by its README procedure, "
+        "then establish a fresh border reference, teach the 7 mm gauge again and measure the workpiece.\n"
+    )
+    return before + heading + "\n" + installation + next_heading + after
+
+
+def installation_guide(folder: Path) -> str:
+    windows_source = str(folder.resolve()).replace("'", "''")
+    return (
+        "# Install this laser-focus companion\n\n"
+        f"This installer accepts the exact `{PREVIOUS_REVISION}` predecessor or already-current "
+        "payload files. Unknown edits reject before any replacement; replaced sources are backed up. "
+        "Current sources require matching firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1` for "
+        "normal Z movement. This source installer does not flash firmware. Follow the matching "
+        "firmware package README, then reference the border, teach the gauge again and measure.\n\n"
+        "Copy from Windows PowerShell:\n\n```powershell\n"
+        f"scp -r '{windows_source}' greenhouse-climate@192.168.5.18:/home/greenhouse-climate/\n"
+        "```\n\nIn Pi Bash, preview the source changes without writing or sending controller commands:\n\n"
+        "```sh\n"
+        "e3_project=/home/greenhouse-climate/Projects/laser-camera-aligner\n"
+        f"e3_focus=/home/greenhouse-climate/{folder.name}\n"
+        '"$e3_project/.venv/bin/python" "$e3_focus/install_laser_focus.py" --project "$e3_project"\n'
+        "```\n\nWhen the machine is idle and E3 is disconnected, stop the service and apply in the "
+        "same Pi Bash session. The installer checks for an inactive service and never stops or "
+        "starts it itself. Restart only after installation succeeds:\n\n"
+        "```sh\n"
+        "sudo systemctl stop e3-hardware-node.service &&\n"
+        "sudo systemctl reset-failed e3-hardware-node.service &&\n"
+        '"$e3_project/.venv/bin/python" "$e3_focus/install_laser_focus.py" --project "$e3_project" --apply &&\n'
+        "sudo systemctl start e3-hardware-node.service\n"
+        "```\n"
+    )
+
+
 def package(destination: Path) -> Path:
     sources = {name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in PREVIOUS}
     manifest = json.dumps({"predecessor_revision": PREVIOUS_REVISION, "files": [
@@ -48,6 +96,11 @@ def package(destination: Path) -> Path:
                  .replace("CPU cooling support not installed", "Laser-focus support not installed"))
     (folder / "install_laser_focus.py").write_text(installer, encoding="utf-8", newline="\n")
     guide = (ROOT / "docs/LASER_FOCUS.md").read_text(encoding="utf-8")
+    guide = packaged_focus_guide(
+        guide, installer_name="install_laser_focus.py",
+        predecessors=f"the exact `{PREVIOUS_REVISION}` source predecessor",
+    )
+    (folder / "INSTALL.md").write_text(installation_guide(folder), encoding="utf-8", newline="\n")
     (folder / "README.md").write_text(
         "Current sources require matching firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1` "
         "for normal Z movement. Follow the matching firmware package README, then establish a "

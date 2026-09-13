@@ -8,9 +8,11 @@ from pathlib import Path
 if __package__:
     from .package_laser_focus import PREVIOUS as INSTALLED_FOCUS
     from .package_laser_focus import PREVIOUS_REVISION as INSTALLED_FOCUS_REVISION
+    from .package_laser_focus import packaged_focus_guide
 else:
     from package_laser_focus import PREVIOUS as INSTALLED_FOCUS
     from package_laser_focus import PREVIOUS_REVISION as INSTALLED_FOCUS_REVISION
+    from package_laser_focus import packaged_focus_guide
 
 ROOT = Path(__file__).resolve().parents[1]
 SAVED_Z_REVISION = "c638b3683faf83b10bb8483dd53fa8a4726b25c8"
@@ -118,6 +120,12 @@ def package(destination: Path) -> Path:
     (folder / "INSTALL.md").write_text(installation_guide(folder), encoding="utf-8", newline="\n")
     for name in ("LASER_FOCUS.md", "ENDER_RECOVERY.md", "Z_RETENTION.md"):
         guide = (ROOT / "docs" / name).read_text(encoding="utf-8")
+        if name == "LASER_FOCUS.md":
+            guide = packaged_focus_guide(
+                guide, installer_name="install_workpiece_focus.py",
+                predecessors="the recorded installed `e57adbb5` / `12dbb3d` / `59c31d7` combination, "
+                "the pinned main-focus predecessor or the pinned saved-Z predecessor",
+            )
         guide = guide.replace("__PI_PACKAGE__", folder.name).replace("install_laser_focus.py", "install_workpiece_focus.py")
         (folder / name).write_text(guide, encoding="utf-8", newline="\n")
     (folder / "README.md").write_text(

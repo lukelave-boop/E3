@@ -162,6 +162,15 @@ def test_package_pins_complete_baselines_and_copies_only_application_sources(tmp
     assert "__PI_PACKAGE__" not in guide
     assert "install_laser_focus.py" not in guide
     assert "install_workpiece_focus.py" in guide
+    assert "install_z_setup_speed.py" not in guide
+    assert "package_z_setup_speed.py" not in guide
+    assert "[INSTALL.md](INSTALL.md)" in guide
+    installation_section = guide.split("## Pi companion installation\n", 1)[1]
+    assert "568b1cc9" not in installation_section
+    assert "`e57adbb5` / `12dbb3d` / `59c31d7`" in installation_section
+    assert "pinned saved-Z predecessor" in installation_section
+    assert "## Setup travel speeds" in guide
+    assert "Normal Z moves require the new firmware's exact" in guide
     assert (bundle / "Z_RETENTION.md").is_file()
     installation = (bundle / "INSTALL.md").read_text(encoding="utf-8")
     assert str(bundle.resolve()).replace("'", "''") in installation

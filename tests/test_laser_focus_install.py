@@ -14,6 +14,27 @@ import pytest
 from scripts.package_laser_focus import PREVIOUS, PREVIOUS_REVISION, ROOT, package
 
 
+def test_packaged_guide_uses_its_own_installer_baseline_and_existing_install_link(tmp_path):
+    bundle = package(tmp_path / "dist")
+    guide = (bundle / "README.md").read_text(encoding="utf-8")
+    assert "install_laser_focus.py" in guide
+    assert "install_workpiece_focus.py" not in guide
+    assert "install_z_setup_speed.py" not in guide
+    assert "package_z_setup_speed.py" not in guide
+    assert "[INSTALL.md](INSTALL.md)" in guide
+    section = guide.split("## Pi companion installation\n", 1)[1]
+    assert PREVIOUS_REVISION in section
+    assert "568b1cc9" not in section
+    assert "## Setup travel speeds" in guide
+    assert "Normal Z moves require the new firmware's exact" in guide
+    installation = (bundle / "INSTALL.md").read_text(encoding="utf-8")
+    assert str(bundle.resolve()).replace("'", "''") in installation
+    assert f"e3_focus=/home/greenhouse-climate/{bundle.name}" in installation
+    assert '"$e3_focus/install_laser_focus.py" --project "$e3_project"\n' in installation
+    assert '"$e3_focus/install_laser_focus.py" --project "$e3_project" --apply &&\n' in installation
+    assert "Cap:E3_Z_SETUP_SPEED_V1:1" in installation
+
+
 @pytest.fixture
 def kit(tmp_path, monkeypatch):
     bundle = package(tmp_path / "dist")
