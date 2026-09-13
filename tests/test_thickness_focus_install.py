@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.package_thickness_focus import INTEGRATED_REVISION, THICKNESS_REVISION, package, source
+from scripts.package_thickness_focus import COOLING_REVISION, INTEGRATED_REVISION, THICKNESS_REVISION, package, source
 
 
-@pytest.fixture(params=["synthetic", "integrated", "thickness"])
+@pytest.fixture(params=["synthetic", "integrated", "thickness", "cooling"])
 def kit(tmp_path, monkeypatch, request):
     bundle = package(tmp_path / "dist", "HEAD", "0.7.133")
     spec = importlib.util.spec_from_file_location("thickness_installer", bundle / "install_thickness_focus.py")
@@ -22,9 +22,10 @@ def kit(tmp_path, monkeypatch, request):
     for entry in manifest["files"]:
         path = project / entry["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
-        if request.param in {"integrated", "thickness"}:
+        if request.param in {"integrated", "thickness", "cooling"}:
             try:
-                revision = INTEGRATED_REVISION if request.param == "integrated" else THICKNESS_REVISION
+                revision = {"integrated": INTEGRATED_REVISION, "thickness": THICKNESS_REVISION,
+                            "cooling": COOLING_REVISION}[request.param]
                 content = source(revision, entry["path"])
             except subprocess.CalledProcessError:
                 pytest.skip("Historical integrated Git source is unavailable in this shallow checkout")

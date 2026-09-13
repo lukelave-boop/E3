@@ -1,5 +1,11 @@
 # Roadmap
 
+## Invalid thickness recovery (2026-09-13)
+
+Separate invalid derived measurements at verified clearance from motion failures.
+Keep jobs blocked and expose numeric diagnostics while preserving the connection
+and reference for corrected measurement. Physical validation remains pending.
+
 ## Focus/cooling hang correction (2026-09-13)
 
 A simulated regression reproduces and corrects a focus/cooling lock inversion

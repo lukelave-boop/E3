@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Invalid thickness after a completed probe/clearance cycle now blocks jobs with
+numeric diagnostics while retaining the controller connection. Correct the datum,
+spacers or probe location and measure again; see [focus setup](docs/LASER_FOCUS.md).
+
 A tested Pi-side focus/cooling deadlock correction is available; see
 [focus teaching status](docs/LASER_FOCUS.md). It preserves the existing gauge
 calibration and automatic thickness rule. Operator verification remains pending.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — invalid thickness connection preservation
+
+- Keep the controller connected when a completed measurement returns to verified
+  clearance but its calculated thickness is invalid. Continue blocking jobs.
+- Show and log the measured elevation, datum, spacers and rejected thickness
+  instead of losing these details during an unnecessary Ender emergency stop.
+
 ## Unreleased — focus/cooling deadlock correction
 
 - Keep focus and CPU cooling lock acquisition in the same order, preventing

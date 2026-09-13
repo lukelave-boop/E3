@@ -6,6 +6,7 @@ may restore the border datum; surfaces and movement previews never survive.
 from __future__ import annotations
 
 import copy
+import logging
 import math
 import re
 import time
@@ -35,6 +36,7 @@ ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
+LOGGER = logging.getLogger(__name__)
 
 
 def focus_calibration_path(config_path: Path) -> Path:
@@ -550,14 +552,29 @@ class LaserFocus:
                             "carriage_xy_mm": list(xy), "measured_at": time.time()}
             derived = None
             if automatic:
-                # A failed derivation leaves powered jobs blocked, never using the old plan.
-                self.job_focus_block_reason = "Invalid material thickness; check the honeycomb datum and spacers, then measure again"
-                derived = thickness_focus(self.surface["elevation_mm"], value)
-                self.surface.update(derived)
-                gap_mm = derived["gap_mm"]
-            self._select_measured_job(firmware=firmware, geometry=geometry, maximum=maximum,
-                                      session=session, xy=xy, current=current, clearance=clearance,
-                                      gap=gap_mm, compatible=compatible)
+                # contact_at has already verified the clearance return. A bad
+                # derived thickness blocks jobs, but is not a motion failure.
+                # Discard the surface so manual selection cannot reuse it.
+                elevation = self.surface["elevation_mm"]
+                try:
+                    derived = thickness_focus(elevation, value)
+                except SafetyError:
+                    thickness = elevation - HONEYCOMB_HEIGHT_MM - value
+                    self.clear_surface(keep_alignment=True)
+                    self.job_focus_block_reason = (
+                        f"Invalid material thickness {thickness:.3f} mm: measured elevation "
+                        f"{elevation:.3f} mm, honeycomb datum {HONEYCOMB_HEIGHT_MM:.3f} mm, "
+                        f"spacers {value:.3f} mm. Check the datum, spacers and probe location, "
+                        "then measure again. Z returned to clearance."
+                    )
+                    LOGGER.warning("Workpiece measurement rejected: %s", self.job_focus_block_reason)
+                else:
+                    self.surface.update(derived)
+                    gap_mm = derived["gap_mm"]
+            if not automatic or derived is not None:
+                self._select_measured_job(firmware=firmware, geometry=geometry, maximum=maximum,
+                                          session=session, xy=xy, current=current, clearance=clearance,
+                                          gap=gap_mm, compatible=compatible)
             if derived is not None and self.job_plan is not None:
                 self.job_plan.update(derived)
         elif action in {"jog", "teach", "preview"}:

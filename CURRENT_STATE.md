@@ -1,5 +1,50 @@
 # Current repository state
 
+## Invalid thickness disconnect correction (2026-09-13)
+
+Direct SSH verified all 17 installed files match ef005aa / e3-pi-thickness-focus-5f770c81.
+The running Pi service started after that installation. At 11:11, a completed
+probe/clearance sequence reached thickness derivation, rejected the derived
+value and invoked the generic post-motion STOP path. Retained machine.status
+reports Invalid material thickness and Ender emergency stop requested; primary
+status RPCs remained responsive. The old code discarded the measured values, so
+the exact rejected thickness/datum/spacer combination is unavailable.
+
+The correction treats only thickness derivation rejection after verified
+clearance as a blocked measurement result. It discards surface/preview/job
+selection, retains the valid reference and connection, and reports and logs
+elevation, fixed honeycomb datum, spacer value and rejected thickness. Invalid
+thickness still cannot authorize jobs or be reused through manual focus.
+Probe, clearance, communication and STOP failures retain their stop paths.
+Windows focused verification and Pi installation are pending. No physical motion
+or focus accuracy is newly verified. Existing Windows E3 DEV TEST 0.7.133 is
+compatible; this is a Pi-only correction.
+
+## Direct Pi SSH verified (2026-09-13)
+
+Direct read-only SSH works from Windows to greenhouse-climate@192.168.5.18.
+Plain batch SSH reproduces Permission denied (publickey,password): the existing
+non-default key is not automatically selected, and no SSH config file is present.
+The restricted execution sandbox also cannot read the Windows .ssh directory.
+Use approved execution outside that sandbox and explicitly select the existing
+key; do not interpret a default-login failure as rejection of this specific key:
+
+```powershell
+ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i "$env:USERPROFILE\.ssh\greenhouse_pi_ed25519" greenhouse-climate@192.168.5.18 "hostname; uptime"
+```
+
+Repeated explicit-key logins succeeded; saved host identity matched and Pi sshd
+recorded accepted public-key authentication. No credentials, SSH configuration,
+service state or hardware state were changed. The prior note that key
+authentication was rejected did not establish rejection of the Pi-specific key.
+The earlier pre-reboot SSH outage remains unexplained; only this boot's journal
+is available. Direct logs show the 11:11 focus request failed and the controller
+became disconnected while subsequent machine.status RPCs continued succeeding.
+Current read-only observations: SSH and E3 services active, 493 MiB available
+memory, no swap use, 22 GiB disk free; temperature 63.9 C and get_throttled=0x80008.
+These observations do not establish the cause of the earlier outage or qualify
+physical motion. Future diagnostics should use direct SSH with the command above.
+
 ## Focus/cooling deadlock correction (2026-09-13)
 
 Operator reports: teaching Z moves twice produced no movement and an unresponsive

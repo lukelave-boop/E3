@@ -43,6 +43,11 @@ THICKNESS = {
     'laser_aligner/machine/laser_focus.py': '3f1610cbe953f8e34301b038d74c9577109622b8d53bdf42a210ad697680b5d7',
     'laser_aligner/machine/job_focus.py': '54c7dbfcd86a79de20dd14948f59dd4a73d3e7d2e2a7968d0a4c5204bd1ae653',
 }
+COOLING_REVISION = "ef005aa236e12d213acfa58b9dfa54d1aaa303b1"
+COOLING = {
+    **THICKNESS,
+    "laser_aligner/machine/service.py": "50ff453e64dc40f70a08e4c63b397d6c42c721c3299e5ec56f7903684eecd6d9",
+}
 
 
 
@@ -61,6 +66,7 @@ def package(destination, revision, version):
             {"revision": "installed-workpiece-focus-568b1cc9", "files": PREVIOUS},
             {"revision": INTEGRATED_REVISION, "files": INTEGRATED},
             {"revision": THICKNESS_REVISION, "files": THICKNESS},
+            {"revision": COOLING_REVISION, "files": COOLING},
         ],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
@@ -81,8 +87,10 @@ def package(destination, revision, version):
     guide = f"""# Install automatic thickness-derived focus
 
 Use E3 DEV TEST {version} with this exact Pi companion, revision `{revision}`.
-The companion fixes a focus/cooling lock inversion that could block a teaching
-jog before motion. The existing Windows 0.7.133 build remains compatible.
+The companion keeps invalid thickness blocked after a verified clearance return
+without emergency-stopping the controllers. It reports the measured elevation,
+datum and spacers for correction, and retains the focus/cooling lock-order fix.
+The existing Windows 0.7.133 build remains compatible.
 It includes the integrated faster-Z and first-app-priority sources. Normal Z
 travel still requires `Cap:E3_Z_SETUP_SPEED_V1:1`; use the previously supplied
 matching speed firmware. This installer does not flash firmware or operate hardware.
@@ -91,14 +99,15 @@ or gauge teaching. A firmware identity change still requires reference and teach
 
 Accepted predecessors: the recorded installed 568b1cc9 companion or the integrated
 speed/priority sources at `{INTEGRATED_REVISION}`, or the thickness-focus sources
-at `{THICKNESS_REVISION}`. Unknown edits reject. Operator
+at `{THICKNESS_REVISION}`, or the installed cooling fix at `{COOLING_REVISION}`.
+Unknown edits reject. Operator
 configuration, calibration and saved-Z data are preserved; replaced sources are
 backed up. Default installation is a read-only preview.
 
 Copy from Windows PowerShell:
 
 ```powershell
-scp -r '{windows_source}' greenhouse-climate@192.168.5.18:/home/greenhouse-climate/
+scp -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i "$env:USERPROFILE\\.ssh\\greenhouse_pi_ed25519" -r '{windows_source}' greenhouse-climate@192.168.5.18:/home/greenhouse-climate/
 ```
 
 In Pi Bash:

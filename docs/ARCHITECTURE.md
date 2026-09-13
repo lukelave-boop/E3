@@ -1,5 +1,14 @@
 # Architecture
 
+## Completed measurement with invalid thickness
+
+LaserFocus catches only thickness derivation rejection after contact_at has
+verified clearance, known Z and the stowed probe. It returns a blocked result
+with no surface, preview or job plan, preserving alignment for remeasurement.
+Final connection/session/STOP guards and telemetry cleanup still run. All other
+exceptions retain MachineService's existing failure/STOP behavior. Numeric
+rejection diagnostics appear in job_focus_block_reason and the Pi journal.
+
 ## Focus and CPU cooling lock order
 
 Focus guards acquire the Ender owner lock before the secondary write gate and

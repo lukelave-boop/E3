@@ -1,5 +1,14 @@
 # Surface height and gauge-taught laser focus
 
+## Invalid thickness after measurement (2026-09-13)
+
+After the probe returns to verified clearance, an invalid calculated thickness
+blocks job focus and discards the surface. The connection and border reference
+remain available. The panel and Pi journal report the measured elevation,
+honeycomb datum, spacers and rejected thickness; correct the setup and measure
+again. No negative thickness is clamped into a valid sheet. Probe, clearance or
+communication failures still stop the machine. Physical validation is pending.
+
 ## Teaching hang correction (2026-09-13)
 
 A Pi-side correction gives focus and CPU cooling a consistent lock order. Their

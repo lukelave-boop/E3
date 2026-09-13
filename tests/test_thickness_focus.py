@@ -78,12 +78,71 @@ def test_failed_thickness_cannot_reuse_previous_focus(focus_machine):
     machine, focus, primary = focus_machine
     automatic(machine, focus)
     focus.serial.contacts = [-1.6]
-    with pytest.raises(SafetyError, match="thickness"):
-        machine.focus_control("measure_workpiece", confirmed=True, value=0)
+    before = len(focus.serial.writes)
+    result = machine.focus_control("measure_workpiece", confirmed=True, value=0)
+    assert result["available"] and result["reference_ready"]
+    assert result["current_readback"] == {"z_mm": 30., "z_known": True, "fresh": True}
+    assert "Invalid material thickness -0.100 mm" in result["job_focus_block_reason"]
+    assert "measured elevation -1.600 mm" in result["job_focus_block_reason"]
+    assert not result["requires_clearance"]
+    assert result["surface"] is None and result["preview"] is None
+    assert machine.status()["connected"] and focus.owner.ready
+    assert "M112" not in focus.serial.writes[before:]
     assert focus.state.job_plan is None
-    with pytest.raises(MachineError):
+    with pytest.raises(SafetyError, match="Invalid material thickness"):
         machine.preflight_program(PROGRAM)
     assert not primary.laser_on
+    focus.serial.contacts = [2.5]
+    corrected = machine.focus_control("measure_workpiece", confirmed=True, value=0)
+    assert corrected["job_focus"]["material_thickness_mm"] == 4
+
+
+@pytest.mark.parametrize("failure", ["lost_z", "bad_clearance"])
+def test_failed_probe_or_clearance_still_stops_before_thickness_rejection(focus_machine, failure):
+    machine, focus, primary = focus_machine
+    automatic(machine, focus)
+    focus.serial.contacts = [-1.6]
+    if failure == "lost_z":
+        focus.serial.lose_z_after_probe = True
+    else:
+        focus.serial.overrides["G1 Z30.000 F1200"] = ["error: clearance failed"]
+    with pytest.raises(MachineError):
+        machine.focus_control("measure_workpiece", confirmed=True, value=0)
+    assert focus.state.job_plan is None
+    assert not machine.status()["connected"]
+    assert "M112" in focus.serial.writes
+    assert not primary.laser_on
+
+
+def test_authenticated_invalid_thickness_returns_blocked_status_without_disconnect(focus_server):
+    harness, focus = focus_server
+    select(harness.machine)
+    focus.serial.contacts = [-1.6]
+    response = remote_helpers.rpc(harness, "measure_workpiece", value=0.)
+    assert response["ok"], response
+    result = response["result"]
+    assert result["job_focus"] is None and result["job_focus_required"]
+    assert result["surface"] is None
+    assert "-0.100 mm" in result["job_focus_block_reason"]
+    assert harness.machine.status()["connected"]
+
+
+def test_stop_during_invalid_thickness_processing_still_rejects(focus_machine, monkeypatch):
+    from laser_aligner.machine import laser_focus
+    machine, focus, primary = focus_machine
+    automatic(machine, focus)
+    focus.serial.contacts = [-1.6]
+    derive = laser_focus.thickness_focus
+
+    def interrupted(elevation, spacers):
+        machine.request_stop(_recover=False)
+        return derive(elevation, spacers)
+
+    monkeypatch.setattr(laser_focus, "thickness_focus", interrupted)
+    with pytest.raises(MachineError):
+        machine.focus_control("measure_workpiece", confirmed=True, value=0)
+    assert not machine.status()["connected"]
+    assert focus.state.job_plan is None and not primary.laser_on
 
 
 def test_manual_gap_cannot_override_automatic_workpiece(focus_machine):
