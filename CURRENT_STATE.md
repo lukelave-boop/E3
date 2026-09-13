@@ -640,6 +640,34 @@ The existing E3 DEV TEST 0.7.90 client remains selected; no Windows executable
 was rebuilt. Paper measurement, gauge focus and the original failure cause remain
 unverified; the successful border cycle does not establish their correctness.
 
+## XY recovery installed and E3 DEV TEST selected (2026-09-12)
+
+After fresh user confirmation that Z was secure, the probe pin path clear and
+the laser unable to emit, companion 4a610d7f was installed with five backups.
+All 13 installed payload hashes and preserved saved configuration were verified.
+Pi service PID42165 is active, NRestarts0; authenticated read-only RPC confirms
+pi-laser-focus-xy-recovery-v1, controllers disconnected and disarmed. No axis
+motion, reference or probe retry was requested. Firmware was not changed.
+
+The permanent E3 DEV TEST pointer now selects Guarded XY recovery after probing,
+0.7.90 / d6901d9b12033b3b1697d019fa9e4036d6669fb6 at
+`.codex-worktrees/focus-xy-recovery-ready/dist/E3/E3.exe`; its EXE hash and adjacent
+metadata matched before atomic selection. Reopen E3 DEV TEST to use this build.
+The prior staged-only handoffs are superseded. Recovery state is process-local:
+after this restart the special button appears only for a subsequent retained
+clearance/Home-required state. Physical probe-failure cause remains unknown.
+Evidence: `dist/focus-xy-recovery-0.7.90/pi-installation.json` and
+`pi-live-verification.json` in that directory. Physical motion remains untested.
+
+## XY recovery companion uploaded (2026-09-12)
+
+After explicit user approval, companion 4a610d7f was uploaded to the Pi home
+directory and its archive hash verified. The actual installer dry-run passed
+(five updates, eight current). Service PID17897 remains active, NRestarts0.
+No installation, restart or hardware command occurred. Installation and
+E3 DEV TEST selection await current physical-condition confirmation. Evidence:
+`dist/focus-xy-recovery-0.7.90/pi-staging-readonly.json`.
+
 ## XY recovery 0.7.90 built; installation pending (2026-09-12)
 
 Frozen Windows 0.7.90 is verified at d6901d9b12033b3b1697d019fa9e4036d6669fb6 in
@@ -1278,6 +1306,30 @@ Active max40 and saved X+3.302/Y+38.608 are preserved.
 Physical gauge calibration, transfer acceptance and job integration remain
 active work on this branch.
 
+## Active: Console reply display and laser-head fan diagnosis (2026-09-11)
+
+Operator entered $I/$$ in the correct Console field; screenshot showed blank
+output. Source review found that explicit RPC replies were shown only in a
+seven-second status notice, while Pi status deliberately omitted the raw log.
+Desktop Console now retains bounded, selectable manual replies and ordinary
+rejection errors across refreshes. Backend command gates, session/STOP callback
+suppression, Pi log privacy and both G-code pipelines remain unchanged.
+
+Verification: 70 Windows offscreen Qt/controller tests passed, including six
+new Console regressions. Affected Ruff, compileall and diff checks passed.
+No interactive frozen GUI verification or new frozen build was performed.
+The selected 0.7.67 EXE predates this source fix; active focus work is preserved.
+
+Assistant retrieved read-only $I/$$/$G through the existing authenticated Pi
+MachineService after checking connected, idle, disarmed status before each
+query and binding its current session. Pi reported 0.7.54/53386651, generation1,
+READY_MOTION. $I returned only ok; $$ included $1=255, $30=1000, $31=0, $32=1
+and no $152; $G reported M5/M9/S0. Exact primary firmware identity remains
+unknown. These verify communication/commanded state, not optical output or fan
+behavior. No setting, controller connection, motion, laser output, stop or
+service change was requested. Continuous laser-head fan cause and native
+cooldown remain unverified. See docs/CONSOLE_DIAGNOSTICS.md.
+
 ## Active: camera-selected probe positioning (2026-09-11)
 
 The Surface / laser focus window now has Position probe, a live-image crosshair,
@@ -1347,6 +1399,29 @@ reconstruction of the installed a43df3a1 files: 4 updated, 7 current, all hashes
 matched, reapplication idempotent, config/max40/cooling/calibration preserved.
 Only the Linux service-inactive check was stubbed for that offline installation.
 
+## Compact USB maintenance startup recovery (2026-09-11)
+
+Follow-up operator capture localized the timeout to M997 with a partial `E`;
+subsequent inspect captured startup text and identified old Marlin again.
+The STM32 Marlin wrapper lacks flushTX, making a truncated entry acknowledgement
+a likely explanation; updater entry itself is not physically established.
+Host now permits a bounded HOLD/fresh-identity check after a nonempty expected
+entry-message prefix. Wrong/missing HOLD or identity still prevents BEGIN.
+Updated focused host coverage: 115 passed, Ruff and compileall passed. Physical
+handoff/update validation remains pending; no firmware binary changed.
+
+Operator installed the a43df3a1 Pi focus companion with the hardware service
+stopped. The initial 9518b83f application upload timed out. The subsequent
+35-second/resynchronized capture returned the old Sep 10 10:08:40 compact
+Marlin identity, plus 64 bytes of partial startup text. This confirms the old
+application responds; it does not establish the failed upload stage or reset cause.
+The revised compact host observes startup for 35 seconds on one connection,
+synchronizes, requires a fresh identity, and reports each update stage and
+partial timeout bytes. No firmware binary or flash layout changed.
+Focused Windows host tests: 103 passed; affected Ruff passed. Physical upload
+with this revised host remains pending. Last operator status retained a 40 mm
+host Z maximum; focus and V2 probing are not yet physically qualified.
+
 ## Verified focus feature handoff (2026-09-10)
 
 E3 DEV TEST now selects Gauge focus and raised surfaces, version 0.7.65,
@@ -1406,6 +1481,157 @@ configurations, planner/output/M997 audits, and three pristine source
 profile reproductions passed. The Windows frozen build and CI results are
 recorded in the subsequent handoff; this branch remains experimental until
 operator validation and job-integration work are complete.
+
+
+## Operator result: desktop Z jog test completed (2026-09-10)
+
+After successful border referencing, the operator replied "ok done" to the
+E3 DEV TEST 0.7.61 sequence: Refresh at Z20, select 0.1 mm, confirm the stowed
+probe and clear path, Z+ once expecting Z20.100, then Z- once expecting Z20.000.
+Record this as operator-confirmed completion of the requested desktop jog test.
+No additional screenshot, numeric readback transcript or independently measured
+travel was supplied, so it does not establish physical travel accuracy. The
+Pi companion is a1c79819; the preceding controller report was compact F401
+Marlin 2.0.8.24F4 (Sep 10 2026 10:08:40), Pi 0.7.54 revision 9f932a75.
+Configured maximum was displayed as Z80; maximum-save/persistence verification
+is next. The firmware Z80 capability remains unconfirmed.
+
+## Operator result: Z reference after Pi companion installation (2026-09-10)
+
+Operator reference-border returned ok:true, READY_MOTION, boot ID
+b974afe1-c880-4b9f-86b1-75f0c8b5242b, Pi version 0.7.54 revision 9f932a75,
+primary generation 1 and secondary generation 2. The acknowledged transcript
+shows the initial 5 mm lift, G28 Z R0 ending at Z0 with Z known, followed by
+G1 Z20 F300 / M400 and final M114 Z20.00. Border reference is stored at
+primary carriage XY 15,195, border Z0, with the additional material border
+check still pending. This confirms the CLI cycle's reported success on the
+updated Pi; the new desktop numerical readback and jog buttons remain untested.
+M115 still reports the Sep 10 10:08:40 compact F401 application without the
+E3_Z_LIMIT_80_V1 capability. The configurable Pi Z80 guard is distinct from
+firmware-ceiling verification. No hardware commands were sent by the assistant.
+
+## Operator result: Pi Z-control companion applied (2026-09-10)
+
+The operator reported install_z_controls.py --apply from
+e3-pi-z-controls-a1c79819 on the Pi project returning applied:true. Seven
+runtime files were updated with backups where applicable; pi_job_service.py
+was already current. This confirms the companion's real Pi installation path.
+The pasted shell command invokes systemctl start after successful installation;
+service_started:false describes the installer itself, not the later systemctl
+result. Running service health, E3 DEV TEST Z readback, configurable-limit
+persistence and physical UI jogging still require observation. No hardware
+command was sent by the assistant.
+
+The operator then connected E3 DEV TEST and supplied a Machine-tab screenshot:
+PI REACHABLE / READY HOME REQUIRED, Ender Z unknown / Z homing required,
+Active maximum 80 mm, and Firmware ceiling not confirmed (host limit applies).
+This observes the new desktop panel receiving the Pi maximum and gating jogs
+while MCU Z is unknown. It does not verify numerical Z readback, jogging,
+maximum persistence across restart, or the firmware Z80 capability.
+
+## Operator result: stock F401 boot restored (2026-09-10)
+
+After the F103 dcd8e193 trial, the operator reported the same frozen screen.
+Pi diagnostic at 2026-09-10 01:37:02 UTC opened CH340 /dev/ttyUSB0 at 115200,
+location 1-1.2, but captured zero bytes during both 35-second listening and
+the M115 response window. This physically exercised the Pi diagnostic's silent
+path; it did not establish whether either custom installer had been accepted.
+
+The operator then used the stock F401 recovery folder from package 6991d999.
+Screenshots showed STM32F4_UPDATE/stock_2_0_8_26_9a81f756.bin on the card.
+The operator now reports the Creality animation completes and the normal stock
+screen opens. Photo 20260910_031911.jpg shows Ender-3 S1 Pro, firmware
+2.0.8.26F4, screen V1.0.2, reported H/W CR-FDM-v24S1_301. This records successful
+operator SD recovery and stock boot on the working machine. The displayed H/W
+string is not a direct MCU marking or flash-capacity measurement. Earlier
+pending-recovery statements below are historical. No hardware action was
+performed by the assistant, and no new installer was selected.
+
+The operator then stopped e3-hardware-node.service and ran the Pi identity
+diagnostic at 2026-09-10 09:27:25 UTC. CH340 /dev/ttyUSB0 (1A86:7523, location
+1-1.2), 115200 8N1, returned 832 bytes to M115, including Marlin 2.0.8.26F4
+(Jan 9 2023 12:40:40), Ender-3 S1 Pro and final ok. Reported role was marlin;
+EMERGENCY_PARSER was 0. The preceding 35-second passive window was silent.
+This physically verifies one stock USB identity exchange and the diagnostic's
+positive Pi path. It does not verify long-running USB stability, connected
+cold-start timing, E3 service integration, motion, fans or probing. Stock SD
+recovery, normal display boot and Pi UART communication now form a working
+baseline. Investigate the custom F401 image's installation, target capacity
+and startup/handoff next; neither RC capacity nor a specific code fault has
+been established. The latest operator action left the service stopped.
+
+## Active: working F401 startup diagnosis (2026-09-09)
+
+The installed board's full part marking remains unavailable. Historical F4
+firmware establishes neither RET6 nor 512 KiB. Offline checks confirm installer
+6991d999 ends at 0x0804465C, 18012 bytes beyond a 256 KiB F401's flash end.
+The retained updater rejects non-0x433/non-512 KiB hardware with a one-time
+MCU_MISMATCH message, then ignores input. This is a possible explanation for
+late serial silence, not a physically established cause. The archived stock
+F401 image fits below 0x08040000; its hash and the selected custom image's hash
+were rechecked unchanged. No replacement firmware was built or selected.
+
+`scripts/diagnose_ender_startup.py` provides a standalone Pi maintenance capture
+with explicit hardware flag, inactive-service check, CH340 selection, exclusive
+open, preserved startup bytes and bounded M115/conditional INFO only. It cannot
+recover messages sent before opening or infer chip identity from silence.
+See docs/ENDER_STARTUP_DIAGNOSIS.md for the operator procedure and stock recovery
+decision. Normal controller authority remains MachineService. No motion,
+firmware writes, services or USB devices were operated by the assistant.
+
+Verification: 67 focused Windows Python tests passed across the new helper,
+existing USB identity helper and secondary startup; affected Ruff and compileall
+passed. Linux/Pi execution and physical diagnosis/recovery remain pending.
+Existing F103 candidate, F401 packages and unrelated working changes are preserved.
+
+## Active: separate F103RET6 USB-update candidate (2026-09-09)
+
+The operator requested a second installer assuming an F103 board and explicitly
+required USB updates in its first version. `firmware/ender_aux_f103/` now builds
+a separate Cortex-M3 retained updater plus the same native fan/probe/Z/G39
+profile. The updater starts at 0x08007000, protects the factory loader and its
+own 36 KiB region, programs only application halfwords/pages, and retains the
+commit-last recovery protocol. Application metadata is at 0x08010000 and
+vectors at 0x08010200. M997 provides an explicit idle-only application-to-updater
+handoff; the F103 host requires its exact capability before requesting it.
+F401 images/clients remain separate. Pi readiness accepts the exact F103 updater
+identity as a transient state, never as an acknowledged ready application.
+
+Local Windows verification: application and updater compiled; 202 focused Python
+tests passed, executable Cortex-M3 core/recovery tests passed, 27 production
+flash/GPIO MMIO cases passed, 15 actual M997-body fake-I/O cases passed, all three
+native G39/probe harness configurations passed, and ELF startup/vector/flash
+layout plus compiled fan-kill audits passed. Ruff and compileall passed on the
+affected code. No Pi/Linux runtime test, F103 hardware operation, physical
+flash/recovery, electrical output validation, or F103-specific CI run occurred.
+This working-tree candidate is not integrated/released or physically qualified.
+
+Candidate: `dist/e3-mainboard-f103-usb-dcd8e193.zip`, SD image 189296 bytes,
+SHA256 dcd8e1933113abaa3a4a628f17bb70c7492f1089280b82cbdc1c4322b6ba9b96.
+Includes USB application/client, exact patched sources, ELFs and companion patch.
+The prior F401 installer/package is unchanged.
+
+Important diagnosis correction: existing records below and docs/MATERIAL_HEIGHT.md
+identify the working Ender's successful stock firmware as **2.0.8.26F4**.
+Unless that board was subsequently replaced, this supports F401 and undermines
+the suggested F103 explanation. The operator cannot currently inspect its chip.
+Do not recommend trying the F103 candidate as chip identification on that board.
+Current operator evidence: correct F401 installer filename on SD, expected CH340
+by-id mapping to ttyUSB0 at 115200, Pi source updated to 5f52e40 with package
+0.7.54, and readiness timed out after 45 seconds with no response lines. Screen
+stops during its startup animation; probe self-tests then stays red. Firmware
+installation success and the cause of that F401 startup failure remain unknown.
+The assistant performed no hardware, Pi service, serial or webcam operation.
+
+## Active: connected-startup correction, updater 0.2.0 (2026-09-09)
+
+The operator authorized fixing normal connected power-up. Updater 0.2.0 keeps
+its five-second automatic boot deadline despite ordinary traffic, INFO/M115,
+partial/oversized lines and UART errors. Only exact HOLD or a validated BEGIN
+holds maintenance; invalid/incomplete images still remain in recovery. Flash
+ownership, commit-last validation and physical output initialization are unchanged.
+Replacing updater 0.1.0 requires the new combined SD installer, not a USB
+application upload. Earlier accepted artifacts remain intact.
 
 ## Active: natural numeric editing across desktop controls (2026-09-10)
 
@@ -1500,28 +1726,346 @@ No live GUI, camera, serial, motion, real Pi installation or firmware upload
 was performed. The Pi companion and new desktop workflow require operator
 verification. The normal launcher was not modified. See docs/MAINBOARD_Z_CONTROLS.md.
 
-## Compact Z endpoint and Pi CPU cooling (2026-09-10)
+## Operator-selected Z80 ceiling candidate (2026-09-10)
 
-Operator reports installed compact 08beaf0d firmware (Marlin 2.0.8.24F4,
-Sep 10 2026 10:08:40, MCU:423 FLASH_KIB:256), Pi 0.7.54 with endpoint patch
-393a2d2c. Native homing ends Z0; the corrected host verifies that endpoint
-before its final Z20 lift. Operator observed full homing/clearance and manual
-Z21/back-to-Z20. FAN1 is Pi cooler and FAN2 air assist, each physically on/off
-verified; pin deploy/stow observed. The 7 mm sample measured 6.984, 6.983,
-6.984 mm at one XY position with -0.001 border baseline and configured 1.5 mm
-support offset. Reported 0.001 mm spread is not absolute accuracy calibration.
+At the last verified Z20 clearance, the operator measured about 75 mm additional
+upward travel to collision and requested a ceiling 60 mm above that position.
+The selected absolute border-frame limit is therefore Z80, about 15 mm below
+the reported collision point. No powered end-of-travel test was performed.
 
-Added opt-in Pi E3_CPU_COOLING=1: 45 C on, 40 C off, five-second polling,
-shared MachineService FAN1-only authority, STOP/session pause and no FAN2,
-primary laser or motion command. Kit dist/e3-pi-cooling-79cbe077 validates
-known previous source hashes and retains backups; existing probe/startup
-patches are preserved. 125 focused Windows tests plus Ruff/compileall passed.
-Exact original node/service LF sources pass local patch/backup verification.
-Windows/Linux fast CI is pending. Automatic thermal switching and installed
-board USB uploads remain physically untested. The earlier service shutdown
-timeout is not fixed by these changes. See docs/PI_CPU_COOLING.md for behavior,
-installation and caliper-based next calibration checks. No main merge while
-physical qualification and CI are pending.
+The compact F401 profile now sets Z_MAX_POS=80 for its S1 selections and calls
+native kill before Planner::buffer_segment queues a nonfinite or above-80
+machine-space Z target. This planner check is independent of M211. Ordinary
+homed soft-endstop handling can clamp G0/G1 to Z80; the existing E3 manual
+controls reject targets above 80 before transport. Valid border homing remains
+necessary: a coordinate bound cannot determine unknown physical position.
+M115 adds Cap:E3_Z_LIMIT_80_V1:1; packaging requires it. Installed 08beaf0d does
+not contain this guard. G39 remains -2..10.5 mm with a Z20 start; 30 mm probing
+has not been enabled by this change.
+
+Prepared kit: dist/e3-mainboard-f401-usb-934ef4b3.zip; application.e3fw is an
+application-only USB update for the existing 0401C013 retained updater. Combined
+SD image is 147404 bytes, SHA256
+934ef4b3133a4e149468773e50a847cbd33ef1cfd4731365a476669241aecde0.
+The source archive and manifest capture the exact working firmware sources.
+No firmware was uploaded, no serial port opened and no Pi files were changed.
+The already working Pi startup/probe/cooling patches should be retained; use
+the kit's later application-only update instructions, not Pi-support reinstall.
+
+Verification: local pinned Windows firmware build passed (6740 bytes static
+RAM); patch preparation and hashes passed on a fresh pinned local clone.
+Compiled planner passed 18 cases including 80 acceptance, just-over-80/95/270
+and nonfinite rejection with ordinary soft endstops disabled; rejected targets
+queued no block and invoked a mocked kill boundary. Separately, compiled kill
+cleared both fan GPIO/PWM states. Compiled M115/HAL passed, including the new
+capability, and native G39/probe tests passed all three probing configurations.
+Focused Windows host/preparation/package/probe-fix tests passed (77 before the
+added package capability case; all 25 package tests passed afterward). Ruff
+and compileall passed for touched Python. These are simulated I/O/software
+checks, not physical limit or motion qualification. Installation, new-identity
+readback and ordinary in-range operator motion verification remain pending.
+
+## Operator result: 5 mm step repeatability (2026-09-10)
+
+Three successive operator measurements of the same 5.000 mm step at primary
+XY (75,143) reported 4.641, 4.641, and 4.643 mm thickness: a 0.002 mm reported
+range. Errors were -0.359, -0.359, and -0.357 mm, within the operator's accepted
++/-0.6 mm criterion. This records short-run repeatability at one location,
+not 0.002 mm absolute accuracy. Both new transcripts ended with completed
+M400 and M114 Z20.00 (8000 steps), ok=true, READY_MOTION. No calibration or
+motion/probe limits were changed. The earlier 3.000 -> 2.670 mm and
+7.010 -> 6.586 mm step readings also met the accepted criterion. These are
+surfaces on one stepped artifact. The 30 mm reference remains untested and
+requires appropriate firmware probing bounds and clearance before use.
+
+Configuration: compact F401 package 08beaf0d, Marlin 2.0.8.24F4 built
+Sep 10 2026 10:08:40, MCU:423 FLASH_KIB:256; Pi 0.7.54 revision efaba88c,
+boot b9cfcc45-83dc-45cc-ba3d-afb224d52037, primary session generation 8.
+Border contact -0.001 mm at primary XY (15,195), support height -1.5 mm,
+clearance Z20. Latest G39 contacts were 3.140 and 3.142 mm. Operator request
+IDs: b1003191-d9da-4ebc-9d37-9e900a7d11c6 and
+a361096b-eb49-4729-9c9c-57c731d1e9e9. Only Z, probe and fans belong to the
+Ender; physical XY and laser belong to the separate primary controller.
+
+## Operator result: stepped height checks within accepted tolerance (2026-09-10)
+
+The operator accepts +/-0.6 mm for material-height qualification. This is an
+acceptance criterion, not a change to motion bounds or firmware probe safeguards.
+One caliper-measured stepped artifact produced these physical results:
+
+| Reference thickness (mm) | Reported thickness (mm) | Error (mm) |
+| --- | --- | --- |
+| 3.000 | 2.670 | -0.330 |
+| 5.000 | 4.641 | -0.359 |
+| 7.010 | 6.586 | -0.424 |
+
+All three individual readings meet that criterion. No steps/mm or offset change
+was applied. These readings do not establish repeatability or full-range accuracy.
+The 30 mm reference remains untested; the current Z20 clearance and bounded G39
+measurement routine must be addressed before attempting that height.
+
+Recorded configuration: installed compact F401 package 08beaf0d, Marlin
+2.0.8.24F4 (Sep 10 2026 10:08:40), MCU:423 FLASH_KIB:256; Pi 0.7.54 revision
+efaba88c, boot b9cfcc45-83dc-45cc-ba3d-afb224d52037, primary session generation 8.
+Border contact was -0.001 mm at primary XY (15,195), with configured support
+height -1.5 mm and final clearance Z20. The latest 5 mm step at primary XY
+(75,143) returned G39 contact Z3.140, calculated surface height 3.141 mm,
+and thickness 4.641 mm. Its transcript confirms M400 completion and final
+M114 Z20.00 (8000 steps), with READY_MOTION. Request ID:
+1a12b7a5-72b1-4a70-be73-36c0061a6beb. Ender XY coordinates are not the physical
+primary-controller XY position; only Z, probe, and fans are connected to Ender.
+
+## Active: Pi automatic FAN1 CPU cooling (2026-09-10)
+
+Added opt-in E3_CPU_COOLING=1: full FAN1 at 45 C, off at 40 C, five-second
+polling and missing-sensor full-cooling demand. MachineService retains the
+shared Ender owner, exact capability and readback checks, no independent port,
+no motion/laser/FAN2 command. It supports primary jobs, defers during probing,
+and latches paused after STOP/error until explicit controller reinitialization.
+Manual FAN1 ON is rejected while automatic; manual OFF pauses it. A Pi-only
+source-checked/backed-up kit is dist/e3-pi-cooling-79cbe077. Existing probe
+endpoint/startup patches are not replaced. See docs/PI_CPU_COOLING.md for
+installation, thermal behavior and next Z scale/offset/position checks.
+
+125 focused Windows tests passed; affected Ruff and compileall passed. Exact
+previous Pi LF node/service sources were patched and backed up in a temporary
+local project. Linux sensor/service tests use mocked inputs; automatic thermal
+switching has not yet been physically tested. Existing manual FAN1/FAN2 and
+probe/Z operator results do not qualify automatic cooling. The earlier service
+shutdown timeout remains unresolved. No assistant hardware action occurred.
+
+## Operator result: three material measurements at one position (2026-09-10)
+
+The roughly 7 mm piece returned thicknesses 6.984, 6.983 and 6.984 mm at
+primary XY [35,175], using border contact -0.001 mm at [15,195] and configured
+support offset -1.5 mm. Mean 6.9837 mm; reported full range 0.001 mm. Repeat
+G39 contacts were 5.482 and 5.483 mm; both returned ok:true, READY_MOTION and
+final M114 Z20/8000 steps. Same boot ba2d5e2c-4e2e-46bf-ad88-c0b75a4b85a3,
+session generation 1, Pi 0.7.54 revision 578fb7f2 with endpoint fix 393a2d2c,
+compact firmware 08beaf0d / Marlin 2.0.8.24F4 Sep 10 2026 10:08:40,
+MCU:423 FLASH_KIB:256. Repeat request IDs 7cd3e331-f90d-49f3-99e8-e7a51d3d463b
+and 633bcb9b-7161-4fa3-80a2-3a2044ccb779. The first cycle's fast/slow touches
+and clearance were explicitly observed by the operator; repeat transcripts
+confirm controller completion. This is three reported results at one position
+in one session, not micron-level physical accuracy or broad repeatability
+qualification. No calibrated piece thickness or support offset measurement
+was supplied. Firmware reports contact to 0.001 mm; extra floating-point digits
+in JSON are not additional measurement precision. Earlier single-sample
+statements below are historical. Automatic cooling, USB update qualification,
+reference-flow cleanup and the shutdown timeout remain outstanding.
+
+## Operator result: approximately 7 mm material measured successfully (2026-09-10)
+
+Installed compact F401 kit 08beaf0d (Marlin 2.0.8.24F4 Sep 10 2026 10:08:40,
+MCU:423 FLASH_KIB:256) with Pi endpoint fix 393a2d2c, service 0.7.54 revision
+578fb7f2, boot ba2d5e2c-4e2e-46bf-ad88-c0b75a4b85a3/session generation 1.
+Reference-border at primary XY [15,195] succeeded; subsequent G39 border check
+returned -0.001 mm and final Z20. After primary jog to [35,175], operator
+measure-height returned ok:true and READY_MOTION, G39 E3MH:1 Z:5.483.
+Relative to the measured border, surface height was 5.484 mm. Applying the
+configured border-to-honeycomb offset of 1.5 mm gave thickness 6.984 mm.
+Request ID a5a97b0a-8a97-441a-919a-7956935ddeda. Transcript confirms known Z,
+expected probe input, post-probe Z10 and completed final Z20 lift. Operator
+physically confirmed both fast/slow touches and return to clearance.
+
+This physically verifies one successful custom material cycle on the roughly
+7 mm piece previously rejected by stock firmware. Nominal difference from
+7 mm is 0.016 mm; the piece's true thickness and support offset were not
+independently calibrated by this result. sample_count=1, spread=null: no
+repeatability claim or general measurement accuracy claim is established.
+Prior operator tests also verified both fans (FAN1 Pi cooler, FAN2 air assist),
+probe pin deploy/stow, native homing and manual Z21/back-to-Z20. Automatic
+CPU cooling, installed-board USB uploads, broader range/accuracy and the
+shutdown timeout remain unqualified. The separate border-check command is
+still required by the current reference workflow; combining it with
+reference-border is a recorded workflow improvement, not implemented here.
+Earlier pending seven-millimetre test statements below are historical.
+
+## Operator result: manual Z21 and return to Z20 passed (2026-09-10)
+
+Following successful compact native homing and final Z20 clearance, the
+operator ran typed mainboard_control z 21 --confirm and z 20 --confirm through
+Pi host 192.168.5.18. They confirmed the requested up/down movements and
+successful commands. Current setup: compact firmware 08beaf0d (Marlin
+2.0.8.24F4 Sep 10 2026 10:08:40, MCU:423 FLASH_KIB:256), Pi 0.7.54 revision
+578fb7f2 with z_probe endpoint patch 393a2d2c. This physically qualifies this
+small manual Z move pair, not independently calibrated travel accuracy.
+FAN1 Pi cooler, FAN2 air assist, pin deploy/stow and one full native Z cycle
+also have operator observations. Material reference/measurement is next;
+automatic cooling, physical USB uploads and shutdown-timeout repair remain
+unverified. Native-cycle and manual Z do not establish a material reference.
+Older pending manual-Z statements below are historical.
+
+## Operator result: corrected native Z cycle physically passed (2026-09-10)
+
+Installed compact firmware 08beaf0d, Marlin 2.0.8.24F4 (Sep 10 2026 10:08:40),
+reports MCU:423 FLASH_KIB:256. Operator installed Pi z_probe.py patch LF SHA
+393a2d2c5e791754fed2a14fd706548df4b57bb96cc7fc46ba71d31101c96ece with
+original backup z_probe.py.e3-backup-dvwzyq_7.py. After board power cycle,
+service restart and primary Home/Park, native-cycle returned ok:true and
+READY_MOTION. Service 0.7.54 revision 578fb7f2, boot ID
+ba2d5e2c-4e2e-46bf-ad88-c0b75a4b85a3, controller session generation 1.
+Transcript: initial relative Z5 lift read back Z5/2000 steps; G28 Z R0
+finished Z0 with known Z true and z_min TRIGGERED; final G1 Z20 F300,
+M400 and M114 finished Z20/8000 steps. Operator confirmed the physical
+sequence behaved as expected. This verifies one complete native homing and
+final clearance sequence on the installed mechanics with the corrected host.
+The previous failure was the stock Z5 endpoint assumption; compact V1 uses Z0.
+
+Previously observed: FAN1 Pi cooler and FAN2 air-assist each switched on/off,
+and probe pin deployed/stowed. Primary controller owns XY and laser; Ender
+has no XY stepper connections. Manual Z21/back-to-Z20, material reference/
+measurement accuracy, automatic CPU-temperature cooling and installed-board
+USB uploads remain pending. reference_ready:false is expected for this
+native-cycle test; it does not establish a material-measurement reference.
+Service shutdown earlier timed out and was killed by systemd; the endpoint
+patch does not establish that shutdown behavior is fixed. Older pending
+physical-cycle statements below describe earlier stages.
+
+## Compact Z homing endpoint fix and operator results (2026-09-10)
+
+Installed compact kit 08beaf0d identifies MCU:423 FLASH_KIB:256 and custom
+mainboard/material/USB-update capabilities. Pi service 0.7.54 revision 8c43e335
+successfully connects. Operator physically verified FAN1 = Pi cooler and
+FAN2 = air assist, each at 100 percent/off, and probe pin deploy/stow. The
+separate primary controller owns XY/laser; no XY steppers connect to Ender.
+
+Operator native_test at 04:57:57 local returned initial lift Z5, acknowledged
+G28 Z R0 ending at Z0, then M119 z_min TRIGGERED and known Z true. The Pi
+expected Z5 and stopped/disconnected before sending its final Z20 lift. This
+matches compact Configuration.h Z_AFTER_HOMING=0. It is not a failed contact
+in this transcript. Operator observed fast/slow touches and ending near the
+surface; neither clearance nor measurement accuracy was accepted.
+
+The Pi now selects endpoint Z0 only for exact E3_COMPACT_F401_V1:1; absent
+compact capability retains legacy Z5. Unknown/duplicate compact contracts
+reject before movement. Known-axis, probe-input, endpoint tolerance, final
+lift verification and stop paths remain required. Error details now include
+actual Z/input and whether final lift was withheld. No firmware bytes changed.
+The Pi-only kit dist/e3-compact-probe-fix-393a2d2c uses the existing tested
+installer engine with pinned old/new z_probe.py hashes, service-inactive gate,
+atomic replacement, original backup and line-ending preservation. Unknown
+local edits reject. scripts/package_compact_probe_fix.py reproduces the kit.
+Verification: 172 focused Windows tests passed, one symlink privilege skip;
+affected Ruff and compileall passed. The exact prior operator source was
+patched and backed up in a temporary local project. Pi installation and
+Physical retry with this patch remains pending; no Pi hardware was operated
+by the assistant. Previous pending identity/fan/pin statements are historical.
+
+## Operator result: compact firmware fans and probe pin verified (2026-09-10)
+
+Installed candidate 08beaf0d identifies as custom Marlin 2.0.8.24F4
+(Sep 10 2026 10:08:40), MCU:423 FLASH_KIB:256. Normal Pi MachineService
+0.7.54 revision 8c43e335 status succeeded. The operator physically verified
+FAN1 (Pi cooler) and FAN2 (air assist) each starting at 100 percent and stopping
+at zero through typed mainboard controls. Probe inspect succeeded in the same
+service session, reporting z_min TRIGGERED and unknown axis references.
+The operator then confirmed physical pin extension and retraction following
+typed probe_diagnostic deploy/stow with clearance confirmation. This qualifies
+pin actuation only, not contact sensing or stopping Z motion. Z remains
+unhomed; configuration readback, Z mechanics, native probing/material accuracy,
+automatic temperature-based cooling and installed-board USB uploads remain
+pending. Earlier pending boot/service/output observations below are historical.
+
+## Operator physical result: both fan outputs verified (2026-09-10)
+
+The installed compact F401 candidate 08beaf0d reports Marlin 2.0.8.24F4
+(Sep 10 2026 10:08:40), MCU:423 FLASH_KIB:256 and custom mainboard,
+material-height, compact/USB-updater and emergency-parser capabilities.
+Normal Pi MachineService status succeeded at version 0.7.54 revision 8c43e335,
+reporting FAN1:0 FAN2:0 Z_KNOWN:0. Through typed mainboard_control commands
+at host 192.168.5.18, the operator separately requested fan1 100 --confirm,
+fan1 0, fan2 100 --confirm and fan2 0. They physically confirmed FAN1 starts
+and stops the Pi cooler fan, and FAN2 starts and stops the air-assist fan.
+These attached-load mappings and individual full-on/off operations are now
+physically verified. Intermediate PWM, simultaneous independence, automatic
+CPU-temperature control, probe/Z mechanics and installed-board USB application
+uploads remain pending. Earlier identity/service/fan pending statements below
+are historical. No hardware operation was performed by the assistant.
+
+## Operator physical result: FAN1 is the Pi cooler (2026-09-10)
+
+With installed compact F401 candidate 08beaf0d (Marlin 2.0.8.24F4,
+Sep 10 2026 10:08:40; MCU:423 FLASH_KIB:256), the Pi MachineService
+0.7.54 revision 8c43e335 successfully returned custom M115 identity and
+M123 FAN1:0 FAN2:0 Z_KNOWN:0. The operator then ran typed mainboard_control
+fan1 100 --confirm and fan1 0 through host 192.168.5.18. They physically
+observed the Pi cooler fan start and stop. FAN1's attached load and full-on/off
+operation are now verified for this setup. Intermediate PWM, temperature-based
+control, FAN2, probe/Z mechanics and installed-board USB uploads remain
+unverified. Earlier pending identity/service statements below are historical.
+
+## Operator result: compact firmware connected through E3 (2026-09-10)
+
+The operator's installed-board diagnostic at 10:40:27 UTC returned custom
+Marlin 2.0.8.24F4 (Sep 10 2026 10:08:40), compact/mainboard/material-height/
+USB-updater capabilities and emergency parser, with MCU:423 FLASH_KIB:256.
+This establishes the old 512 KiB-only installer was incompatible with this
+reported device. The successful --resync capture does not prove the cause of
+the preceding empty-command reply.
+
+After service restart and E3 connection, the operator's Windows typed mainboard
+status request succeeded through the Pi MachineService: ok:true,
+READY_HOME_REQUIRED, service version 0.7.54 revision 8c43e335, boot ID
+961fd9d7-1f9c-4bd9-b26e-34d4d9072ba0, session generation 1. Firmware identity
+matched the compact 08beaf0d candidate. M123 twice returned
+E3MB:1 FAN1:0 FAN2:0 Z_KNOWN:0 with ok; M114 returned Z:0.00 with ok.
+This physically verifies one normal service connection and typed status
+exchange. Fan values are commanded PWM, not physical feedback; reported Z
+is not a homed reference. Actual fan/probe/Z behavior, repeatable cold start,
+and USB application upload remain pending. Service integration is no longer
+pending for this observed session. Earlier state entries below are historical.
+
+## Operator result: compact firmware identity verified (2026-09-10)
+
+At 10:40:27 UTC, the operator ran the standalone diagnostic with --resync,
+e3-hardware-node.service stopped, and CH340 /dev/ttyUSB0 at 115200 on the
+installed Ender. M115 returned 952 bytes, a complete custom identity and ok:
+Marlin 2.0.8.24F4 (Sep 10 2026 10:08:40), E3_MAINBOARD_V1,
+E3_MATERIAL_HEIGHT_V1, E3_USB_UPDATER_F401_V1, E3_COMPACT_F401_V1 and
+EMERGENCY_PARSER all enabled. E3HW reports MCU:423 (hex ID) FLASH_KIB:256.
+The operator-selected package is 08beaf0d. Report: /tmp/e3-startup-dr2n31xx.json.
+This physically verifies custom application boot and one Pi USB identity
+exchange. The reported capacity establishes incompatibility with the earlier
+512 KiB-only installer guard/layout; it does not establish every earlier
+failure's cause. Previous unknown-capacity and unconfirmed-identity entries
+below describe earlier stages.
+
+The passive and line_sync phases both returned zero bytes. Success with
+--resync does not establish why the previous empty-command reply occurred,
+nor whether line resynchronization was necessary. No firmware bytes changed.
+Normal E3 connection, cold-start repeatability, actual USB application upload,
+and attached fan/probe/Z behavior remain unverified on this installed board.
+The updater capability advertises support, not a completed upload test.
+Next operator check is service restart, E3 connection and typed mainboard
+status without homing or motion. The service was left stopped by this capture.
+
+## Operator result: compact candidate answers but identity fails (2026-09-10)
+
+For kit 08beaf0d, the operator copied the complete package to the Pi and applied
+the support installer. It reported a successful change from readiness source
+SHA dd2ba0f981681e6be1479e061746418922b417ef06712c82fef24e4c230890a9
+to b052d29029c2d393014cd252ac70de56b01178ee8249a1f9002b5a0ddcfec0d2,
+with an original-file backup. The hardware service was stopped.
+
+At 10:32:15 UTC, the diagnostic opened CH340 /dev/ttyUSB0, 115200 8N1,
+location 1-1.2. The 35-second passive window was silent. Its M115 query received
+28 bytes: `echo:Unknown command: ""` followed by `ok`. Role remained
+unidentified_bytes. This records a responsive Marlin-style command path,
+not successful custom identity, MCU capacity, or attached-hardware acceptance.
+The diagnostic source sends literal M115 plus LF. Investigation now covers the
+compiled receive/queue/parser path; no replacement image or hardware action
+has been performed in response to this result. Keep normal operation pending
+identity acceptance. Earlier stock recovery remains the known baseline.
+
+Offline follow-up executes the exact CI ELF's serial-line ingestion (with fake
+HardwareSerial read/available), queue, parser and dispatch: M115 plus LF and
+LF-prefixed M115 both return custom capabilities; NUL-prefixed M115 returns the
+same 28-byte empty-command reply. UART ISR/physical receive bytes are not tested
+by this reproduction, so a NUL on the real link remains only a hypothesis.
+Standalone diagnostic --resync adds one LF and a separately preserved reply
+phase before M115. Its 27 focused Windows tests, affected Ruff and compileall
+pass. No firmware/kit bytes were modified; operator follow-up is pending.
 
 ## Active: compact F401 installer with initial USB updates (2026-09-10)
 
@@ -1597,16 +2141,6 @@ BENCH recovery does not qualify this native application. No assistant hardware
 operation was performed; the operator's Pi service remains stopped after the
 stock diagnostic. Prior entries below record earlier stages.
 
-## Active: connected-startup correction, updater 0.2.0 (2026-09-09)
-
-The operator authorized fixing normal connected power-up. Updater 0.2.0 keeps
-its five-second automatic boot deadline despite ordinary traffic, INFO/M115,
-partial/oversized lines and UART errors. Only exact HOLD or a validated BEGIN
-holds maintenance; invalid/incomplete images still remain in recovery. Flash
-ownership, commit-last validation and physical output initialization are unchanged.
-Replacing updater 0.1.0 requires the new combined SD installer, not a USB
-application upload. Earlier accepted artifacts remain intact.
-
 The Pi's existing Creality owner now performs a bounded read-only M115 readiness
 handshake before its acknowledged fan-OFF exchange: up to 15 queries within
 45 seconds, plus existing settle/synchronization bounds. Marlin identity and
@@ -1670,6 +2204,36 @@ entry from normal traffic and establish/recover controller readiness without
 operator cable timing, while preserving recovery, output-off behavior, shared
 serial ownership and the webcam. The proposed 30-second isolated boot is only
 a diagnostic margin for updater plus native Marlin initialization.
+
+The operator clarified that the Ender will never be physically connected to
+Windows, including for this investigation. The prepared Windows USB identity
+diagnostic is not the selected next step and has not been run. All controller
+diagnostics remain Pi-local; Windows may be the network client. The next test
+uses the existing Pi usbmon metadata helper, started before the operator's
+service restart, to capture the failing startup M106 S0 exchange. The Ender and
+webcam stay connected to the Pi. See docs/ENDER_USB_CAPTURE.md for the concrete
+two-terminal procedure. The helper does not open serial or command hardware;
+the operator separately initiates the service restart, which briefly restarts
+the camera service. No additional firmware or Pi runtime change is required
+for that test, and no hardware-service action was performed by the assistant.
+
+The operator completed the Pi-local capture on 2026-09-09, 12:20:20-12:22:20
+UTC, and copied /tmp/e3-ender-usb-8dk_yahg into local ignored dist/. Analysis
+of all 80 metadata records found four successful eight-byte bulk OUT transfers
+and zero successful bulk IN bytes. All eight received bytes were four two-byte
+control responses from the CH340. The twelve negative completions were -2
+(ENOENT/cancelled requests): eight bulk IN and four interrupt IN, grouped about
+1.013-1.014 seconds after each successful OUT transfer, consistent with the
+deployed one-second ACK timeout and port-close cleanup. There were no -32
+endpoint-stall completions in this capture. Dropped monitor events were zero;
+two headers remained queued at the end. The adapter was active with USB power
+control "on". Successful USB OUT completion does not prove MCU UART receipt,
+correct firmware execution or USB receive-path correctness. The trace does
+not reproduce the earlier endpoint-stall signature. Payloads were not captured,
+so the eight-byte writes are consistent with, not independent proof of, M106 S0.
+Per-transfer derived counts are saved in the ignored capture's analysis.json.
+Concurrent updater/readiness implementation in the shared checkout is preserved;
+this analysis makes no controller, firmware, USB or service changes.
 
 Final package: `dist/e3-mainboard-v1-7f45686b`; install
 `SD_CARD/STM32F4_UPDATE/e3main_7f45686b.bin` (214620 bytes), SHA-256

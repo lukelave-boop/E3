@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -3065,6 +3066,8 @@ class ConsolePanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._busy = False
+        self._controller_lines: list[str] = []
+        self._diagnostic_lines: deque[str] = deque(maxlen=1000)
         self._machine_status: dict[str, Any] = {}
         self._ui_state: ControllerUiState = project_machine_state(None)
         layout = _panel_layout(self)
@@ -3092,14 +3095,25 @@ class ConsolePanel(QtWidgets.QWidget):
             self.command.clear()
 
     def set_lines(self, lines: list[str]) -> None:
-        text = "\n".join(lines)
+        # Status snapshots replace the local controller log. Explicit diagnostic
+        # replies are desktop-owned: remote status deliberately omits that log.
+        self._controller_lines = lines[-1000:]
+        self._render_lines()
+
+    def _render_lines(self) -> None:
+        lines = list(self._controller_lines)
+        if lines and self._diagnostic_lines:
+            lines.extend(("", "Diagnostic commands:"))
+        lines.extend(self._diagnostic_lines)
+        text = "\n".join(lines[-1000:])
         if text != self.output.toPlainText():
             self.output.setPlainText(text)
             scrollbar = self.output.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
 
     def append_line(self, line: str) -> None:
-        self.output.appendPlainText(line)
+        self._diagnostic_lines.extend(line.splitlines())
+        self._render_lines()
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         self._machine_status = dict(status or {})

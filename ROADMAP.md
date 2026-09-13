@@ -156,6 +156,14 @@ The inset calibration-grid restriction is corrected; selection uses the
 configured bed with current registration and mesh. Physical placement and
 gauge-focus acceptance remain the next operator checks.
 
+## Console replies and laser-head idle fan
+
+Desktop Console reply persistence is implemented in source; frozen delivery
+and operator verification remain pending. The physical primary controller
+reports M5/S0 and no $152 setting in its settings listing. Its exact firmware
+identity and the cause of continuous laser-head fan operation remain unknown;
+no fan behavior, standby setting or motor-hold policy has been changed.
+
 ## Gauge focus calibration
 
 Implemented for operator testing: camera-selected probe positioning with
@@ -175,6 +183,24 @@ gauge fit at multiple elevations, then bind the accepted surface/calibration to
 job preparation and coordinate a final Z lift before post-job XY homing. Camera
 projection correction for raised work remains an independent calibration task.
 
+
+Next for the installed Ender: collect the [independent Pi identity report](docs/ENDER_STARTUP_DIAGNOSIS.md),
+then use the existing stock recovery baseline if silent. Confirm its actual
+F401 memory capacity before selecting another custom image. USB updates remain
+a requirement of the final custom installation.
+
+The [F103RET6 USB-update candidate](firmware/ender_aux_f103/README.md) is built
+and offline-tested, but target identification and physical qualification remain
+pending. The current Ender has historical F4 firmware evidence; resume diagnosis
+of its F401 startup/serial failure rather than selecting another processor image
+by trial. No F103 deployment or integration is claimed.
+
+Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
+handshake. Ordinary traffic cannot hold the updater; incomplete images still
+remain in recovery. A new SD install and companion Pi source update are required.
+[Startup validation](firmware/marlin_mainboard/STARTUP.md) remains operator-pending; no physical
+fix of the separate zero-response fault is claimed. Earlier release notes follow.
+
 ## Numeric editing consistency
 
 Shared numeric controls cover desktop tabs and dialogs, including Z maximum
@@ -190,11 +216,22 @@ in E3 DEV TEST 0.7.61. Full Windows and focused POSIX CI passed. Pi-companion
 installation and physical operator verification remain pending. The 30 mm
 material probing extension remains separate and unimplemented.
 
-Compact firmware's native Z cycle and approximately 7 mm material measurement
-have operator evidence. Automatic FAN1 CPU cooling is implemented; thermal
-switching and installed-board USB updates require physical qualification.
-Next Z work compares caliper-measured samples, physical travel and support
-variation. See docs/PI_CPU_COOLING.md.
+## Compact Z travel qualification
+
+The operator selected an absolute Z80 ceiling from the current border-frame
+Z20 plus 60 mm remaining travel. Compact firmware enforcement is being prepared
+for operator installation. Extending G39 and clearance for the 30 mm reference
+remains separate work; the current G39 range is unchanged.
+
+Pi FAN1 cooling is implemented and tested offline; operator installation and
+thermal on/off observations remain pending. Next Z calibration work separates
+measured travel scale, independently measured sample thickness/support offset,
+and position-dependent honeycomb variation. See docs/PI_CPU_COOLING.md.
+
+Compact F401 qualification: boot, Pi service integration, both fan on/off
+mappings and probe deploy/stow have operator evidence. The Pi Z0/Z5 endpoint
+mismatch is corrected offline; final Z20 clearance, material accuracy and
+installed-board USB uploads still require physical qualification.
 
 The stock F401 baseline is restored and its Pi USB identity works. Next,
 operator-test the [compact F401 kit](firmware/marlin_mainboard_compact/README.md):
@@ -203,12 +240,6 @@ wiring, then explicit USB update/boot and attached fan/Z/probe qualification.
 The initial installer already includes USB updating. The headless profile
 intentionally omits the stock menu; future display support is separate.
 Earlier milestones below are historical.
-
-Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
-handshake. Ordinary traffic cannot hold the updater; incomplete images still
-remain in recovery. A new SD install and companion Pi source update are required.
-[Startup validation](firmware/marlin_mainboard/STARTUP.md) remains operator-pending; no physical
-fix of the separate zero-response fault is claimed. Earlier release notes follow.
 
 Mainboard firmware now has a complete SD installation/recovery package for
 both fans, probe and Z. The next stage is operator physical validation of the

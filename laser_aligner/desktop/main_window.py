@@ -1305,6 +1305,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.machine_panel.z_control.attach_focus_workspace(self.focus_workspace)
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
+        self.controller.diagnosticOutput.connect(self.console_panel.append_line)
         self.material_panel.applyPresetRequested.connect(self.apply_material_preset)
         self.material_panel.notice.connect(self.show_notice)
         self.material_panel.error.connect(self.show_error)

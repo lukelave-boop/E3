@@ -258,6 +258,15 @@ refinement can cover a larger area. MachineService still independently bounds
 the physical target, probe carriage and later laser-return carriage. The typed
 Pi operation and both G-code pipelines are unchanged.
 
+## Manual diagnostic display
+
+DesktopController publishes the result of an explicitly submitted manual
+command to ConsolePanel through diagnosticOutput. The panel retains a bounded
+window-local transcript separately from replaceable local controller-log
+snapshots. Pi monitoring continues to omit raw logs and the arm phrase; manual
+RPC replies use the existing guarded MachineService path and allowlist. This
+changes desktop presentation only, not either G-code pipeline or hardware.
+
 ## Laser focus setup boundary
 
 LaserFocusWorkspace shares the focus panel and coordinator between the embedded
@@ -326,6 +335,28 @@ laser emission, camera correction, persistent live authority or automatic job
 focus. See [LASER_FOCUS.md](LASER_FOCUS.md) for the operator and persistence
 contracts.
 
+
+`scripts/diagnose_ender_startup.py` is a standalone, explicitly enabled Pi
+maintenance diagnostic that requires the hardware service to be inactive and
+opens only the selected CH340 exclusively. It preserves replies and sends
+M115/conditional INFO only; no service, actuator or updater state changes are
+requested. It does not replace MachineService in normal operation or affect
+either desktop/browser pipeline. See ENDER_STARTUP_DIAGNOSIS.md for its limits.
+
+`firmware/ender_aux_f103` is a separate experimental target with F103 flash-page
+programming, a 0x08007000 retained updater and 0x08010200 application vectors.
+It shares the native fan/probe/Z behavior but has a distinct image board ID and
+USB client. Explicit idle-only M997 enters maintenance; normal controller access
+remains through MachineService. The Pi startup reader recognizes the F103 updater
+only as a transient pre-application state. Desktop and browser pipelines are
+unchanged. See its README for target and physical-verification limits.
+
+Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
+handshake. Ordinary traffic cannot hold the updater; incomplete images still
+remain in recovery. A new SD install and companion Pi source update are required.
+[Startup validation](../firmware/marlin_mainboard/STARTUP.md) remains operator-pending; no physical
+fix of the separate zero-response fault is claimed. Earlier release notes follow.
+
 ## Numeric input drafts
 
 Desktop NumericDoubleSpinBox and NumericSpinBox share deferred keyboard
@@ -356,10 +387,27 @@ A validated schema-1 sidecar beside the loaded configuration binds the persisten
 maximum to the Ender port. Windows does not replace the Pi's active value with a
 local profile default. The firmware ceiling capability is displayed separately.
 
-Opt-in Pi CPU cooling polls a Linux thermal sensor and passes only FAN1
-OFF/full-speed demand through MachineService and the shared Ender owner.
-It preserves primary job and FAN2 control, defers during probing, and pauses
-after STOP/error until owner reinitialization. See PI_CPU_COOLING.md.
+## Compact firmware Z ceiling
+
+MachineService retains the 20..80 mm typed manual-Z range. The compact F401
+profile additionally sets native Z_MAX_POS=80 and checks the machine-space Z
+at Planner::buffer_segment before queueing, including internal probe/retract
+paths and when M211 is disabled. A violation invokes native kill. Capability
+E3_Z_LIMIT_80_V1 identifies this enforcement; older compact firmware does not
+advertise it. The ceiling relies on a valid border-homed frame. It is not a
+physical limit switch and does not expand the G39 contact range.
+
+The optional Pi CPU cooling worker polls a Linux CPU thermal zone and passes
+only OFF/full-speed demand to MachineService.update_cpu_cooling. The service
+uses the existing Ender owner with bounded FAN1-only exchanges and STOP/session
+guards; it does not reuse manual controls that would issue primary M5 during
+a job. See PI_CPU_COOLING.md for ownership, deferral and recovery behavior.
+
+Compact native homing contract: the shared CrealityZProbe client chooses
+Z0 only from exact E3_COMPACT_F401_V1:1 identity, otherwise retaining legacy
+Z5. MachineService remains the authority for the complete sequence, including
+known-axis/probe checks and final Z20 verification. Unknown compact versions
+reject before motion. No transport or manual-command permission is added.
 
 The separate `ender_aux_f401compact` / `marlin_mainboard_compact` target uses
 one 256 KiB flash / 64 KiB RAM layout for the exact F401 RC/256 and RE/512 pairs.
@@ -378,12 +426,6 @@ matching application/updater identity and validated image before flash writes.
 normal runtime remains owned by MachineService/CrealityControllerOwner. Neither
 browser nor desktop geometry/project/camera pipelines change. See the
 [compact profile](../firmware/marlin_mainboard_compact/PROFILE.md).
-
-Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
-handshake. Ordinary traffic cannot hold the updater; incomplete images still
-remain in recovery. A new SD install and companion Pi source update are required.
-[Startup validation](../firmware/marlin_mainboard/STARTUP.md) remains operator-pending; no physical
-fix of the separate zero-response fault is claimed. Earlier release notes follow.
 
 The `firmware/marlin_mainboard` profile extends the pinned material patch with
 two independent native fan channels, an explicit capability/status contract and

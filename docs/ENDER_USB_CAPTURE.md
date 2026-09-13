@@ -7,6 +7,44 @@ runs Inspect. No homing, probing, jogging or laser operation is needed here.
 
 ## One bounded attempt
 
+### Current startup failure: capture before service initialization
+
+For the September 2026 mainboard startup fault, start capture **before** the
+operator restarts the service. Its startup M106 S0 is the failed exchange;
+capturing only a later rejected Inspect/Status would miss it. The Ender remains
+physically connected to the Pi. Windows is only an SSH client. Keep the Ender
+powered, the SD card removed, the webcam connected and laser emission disabled.
+Disconnect the machine in E3 before this diagnostic.
+
+Open an SSH terminal to `greenhouse-climate@192.168.5.18`, then run on the Pi:
+
+```sh
+cd /home/greenhouse-climate/Projects/laser-camera-aligner
+sudo modprobe usbmon
+ender_tty=$(basename "$(readlink -f /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0)")
+sudo python3 scripts/capture_ender_usb.py --tty "$ender_tty" --seconds 120
+```
+
+Only after `CAPTURE READY`, use a second Windows PowerShell terminal:
+
+```powershell
+ssh -t greenhouse-climate@192.168.5.18 "sudo systemctl restart e3-hardware-node.service"
+```
+
+The operator restart makes the existing MachineService-owned startup OFF
+attempt. It briefly restarts the camera service too; keep the webcam attached.
+No Home, Inspect or mainboard control command is needed for this capture.
+Let the first terminal finish and retain its printed summary and capture
+directory. The three saved files are needed for transfer-by-transfer analysis;
+the summary alone cannot distinguish control transfers from serial bulk data.
+Correlate the capture's UTC interval with service and kernel journals.
+
+The existing helper was physically exercised in the earlier dwc2 investigation;
+this new startup-failure capture is pending operator execution. It does not
+require a firmware/software update, USB relocation, or a second serial owner.
+
+### Earlier idle-failure procedure
+
 1. Fetch the reviewed development commit. Extract
    `scripts/capture_ender_usb.py` using `git show COMMIT:scripts/capture_ender_usb.py`
    into a temporary Python file. This does not switch the application checkout.

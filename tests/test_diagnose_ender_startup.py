@@ -53,6 +53,46 @@ def test_startup_error_is_preserved_even_when_query_is_silent():
     assert diagnostic.capture(port, clock=port.clock)["reported_role"] == "mcu_mismatch_reported"
 
 
+def test_explicit_line_resync_captures_stale_reply_before_identity():
+    stale = b'echo:Unknown command: ""\nok\n'
+    identity = b"FIRMWARE_NAME:Marlin custom\nok\n"
+    port = Serial({b"\n": stale, b"M115\n": identity})
+    result = diagnostic.capture(port, clock=port.clock, resync=True)
+    assert [data for _, data in port.writes] == [b"\n", b"M115\n"]
+    assert 35 <= port.writes[0][0] < 37
+    assert port.writes[1][0] > port.writes[0][0]
+    assert port.now < 48
+    assert result["phases"][1]["phase"] == "line_sync"
+    assert result["phases"][1]["hex"] == stale.hex()
+    assert result["phases"][2]["hex"] == identity.hex()
+    assert result["reported_role"] == "marlin"
+
+
+def test_line_resync_reply_cannot_supply_missing_query_identity():
+    port = Serial({b"\n": b"FIRMWARE_NAME:Marlin old\nok\n", b"M115\n": b"ok\n"})
+    result = diagnostic.capture(port, clock=port.clock, resync=True)
+    assert result["reported_role"] == "unidentified_bytes"
+
+
+def test_failed_line_resync_write_stops_before_query():
+    port = Serial()
+    writes = []
+    def fail(data):
+        writes.append(data)
+        return 0
+    port.write = fail
+    with pytest.raises(OSError, match="Incomplete query write"):
+        diagnostic.capture(port, clock=port.clock, resync=True)
+    assert writes == [b"\n"]
+
+
+def test_silent_line_resync_does_not_loop_or_enter_updater():
+    port = Serial()
+    result = diagnostic.capture(port, clock=port.clock, resync=True)
+    assert result["reported_role"] == "no_response"
+    assert [data for _, data in port.writes] == [b"\n", b"M115\n"]
+
+
 def test_old_updater_info_fallback_only_after_explicit_unsupported():
     port = Serial({b"M115\n": b"ERR UNSUPPORTED\n",
                    b"INFO\n": b"E3AUX1 UPDATER 0.1.0 BOARD=0401E013\n"})

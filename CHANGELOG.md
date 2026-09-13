@@ -200,6 +200,12 @@ being rejected. Selection now uses the current registered bed map and machine
 work area, with an informational original-grid note and unchanged carriage,
 clearance and separate-move checks.
 
+## Console replies on Pi connections (2026-09-11)
+
+Fixed manual diagnostic replies appearing only in a temporary status message.
+The Console now retains a bounded, selectable command/reply and error history
+across status refreshes, without adding the Pi's full log to monitoring replies.
+
 ## Camera-selected probe positioning (2026-09-11)
 
 Added Position probe in the focus window: select a spot in the live camera,
@@ -215,6 +221,12 @@ the measured point can be returned to the laser for teaching/focus.
   that place the probe and laser over the same spot. Teaching requires the
   laser's acknowledged return; ordinary XY movement invalidates the measurement.
 
+## Compact USB maintenance startup (2026-09-11)
+
+- Wait and synchronize on the same serial connection before firmware identity
+  checks; report update stages and partial timeout responses without automatic
+  transaction retries. Existing firmware images remain unchanged.
+
 ## Gauge-taught focus setup (2026-09-10)
 
 - Added a shared Machine/Machine Setup surface and laser-focus workflow with
@@ -228,7 +240,41 @@ the measured point can be returned to the laser for teaching/focus.
 - Added a hash-checked Pi companion. Hardware calibration and job-bound focus
   integration remain pending physical acceptance.
 
+
+## Working-board startup diagnostic (2026-09-09)
+
+- Add an operator-run Pi identity capture with explicit hardware/service/port
+  gates and bounded M115/conditional INFO queries. No firmware or runtime changes.
+- Document the unconfirmed F401 memory-capacity mismatch and stock-recovery
+  decision path; do not use the F103 candidate as a trial identification image.
+
+## Experimental F103RET6 USB-update candidate (2026-09-09)
+
+- Add a separate F103 retained updater, native fan/probe/Z application, guarded
+  M997 maintenance entry, target-specific USB client and conditional SD package.
+- Preserve F401 builds; extend Pi readiness to wait through the exact F103
+  updater identity. No new runtime control commands are automatically sent.
+- Automated verification only. Historical working-board F4 identity means this
+  is not the selected recovery installer for the currently failing Ender.
+
 ## Mainboard SD firmware and typed controls
+
+Added a complete retained-loader SD installer with independent FAN1/FAN2 PWM,
+native probe and Z control, bounded G39 material probing, fan status, enabled
+emergency parsing and explicit fan shutdown in native kill. The bundle includes
+official F401 stock rollback and corresponding source. Added guarded shared-owner
+fan/Z controls through MachineService and authenticated Pi RPC, plus acceptance,
+rejection, replay and cleanup tests. Ready for attached-hardware validation;
+bare-spare command/readback and compiled checks are recorded in CURRENT_STATE.md.
+
+
+Added a standalone, bounded operator-run Ender USB metadata capture for idle
+connection failures. It records no USB payloads and changes no controller
+behavior. Actual Pi validation is pending.
+
+Probe failures now retain controller replies in the Pi journal for diagnosis;
+remote status continues to omit the local command log. Motion is unchanged.
+
 
 ## Unreleased: numeric field editing
 
@@ -249,10 +295,30 @@ the measured point can be returned to the laser for teaching/focus.
 - Reject unsupported Pi software, stale readbacks and late-session actions;
   expose whether the separate firmware Z80 ceiling is advertised.
 
-Added opt-in Pi CPU cooling on Ender FAN1 (45 C on / 40 C off) through the
-shared controller, with FAN2 preservation and STOP/session guards. Corrected
-the compact V1 homing endpoint from the stock Z5 assumption to verified Z0
-before final Z20 clearance. Source-checked Pi patch kits preserve backups.
+## Unreleased: compact F401 Z80 ceiling
+
+- Set compact firmware upper travel to Z80 and reject nonfinite/over-ceiling
+  planner targets through native kill, independently of ordinary soft endstops.
+- Advertise E3_Z_LIMIT_80_V1; retain the existing G39 probing range and host limits.
+- The operator selected 60 mm remaining travel from Z20. Installation and
+  physical verification of this candidate remain pending.
+
+Added opt-in Pi CPU cooling on Ender FAN1 (45 C on / 40 C off), through the
+existing MachineService owner with independent FAN2 state and STOP/session
+guards. Added a source-checked Pi installer and focused policy/ownership tests.
+Physical automatic thermal switching remains pending.
+
+Compact F401 homing correction: select the exact compact V1 Z0 endpoint
+instead of the stock Z5 assumption, preserving probe/known-axis checks and
+verified final Z20 clearance. Add a source-checked Pi-only patch with backup;
+no firmware reinstall is required. Physical retry is pending.
+
+## Read-only Ender identity resynchronization (2026-09-10)
+
+- Add an explicit `--resync` maintenance option to delimit a possibly partial
+  input line before M115, preserving the delimiter reply in its own phase.
+- Keep default capture behavior and all port/service gates unchanged. The
+  empty-command response does not establish the physical source of bad input.
 
 ## Compact F401 SD/USB installer candidate (2026-09-10)
 
@@ -265,23 +331,6 @@ before final Z20 clearance. Source-checked Pi patch kits preserve backups.
 - Package explicit idle-only M997 entry, target-specific USB client, bounded Pi
   support installer, exact firmware source and the operator-proven stock recovery.
   Automated checks pass; physical acceptance of the new image remains pending.
-
-Added a complete retained-loader SD installer with independent FAN1/FAN2 PWM,
-native probe and Z control, bounded G39 material probing, fan status, enabled
-emergency parsing and explicit fan shutdown in native kill. The bundle includes
-official F401 stock rollback and corresponding source. Added guarded shared-owner
-fan/Z controls through MachineService and authenticated Pi RPC, plus acceptance,
-rejection, replay and cleanup tests. Ready for attached-hardware validation;
-bare-spare command/readback and compiled checks are recorded in CURRENT_STATE.md.
-
-
-Added a standalone, bounded operator-run Ender USB metadata capture for idle
-connection failures. It records no USB payloads and changes no controller
-behavior. Actual Pi validation is pending.
-
-Probe failures now retain controller replies in the Pi journal for diagnosis;
-remote status continues to omit the local command log. Motion is unchanged.
-
 
 ## Connected startup correction (2026-09-09)
 

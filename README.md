@@ -160,6 +160,13 @@ map. The initial calibration grid is not a travel boundary; points beyond it
 receive an informational preview note. Probe and laser-return carriage limits
 still apply. See [the focus workflow](docs/LASER_FOCUS.md).
 
+## Console diagnostic replies
+
+Window > Console retains manual command replies and errors in the current
+window, including on Pi connections. Copy the response pane with Ctrl+A/Ctrl+C.
+This source fix is not yet in the selected frozen build. See
+[Console and laser-fan diagnosis](docs/CONSOLE_DIAGNOSTICS.md).
+
 ## Laser focus setup
 
 The daily reference workspace's **Position probe** mode lets you click the main
@@ -186,6 +193,16 @@ V2 firmware. Calibration and positioning are explicit laser-off actions;
 sequence. Raised-work camera correction remains separate.
 See [the calibration and installation guide](docs/LASER_FOCUS.md).
 
+
+The working Ender's startup failure is under [F401 diagnosis](docs/ENDER_STARTUP_DIAGNOSIS.md).
+Its historical F4 version does not establish flash capacity. A bounded Pi-only
+identity capture is ready; no new firmware or physical fix is claimed.
+
+A separate [experimental F103RET6 installer](firmware/ender_aux_f103/README.md)
+includes USB updates from its first installation. It has offline verification
+only. The working Ender's historical firmware identifies F4, so this candidate
+is not recommended as a trial fix for that machine's current startup failure.
+
 The [mainboard SD firmware](firmware/marlin_mainboard/README.md) now supports
 independent FAN1/FAN2, native probe deployment/stow, Z motion and bounded native
 material-height measurement. The complete SD installer and stock rollback kit
@@ -194,6 +211,12 @@ firmware command/readback paths and now runs this image. See
 [installation](firmware/marlin_mainboard/INSTALL.md) and
 [validation](firmware/marlin_mainboard/VALIDATE.md). The working machine, Pi and
 webcam have not been changed. Earlier prototype/BENCH notes below are historical.
+
+
+For the intermittent Ender connection investigation, see the bounded
+[operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer
+metadata with the webcam running; actual Pi capture validation is pending.
+
 
 Desktop numeric fields now support clearing/replacing numbers and typing
 incomplete decimals without losing keystrokes. Enter, Tab or leaving the field
@@ -204,9 +227,20 @@ E3 Dev's Machine tab now includes Ender Z jogging, adjacent reported height and
 a visible saved Z maximum. The matching Pi companion owns movement validation
 and persistence; see [Z controls](docs/MAINBOARD_Z_CONTROLS.md).
 
-Automatic Pi cooling on FAN1 is available as an opt-in companion: 45 C on,
-40 C off. See [Pi CPU cooling](docs/PI_CPU_COOLING.md) for installation,
-validation limits and the next Z calibration checks.
+The compact F401 source now includes a border-relative Z80 upper travel ceiling,
+aligned with E3's existing manual-Z limit. Firmware identification and update
+instructions are in [the compact profile](firmware/marlin_mainboard_compact/README.md).
+The installed 08beaf0d image does not include this new planner check.
+
+Automatic Pi cooling on the physically identified FAN1 is available as an
+opt-in Pi companion: 45 C on, 40 C off. See [Pi CPU cooling](docs/PI_CPU_COOLING.md)
+for installation and current physical validation limits.
+
+Compact F401 operator update: the Pi native homing client recognizes the
+compact V1 Z0 endpoint before its final Z20 lift; stock retains the Z5 check.
+The source-checked Pi patch kit is built by `scripts/package_compact_probe_fix.py`.
+See `firmware/marlin_mainboard_compact/PROFILE.md` for the contract and
+`CURRENT_STATE.md` for physical validation limits.
 
 The working Ender has been restored to stock **2.0.8.26F4**, with its normal
 screen and Pi USB M115 response verified by the operator. A new
@@ -216,12 +250,6 @@ installation. It retains both fans, native probe/Z and material-height commands.
 The stock touchscreen menu, heaters, extrusion and SD jobs are disabled; check
 startup through USB. The package includes stock recovery and needs physical
 acceptance before attached-hardware use. Earlier development notes follow.
-
-
-For the intermittent Ender connection investigation, see the bounded
-[operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer
-metadata with the webcam running; actual Pi capture validation is pending.
-
 
 Connected startup now has updater 0.2.0 and a bounded Pi Marlin-readiness
 handshake. Ordinary traffic cannot hold the updater; incomplete images still

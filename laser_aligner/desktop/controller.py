@@ -406,6 +406,7 @@ class DesktopController(QtCore.QObject):
     cameraMappingRequired = QtCore.Signal(dict)
     cameraOverlayErrorOccurred = QtCore.Signal(str)
     notice = QtCore.Signal(str)
+    diagnosticOutput = QtCore.Signal(str)
     busyChanged = QtCore.Signal(bool)
     cameraFocusChanged = QtCore.Signal(dict)
     traceResultReady = QtCore.Signal(dict)
@@ -3009,6 +3010,7 @@ class DesktopController(QtCore.QObject):
         self._run(
             lambda: self.runtime.context.machine.send_command(command),
             on_success=lambda responses: self._diagnostic_complete(command, responses),
+            on_failure=lambda message: self._diagnostic_failed(command, message),
             label="Diagnostic command",
             requires_controller=True,
         )
@@ -3033,8 +3035,14 @@ class DesktopController(QtCore.QObject):
         )
 
     def _diagnostic_complete(self, command: str, responses: list[str]) -> None:
+        reply = "\n".join(responses) if responses else "acknowledged"
+        self.diagnosticOutput.emit(f"> {command}\n{reply}")
         self.notice.emit(f"{command}: {' · '.join(responses) if responses else 'acknowledged'}")
         self.poll_status()
+
+    def _diagnostic_failed(self, command: str, message: str) -> None:
+        self.diagnosticOutput.emit(f"> {command}\nERROR: {message}")
+        self.errorOccurred.emit(f"Diagnostic command failed: {message}")
 
     def _machine_changed(self, message: str) -> None:
         self.notice.emit(message)

@@ -3,6 +3,7 @@
 The hardware service must already be stopped by the operator. This standalone
 maintenance tool opens one explicitly selected CH340 exclusively, preserves
 received startup bytes, then sends M115 once (INFO only for an old updater).
+Optional --resync sends one LF after listening and captures its reply separately.
 It does not operate services, reset the controller or reconnect automatically.
 """
 
@@ -47,7 +48,7 @@ def classify(phases):
     return "unidentified_bytes" if any(p["bytes"] for p in phases) else "no_response"
 
 
-def capture(port, *, clock=time.monotonic):
+def capture(port, *, clock=time.monotonic, resync=False):
     phases = []
     remaining = MAX_BYTES
 
@@ -70,6 +71,9 @@ def capture(port, *, clock=time.monotonic):
 
     # Never flush an early error or send traffic during this observation phase.
     listen("listen_35_seconds", 35)
+    if resync:
+        query(b"\n")
+        listen("line_sync", 1)
     query(b"M115\n")
     listen("M115", 8)
     if "ERR UNSUPPORTED" in phases[-1]["text"].splitlines():
@@ -91,14 +95,14 @@ def require_stopped_service():
                          "Its inactive state could not be confirmed; no port was opened.")
 
 
-def inspect_adapter(factory, device, *, clock=time.monotonic):
+def inspect_adapter(factory, device, *, clock=time.monotonic, resync=False):
     port = factory(port=None, baudrate=115200, timeout=0.2, write_timeout=2, exclusive=True)
     try:
         port.dtr = False
         port.rts = False
         port.port = device
         port.open()
-        return capture(port, clock=clock)
+        return capture(port, clock=clock, resync=resync)
     finally:
         port.close()
 
@@ -107,11 +111,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True)
     parser.add_argument("--hardware-enabled", action="store_true", required=True)
+    parser.add_argument("--resync", action="store_true",
+                        help="Send one LF after passive listening, capture its reply, then query M115")
     args = parser.parse_args(argv)
     if not args.hardware_enabled or not sys.platform.startswith("linux"):
         parser.error("Run this maintenance diagnostic on the Pi with --hardware-enabled")
     report = {"started_utc": datetime.now(timezone.utc).isoformat(),
-              "port": args.port, "baudrate": 115200}
+              "port": args.port, "baudrate": 115200, "line_resync_requested": args.resync}
     try:
         require_stopped_service()
         import serial
@@ -126,7 +132,7 @@ def main(argv=None):
                              for key in ("device", "vid", "pid", "location", "description")}
         print("Listening 35 seconds, then querying identity. Leave the board powered and USB connected.",
               flush=True)
-        report.update(inspect_adapter(serial.Serial, str(selected)))
+        report.update(inspect_adapter(serial.Serial, str(selected), resync=args.resync))
     except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt) as exc:
         report["error"] = str(exc) or type(exc).__name__
     text = json.dumps(report, indent=2) + "\n"
