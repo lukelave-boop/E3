@@ -1,6 +1,6 @@
 # Current repository state
 
-## Captured Home/cooling deadlock (2026-09-13, tested and staged)
+## Captured Home/cooling deadlock (2026-09-13, installed and verified)
 
 After operator use of saved-height build 0.7.150, the desktop reports Pi timeout
 and failed software STOP. Read-only SSH at 13:28 finds Pi uptime four minutes,
@@ -31,24 +31,31 @@ published because the GitHub credential lacks workflow scope; it was removed,
 and the focused Linux regression was verified directly on the Pi instead.
 
 Pi-only companion e3-pi-thickness-focus-1ccd58e0 is frozen at
-de6cdc1ed1530522321298c3965cf91fa9bfcdf7 and staged in /home/greenhouse-climate.
-The read-only guarded install preview accepts exactly installed ff07860 and
-would replace only machine/job_focus.py. Windows E3 DEV TEST 0.7.150 and its
-permanent pointer remain unchanged. Gauge, saved honeycomb, XY offset, Z limits,
-config and cooling drop-in are protected by the staged installer's hash checks.
+de6cdc1ed1530522321298c3965cf91fa9bfcdf7 and installed in /home/greenhouse-climate/
+Projects/laser-camera-aligner after operator authorization and closed-client
+checks. Only machine/job_focus.py changed; all 17 companion hashes verified.
+The adjacent backup is job_focus.py.e3-backup-29_pzmni.py. Windows E3 DEV TEST
+0.7.150 and its permanent pointer remain unchanged. Before/after hashes confirm
+gauge, saved honeycomb, XY offset, Z limits, config and cooling drop-in preserved.
 
-Installation is NOT applied: physical laser isolation, stopped axes, secure Z,
-clear probe-pin path and closed E3 clients are awaiting operator confirmation.
-The hung service has not been signaled or restarted. The prepared one-time
-recovery helper is build/apply_home_cooling_pi.py (ignored) and staged beside
-the Pi companion. It accepts only the captured PID758 and closed client sockets,
-then requests systemd stop (90-second timeout), installs, verifies and restarts.
-If PID or service state changed, inspect afresh instead of weakening that guard.
-After restart, use read-only authenticated status/capability verification; do not
-automatically Home, probe, resume a job or fire the laser. Physical validation of
-the corrected Home/completion behavior remains pending. Stack/log captures are
-ignored local artifacts. Source is integrated into main and its completed
-branch removed; the remaining task is guarded deployment and operator retest.
+The first recovery attempt stopped captured PID758 after systemd's 90-second
+timeout, but the installer refused the resulting failed service state before
+any source write. Its cleanup restarted the old service. Fresh disconnected,
+disarmed, idle status and closed-client checks then allowed a clean stop,
+reset-failed, install and restart at 14:35:36 MDT (PID5349). Authenticated status
+and pi-thickness-focus-v2 capability requests succeed; service is active,
+DISCONNECTED and disarmed. CPU cooling resumed (FAN1 255, FAN2 0).
+
+All four forced Home/completion overlap tests also passed against the actual
+installed application modules using fake controllers (7.17 seconds). An initial
+extra run selected stale test helpers from the Pi checkout and failed fixture
+homing before reaching the regression; explicitly selecting the committed test
+helpers resolved that harness mismatch. Temporary-file gauge/datum persistence
+and thickness acceptance/rejection checks passed. No physical Home, probe, job
+or laser command was issued. Physical validation of corrected Home/completion
+behavior remains pending operator retest. Stack/log captures and recovery helpers
+are ignored local artifacts. Source is integrated into main and its completed
+branch removed; installation is complete.
 
 
 ## Paper measurement datum mismatch (2026-09-13)

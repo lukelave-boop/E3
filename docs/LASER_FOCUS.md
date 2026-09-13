@@ -2,9 +2,10 @@
 
 ## Home / park timeout correction
 
-Tested Pi-only companion **e3-pi-thickness-focus-1ccd58e0** (`de6cdc1`) is staged,
-not yet installed; physical-state confirmation is required to restart the hung
-service. Existing **E3 DEV TEST 0.7.150** and saved calibration stay compatible.
+Pi-only companion **e3-pi-thickness-focus-1ccd58e0** (`de6cdc1`) is installed and
+hash-verified. The restarted service responds, and all four fake-controller
+concurrency regressions pass against its installed code. Existing **E3 DEV TEST
+0.7.150** and saved calibration remain unchanged; physical retesting is pending.
 
 A directly captured Pi deadlock after Home blocked status and software STOP:
 the Home focus-preservation guard and CPU cooling acquired shared locks in
@@ -18,7 +19,8 @@ hardware stopping. See CURRENT_STATE.md for deployment status.
 ## Saved honeycomb Z height
 
 Current handoff: **E3 DEV TEST 0.7.150**, paired with installed Pi companion
-**e3-pi-thickness-focus-c8f0fe1d**, revision `ff07860`. Automated Windows/Pi
+**e3-pi-thickness-focus-1ccd58e0**, revision `de6cdc1`, superseding the earlier
+saved-height companion `c8f0fe1d`. Automated Windows/Pi
 checks pass; dimensional and physical operator validation is pending.
 
 Open **Machine Setup → 7 · Z / laser focus → Honeycomb height**. Enter
