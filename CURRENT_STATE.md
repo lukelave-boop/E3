@@ -1,5 +1,28 @@
 # Current repository state
 
+## Main-view probe build verified and selected (2026-09-12)
+
+Exact application revision 1c504d4b7c92e408798e6712b14ff28e85b9c482 passed
+Compatibility CI 34730211605: Windows Python 3.12 desktop, 6,068 passed /
+26 skipped; Windows Python 3.10 core, 4,874 passed / 96 skipped; focused POSIX,
+617 passed; repository Ruff passed. Local focused and offscreen visual checks
+are recorded below. Only this verification record changed after that revision.
+
+Windows 0.7.118 is frozen from that exact source. All 162 collected application
+source modules and embedded compiled modules match the clean revision; the
+executable, installer and native-library bundle guard passed. The permanent
+E3 DEV TEST pointer selects Probe selection in main view at
+.codex-worktrees/main-view-probe/dist/E3/E3.exe with matching adjacent metadata.
+The permanent launcher, shortcut and production E3 were not replaced.
+
+The pre-existing tracked changes were backed up byte-for-byte and their
+three-way merge was verified before
+integration. No new Pi/firmware update is required by this desktop change.
+No interactive GUI, real camera, controller/laser or physical probe-placement
+test was performed. Evidence: .codex-worktrees/main-view-probe/build/probe/
+(CI logs, focused results, wide/compact synthetic Qt renders, exact-source
+bundle verification, prior pointer and pre-existing-edit preservation records).
+
 ## Probe selection in the main workspace (2026-09-12)
 
 The daily Machine → Z axis · Ender controls no longer contain a second live
