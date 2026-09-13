@@ -1,4 +1,4 @@
-"""Build the guarded Pi companion for faster laser-off Z setup movement."""
+"""Build the guarded Pi companion for faster Z setup and first-app priority."""
 from __future__ import annotations
 
 import hashlib
@@ -8,11 +8,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLED_NAME = "installed-workpiece-focus-568b1cc9"
 INSTALLED_REVISION = "671b235f272b8a0e910ff5039006c0d431bb9cd8"
+DESKTOP_VERSION = "0.7.132"
+DESKTOP_REVISION = "92a7a6149713c7218fdc49de42336d660f24c48a"
 # The operator installed all 15 paths from 568b1cc9. Its application payload
 # matches this exact revision; other installed paths are not assumed upgraded.
 # Install the new shared module first, after validation of the complete bundle.
 PREVIOUS = {
     "laser_aligner/machine/setup_motion.py": None,
+    # 568b1cc9 did not replace the protocol. These exact bytes also match the
+    # reconstructed preceding bb37be7 tree and the priority kit's pinned input.
+    "laser_aligner/machine/pi_job_protocol.py": "62aa7a9a68348cedbb848f2ede93b62797af78e0d4190e67aa56ba9904229328",
     "laser_aligner/config.py": "f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58",
     "laser_aligner/machine/mainboard.py": "0388228c3ded64c5b424f6da163d6260bbc90a0f1161b19a8a9c88062cea4eba",
     "laser_aligner/machine/service.py": "75d59bc5659b692afcbaf72d3a75559c9f6657b9589b4545da4c811bcf8a840b",
@@ -34,7 +39,12 @@ PREVIOUS = {
 def installation_guide(folder: Path) -> str:
     windows_source = str(folder.resolve()).replace("'", "''")
     return (
-        "# Install faster Z setup movement\n\n"
+        "# Install faster Z setup and first-app connection priority\n\n"
+        f"Use **E3 DEV TEST {DESKTOP_VERSION}**, frozen from Windows application revision "
+        f"`{DESKTOP_REVISION}`, with this combined Pi companion and the matching speed firmware. "
+        "The Windows priority build uses the existing focus/mainboard commands; the combined Pi "
+        "supplies their faster movement and preserves the first connected app's control priority. "
+        "Use this combined package for both features.\n\n"
         "This companion updates application sources only. Faster Z requires the matching "
         "e3-mainboard-f401-usb firmware package supplied with this build, advertising "
         "`Cap:E3_Z_SETUP_SPEED_V1:1`. Follow that firmware package's README before motion testing. "
@@ -57,10 +67,11 @@ def installation_guide(folder: Path) -> str:
         '--project "$e3_project"\n'
         "```\n\n"
         "The installer accepts the installed 568b1cc9 workpiece-focus companion or already-current "
-        "sources. It checks the complete payload before replacing any file. Unknown local edits "
+        "sources. It checks all 17 payload paths, including the shared motion and priority protocol "
+        "modules, before replacing any file. Unknown local edits "
         "or other baselines reject; do not force replacement. Changed existing sources receive "
         "byte-for-byte backups.\n\n"
-        "When the machine is idle and E3 is disconnected, use the same Pi Bash session to stop "
+        "When the machine is idle and all E3 instances are disconnected, use the same Pi Bash session to stop "
         "the service and apply. The installer requires an inactive service and never stops or "
         "starts it itself. Restart only after successful installation:\n\n"
         "```sh\n"
@@ -70,7 +81,15 @@ def installation_guide(folder: Path) -> str:
         '--project "$e3_project" --apply &&\n'
         "sudo systemctl start e3-hardware-node.service\n"
         "```\n\n"
-        "Open the matching E3 DEV TEST build after the service starts. Establish the required "
+        "The first connected app keeps control while another app monitors. Status and authenticated "
+        "STOP remain available to the second app; its ordinary controls and cleanup cannot take "
+        "ownership. Use explicit Disconnect while idle before switching apps. An older desktop "
+        "without ownership-release support retains priority until its explicit Disconnect or a "
+        "Pi service restart; closing it or losing Wi-Fi does not release priority.\n\n"
+        f"Open E3 DEV TEST {DESKTOP_VERSION} after the service starts. While idle, connect normal E3 "
+        "first and then open E3 DEV TEST; verify the second app is view-only and the first retains "
+        "its connection. Disconnect the first app, connect the second, and repeat in reverse order. "
+        "Establish the required "
         "reference and measure the workpiece again; service restart does not restore the "
         "previous workpiece focus. Verify the faster laser-off XY positioning and Z movement "
         "with clear physical travel paths. These speeds require operator physical verification. "
@@ -83,6 +102,9 @@ def package(destination: Path) -> Path:
     manifest = json.dumps({
         "predecessors": [{"revision": INSTALLED_NAME, "files": PREVIOUS}],
         "predecessor_application_revision": INSTALLED_REVISION,
+        "compatible_windows_version": DESKTOP_VERSION,
+        "compatible_windows_revision": DESKTOP_REVISION,
+        "pi_control_capability": "pi-control-owner-v1",
         "required_firmware_capability": "Cap:E3_Z_SETUP_SPEED_V1:1",
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
@@ -108,8 +130,11 @@ def package(destination: Path) -> Path:
                  .replace("install_workpiece_focus.py", "install_z_setup_speed.py"))
         (folder / name).write_text(guide, encoding="utf-8", newline="\n")
     (folder / "README.md").write_text(
-        "# Faster Z setup Pi companion\n\n"
-        "Install this matching companion for faster laser-off setup XY travel and Z movement. "
+        "# Faster Z setup and first-app priority Pi companion\n\n"
+        f"Use E3 DEV TEST {DESKTOP_VERSION}, this combined Pi companion and the matching speed "
+        "firmware. The Pi provides faster laser-off setup XY/Z movement and preserves the first "
+        "connected app's control priority. The payload includes both features' complete source "
+        "dependencies, including the ownership protocol and shared motion module. "
         "It preserves existing motion, bounds, clearance, probe and laser-off checks. "
         "This package changes application sources only. Normal Z movement requires the matching "
         "firmware advertising `Cap:E3_Z_SETUP_SPEED_V1:1`; install the supplied firmware package "

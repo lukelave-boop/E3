@@ -11,6 +11,12 @@ its prior effective speed. Bounds, clearance, readbacks and STOP guards remain.
 The firmware update requires a fresh border reference and gauge teaching.
 These rates require physical qualification; see [Z setup travel](docs/LASER_FOCUS.md#setup-travel-speeds).
 
+The coordinated Pi feature uses **E3 DEV TEST 0.7.132**, the combined
+speed/connection-priority Pi companion, and matching speed firmware. That
+desktop sends the existing remote actions; the Pi selects the faster feeds.
+Direct/local-controller operation in the frozen 0.7.132 desktop retains the
+earlier feeds. Use the combined companion's INSTALL.md for this handoff.
+
 ## First-connected app keeps Pi control
 
 With the connection-priority Pi companion, the first E3 app to connect retains

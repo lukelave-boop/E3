@@ -617,7 +617,7 @@ The bundled `install_z_setup_speed.py` defaults to read-only.
 
 The installer accepts the recorded installed `568b1cc9` workpiece-focus payload
 (application revision `671b235f272b8a0e910ff5039006c0d431bb9cd8`) and already-current
-files. It validates all 16 payload paths together, including the new shared
+files. It validates all 17 payload paths together, including the priority protocol and new shared
 motion module, rejects unknown edits before replacement, and backs up changed
 source bytes. Configuration, gauge calibration files, Z maximum, retained-Z
 data and cooling settings are preserved. Firmware compatibility and fresh

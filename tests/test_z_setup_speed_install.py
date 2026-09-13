@@ -12,9 +12,18 @@ from pathlib import Path
 import pytest
 
 from scripts.package_laser_focus import PREVIOUS_REVISION as BASE_REVISION
-from scripts.package_z_setup_speed import INSTALLED_NAME, INSTALLED_REVISION, PREVIOUS, ROOT, package
+from scripts.package_z_setup_speed import (
+    DESKTOP_REVISION,
+    DESKTOP_VERSION,
+    INSTALLED_NAME,
+    INSTALLED_REVISION,
+    PREVIOUS,
+    ROOT,
+    package,
+)
 
 SETUP_MOTION = "laser_aligner/machine/setup_motion.py"
+PRIORITY_PROTOCOL = "laser_aligner/machine/pi_job_protocol.py"
 
 
 def load_installer(bundle):
@@ -62,7 +71,7 @@ def test_upgrade_preserves_data_backups_and_newlines_and_is_idempotent(kit):
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["applied"] and not result["service_started"]
     assert result["compatible_predecessors"] == [INSTALLED_NAME]
-    assert len(result["files"]) == len(PREVIOUS) == 16
+    assert len(result["files"]) == len(PREVIOUS) == 17
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
@@ -87,6 +96,23 @@ def test_partial_upgrade_can_resume_from_same_predecessor(kit):
     for entry in result["files"]:
         if Path(entry["path"]).name in ("setup_motion.py", "service.py"):
             assert entry["status"] == "already_current" and "backup" not in entry
+
+
+@pytest.mark.parametrize("installed_paths", [
+    (PRIORITY_PROTOCOL, "laser_aligner/machine/pi_machine_server.py", "laser_aligner/machine/remote_service.py"),
+    (SETUP_MOTION, "laser_aligner/machine/service.py", "laser_aligner/machine/mainboard.py",
+     "laser_aligner/machine/laser_focus.py", "laser_aligner/machine/job_focus.py", "laser_aligner/machine/z_probe.py"),
+], ids=["priority_already_installed", "speed_already_installed"])
+def test_combined_upgrade_preserves_already_installed_feature_sources(kit, installed_paths):
+    installer, project, bundle = kit
+    for relative in installed_paths:
+        (project / relative).write_bytes((bundle / relative).read_bytes())
+    result = installer.install(project, bundle=bundle, apply=True)
+    for entry in result["files"]:
+        relative = Path(entry["path"]).relative_to(project).as_posix()
+        if relative in installed_paths:
+            assert entry["status"] == "already_current" and "backup" not in entry
+        assert (project / relative).read_bytes().replace(b"\r\n", b"\n") == (bundle / relative).read_bytes()
 
 
 @pytest.mark.parametrize("relative", PREVIOUS)
@@ -141,8 +167,12 @@ def test_package_pins_complete_installed_baseline_and_exact_application_payload(
     assert manifest["predecessors"] == [{"revision": INSTALLED_NAME, "files": PREVIOUS}]
     assert manifest["predecessor_application_revision"] == INSTALLED_REVISION
     assert manifest["required_firmware_capability"] == "Cap:E3_Z_SETUP_SPEED_V1:1"
+    assert manifest["compatible_windows_version"] == DESKTOP_VERSION == "0.7.132"
+    assert manifest["compatible_windows_revision"] == DESKTOP_REVISION
+    assert manifest["pi_control_capability"] == "pi-control-owner-v1"
     assert {entry["path"] for entry in manifest["files"]} == PREVIOUS.keys()
     assert PREVIOUS[SETUP_MOTION] is None
+    assert PREVIOUS[PRIORITY_PROTOCOL] == "62aa7a9a68348cedbb848f2ede93b62797af78e0d4190e67aa56ba9904229328"
     assert all(path.startswith("laser_aligner/") for path in PREVIOUS)
     for entry in manifest["files"]:
         content = (bundle / entry["path"]).read_bytes()
@@ -159,6 +189,10 @@ def test_package_pins_complete_installed_baseline_and_exact_application_payload(
     assert "install_z_setup_speed.py" in installation
     assert "Cap:E3_Z_SETUP_SPEED_V1:1" in installation
     assert "teach the 7 mm gauge again" in installation
+    assert f"E3 DEV TEST {DESKTOP_VERSION}" in installation and DESKTOP_REVISION in installation
+    assert "all 17 payload paths" in installation
+    assert "all E3 instances are disconnected" in installation
+    assert "explicit Disconnect or a Pi service restart" in installation
     assert "[INSTALL.md](INSTALL.md)" in (bundle / "README.md").read_text(encoding="utf-8")
 
 
@@ -178,6 +212,8 @@ def test_exact_recorded_installed_upgrade_imports_without_hardware(tmp_path, mon
     with zipfile.ZipFile(io.BytesIO(source)) as archive:
         assert all((project / item.filename).resolve().is_relative_to(project) for item in archive.infolist())
         archive.extractall(project)
+    # The untouched protocol is pinned from the actual preceding base too.
+    assert hashlib.sha256((project / PRIORITY_PROTOCOL).read_bytes().replace(b"\r\n", b"\n")).hexdigest() == PREVIOUS[PRIORITY_PROTOCOL]
     paths = [path for path, digest in PREVIOUS.items() if digest is not None]
     installed = subprocess.check_output(["git", "archive", "--format=zip", INSTALLED_REVISION, *paths], cwd=ROOT)
     with zipfile.ZipFile(io.BytesIO(installed)) as archive:
@@ -202,7 +238,12 @@ def test_exact_recorded_installed_upgrade_imports_without_hardware(tmp_path, mon
         if relative not in PREVIOUS:
             assert (project / relative).read_bytes() == content
     modules = [name.removesuffix(".py").replace("/", ".") for name in PREVIOUS]
-    subprocess.run([sys.executable, "-c", "import " + ", ".join(modules)],
+    checks = ("import " + ", ".join(modules) + "\n"
+              "from laser_aligner.machine.pi_job_protocol import CAPABILITY_PI_CONTROL_OWNER\n"
+              "from laser_aligner.machine.setup_motion import z_feed_mm_min\n"
+              "assert CAPABILITY_PI_CONTROL_OWNER == 'pi-control-owner-v1'\n"
+              "assert z_feed_mm_min(20, 30) == 1200 and z_feed_mm_min(30, 20) == 600\n")
+    subprocess.run([sys.executable, "-c", checks],
                    cwd=project, check=True, capture_output=True)
     assert all(entry["status"] == "already_current"
                for entry in installer.install(project, bundle=bundle)["files"])

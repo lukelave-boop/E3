@@ -23,6 +23,7 @@ from scripts.package_workpiece_focus import (
 RECORDED_REMOTE_REVISION = "050498c0e31d7778c161688c9c232224aceb2717"
 REMOTE_SERVICE = "laser_aligner/machine/remote_service.py"
 PI_JOB_PROTOCOL = "laser_aligner/machine/pi_job_protocol.py"
+SETUP_MOTION = "laser_aligner/machine/setup_motion.py"
 
 
 def load_installer(bundle):
@@ -70,7 +71,7 @@ def test_upgrade_preserves_operator_data_backups_and_newlines_and_is_idempotent(
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["applied"] and not result["service_started"]
     assert result["compatible_predecessors"] == [list(PREDECESSORS)[baseline]]
-    assert len(result["files"]) == len(SAVED_Z) == 16
+    assert len(result["files"]) == len(SAVED_Z) == 17
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
@@ -159,7 +160,8 @@ def test_package_pins_complete_baselines_and_copies_only_application_sources(tmp
     for previous in manifest["predecessors"]:
         assert previous["files"].keys() == SAVED_Z.keys()
     assert all(path.startswith("laser_aligner/") for path in SAVED_Z)
-    assert PI_JOB_PROTOCOL in SAVED_Z
+    assert {PI_JOB_PROTOCOL, SETUP_MOTION} <= SAVED_Z.keys()
+    assert all(previous["files"][SETUP_MOTION] is None for previous in manifest["predecessors"])
     guide = (bundle / "LASER_FOCUS.md").read_text(encoding="utf-8")
     assert "__PI_PACKAGE__" not in guide
     assert "install_laser_focus.py" not in guide
@@ -201,7 +203,7 @@ def exact_predecessor_project(tmp_path, baseline):
     for name, source_revision in overrides.items():
         (project / name).write_bytes(subprocess.check_output(
             ["git", "show", f"{source_revision}:{name}"], cwd=ROOT))
-    assert len(PREDECESSORS[baseline]) == 16
+    assert len(PREDECESSORS[baseline]) == 17
     for name, digest in PREDECESSORS[baseline].items():
         target = project / name
         if digest is None:
@@ -232,6 +234,7 @@ def test_exact_git_predecessor_upgrade_imports_without_hardware(tmp_path, monkey
     assert not result["service_started"]
     assert all(entry["status"] == "already_current" for entry in installer.install(project, bundle=bundle)["files"])
     modules = [name.removesuffix(".py").replace("/", ".") for name in SAVED_Z]
+    assert {"laser_aligner.machine.pi_job_protocol", "laser_aligner.machine.setup_motion"} <= set(modules)
     subprocess.run([sys.executable, "-c", "import " + ", ".join(modules)],
                    cwd=project, check=True, capture_output=True)
 
