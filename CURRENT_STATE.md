@@ -34,6 +34,18 @@ controller/laser, sustained connection or physical two-app test has been run.
 Pi installation remains pending. Existing untracked scratch artifacts and the
 separate update-launch-deadline worktree are preserved.
 
+
+The first full compatibility run exposed old authenticated fixtures that bypassed
+Connect ownership and stale fault-matrix test names. Test/document-only updates
+preserve the original safety assertions; all 317 directly affected Windows
+cases pass. Frozen application source 402c56f and version 0.7.126 are unchanged.
+Exact frozen-source Linux checks cover 402 cases; all seven real predecessor
+checks were rerun successfully with an explicit Git-directory mapping (65
+installer cases, zero skips). A redundant local full run collected the earlier
+fixtures and was cancelled after its known failures; full CI is the clean gate.
+Offscreen compact/normal control-strip and machine-panel renders were visually
+inspected with synthetic status, with no clipping of the ownership message.
+
 ## Correct the installed Pi companion baseline (2026-09-12)
 
 The operator's read-only dry run of e3-pi-workpiece-focus-29a79a73 rejected
