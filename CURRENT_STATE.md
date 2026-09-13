@@ -1,5 +1,55 @@
 # Current repository state
 
+## Saved Z integrated and packaged for testing (2026-09-12)
+
+The clean-shutdown Z feature and consolidated daily/setup controls are merged
+into main at c638b3683faf83b10bb8483dd53fa8a4726b25c8. The two completed
+retention/focus-controls branches have been retired; their frozen build
+worktrees remain. The subsequent machine-layout task starts from this revision
+and owns its later UI changes. Unrelated console/startup/F103 edits remain
+outside this integration; the tracked patch was verified against its backup.
+
+Exact-revision Compatibility CI 34727432413 passed all jobs: Windows Python
+3.12 desktop, 5,940 passed / 26 skipped; Windows Python 3.10 core, 4,874 passed /
+92 skipped; focused POSIX recovery, 617 passed; repository Ruff passed. Fast
+Development CI 34727432607 hit its ten-minute Windows job limit after 5,785
+passes and 26 skips; it is incomplete, not a passing full suite. Its other jobs
+passed. The complete Compatibility run is the required integration gate.
+The predecessor's three firmware workflows passed and final firmware sources
+are unchanged. Integrated UI checks passed 238 tests; local Ruff/compileall
+passed. Earlier focused verification is recorded below.
+
+Windows 0.7.114 is frozen from exact application revision c638b36. All 161
+application source modules and their embedded compiled modules match the clean
+checkout. The executable, installer and native-library bundle guard passed.
+One restricted-environment build was rejected after collecting four unrelated
+Poppler ICU/OpenSSL DLLs; the unchanged production build script passed when
+repeated in the normal Windows environment, with its guard intact.
+
+The permanent E3 DEV TEST pointer selects Saved Z after clean shutdown,
+version 0.7.114, branch main, revision c638b36, targeting
+.codex-worktrees/z-retention-integrated/dist/E3/E3.exe. The permanent launcher,
+shortcut and normal E3 application were not replaced. Evidence is under
+dist/z-retention-0.7.114/ and build/z-retention-ci-summary.json.
+
+Matching companion packages under the integrated checkout's dist directory:
+e3-pi-laser-focus-87b47670.zip and e3-mainboard-f401-usb-954e39ad.zip.
+All 51 focused packaging checks passed; all 15 Pi payload files, 75 archived
+E3 firmware files and 29 native source pins were verified. The exact-main
+staged upgrade imports successfully and preserves synthetic configuration and
+calibration bytes. Package evidence: dist/z-retention-package-verification.json
+inside that clean checkout.
+
+Daily focus and embedded Machine Setup were visually inspected from offscreen
+Qt renders at normal and compact sizes; saved-Z status, Forget saved Z and
+Home / park XY remain readable without clipped retention text. Evidence:
+.codex-worktrees/z-retention-integrated/build/retention-ui/.
+No interactive GUI, real camera, retained-Z controller/laser test, Pi companion
+installation or firmware installation was performed. Physical power-cycle
+acceptance remains pending. The matching updates are required before this
+feature works on hardware; exact-firmware teaching may require one new gauge
+teaching. See docs/Z_RETENTION.md for operation and rejection conditions.
+
 ## Integrated clean-shutdown Z retention candidate (2026-09-12)
 
 Implemented a Pi-owned, one-use checkpoint for an idle, disarmed, referenced
