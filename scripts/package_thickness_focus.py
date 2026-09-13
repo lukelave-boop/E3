@@ -14,6 +14,26 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATED_REVISION = "14c62d07b28722410bacb5f5e794279e21a62d4c"
+# Pinned complete integrated source set; packaging also works in shallow CI checkouts.
+INTEGRATED = {
+    "laser_aligner/machine/setup_motion.py": "f40132601ff1981da6b693a335ad673531434de32cd5ad0247c160f34d075775",
+    "laser_aligner/machine/pi_job_protocol.py": "a39634447897c97bfd32566e5200baee1849024d0f0645af577430733ffd7290",
+    "laser_aligner/config.py": "f12b0135c68ee8e787cf316294c15a51451f9ec64338b85f2db9f0c2929f9f58",
+    "laser_aligner/machine/mainboard.py": "4a6b5e63816b7b11cd37751f7ea01d3a4c6f422733da7b9c6f28fa99347e39f5",
+    "laser_aligner/machine/service.py": "4bf818d2a4b1bddd80f9c6b6bb9cf6da80543a38c8dd2467d37b93e7dbf350e9",
+    "laser_aligner/machine/remote_service.py": "663c33a9d62032705e2516ba92b35f60a6c713129151e34748ac26ed28c8e47d",
+    "laser_aligner/machine/pi_job_service.py": "f36f0841b67c48074dacefad05a1de242325675d398ce7eed12301f651d07da3",
+    "laser_aligner/machine/pi_machine_server.py": "1495e6e957901bd15c6d4e3d15f75d048183bd8582edf6260d4e6568f588933a",
+    "laser_aligner/remote_node.py": "474325070988bf6e0323a4c8874e843438166ad81e569d9d862de580e7cf7088",
+    "laser_aligner/machine/z_limits.py": "c1ccb0ec6f82d7489d49dd50bdaf295a75a20b22117d3cad0ee56298c3b00310",
+    "laser_aligner/machine/z_probe.py": "fc45ce6f42c01b1cdcab0c6935bf2e876317b369c9c88f862ce28fdecf628ec4",
+    "laser_aligner/machine/secondary_controller.py": "788420240b542f1280343fc0677590510d2b13c395988871d2b75e67d88b08f2",
+    "laser_aligner/machine/secondary_startup.py": "d7c6bc19862d8f3dd5fd638581860057189956e4314157efb92f317298eb258b",
+    "laser_aligner/machine/laser_focus.py": "aee6eb79f30bec7545b114c4324ba0c51c36ee18dd8154909502eb5323df49a8",
+    "laser_aligner/machine/focus_bounds.py": "9d2f2403c38f50bf20b35bf364de54747128c131bb816ae46534ce6bceb93d5c",
+    "laser_aligner/machine/job_focus.py": "416ca7900d4156617083d957577f45b966fc3734865755d8605c8359991633cc",
+    "laser_aligner/machine/z_retention.py": "f6f5ac717b12272365b8635b4c4874824e644d42594a99e0e7c94b1dd88ee812"
+}
 
 
 def source(revision, name):
@@ -24,13 +44,12 @@ def package(destination, revision, version):
     revision = subprocess.check_output(["git", "rev-parse", "--verify", f"{revision}^{{commit}}"],
                                        cwd=ROOT, text=True).strip()
     sources = {name: source(revision, name) for name in PREVIOUS}
-    integrated = {name: hashlib.sha256(source(INTEGRATED_REVISION, name)).hexdigest() for name in PREVIOUS}
     manifest = json.dumps({
         "revision": revision, "compatible_windows_version": version,
         "required_capability": "pi-thickness-focus-v1",
         "predecessors": [
             {"revision": "installed-workpiece-focus-568b1cc9", "files": PREVIOUS},
-            {"revision": INTEGRATED_REVISION, "files": integrated},
+            {"revision": INTEGRATED_REVISION, "files": INTEGRATED},
         ],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],

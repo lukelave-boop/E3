@@ -1,6 +1,8 @@
 """Exact predecessor upgrade and unknown-edit rejection for the Pi companion."""
+import hashlib
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,8 +10,8 @@ import pytest
 from scripts.package_thickness_focus import INTEGRATED_REVISION, package, source
 
 
-@pytest.fixture
-def kit(tmp_path, monkeypatch):
+@pytest.fixture(params=["synthetic", "integrated"])
+def kit(tmp_path, monkeypatch, request):
     bundle = package(tmp_path / "dist", "HEAD", "0.7.133")
     spec = importlib.util.spec_from_file_location("thickness_installer", bundle / "install_thickness_focus.py")
     installer = importlib.util.module_from_spec(spec)
@@ -20,7 +22,19 @@ def kit(tmp_path, monkeypatch):
     for entry in manifest["files"]:
         path = project / entry["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(source(INTEGRATED_REVISION, entry["path"]))
+        if request.param == "integrated":
+            try:
+                content = source(INTEGRATED_REVISION, entry["path"])
+            except subprocess.CalledProcessError:
+                pytest.skip("Historical integrated Git source is unavailable in this shallow checkout")
+        else:
+            content = f"# synthetic predecessor: {entry['path']}\n".encode()
+            manifest["predecessors"][1]["files"][entry["path"]] = hashlib.sha256(content).hexdigest()
+        path.write_bytes(content)
+    if request.param == "synthetic":
+        manifest_bytes = json.dumps(manifest).encode()
+        (bundle / "manifest.json").write_bytes(manifest_bytes)
+        installer.MANIFEST_SHA256 = hashlib.sha256(manifest_bytes).hexdigest()
     (project / "operator.json").write_bytes(b"preserve operator data\r\n")
     return installer, project, bundle
 

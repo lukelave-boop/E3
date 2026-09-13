@@ -18,10 +18,15 @@ change used by desktop and browser jobs, with new controls only in desktop.
 The new desktop requires pi-thickness-focus-v1 for daily measurement. No firmware,
 project schema, bounds, arming, laser, stop, or persisted configuration change.
 
-Initial Windows verification passed 186 focus/desktop cases, including offscreen
-Qt and fake-controller fractional-focus acceptance/rejection. Broader focused
-checks, exact-source Pi companion verification and Compatibility CI are in
-progress. No interactive GUI, real camera, controller/laser, focus accuracy or
+Windows verification passed 605 focused cases, including offscreen Qt and
+fake-controller fractional-focus acceptance/rejection. A compact panel render
+with Segoe UI was visually inspected. Ruff and compileall pass. Exact 7ef632d
+source passed 428 focused Linux/Pi cases on WSL Ubuntu 22.04, including
+authenticated requests and real integrated-predecessor upgrade tests. The Pi
+companion is e3-pi-thickness-focus-2528c9d0, with 17 exact-source payload files.
+Four package tests pass after pinning the integrated predecessor hashes for
+shallow CI checkouts; this changes no application code. Compatibility CI and
+the guarded Windows 0.7.133 build are in progress. No interactive GUI, real camera, controller/laser, focus accuracy or
 cutting test has been performed. Existing untracked scratch files are preserved.
 The previously selected 0.7.132 feature launcher pointer is unchanged so far.
 
