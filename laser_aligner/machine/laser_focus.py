@@ -26,13 +26,13 @@ XY_CAPABILITY = "pi-laser-focus-xy-v1"
 CLICK_CAPABILITY = "pi-laser-focus-click-v1"
 RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
-THICKNESS_CAPABILITY = "pi-thickness-focus-v1"
+THICKNESS_CAPABILITY = "pi-thickness-focus-v2"
 # Operator-reported rig datum (2026-09-06), explicitly selected for this workflow.
 HONEYCOMB_HEIGHT_MM = -1.5
-THICKNESS_POLICY = "linear-0-6mm-v1"
+THICKNESS_POLICY = "linear-0-6mm-v2"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece"}
+           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece", "set_honeycomb_height"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -43,14 +43,15 @@ def focus_calibration_path(config_path: Path) -> Path:
     return config_path.with_name(config_path.name + ".laser-focus.json")
 
 
-def thickness_focus(elevation_mm, spacer_mm):
+def thickness_focus(elevation_mm, spacer_mm, honeycomb_height_mm=HONEYCOMB_HEIGHT_MM):
     """Derive sheet thickness and gap; negative thickness is invalid, not thin paper."""
     elevation = finite_number(elevation_mm, "Surface elevation", -100, 100)
     spacer = finite_number(spacer_mm, "Spacer thickness", 0, 80)
-    thickness = finite_number(elevation - HONEYCOMB_HEIGHT_MM - spacer,
+    honeycomb = finite_number(honeycomb_height_mm, "Honeycomb height", -10, 10)
+    thickness = finite_number(elevation - honeycomb - spacer,
                               "Material thickness", 0, 100)
     return dict(focus_policy=THICKNESS_POLICY, material_thickness_mm=thickness,
-                spacer_thickness_mm=spacer, honeycomb_height_mm=HONEYCOMB_HEIGHT_MM,
+                spacer_thickness_mm=spacer, honeycomb_height_mm=honeycomb,
                 surface_elevation_mm=elevation, gap_mm=max(3.0, 7.0 - thickness * 2.0 / 3.0))
 
 
@@ -58,7 +59,8 @@ def validate_thickness_plan(plan):
     """Recheck the derived values at remote observation and job admission."""
     if "focus_policy" not in plan:
         return
-    derived = thickness_focus(plan.get("surface_elevation_mm"), plan.get("spacer_thickness_mm"))
+    derived = thickness_focus(plan.get("surface_elevation_mm"), plan.get("spacer_thickness_mm"),
+                              plan.get("honeycomb_height_mm"))
     if any(plan.get(key) != value for key, value in derived.items()):
         raise SafetyError("Thickness-derived focus changed; measure the workpiece again")
 
@@ -75,6 +77,8 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
         raise SafetyError("Select a 3, 5 or 7 mm focus gap")
     if action == "measure_workpiece":
         finite_number(value, "Spacer thickness", 0, 80)
+    elif action == "set_honeycomb_height":
+        finite_number(value, "Honeycomb height", -10, 10)
     elif action == "jog":
         if finite_number(value, "Focus jog", -5, 5) == 0:
             raise SafetyError("Focus jog must be nonzero")
@@ -128,9 +132,12 @@ class LaserFocus:
     def __init__(self, path: Path | None, controller_port: str):
         self.path, self.controller_port = path, controller_port
         self.calibration = self._load()
+        self.honeycomb_path = None if path is None else path.with_name(path.stem + "-honeycomb.json")
+        self.honeycomb_height_mm = self._load_honeycomb()
         # A lost workpiece datum must never downgrade a calibrated machine to
         # ordinary unfocused output. A new process requires a fresh measurement.
-        self.job_focus_required = self.calibration is not None
+        self.job_focus_required = (self.calibration is not None
+                                   or (self.honeycomb_path is not None and self.honeycomb_path.exists()))
         self.job_focus_block_reason = "Measure the workpiece before starting a powered job"
         self.xy_path = None if path is None else path.with_name(path.stem + "-xy.json")
         self.probe_xy_offset_mm = self._load_xy_offset()
@@ -230,12 +237,46 @@ class LaserFocus:
             "requires_clearance": self.requires_clearance,
             "job_focus_required": self.job_focus_required, "job_focus": self.job_plan,
             "workpiece_focus_available": True,
+            "honeycomb_height_mm": self.honeycomb_height_mm,
+            "honeycomb_height_persistent": self.honeycomb_path is not None,
             "job_focus_block_reason": self.job_focus_block_reason if self.job_plan is None else None,
             "xy_recovery_pending_reference": self.xy_recovery_pending_reference,
             "return_clearance_mm": self.selected_clearance,
             "ender": ender, "recovery_available": True,
             "transcript": [], "physical_feedback": False,
         })
+
+    def _load_honeycomb(self):
+        if self.honeycomb_path is None:
+            return HONEYCOMB_HEIGHT_MM
+        try:
+            data = strict_json_loads(self.honeycomb_path.read_text(encoding="utf-8"))
+            if (type(data) is not dict
+                or set(data) != {"schema_version", "controller_port", "honeycomb_height_mm"}
+                or type(data["schema_version"]) is not int or data["schema_version"] != 1
+                or data["controller_port"] != self.controller_port):
+                raise ValueError("Unknown honeycomb height format or controller binding")
+            return finite_number(data["honeycomb_height_mm"], "Honeycomb height", -10, 10)
+        except FileNotFoundError:
+            return HONEYCOMB_HEIGHT_MM
+        except (OSError, UnicodeError, ValueError, MachineError) as exc:
+            raise MachineError(f"Invalid saved honeycomb height: {exc}") from exc
+
+    def persist_honeycomb(self, value):
+        height = finite_number(value, "Honeycomb height", -10, 10)
+        if self.honeycomb_path is None:
+            raise MachineError("Persistent honeycomb height is unavailable; update the E3 node")
+        try:
+            atomic_write_json(self.honeycomb_path, {
+                "schema_version": 1, "controller_port": self.controller_port,
+                "honeycomb_height_mm": height,
+            })
+        except OSError as exc:
+            raise MachineError(f"Cannot save honeycomb height: {exc}") from exc
+        self.honeycomb_height_mm = height
+        self.clear_surface()
+        self.job_focus_required = True
+        self.job_focus_block_reason = "Honeycomb height saved; measure the workpiece again before starting a job"
 
     def _load_xy_offset(self):
         if self.xy_path is None:
@@ -557,13 +598,13 @@ class LaserFocus:
                 # Discard the surface so manual selection cannot reuse it.
                 elevation = self.surface["elevation_mm"]
                 try:
-                    derived = thickness_focus(elevation, value)
+                    derived = thickness_focus(elevation, value, self.honeycomb_height_mm)
                 except SafetyError:
-                    thickness = elevation - HONEYCOMB_HEIGHT_MM - value
+                    thickness = elevation - self.honeycomb_height_mm - value
                     self.clear_surface(keep_alignment=True)
                     self.job_focus_block_reason = (
                         f"Invalid material thickness {thickness:.3f} mm: measured elevation "
-                        f"{elevation:.3f} mm, honeycomb datum {HONEYCOMB_HEIGHT_MM:.3f} mm, "
+                        f"{elevation:.3f} mm, honeycomb datum {self.honeycomb_height_mm:.3f} mm, "
                         f"spacers {value:.3f} mm. Check the datum, spacers and probe location, "
                         "then measure again. Z returned to clearance."
                     )
@@ -666,6 +707,9 @@ class LaserFocus:
                 raise SafetyError("Clearance return only raises Z; select clearance above current Z")
             self.preview = None
             move_to(clearance)
+        elif action == "set_honeycomb_height":
+            with guard():
+                self.persist_honeycomb(value)
         elif action == "clear_surface":
             self.clear_surface()
         elif action == "forget":
@@ -681,6 +725,8 @@ class LaserFocus:
         return copy.deepcopy({"action": requested_action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
                               "thickness_focus_available": True,
                               "workpiece_focus_available": True,
+                              "honeycomb_height_mm": self.honeycomb_height_mm,
+                              "honeycomb_height_persistent": self.honeycomb_path is not None,
                               "job_focus_required": self.job_focus_required,
                               "job_focus_block_reason": self.job_focus_block_reason if self.job_plan is None else None,
                               "ender": owner.recovery_status(), "recovery_available": True,

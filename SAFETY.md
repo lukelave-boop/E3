@@ -1,5 +1,12 @@
 # Safety requirements
 
+Saved honeycomb height is an explicit signed datum, not a clearance bound or
+flatness tolerance. Updating it is idle and disarmed, sends no motion, and
+invalidates workpiece/preview/job selection. Jobs require a new measurement and
+revalidate the datum; negative derived thickness remains rejected. Raw contact Z,
+gauge calibration and all focus/clearance bounds remain authoritative.
+
+
 Retained Z is conditional software knowledge, not an absolute position sensor.
 Only a verified clean idle Pi disconnect/shutdown at or above saved clearance
 may save the border datum and Z. A checkpoint is consumed before the next

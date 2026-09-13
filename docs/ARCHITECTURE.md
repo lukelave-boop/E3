@@ -1,5 +1,20 @@
 # Architecture
 
+## Saved honeycomb datum
+
+LaserFocus owns a schema-1 `<focus-path-stem>-honeycomb.json` sidecar bound to
+controller_port. Missing files retain the previous -1.5 mm default; malformed,
+nonfinite, out-of-range or differently bound files reject. The typed
+set_honeycomb_height action atomically saves an explicit value from -10 to +10
+mm through MachineService's existing idle/disarmed/session/STOP guards, clears
+surface/preview/job authority, and preserves gauge teaching and reference.
+No motion is issued. Policy linear-0-6mm-v2 derives thickness from this value;
+job admission verifies the plan's datum against current controller state.
+The remote facade gates v2 actions and validates the save acknowledgment. This
+affects the shared focus/job controller path and the desktop Step 7 editor;
+there is no project-schema change or browser-specific UI change.
+
+
 ## Completed measurement with invalid thickness
 
 LaserFocus catches only thickness derivation rejection after contact_at has
@@ -23,14 +38,14 @@ acquisition; waiting cannot preserve expired motion authority.
 `machine/laser_focus.py` owns the UI-neutral thickness policy and the typed
 `measure_workpiece` action. Its numeric `value` is total spacer thickness in mm.
 It uses the existing guarded probe sequence, derives sheet thickness from border
-relative surface elevation + 1.5 mm − spacers, and computes `max(3, 7 - 2*t/3)`.
+relative surface elevation − saved honeycomb height − spacers, and computes `max(3, 7 - 2*t/3)`.
 The operator-selected −1.5 mm honeycomb datum is specific to this rig.
 The plan stores the policy version, thickness, spacer and support values, gap,
 and the existing contact/calibration/session/clearance binding. Job admission
 rechecks the derived values. Invalid thickness cannot retain a previous job plan.
 
 The daily desktop panel sends this action through MachineService or the existing
-Pi facade; the Pi advertises `pi-thickness-focus-v1` and owns the calculation.
+Pi facade; the Pi advertises `pi-thickness-focus-v2` and owns the calculation.
 An older Pi is rejected before receiving the new measurement. The gap is read-only
 in daily use. Spacer edits require clearing the measurement; parked jobs retain
 their values. Legacy `measure`, preview and gauge teaching remain available for

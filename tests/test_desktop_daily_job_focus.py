@@ -25,7 +25,7 @@ def workpiece(gap=7.0):
     return {
         "id": f"workpiece-{gap:g}", "gap_mm": gap, "target_z_mm": 16.0 + gap - 7.0,
         "clearance_z_mm": 30.0, "reusable": True, "measurement_id": "surface-1",
-        "calibration_id": "calibration-1", "focus_policy": "linear-0-6mm-v1",
+        "calibration_id": "calibration-1", "focus_policy": "linear-0-6mm-v2",
         "material_thickness_mm": (7-gap)*1.5, "spacer_thickness_mm": 0.0,
     }
 

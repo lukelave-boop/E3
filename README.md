@@ -12,11 +12,13 @@ calibration and automatic thickness rule. Operator verification remains pending.
 
 Daily **Machine → Z axis · Ender → Measure surface** selects the focus gap automatically:
 `gap_mm = max(3, 7 - 2 * thickness_mm / 3)`. Thickness is measured surface elevation
-above the black border + 1.5 mm − entered spacer thickness. Enter total spacers
+above the black border − saved honeycomb height − entered spacer thickness. Enter total spacers
 before measuring (zero for material directly on the honeycomb); clear the measurement
 before changing them. The panel shows thickness, automatic gap and target Z.
-The −1.5 mm honeycomb datum is the operator-reported value for this rig, not a
-universal default or a physically verified dimension. This workflow requires the
+Edit and save **Honeycomb Z relative to border** in **Machine Setup → 7 · Z /
+laser focus**. Negative means below the border. Saving clears job focus and
+requires remeasurement. The initial −1.5 mm datum is the operator-reported value
+for this rig, not a physically verified dimension. This workflow requires the
 matching desktop and Pi thickness-focus update. See [focus setup](docs/LASER_FOCUS.md).
 
 ## Faster Z setup travel

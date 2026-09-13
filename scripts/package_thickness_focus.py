@@ -49,6 +49,11 @@ COOLING = {
     "laser_aligner/machine/service.py": "50ff453e64dc40f70a08e4c63b397d6c42c721c3299e5ec56f7903684eecd6d9",
 }
 
+REJECTION_REVISION = "30e05ac1220747436b26164b4e2190bc3429858c"
+REJECTION = {
+    **COOLING,
+    "laser_aligner/machine/laser_focus.py": "743f3364082a0d314f0afd076051a71c48cba64b458335c43a02390cb5ab9ac5",
+}
 
 
 def source(revision, name):
@@ -61,12 +66,13 @@ def package(destination, revision, version):
     sources = {name: source(revision, name) for name in PREVIOUS}
     manifest = json.dumps({
         "revision": revision, "compatible_windows_version": version,
-        "required_capability": "pi-thickness-focus-v1",
+        "required_capability": "pi-thickness-focus-v2",
         "predecessors": [
             {"revision": "installed-workpiece-focus-568b1cc9", "files": PREVIOUS},
             {"revision": INTEGRATED_REVISION, "files": INTEGRATED},
             {"revision": THICKNESS_REVISION, "files": THICKNESS},
             {"revision": COOLING_REVISION, "files": COOLING},
+            {"revision": REJECTION_REVISION, "files": REJECTION},
         ],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
@@ -90,7 +96,8 @@ Use E3 DEV TEST {version} with this exact Pi companion, revision `{revision}`.
 The companion keeps invalid thickness blocked after a verified clearance return
 without emergency-stopping the controllers. It reports the measured elevation,
 datum and spacers for correction, and retains the focus/cooling lock-order fix.
-The existing Windows 0.7.133 build remains compatible.
+This companion adds saved honeycomb height and requires the matching Windows
+build above (pi-thickness-focus-v2); 0.7.133 cannot use the updated daily measurement.
 It includes the integrated faster-Z and first-app-priority sources. Normal Z
 travel still requires `Cap:E3_Z_SETUP_SPEED_V1:1`; use the previously supplied
 matching speed firmware. This installer does not flash firmware or operate hardware.
@@ -99,7 +106,8 @@ or gauge teaching. A firmware identity change still requires reference and teach
 
 Accepted predecessors: the recorded installed 568b1cc9 companion or the integrated
 speed/priority sources at `{INTEGRATED_REVISION}`, or the thickness-focus sources
-at `{THICKNESS_REVISION}`, or the installed cooling fix at `{COOLING_REVISION}`.
+at `{THICKNESS_REVISION}`, the cooling fix at `{COOLING_REVISION}`, or the installed
+invalid-thickness correction at `{REJECTION_REVISION}`.
 Unknown edits reject. Operator
 configuration, calibration and saved-Z data are preserved; replaced sources are
 backed up. Default installation is a read-only preview.
@@ -130,8 +138,10 @@ sudo systemctl start e3-hardware-node.service
 
 Open **E3 DEV TEST**. Establish the required reference, enter total spacers (zero
 for material directly on the honeycomb), and measure a flat workpiece. Check the
-reported thickness, calculated gap and focus Z. The selected rig datum is -1.5 mm
-relative to the black border. The gap is `max(3, 7 - 2*thickness/3)` mm: 1.5 mm
+reported thickness, calculated gap and focus Z. In Machine Setup → 7 · Z / laser
+focus, save the measured **Honeycomb Z relative to border**. Existing installations
+start at -1.5 mm until explicitly saved. Negative means below the black border.
+Saving clears the workpiece measurement and sends no movement command. The gap is `max(3, 7 - 2*thickness/3)` mm: 1.5 mm
 material gives 6 mm; 3 mm gives 5 mm; 4 mm gives 4.333 mm; 6 mm and thicker gives
 3 mm. Clear measurement before changing spacers. Remove the gauge before travel.
 Verify physical clearance and focus before a supervised material trial. Automated

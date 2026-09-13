@@ -4449,7 +4449,7 @@ class MachineService:
                 if action == "status":
                     return unavailable()
                 raise MachineError("Connect the shared Ender controller before laser focus")
-            if action not in {"status", "recover", "recover_xy", "forget", "clear_surface", "set_xy_offset"}:
+            if action not in {"status", "recover", "recover_xy", "forget", "clear_surface", "set_xy_offset", "set_honeycomb_height"}:
                 if (self._controller_state is not ControllerState.READY_MOTION
                     or not self._coordinate_reference_ready
                     or self._coordinate_reference_session_generation != session.generation

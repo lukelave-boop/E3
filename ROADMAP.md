@@ -1,5 +1,14 @@
 # Roadmap
 
+## Saved honeycomb datum follow-up
+
+An explicit saved height editor in Step 7 is implemented for the paired
+desktop/Pi feature build; automated and operator verification are tracked in
+CURRENT_STATE.md. Guided four-corner/center surveying, manual leveling guidance
+and measurement/return-button regrouping remain pending. Continuous bed mesh
+compensation is separate scope. Small-negative thickness tolerance was canceled.
+
+
 ## Invalid thickness recovery (2026-09-13)
 
 Separate invalid derived measurements at verified clearance from motion failures.

@@ -58,6 +58,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._pending = False
         self._preview_id: str | None = None
         self._clearance_edited = False
+        self._honeycomb_edited = False
         self._offset_edited = False
         self._offset_entered = [False, False]
         self._camera_target: dict[str, Any] | None = None
@@ -114,6 +115,26 @@ class LaserFocusPanel(QtWidgets.QWidget):
         ender_row.addWidget(self.ender_status, 1)
         ender_row.addWidget(self.reconnect_ender)
         layout.addLayout(ender_row)
+        self.honeycomb_group = QtWidgets.QGroupBox("Honeycomb height")
+        honeycomb_layout = QtWidgets.QVBoxLayout(self.honeycomb_group)
+        honeycomb_layout.addWidget(QtWidgets.QLabel("Honeycomb Z relative to border (negative = below border)"))
+        honeycomb_row = QtWidgets.QHBoxLayout()
+        self.honeycomb_height = MeasurementSpinBox()
+        self.honeycomb_height.setRange(-10, 10)
+        self.honeycomb_height.setDecimals(3)
+        self.honeycomb_height.setSuffix(" mm")
+        self.honeycomb_height.setValue(-1.5)
+        self.save_honeycomb = QtWidgets.QPushButton("Save honeycomb height")
+        honeycomb_row.addWidget(self.honeycomb_height)
+        honeycomb_row.addWidget(self.save_honeycomb)
+        honeycomb_layout.addLayout(honeycomb_row)
+        self.honeycomb_note = QtWidgets.QLabel("Enter the measured bed height relative to the border. Saving clears the workpiece measurement; measure again before running a job.")
+        self.honeycomb_note.setWordWrap(True)
+        honeycomb_layout.addWidget(self.honeycomb_note)
+        layout.addWidget(self.honeycomb_group)
+        self.honeycomb_group.setVisible(calibration_mode)
+        self.honeycomb_height.valueChanged.connect(self._edit_honeycomb)
+        self.honeycomb_height.lineEdit().textEdited.connect(self._edit_honeycomb)
         self.z_retention_group = QtWidgets.QGroupBox("Saved Z between sessions")
         retention_layout = QtWidgets.QVBoxLayout(self.z_retention_group)
         retention_row = QtWidgets.QHBoxLayout()
@@ -307,7 +328,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.spacers.setSuffix(" mm")
         self.spacers.setPrefix("Spacers: ")
         self.spacers.setToolTip("Total spacer thickness under the material. Clear measurement before changing this value.")
-        self.thickness_note = QtWidgets.QLabel("Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: −1.5 mm below border.")
+        self.thickness_note = QtWidgets.QLabel("Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: waiting for saved height.")
         self.thickness_note.setWordWrap(True)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
@@ -368,7 +389,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                                (self.teach, "teach"), (self.preview, "preview"),
                                (self.use_job, "use_job"), (self.move, "move"), (self.return_clearance, "clearance"),
                                (self.clear_surface, "clear_surface"), (self.forget, "forget"),
-                               (self.forget_z, "forget_z"),
+                               (self.forget_z, "forget_z"), (self.save_honeycomb, "set_honeycomb_height"),
                                (self.apply_offset, "set_xy_offset"), (self.align_probe, "align_probe"),
                                (self.align_laser, "align_laser")):
             if button is not None:
@@ -586,6 +607,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         ):
             self.clear_camera_target("Machine position or offset changed; select the probe point again.")
         self._result = dict(result)
+        honeycomb = _number(result.get("honeycomb_height_mm"))
+        if honeycomb is not None and -10 <= honeycomb <= 10 and (not self._honeycomb_edited or result.get("action") == "set_honeycomb_height"):
+            blocker = QtCore.QSignalBlocker(self.honeycomb_height)
+            self.honeycomb_height.setValue(honeycomb)
+            del blocker
+            self._honeycomb_edited = False
         job_focus = result.get("job_focus")
         if not self.calibration_mode and isinstance(job_focus, Mapping) and job_focus.get("reusable") is True:
             spacer = _number(job_focus.get("spacer_thickness_mm"))
@@ -791,11 +818,28 @@ class LaserFocusPanel(QtWidgets.QWidget):
                       and retention["available"] else "Saved Z: ")
             self.z_retention_status.setText(prefix + (retention["reason"] or "No saved position restored."))
 
+    def _edit_honeycomb(self, *_args) -> None:
+        self._honeycomb_edited = True
+        self._sync()
+
     def _sync(self) -> None:
         self._sync_z_display()
         idle = _read_allowed(self._status) and not self._busy and not self._pending
         ready = idle and self.fresh()
         self._sync_z_retention(ready)
+        honeycomb = _number(self._result.get("honeycomb_height_mm"))
+        honeycomb_available = (honeycomb is not None and -10 <= honeycomb <= 10
+                               and self._result.get("thickness_focus_available") is True
+                               and self._result.get("honeycomb_height_persistent") is True)
+        self.honeycomb_height.setEnabled(bool(self.calibration_mode and ready and honeycomb_available))
+        self.save_honeycomb.setEnabled(bool(self.honeycomb_height.isEnabled() and self._honeycomb_edited
+                                           and self.honeycomb_height.hasAcceptableInput()))
+        if honeycomb is not None:
+            self.thickness_note.setText(f"Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: {honeycomb:+.3f} mm relative to border.")
+        self.honeycomb_note.setText(
+            f"Saved: {honeycomb:+.3f} mm relative to border. Saving clears the workpiece measurement; measure again before running a job."
+            if honeycomb_available else "Connect and refresh the updated Pi companion to edit the saved honeycomb height."
+        )
         projection = project_machine_state(self._status)
         clearance = self._clearance_value()
         moving = ready and projection.can_jog and self.path_clear.isChecked() and clearance is not None
@@ -989,7 +1033,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             return False
         if isinstance(plan, Mapping) and plan.get("reusable") is True:
             thickness = _number(plan.get("material_thickness_mm"))
-            if thickness is None or plan.get("focus_policy") != "linear-0-6mm-v1":
+            if thickness is None or plan.get("focus_policy") != "linear-0-6mm-v2":
                 self.job_note.setText("Measure the workpiece again to calculate focus from material thickness.")
                 return False
             gap = _number(plan.get("gap_mm"))
@@ -1020,6 +1064,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "measure": self.measure, "teach": self.teach,
             "preview": self.preview, "use_job": self.use_job, "move": self.move, "clearance": self.return_clearance,
             "clear_surface": self.clear_surface, "forget": self.forget, "forget_z": self.forget_z,
+            "set_honeycomb_height": self.save_honeycomb,
             "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
             "recover": self.reconnect_ender, "recover_xy": self.recover_xy,
         }.get(action)
@@ -1038,6 +1083,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             arguments["preview_id"] = self._preview_id
         if action == "jog":
             arguments["value"] = value
+        if action == "set_honeycomb_height":
+            self.honeycomb_height.interpretText()
+            arguments["value"] = float(self.honeycomb_height.value())
         if action == "set_xy_offset":
             arguments["value"] = self._offset_value()
         if action == "forget_z":

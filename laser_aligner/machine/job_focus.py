@@ -92,6 +92,8 @@ def selection_snapshot(machine, token):
     from .laser_focus import validate_thickness_plan
     validate_thickness_plan(plan)
     if "focus_policy" in plan:
+        if plan["honeycomb_height_mm"] != state.honeycomb_height_mm:
+            raise SafetyError("Honeycomb height changed; measure the workpiece again")
         expected = plan["contact_z_mm"] + state.calibration["focus_offset_mm"] + plan["gap_mm"] - 7
         if plan["target_z_mm"] != expected:
             raise SafetyError("Thickness-derived focus target changed; measure the workpiece again")

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - editable saved honeycomb height
+
+- Add signed honeycomb height relative to border with an explicit Save button
+  in Machine Setup Step 7; show the controller's saved datum in daily focus.
+- Persist the value separately from gauge teaching and require remeasurement
+  after saving. Keep the initial -1.5 mm value and reject negative thickness.
+- Require the paired v2 desktop/Pi focus update and guard against stale datum
+  reuse at job admission. Preserve the prior completed-probe rejection fix.
+
+
 ## Unreleased — invalid thickness connection preservation
 
 - Keep the controller connected when a completed measurement returns to verified

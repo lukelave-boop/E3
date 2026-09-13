@@ -1,5 +1,24 @@
 # Surface height and gauge-taught laser focus
 
+## Saved honeycomb Z height
+
+Open **Machine Setup → 7 · Z / laser focus → Honeycomb height**. Enter
+**Honeycomb Z relative to border**, then choose **Save honeycomb height**.
+Negative values mean below the border; the accepted setting range is -10 to
++10 mm. Use the measured bed height. This changes a datum, not bed flatness
+compensation or a tolerance. The default remains -1.500 mm until explicitly
+saved. The controller stores it across app/Pi restarts, separately from gauge
+teaching, and the Machine panel displays its current value.
+
+Saving is an idle, disarmed, confirmed no-motion action. It clears the previous
+surface, preview and job focus. Measure the workpiece again before running a
+job. Gauge teaching and the valid border reference are retained. Both the new
+desktop and matching Pi companion (pi-thickness-focus-v2) are required.
+Material thickness = measured elevation - saved honeycomb height - spacers.
+For example, elevation -1.532 mm with datum -1.600 mm and no spacers gives
+0.068 mm material thickness. Negative thickness still blocks; nothing is clamped.
+
+
 ## Invalid thickness after measurement (2026-09-13)
 
 After the probe returns to verified clearance, an invalid calculated thickness
@@ -29,7 +48,7 @@ The earlier 0.7.132 combined handoff below is retained as historical context.
 The daily Workpiece focus selector is replaced by a calculated gap:
 
 ```text
-material thickness = measured elevation above border + 1.5 mm - spacers
+material thickness = measured elevation above border - saved honeycomb height - spacers
 laser gap = max(3 mm, 7 mm - material thickness * 2/3)
 target Z = raw probe contact Z + taught 7 mm offset + laser gap - 7 mm
 ```
@@ -44,7 +63,7 @@ target Z = raw probe contact Z + taught 7 mm offset + laser gap - 7 mm
 | 6 mm and above | 3 mm |
 
 This is the operator-selected straight line, superseding discrete thickness bands.
-It uses the reported honeycomb height of −1.5 mm relative to the black border.
+It uses the saved honeycomb height relative to the black border (initially −1.5 mm).
 Set **Spacers** to zero for material resting directly on the honeycomb, or enter
 the total thickness of all supports beneath the sheet before **Measure surface**.
 The material must present one flat top across the job. Unknown supports must not

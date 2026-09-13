@@ -134,9 +134,9 @@ def test_stop_during_invalid_thickness_processing_still_rejects(focus_machine, m
     focus.serial.contacts = [-1.6]
     derive = laser_focus.thickness_focus
 
-    def interrupted(elevation, spacers):
+    def interrupted(elevation, spacers, honeycomb):
         machine.request_stop(_recover=False)
-        return derive(elevation, spacers)
+        return derive(elevation, spacers, honeycomb)
 
     monkeypatch.setattr(laser_focus, "thickness_focus", interrupted)
     with pytest.raises(MachineError):

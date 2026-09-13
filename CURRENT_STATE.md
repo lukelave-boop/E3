@@ -1,6 +1,66 @@
 # Current repository state
 
+## Paper measurement datum mismatch (2026-09-13)
+
+Operator confirms paper is directly on bare honeycomb, with spacers 0.000 mm.
+Pi journal at 12:06:23 reports elevation -1.981 mm and rejected derived thickness
+-0.481 mm against the fixed -1.500 mm honeycomb datum. Earlier rejected readings
+at 11:55:04 and 11:56:32 were -2.054 and -2.056 mm elevation; their exact target
+surfaces are not independently established. The fixed datum is inconsistent
+with these contact results; actual bed elevation and paper deflection still
+need distinguishing before changing the datum. Do not infer paper thickness or
+silently clamp the result from these observations.
+
+Direct read-only status confirms READY_MOTION, disarmed, Ender ready with no
+fault, no active job and jobs blocked by the numeric thickness result. Operator
+completed the probing sequence and saved new gauge teaching: taught Z2.500,
+contact Z-2.045, offset4.545 mm. This records operator-observed probing and saved
+calibration, not independent dimensional verification. No remote movement or
+configuration changes were made during this investigation.
+
+## Next revision: group the gauge measurement workflow (2026-09-13)
+
+Add an explicit **Bed leveling and datum** stage within Step 7 (Z / laser focus),
+after border reference and before gauge teaching. Guide a survey of four bed
+corners plus the center using a rigid target of known thickness. Show measured
+heights and differences so the operator can distinguish an overall datum offset
+from corner tilt or center deviation, adjust the four leveling screws manually,
+and repeat the survey before saving the measured bed datum. Replace the assumed
+bed height only through explicit calibration; do not silently infer a datum
+from paper measurements. Continuous mesh compensation is separate future scope,
+not an automatic consequence of this survey. Survey positions and all movement
+must use the existing MachineService bounds, probe offsets, clearance, laser-off
+and operator-confirmation guards. Implementation and physical validation are
+pending for the next revision.
+
+Operator-requested UI requirement, deferred to the next revision: in Machine
+Setup's Z / laser focus tab, place Measure surface and Return laser to measured
+spot together in the same measurement step, immediately before 7 mm gauge
+teaching. The separate XY-offset editor must not interrupt that sequence.
+Show the required next action beside the measurement/teaching controls so a
+successful measurement followed by disabled Z/teaching controls explains itself
+without external instructions. Preserve explicit movement and existing guards.
+No UI code or feature build was changed for this deferred request.
+
 ## Invalid thickness disconnect correction (2026-09-13)
+
+
+## Saved honeycomb height (2026-09-13, in development)
+
+Operator reports successful manual leveling; latest screenshot is elevation
+-1.532 mm, derived thickness -0.032 mm against the existing -1.500 mm datum.
+The requested small-negative tolerance was explicitly canceled. No tolerance
+or automatic datum adjustment is implemented. Step 7 now exposes a signed
+Honeycomb Z relative to border editor and explicit Save honeycomb height.
+The Pi persists this separately from gauge calibration, bound to the controller
+port, defaulting to the existing -1.5 mm only when no saved file exists. Invalid
+saved files reject. Save clears surface/preview/job selection and requires a new
+measurement; it preserves gauge teaching and border reference and sends no
+motion. The daily panel displays the controller's saved datum. Thickness policy
+and capability are v2 so old companions reject before measurement or saving.
+Current source verification/build/deployment are in progress; physical accuracy
+is unverified. The deferred measurement-button grouping and bed survey below
+remain separate next-revision work.
 
 Initial direct SSH verified all 17 installed files matched
 ef005aa / e3-pi-thickness-focus-5f770c81.

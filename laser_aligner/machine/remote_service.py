@@ -2012,7 +2012,7 @@ class RemoteMachineService:
         self._require_controller_session_capability()
         if FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to use taught laser focus")
-        if action == "measure_workpiece" and THICKNESS_CAPABILITY not in (self._node_capabilities or ()):
+        if action in {"measure_workpiece", "set_honeycomb_height"} and THICKNESS_CAPABILITY not in (self._node_capabilities or ()):
             self._job_focus_required = True
             self._selected_job_focus = None
             raise MachineError("Update the Pi companion before measuring thickness-based focus")
@@ -2048,11 +2048,20 @@ class RemoteMachineService:
             result.get("thickness_focus_available") is not True
             or (result.get("job_focus") is not None
                 and (type(result["job_focus"]) is not dict
-                     or result["job_focus"].get("focus_policy") != "linear-0-6mm-v1"))
+                     or result["job_focus"].get("focus_policy") != "linear-0-6mm-v2"))
         ):
             self._job_focus_required = True
             self._selected_job_focus = None
             raise PiJobProtocolError("Pi did not confirm thickness-derived workpiece focus")
+        if action == "set_honeycomb_height" and (
+            result.get("honeycomb_height_mm") != value
+            or result.get("honeycomb_height_persistent") is not True
+            or result.get("job_focus_required") is not True
+            or any(result.get(key) is not None for key in ("surface", "preview", "job_focus"))
+        ):
+            self._selected_job_focus = None
+            self._job_focus_required = True
+            raise PiJobProtocolError("Pi did not confirm the saved honeycomb height and cleared measurement")
         if not xy_recovery_supported:
             result["xy_recovery_available"] = False
         readback = result.get("current_readback")
