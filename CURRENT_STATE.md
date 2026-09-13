@@ -1,5 +1,38 @@
 # Current repository state
 
+## Probe selection in the main workspace (2026-09-12)
+
+The daily Machine → Z axis · Ender controls no longer contain a second live
+camera pane. Position probe selects a spot in the calibrated main view on the
+left, shows a crosshair and coordinate preview, then becomes Move probe here
+for the separate guarded motion request. Machine Setup tab 7 keeps its raw
+camera preview for the modal calibration workflow.
+
+Corrected-frame metadata binds the displayed area, camera source/settings,
+lens/bed map, machine or honeycomb coordinate frame and conservative capture
+age. Selection inverts the displayed projection through the existing bed/lens
+mapping and calls the unchanged AppContext focus mapper. Missing, reviewed,
+stale, hidden or changed image evidence cannot authorize positioning. A queued
+move rechecks display provenance and loses its target on image replacement or
+control suspension even after its marker was cleared for dispatch. Matching
+fresh frames preserve the selected point. Ordinary canvas editing is suppressed
+only during explicit probe selection; pan and zoom preserve the selected point.
+
+This changes the desktop pipeline only. MachineService bounds, offsets,
+clearance, sessions, arming and STOP guards, saved-Z behavior, project schema,
+Pi services and firmware are unchanged. No installed calibration was accessed.
+The main checkout's unrelated console/startup/F103 changes remain separate.
+
+All 360 focused Windows offscreen widget, mapping and controller acceptance/rejection
+tests pass, including the real viewport → daily panel → guarded fake-controller
+move and queued-target invalidation. Camera/job/template regression checks pass
+156 tests; 93 adapter/drafting/handle/raster/Trace checks pass. Repository Ruff,
+compileall and whitespace checks pass. Wide and compact offscreen Qt renders
+with synthetic image/status show the crosshair and wrapped controls without a
+duplicate pane. Exact-revision Windows CI and frozen-build verification follow
+in the verification entry. Local Python is 3.14.4. No interactive GUI, real
+camera, controller, laser or physical placement test has been performed.
+
 ## Machine-tab reference controls and Setup-only focus positioning (2026-09-12)
 
 The daily Reference and measure controls, Ender recovery/status, saved-Z

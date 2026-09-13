@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -7,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import numpy as np
 from ..calibration.profiles import signature_from_values
 from ..config import WorkArea, effective_laser_output_area
 from ..core import CoreRuntime
+from ..errors import LaserAlignerError
 from ..geometry.polygon import (
     convex_polygon_violation_normalized_mm,
     normalize_convex_polygon,
@@ -1138,6 +1140,7 @@ class DesktopController(QtCore.QObject):
         source_generation = self._camera_source_generation
         self._camera_refresh_in_flight = True
         self._camera_refresh_generation = source_generation
+        focus_evidence: dict[str, Any] = {}
 
         def corrected_image() -> QtGui.QImage:
             options: dict[str, Any] = {}
@@ -1145,11 +1148,27 @@ class DesktopController(QtCore.QObject):
                 options["work_area"] = camera_area
             if coordinate_frame is not None:
                 options["coordinate_frame"] = coordinate_frame
+            # Age starts before capture and correction, not when the finished
+            # image reaches Qt. A refreshed camera cache must never make an
+            # older displayed image look newly captured.
+            received = time.monotonic()
+            before = self._focus_frame_state(camera_area)
             frame = self.runtime.context.rectified_frame(
                 refresh=True,
                 **options,
             )
-            return image_to_qimage(frame)
+            image = image_to_qimage(frame)
+            after = self._focus_frame_state(camera_area)
+            if before is not None and after is not None and before[0] == after[0]:
+                state, age = before
+                focus_evidence["metadata"] = {
+                    **state,
+                    "received_monotonic": received,
+                    "frame_age_seconds": age,
+                    "corrected_width": image.width(),
+                    "corrected_height": image.height(),
+                }
+            return image
 
         self._run(
             corrected_image,
@@ -1161,6 +1180,7 @@ class DesktopController(QtCore.QObject):
                     source_generation,
                     expected_revision,
                     image_area=camera_area,
+                    focus_frame_metadata=focus_evidence.get("metadata"),
                 )
             ),
             on_failure=lambda message, source_generation=source_generation,
@@ -1306,6 +1326,7 @@ class DesktopController(QtCore.QObject):
         expected_revision: tuple[object | None, ...] | None = None,
         *,
         image_area: WorkArea | None = None,
+        focus_frame_metadata: dict[str, Any] | None = None,
     ) -> None:
         if (
             source_generation is not None
@@ -1319,7 +1340,14 @@ class DesktopController(QtCore.QObject):
             self._camera_refresh_pending = True
             return
         if not self._camera_review_active():
-            self._publish_camera_image(image, image_area=image_area)
+            current = self._focus_frame_state(image_area) if focus_frame_metadata else None
+            if current is None or any(
+                focus_frame_metadata.get(key) != value for key, value in current[0].items()
+            ):
+                focus_frame_metadata = None
+            self._publish_camera_image(
+                image, image_area=image_area, focus_frame_metadata=focus_frame_metadata,
+            )
         camera_recovered = self._camera_error_latched is not None
         mapping_recovered = self._camera_mapping_latched is not None
         overlay_recovered = self._camera_overlay_error_latched is not None
@@ -1406,27 +1434,79 @@ class DesktopController(QtCore.QObject):
         except Exception:
             return False
 
+    def _focus_frame_state(
+        self, image_area: WorkArea | None,
+    ) -> tuple[dict[str, Any], float] | None:
+        """Read immutable provenance for live corrected-view probe selection.
+
+        Incomplete camera evidence still permits normal viewing, but cannot
+        authorize a point selection. This only reads cached application state.
+        """
+        if self._calibration_review_active or self._camera_review_active():
+            return None
+        try:
+            context = self.runtime.context
+            camera = context.camera
+            status = camera.status()
+            age = status.frame_age_seconds
+            if (status.connected is not True or status.last_error
+                    or type(age) not in {int, float} or not math.isfinite(age)
+                    or not 0 <= age <= 2.0
+                    or not is_dataclass(camera.settings)):
+                return None
+            width, height = status.width, status.height
+            if any(type(value) is not int or not 0 < value <= 30000 for value in (width, height)):
+                return None
+            lens_id = context.lens.model.model_id
+            mapping = context.bed_mapping_digest()
+            if not isinstance(lens_id, str) or not lens_id or not isinstance(mapping, str) or not mapping:
+                return None
+            ppm = self.runtime.settings.calibration.bed.pixels_per_mm
+            if type(ppm) not in {int, float} or not math.isfinite(ppm) or ppm <= 0:
+                return None
+            area = image_area if image_area is not None else self.runtime.settings.machine.work_area
+            area_values = {key: float(getattr(area, key)) for key in ("x_min", "x_max", "y_min", "y_max")}
+            if (not all(math.isfinite(value) for value in area_values.values())
+                    or area_values["x_min"] >= area_values["x_max"]
+                    or area_values["y_min"] >= area_values["y_max"]):
+                return None
+            signature = self._current_review_signature()
+            if signature[2] != mapping:
+                return None
+            return ({
+                "width": width, "height": height,
+                "source_width": width, "source_height": height, "source_mode": None,
+                "camera_settings": asdict(camera.settings),
+                "review_signature": copy.deepcopy(signature),
+                "source_generation": self._camera_source_generation,
+                "lens_model_id": lens_id, "pixels_per_mm": float(ppm),
+                "camera_image_area": area_values,
+            }, float(age))
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError, LaserAlignerError):
+            return None
+
     def _publish_camera_image(
         self,
         image: QtGui.QImage,
         *,
         image_area: WorkArea | None = None,
+        focus_frame_metadata: dict[str, Any] | None = None,
     ) -> None:
         self._camera_image_published = True
-        if image_area is None:
+        if image_area is None and focus_frame_metadata is None:
             self.cameraImageReady.emit(image)
             return
-        self.cameraImageReady.emit(
-            {
-                "image": image,
-                "camera_image_area": {
-                    "x_min": float(image_area.x_min),
-                    "x_max": float(image_area.x_max),
-                    "y_min": float(image_area.y_min),
-                    "y_max": float(image_area.y_max),
-                },
+        payload: dict[str, Any] = {"image": image}
+        if image_area is not None:
+            payload["camera_image_area"] = {
+                "x_min": float(image_area.x_min),
+                "x_max": float(image_area.x_max),
+                "y_min": float(image_area.y_min),
+                "y_max": float(image_area.y_max),
             }
-        )
+        if focus_frame_metadata is not None:
+            payload["focus_frame_metadata"] = copy.deepcopy(focus_frame_metadata)
+        self.cameraImageReady.emit(payload)
 
     def _invalidate_camera_image(self) -> None:
         if not self._camera_image_published:

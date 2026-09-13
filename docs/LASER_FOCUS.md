@@ -32,8 +32,10 @@ establish dimensional accuracy or qualify fault handling on physical hardware.
 ## Daily focus and machine calibration
 
 Use **Machine → Z axis · Ender → Reference and measure** for routine
-referencing and surface measurement. Ender status/recovery, saved-Z controls,
-the live bed view and related actions are embedded beside the manual Z controls.
+referencing and surface measurement. Ender status/recovery, saved-Z controls
+and related actions are embedded beside the manual Z controls. Position probe
+uses the main calibrated view on the left; the duplicate live bed view in the
+right-hand controls is removed.
 Set the clearance and check the physical headroom and full XY/Z path before
 choosing **Home / park + reference**. This single action homes and parks XY,
 verifies completion and unchanged controller sessions, then references the
@@ -47,8 +49,9 @@ Open **Tools → Machine Setup… → 7 · Z / laser focus** for the entire
 and next-job focus selection. These controls live only in this tab alongside
 **Probe / laser XY offset** and **Teach once with the 7 mm gauge**, including
 teaching jogs, gauge-fit confirmation, Save and Forget. The page retains
-reference, measurement, recovery, saved-Z and camera helpers so calibration can
-be completed there. Both pages use the same machine state and saved offsets.
+reference, measurement, recovery, saved-Z and raw live camera helpers so
+calibration can be completed there. Both pages use the same machine state and
+saved offsets.
 
 The separate **Surface / laser focus…** button/dialog and focus workspace's
 **Position XY** jog row are removed. Use the camera-positioning and probe/laser
@@ -215,9 +218,11 @@ physical cause or physical recovery success is established by this software fix.
 ## Choose a probe point in the camera image
 
 After referencing the border and reaching the selected clearance, choose
-**Position probe** on the left, then click a solid spot in the live image.
-A crosshair and the proposed probe/head coordinates appear. The same button
-changes to **Move probe here** after a valid selection. Check the XY path and
+**Position probe** in **Machine → Z axis · Ender**, then click a solid spot
+in the main calibrated view on the left. In Machine Setup tab 7, use that tab's
+raw live preview instead. A crosshair and the proposed probe/head coordinates
+appear in the selected workspace. The same button changes to **Move probe
+here** after a valid selection. Check the XY path and
 remove the gauge, then press that button again to move at clearance. The camera
 click only previews the target; it does not move, deploy the pin or descend.
 Check the actual probe over the intended solid patch, then use **Measure
@@ -236,13 +241,18 @@ move duration within the bounded focus operation; it does not use the short
 ordinary-command acknowledgement timeout. STOP, lost connections and failed
 position verification still invalidate the reference and stop the operation.
 
-The view remains raw, but click coordinates pass through the installed lens
-correction and active registered/meshed bed calibration. The service applies
-both the configured laser-center correction and saved probe-to-laser offset.
-When the Pi sends a smaller full-frame preview, E3 first converts the click
-back to the original camera coordinates. Resizing the view does not change
-the selected bed point. The original source must still match the calibration;
-unknown preview transformations and changed source settings remain blocked.
+The main view is already corrected using the installed lens and active
+registered/meshed bed calibration. Its selection uses the coordinates displayed
+for the machine or honeycomb workspace and requires fresh image metadata that
+still matches the camera, calibration and displayed area. An unavailable,
+stale or unverified image cannot become a positioning target. Zooming, panning
+and resizing do not change the selected physical point.
+
+Machine Setup's preview remains raw. Its clicks pass through the same lens
+and bed correction; smaller full-frame Pi previews are first converted to
+original camera coordinates. Unknown preview transformations and changed source
+settings remain blocked. Both views retain the configured laser-center
+correction and saved probe-to-laser offset.
 The selected point, probe carriage and later laser-return carriage must all
 be in the configured focus positioning area. Missing/stale calibration, stale/offline frames,
 changed source settings or dimensions, unreferenced Z, insufficient clearance,
@@ -260,18 +270,20 @@ is still rejected.
 
 This is a bed-plane camera estimate. Raised surfaces are not height-corrected;
 verify the probe is over a solid patch before the separate contact cycle.
-Normal live viewing grants no motion action unless Position probe is selected
-and the separate move is requested. The matching updated Pi companion is
-required; surface-height V2 firmware supports positioning without live telemetry.
+Normal viewing grants no motion action unless Position probe is selected
+and the separate move is requested. Moving daily selection to the main view
+requires only the desktop update. Positioning still needs its existing matching
+Pi companion; surface-height V2 firmware supports it without live telemetry.
 
 ## Live view and the probe-to-laser transfer
 
-The Machine Z workspace and Machine Setup tab 7 include a live bed view
-alongside the controls and a next-step prompt. The image is the raw camera feed:
-it preserves aspect ratio and reports frame age, stale frames and a lost
-connection. Ordinary viewing is for visual alignment; explicit Position probe
-mode adds calibrated selection as above. View ownership remains with the active
-workspace; ending its observation does not stop the shared camera.
+The daily Machine Z workspace uses the main calibrated view on the left and
+shows its next-step prompt beside the controls. Machine Setup tab 7 retains a
+raw live camera preview alongside its calibration controls: it preserves aspect
+ratio and reports frame age, stale frames and a lost connection. Ordinary
+viewing is for visual alignment; explicit Position probe mode adds selection
+as above. Setup owns observation while its modal workspace is open. Ending
+observation does not stop the shared camera.
 
 For a narrower teaching surface, open **Machine Setup → 7 · Z / laser focus**
 and enter the measured vector in **Probe / laser XY offset**, from laser center
@@ -283,7 +295,7 @@ not global defaults or physically verified transfer accuracy. Save the measured
 offset explicitly; an unset offset never silently becomes zero.
 
 1. Choose **Home / park + reference**, then remain at the selected clearance.
-2. Use the live view and ordinary Machine XY controls to align the laser over
+2. Use the camera view and ordinary Machine XY controls to align the laser over
    the chosen flat spot at clearance. The focus workspace has no separate XY
    jog row. For direct camera placement of the probe instead, use the separate
    Position probe sequence above.

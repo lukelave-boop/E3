@@ -11,6 +11,7 @@ from ..errors import CalibrationError
 from .controls import MeasurementSpinBox
 from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
+from .main_view_probe import MainViewProbe
 from .mainboard_z import _number, _read_allowed, _session
 from .qt import require_qt
 from .z_telemetry import EnderZTelemetry
@@ -19,6 +20,21 @@ QtCore, _, QtWidgets = require_qt()
 
 FRESH_SECONDS = 5.0
 POLL_SECONDS = 2.0
+
+
+def _validate_main_view_selection(controller: Any, selection: dict[str, Any]) -> None:
+    """Recheck display provenance in the worker without touching Qt widgets."""
+    if selection.get("main_view") is not True:
+        return
+    context = controller.runtime.context
+    if (not controller.review_signature_is_current(selection.get("review_signature"))
+            or controller._camera_review_active()
+            or controller._camera_source_generation != selection.get("source_generation")
+            or getattr(getattr(context.lens, "model", None), "model_id", None)
+            != selection.get("lens_model_id")
+            or controller.runtime.settings.calibration.bed.pixels_per_mm
+            != selection.get("pixels_per_mm")):
+        raise RuntimeError("Main camera view changed; select the probe point again.")
 
 
 class LaserFocusPanel(QtWidgets.QWidget):
@@ -32,6 +48,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None, *, calibration_mode: bool = False) -> None:
         super().__init__(parent)
         self.calibration_mode = calibration_mode
+        self._camera_location = "live image" if calibration_mode else "main view on the left"
+        self._camera_prompt = f"Choose Position probe, then click a solid spot in the {self._camera_location}."
         self._status: dict[str, Any] = {}
         self._result: dict[str, Any] = {}
         self._received_at: float | None = None
@@ -169,8 +187,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.position_probe = QtWidgets.QPushButton("Position probe")
         self.position_probe.setCheckable(True)
         self.position_probe.setStyleSheet("QPushButton:checked { border: 1px solid #ffcf40; color: #ffcf40; }")
-        self.position_probe.setToolTip("Select a probe target in the calibrated camera image.")
-        self.camera_target = QtWidgets.QLabel("Choose Position probe, then click a solid spot in the live image.")
+        self.position_probe.setToolTip(f"Select a probe target in the {self._camera_location}.")
+        self.camera_target = QtWidgets.QLabel(self._camera_prompt)
         self.camera_target.setWordWrap(True)
         grid.addWidget(self.position_probe, 4, 0, 1, 4)
         grid.addWidget(self.camera_target, 6, 0, 1, 4)
@@ -360,7 +378,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
     def fresh(self) -> bool:
         return self._received_at is not None and time.monotonic() - self._received_at <= FRESH_SECONDS
 
-    def clear_camera_target(self, message: str = "Choose Position probe, then click a solid spot in the live image.") -> None:
+    def clear_camera_target(self, message: str | None = None) -> None:
+        message = self._camera_prompt if message is None else message
         self._camera_target = None
         self._camera_point_rejected = False
         self.camera_target.setText(message)
@@ -816,7 +835,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.position_probe.setEnabled(bool(selection_ready))
         self.position_probe.setText("Move probe here" if self._camera_target else "Position probe")
         self.position_probe.setToolTip("Move to the selected point at clearance; gauge removed and full XY path clear."
-                                       if self._camera_target else "Select a probe target in the calibrated camera image.")
+                                       if self._camera_target else f"Select a probe target in the {self._camera_location}.")
         if not selection_ready and self.position_probe.isChecked():
             self.position_probe.setChecked(False)
         if self.calibration_mode:
@@ -881,10 +900,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Next: Confirm the clear path, then choose Home / park + reference." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
             "Next: Choose Move probe here with the gauge removed and XY path clear." if self._camera_target else
-            "Next: Click a solid probe spot in the live camera image." if self.position_probe.isChecked() else
+            f"Next: Click a solid probe spot in the {self._camera_location}." if self.position_probe.isChecked() else
             "Next: Return the laser to the measured spot at clearance." if probe_phase and surface else
             "Next: Confirm the solid target under the probe, then measure surface." if probe_phase else
-            "Next: Choose Position probe and click a flat target in the camera view." if not surface and offset_valid else
+            f"Next: Choose Position probe and click a flat target in the {self._camera_location}." if not surface and offset_valid else
             "Next: Position over a wide, flat patch and measure its surface." if not surface else
             ("Next: Fit the 7 mm gauge with small Z steps, then save the setting." if self.calibration_mode else
              "Next: Teach the 7 mm gauge in Machine Setup → 7 · Z / laser focus.") if not self._result.get("calibration_compatible") else
@@ -1119,11 +1138,12 @@ class LaserFocusCoordinator(QtCore.QObject):
         self.controller.stopInitiated.disconnect(self.stopped)
 
     def set_suspended(self, suspended: bool) -> None:
-        """Pause observation without cancelling an already dispatched operation."""
+        """Pause observation and revoke camera targets; let reference work finish."""
         if self._closed or self._suspended == suspended:
             return
         self._suspended = suspended
         if suspended:
+            self._camera_epoch += 1
             self._queued = None
             if not self._mutation:
                 self._epoch += 1
@@ -1221,12 +1241,14 @@ class LaserFocusCoordinator(QtCore.QObject):
                 age = camera_selection["frame_age_seconds"] + max(
                     0.0, time.monotonic() - camera_selection["snapshot_monotonic"]
                 )
+                _validate_main_view_selection(self.controller, camera_selection)
                 target = self.controller.runtime.context.focus_probe_target(
                     camera_selection["image_x"], camera_selection["image_y"],
                     source_image_size=[camera_selection["width"], camera_selection["height"]],
                     frame_age_seconds=age, frame_metadata=camera_selection,
                     mapping_signature=camera_selection["mapping_signature"],
                 )
+                _validate_main_view_selection(self.controller, camera_selection)
                 if (target["target_machine_xy_mm"] != arguments.get("value")
                         or epoch != self._epoch or parameter_epoch != self._parameter_epoch
                         or camera_epoch != self._camera_epoch):
@@ -1319,7 +1341,8 @@ class LaserFocusCoordinator(QtCore.QObject):
 
 
 class LaserFocusWorkspace(QtWidgets.QWidget):
-    def __init__(self, controller: Any, parent: QtWidgets.QWidget | None = None, *, calibration_mode: bool = False) -> None:
+    def __init__(self, controller: Any, parent: QtWidgets.QWidget | None = None, *,
+                 calibration_mode: bool = False, main_view: Any | None = None) -> None:
         super().__init__(parent)
         self._suspended = False
         self._shutdown = False
@@ -1327,7 +1350,8 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.panel = LaserFocusPanel(calibration_mode=calibration_mode)
         context = controller.runtime.context
-        self.bed_view = FocusBedView(getattr(context, "camera", None), self)
+        self.bed_view = (MainViewProbe(controller, main_view, self) if main_view is not None
+                         else FocusBedView(getattr(context, "camera", None), self))
         self.splitter = None
         if calibration_mode:
             self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -1342,12 +1366,15 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
             self.splitter.setSizes([820, 540])
             layout.addWidget(self.splitter, 1)
         else:
-            # The Machine inspector already scrolls. Keep the camera next to
-            # its selection controls without a nested viewport or fixed width.
+            # The Machine inspector already scrolls; daily positioning uses
+            # the calibrated image in the main workspace.
             self.panel.layout().setContentsMargins(0, 0, 0, 0)
-            self.panel.reference_layout.addWidget(self.bed_view, 6, 0, 1, 2)
-            self.bed_view.image_label.setMinimumSize(240, 180)
-            self.bed_view.image_label.setMaximumHeight(300)
+            note = QtWidgets.QLabel(
+                "Select in the main view on the left. Camera targets use the bed plane; "
+                "raised surfaces are not height-corrected. Check the actual probe, surface and clearance."
+            )
+            note.setWordWrap(True)
+            self.panel.reference_layout.addWidget(note, 6, 0, 1, 2)
             layout.addWidget(self.panel)
         self.coordinator = LaserFocusCoordinator(self.panel, controller, self)
         self._context = context

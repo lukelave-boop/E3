@@ -1301,6 +1301,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.focus_workspace = LaserFocusWorkspace(
             self.controller, self.machine_panel.z_control, calibration_mode=False,
+            main_view=self.workspace,
         )
         self.machine_panel.z_control.attach_focus_workspace(self.focus_workspace)
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
@@ -5952,6 +5953,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             ),
             image_area=image_area,
             source_resolution_multiplier=source_resolution_multiplier,
+            focus_frame_metadata=payload.get("focus_frame_metadata") if isinstance(payload, dict) else None,
         )
         if fit or area_changed:
             self.workspace.fit_camera_image()

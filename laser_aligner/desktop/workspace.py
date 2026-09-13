@@ -1527,6 +1527,7 @@ class _WorkspaceOverlayLegend(QtWidgets.QWidget):
 
 
 class WorkspaceView(QtWidgets.QGraphicsView):
+    cameraImageChanged = QtCore.Signal(object)
     cursorPositionChanged = QtCore.Signal(float, float)
     selectionIdsChanged = QtCore.Signal(list)
     traceSelectionIdsChanged = QtCore.Signal(list)
@@ -1732,13 +1733,17 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         pixels_per_mm: float | None = None,
         image_area: Bounds | None = None,
         source_resolution_multiplier: int = 1,
+        focus_frame_metadata: dict[str, Any] | None = None,
     ) -> None:
         if image is None or image.isNull():
             self._camera_item.setVisible(False)
             self._camera_backing_item.setVisible(False)
             self._camera_image_area = None
+            self.cameraImageChanged.emit(None)
             return
         pixmap = QtGui.QPixmap.fromImage(image)
+        # Raster coordinates are physical source pixels, independent of screen DPI.
+        pixmap.setDevicePixelRatio(1.0)
         if pixmap.isNull():
             raise ValueError("Camera image could not be converted to a display pixmap")
         area = self.workspace_scene.work_area if image_area is None else image_area
@@ -1796,6 +1801,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_backing_item.setVisible(True)
         self._camera_item.setVisible(True)
         self._camera_image_area = area
+        self.cameraImageChanged.emit(focus_frame_metadata)
 
     def fit_camera_image(self) -> None:
         area = self._camera_image_area

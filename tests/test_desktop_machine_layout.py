@@ -8,10 +8,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from laser_aligner.desktop import main_window as main_window_module
 from laser_aligner.desktop.machine_setup import MachineSetupDialog
+from laser_aligner.desktop.main_view_probe import MainViewProbe
 from tests.test_desktop_job_async import _dispose, _window
 from tests.test_desktop_laser_focus import result, status
 
@@ -58,6 +59,32 @@ def test_machine_embeds_reference_and_retention_without_focus_dialog(window, app
     assert workspace.panel.z_retention_group.isVisible()
     assert workspace.panel.reference.text() == "Home / park XY"
     assert workspace.panel.forget_z.isEnabled()
+
+
+def test_daily_probe_uses_main_canvas_without_duplicate_live_view(window):
+    daily = window.focus_workspace
+    assert isinstance(daily.bed_view, MainViewProbe)
+    assert not any(label.text() == "Live bed view"
+                   for label in daily.findChildren(QtWidgets.QLabel))
+    assert "main view on the left" in daily.panel.camera_target.text()
+    assert "main view on the left" in daily.panel.position_probe.toolTip()
+    assert not hasattr(daily.bed_view, "_worker")
+
+
+def test_main_image_delivery_preserves_probe_evidence_and_plain_images_clear_it(window):
+    received = []
+    window.workspace.cameraImageChanged.connect(received.append)
+    area = window.workspace.workspace_scene.work_area
+    ppm = window.runtime.settings.calibration.bed.pixels_per_mm
+    image = QtGui.QImage(round(area.width * ppm), round(area.height * ppm), QtGui.QImage.Format.Format_RGB32)
+    image.fill(QtGui.QColor("#666666"))
+    metadata = {"source_generation": 17}
+    window._camera_image_ready({"image": image, "focus_frame_metadata": metadata})
+    assert received[-1] == metadata
+    window._camera_image_ready(image)
+    assert received[-1] is None
+    window._camera_image_invalidated()
+    assert received[-1] is None
 
 
 def test_machine_setup_owns_preview_and_resumes_daily_view(window, app, monkeypatch):

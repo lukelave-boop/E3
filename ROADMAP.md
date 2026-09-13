@@ -13,11 +13,15 @@ and require explicit re-teaching when that identity changes. See
 
 ## Machine Z layout
 
-Place daily reference, measurement, live camera, recovery and saved-Z controls
-in **Machine → Z axis · Ender**, and the complete **Preview and position**
-section in **Machine Setup → 7 · Z / laser focus** with probe offsets and gauge
-teaching. Remove the separate Surface / laser focus dialog and its Position XY
-jog row. Move and next-job selection explicitly confirm the physical conditions
+Place daily reference, measurement, recovery and saved-Z controls in
+**Machine → Z axis · Ender**. Position probe selects a spot in the main
+calibrated view on the left, previews a crosshair and requires a separate
+**Move probe here** press; remove the duplicated right-hand live view. Require
+fresh calibrated image metadata and preserve machine/honeycomb coordinate
+mapping. Keep the complete **Preview and position** section in
+**Machine Setup → 7 · Z / laser focus** with probe offsets, gauge teaching and
+its raw live camera preview. Remove the separate Surface / laser focus dialog
+and its Position XY jog row. Move and next-job selection explicitly confirm the physical conditions
 printed beside their buttons; headroom, manual-Z, recovery and gauge-fit checks
 remain. Preserve saved-Z restoration, retained Home / park XY and Forget saved Z
 without backend or persistence changes. This layout adds no Pi or firmware

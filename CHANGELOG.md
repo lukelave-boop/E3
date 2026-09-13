@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — select probe points in the main view
+
+- Remove the duplicate live bed view from **Machine → Z axis · Ender**.
+  **Position probe** now selects a solid spot in the main calibrated view on the
+  left, previews a crosshair and target coordinates, and requires an explicit
+  **Move probe here** press before movement.
+- Bind selection to the displayed machine/honeycomb coordinates and fresh,
+  matching image/calibration metadata; unavailable or stale evidence cannot
+  authorize a move. Keep the raw live preview in Machine Setup tab 7.
+- Preserve saved probe offsets, clearance, bounds, session and STOP guards.
+  This desktop change adds no Pi, firmware or calibration update requirement.
+
 ## Unreleased — place Z controls in Machine and Machine Setup
 
 - Embed daily reference, measurement, live camera, Ender recovery and saved-Z

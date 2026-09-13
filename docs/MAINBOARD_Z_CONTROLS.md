@@ -1,16 +1,23 @@
 # Z controls in the Machine tab
 
 **Machine → Z axis · Ender** contains the manual Z controls and daily
-**Reference and measure** workspace, including live bed view, clearance,
-Home / park/reference, camera probe positioning, surface measurement, Ender
-recovery and saved-Z status/**Forget saved Z**. After an accepted saved-Z
+**Reference and measure** workspace, including clearance, Home / park/reference,
+camera probe positioning, surface measurement, Ender recovery and saved-Z
+status/**Forget saved Z**. After an accepted saved-Z
 restore, the combined action remains **Home / park XY** and does not re-probe.
 Without an accepted restore it uses the existing reference/recovery sequence.
 See [saved Z](Z_RETENTION.md) and [the reference workflow](LASER_FOCUS.md).
 
+Choose **Position probe**, then click a solid spot in the main calibrated view
+on the left. Review the crosshair and target coordinates, check the clear path
+and remove the gauge, then press **Move probe here** to move at clearance.
+Selection requires a fresh calibrated image; the click itself never moves or
+probes. The duplicate live bed view in the right-hand controls is removed.
+
 The complete **Preview and position** section is in **Machine Setup →
-7 · Z / laser focus** beside probe-offset and gauge teaching controls. The
-separate **Surface / laser focus…** button/dialog and focus Position XY row
+7 · Z / laser focus** beside probe-offset and gauge teaching controls. That
+calibration tab retains its raw live camera preview. The separate **Surface /
+laser focus…** button/dialog and focus Position XY row
 are removed. Ordinary Machine XY controls remain available under their existing
 guards. This is a desktop layout change; it preserves the existing retention,
 calibration, Pi and firmware contracts.

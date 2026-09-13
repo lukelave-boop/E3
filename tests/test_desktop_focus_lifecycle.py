@@ -222,6 +222,26 @@ def test_pause_clears_camera_selection_and_resume_requires_new_point(
     assert [action for action, _ in controller.machine.calls] == ["position_probe"]
 
 
+@pytest.mark.parametrize("calibration_mode", [False, True])
+@pytest.mark.parametrize("method", ["hide", "suspend"])
+def test_pause_rejects_dispatched_camera_move_after_marker_was_cleared(
+    workspace_factory, calibration_mode, method,
+):
+    workspace, controller = workspace_factory(calibration_mode=calibration_mode)
+    workspace.panel.set_result(camera_result(surface=None))
+    publish(workspace.bed_view)
+    workspace._camera_tick()
+    workspace.panel.position_probe.click()
+    select(workspace.bed_view)
+    workspace.panel.position_probe.click()
+    assert len(controller.work) == 1 and workspace.coordinator._mutation
+    assert workspace.bed_view.selection_snapshot() is None
+    pause(workspace, method)
+    controller.complete()
+    assert controller.machine.calls == []
+    assert not workspace.panel.fresh()
+
+
 def test_unrelated_modal_pauses_daily_camera_and_controller_polling(workspace_factory, app):
     workspace, controller = workspace_factory()
     coordinator = workspace.coordinator

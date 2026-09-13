@@ -17,17 +17,20 @@ physical power-cycle test has been performed yet. See [saved Z](docs/Z_RETENTION
 ## Z controls in Machine and Machine Setup
 
 **Machine → Z axis · Ender** contains daily **Reference and measure**,
-Ender status/recovery, saved-Z controls and the live bed view beside the existing
-manual Z controls. **Home / park + reference** becomes **Home / park XY** after
-an accepted saved-Z restore and parks without probing again. **Position probe**
-becomes **Move probe here** after a valid camera selection; press it again to
-move. The separate **Surface / laser focus…** button/dialog and the focus
+Ender status/recovery and saved-Z controls beside the existing manual Z controls.
+**Home / park + reference** becomes **Home / park XY** after an accepted saved-Z
+restore and parks without probing again. Choose **Position probe**, then click
+a solid spot in the main calibrated view on the left. Review its crosshair and
+target coordinates, then press **Move probe here** to move at clearance. The
+click only previews the target. The duplicate right-hand live bed view is
+removed. The separate **Surface / laser focus…** button/dialog and the focus
 workspace's Position XY jog row are removed.
 
 The whole **Preview and position** section now lives in **Tools → Machine
 Setup… → 7 · Z / laser focus**, alongside probe XY offsets, 7 mm gauge teaching
-and reference/measurement helpers. **Move to focus** and **Use measured focus
-for next job** confirm the physical conditions printed beside those actions;
+and reference/measurement helpers, including its raw live camera preview.
+**Move to focus** and **Use measured focus for next job** confirm the physical
+conditions printed beside those actions;
 the two separate checkboxes are removed. Headroom, manual-Z probe-stowed/path,
 recovery and gauge-fit confirmations remain. This desktop layout preserves
 backend safeguards, calibration and saved-Z behavior, and adds no Pi or firmware
@@ -118,9 +121,12 @@ steps near the gauge fit. See [laser focus](docs/LASER_FOCUS.md).
 
 ## Focus camera preview sizes
 
-Position probe supports the Pi's reduced full-frame live preview. Clicks are
-converted to original camera coordinates before lens and bed correction; window
-size does not change their target. Existing calibration and motion checks remain.
+The daily Position probe action uses the main calibrated image and its displayed
+machine or honeycomb coordinates. A fresh image with matching camera and
+calibration metadata is required. Machine Setup retains its raw camera preview,
+including support for the Pi's reduced full-frame images; those clicks are
+converted to original camera coordinates before lens and bed correction.
+Resizing either view does not change the target. Existing motion checks remain.
 See [laser focus](docs/LASER_FOCUS.md). This correction needs only a desktop update.
 
 ## Ender connection recovery
@@ -147,14 +153,15 @@ still apply. See [the focus workflow](docs/LASER_FOCUS.md).
 
 ## Laser focus setup
 
-The reference workspace's **Position probe** mode lets you click the live camera,
-review the mapped target and move the probe there at clearance using its saved
-XY offset. It uses current lens/bed calibration and preserves a separate
-Measure surface action. Camera estimates remain on the bed plane; raised work
+The daily reference workspace's **Position probe** mode lets you click the main
+calibrated view on the left, review the mapped target and explicitly move the
+probe there at clearance using its saved XY offset. It uses current lens/bed
+calibration and preserves a separate Measure surface action. Camera estimates remain on the bed plane; raised work
 requires a visual probe-placement check. See [laser focus](docs/LASER_FOCUS.md).
 
-The Machine Z section and Machine Setup tab 7 include a live bed view and step
-guidance. A saved measured probe XY offset enables separate probe/laser transfers over the same spot at
+The Machine Z section provides step guidance beside the main view; Machine Setup
+tab 7 retains its own raw live bed view for calibration. A saved measured probe
+XY offset enables separate probe/laser transfers over the same spot at
 clearance, with the Pi checking positions and retaining only that measurement.
 See [the focus sequence](docs/LASER_FOCUS.md) for the matching Pi update and
 operator calibration; no additional mainboard flash is needed for this change.

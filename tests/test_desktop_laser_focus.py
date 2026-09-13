@@ -1177,6 +1177,46 @@ def test_queued_camera_move_is_revalidated_before_controller(coordinator, cause)
     assert controller.machine.calls == []
     assert not item.panel.fresh()
 
+
+@pytest.mark.parametrize("cause", ["unchanged", "source", "pose", "review", "lens", "scale", "during_mapping"])
+def test_queued_main_view_move_rechecks_display_provenance(coordinator, cause):
+    item, controller = coordinator
+    item.panel.set_result(camera_result())
+    controller._camera_source_generation = 3
+    controller.review_signature_is_current = lambda signature: signature == ("machine", None, "bed-1")
+    controller._camera_review_active = lambda: False
+    controller.runtime.context.lens = SimpleNamespace(model=SimpleNamespace(model_id="lens-1"))
+    controller.runtime.settings = SimpleNamespace(calibration=SimpleNamespace(bed=SimpleNamespace(pixels_per_mm=5)))
+
+    def mapper(*_args, **_kwargs):
+        if cause == "during_mapping":
+            controller._camera_source_generation += 1
+        return camera_target()
+
+    controller.runtime.context.focus_probe_target = mapper
+    selection = dict(camera_selection(), main_view=True, source_generation=3,
+                     review_signature=("machine", None, "bed-1"), lens_model_id="lens-1", pixels_per_mm=5)
+    item.request("position_probe", {"confirmed": True, "clearance_z_mm": 30.0,
+                                   "value": camera_target()["target_machine_xy_mm"], "_camera_selection": selection})
+    if cause == "source":
+        controller._camera_source_generation += 1
+    elif cause == "pose":
+        controller.review_signature_is_current = lambda _signature: False
+    elif cause == "review":
+        controller._camera_review_active = lambda: True
+    elif cause == "lens":
+        controller.runtime.context.lens.model.model_id = "lens-2"
+    elif cause == "scale":
+        controller.runtime.settings.calibration.bed.pixels_per_mm = 10
+    controller.complete()
+    if cause == "unchanged":
+        assert controller.machine.calls == [("position_probe", {
+            "confirmed": True, "clearance_z_mm": 30.0, "value": [100.0, 120.0]})]
+    else:
+        assert controller.machine.calls == []
+        assert not item.panel.fresh()
+
+
 @pytest.mark.parametrize("phase", ["click", "refresh", "move"])
 def test_camera_calibration_errors_are_shown_inline_without_motion(app, monkeypatch, phase):
     from laser_aligner.errors import CalibrationError

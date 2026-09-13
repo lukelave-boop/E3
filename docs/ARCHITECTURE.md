@@ -227,10 +227,11 @@ Pi operation and both G-code pipelines are unchanged.
 
 ## Laser focus setup boundary
 
-LaserFocusWorkspace shares the focus panel, camera view and coordinator between
-the embedded Machine-tab **Z axis · Ender** reference/measurement workspace and
-Machine Setup tab 7. The separate Surface / laser focus dialog entry point is
-removed. Calibration mode creates the complete **Preview and position**,
+LaserFocusWorkspace shares the focus panel and coordinator between the embedded
+Machine-tab **Z axis · Ender** reference/measurement workspace and Machine Setup
+tab 7. Daily Position probe selects in the main corrected workspace and creates
+no duplicate camera pane; calibration mode retains its raw FocusBedView. The
+separate Surface / laser focus dialog entry point is removed. Calibration mode creates the complete **Preview and position**,
 measured probe XY offset editor and 7 mm teaching controls only in Machine
 Setup, which also retains reference and measurement helpers. Both surfaces use
 AppContext's existing camera and machine services. Ender recovery, saved-Z
@@ -254,17 +255,23 @@ replacing their separate checkboxes. Headroom, manual-Z probe-stowed/path,
 recovery and gauge-fit confirmations remain. Backend request validation,
 clearance, bounds, session and STOP guards are unchanged.
 
-FocusBedView emits explicit raw-pixel selection metadata but owns no machine
-access. AppContext.focus_probe_target validates camera/lens/bed provenance and
-maps the selected point without motion. LaserFocusCoordinator binds the preview
-to parameter/session state, rechecks the mapping before dispatch, and calls the
+The main view carries capture-age, camera-source, lens/bed and displayed-area
+metadata with its corrected image. Daily probe selection respects the displayed
+machine or honeycomb coordinate frame and rejects unavailable, stale or changed
+evidence before target mapping. Main-view selection is a preview interaction;
+it does not edit the project or provide direct machine access. Machine Setup's
+FocusBedView emits explicit raw-pixel selection metadata and also owns no
+machine access. AppContext.focus_probe_target validates camera/lens/bed
+provenance and maps the selected point without motion. LaserFocusCoordinator
+binds the preview to parameter/session state, rechecks the mapping before dispatch, and calls the
 typed MachineService position_probe action. The Pi checks physical target and
 both offset carriage endpoints, confirmed Z clearance and normal write/STOP
 invariants. Camera selection never auto-starts a contact cycle or Z descent.
 
-The workspace's observational camera pane reuses the bounded latest-frame
-monitor worker and cannot send motion. Typed focus XY actions run under the
-existing MachineService command/session scope, check Z clearance and both work
+Machine Setup's observational camera pane reuses the bounded latest-frame
+monitor worker and cannot send motion. Daily viewing reuses the existing main
+corrected-image pipeline. Typed focus XY actions run under the existing
+MachineService command/session scope, check Z clearance and both work
 area endpoints, and verify primary XY before reassigning a surface measurement
 to the laser-return pose. The measured XY offset is persisted separately from
 all session-only sequence and measurement authority. Ordinary XY invalidates it.
