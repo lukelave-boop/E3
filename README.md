@@ -15,6 +15,12 @@ since they do not send identifiable status renewals. Full protection requires
 the Pi companion; updated desktop cleanup also avoids disconnecting controllers
 it has only observed on an older Pi. See [connection ownership](docs/NETWORK_MACHINE.md#first-connected-app-priority).
 
+## Windows updates
+
+Windows updates create the verified installer before starting E3's shutdown
+deadline. Launch failure keeps the app open; launch and setup diagnostics remain
+in the update cache. See [updates](docs/UPDATES.md).
+
 ## Saved Z after a normal shutdown
 
 The retained-Z feature preserves a verified border reference and Z coordinate

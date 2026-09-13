@@ -2,6 +2,11 @@
 
 ## First-connected Pi app priority (2026-09-13)
 
+The separately verified installer-launch fix landed on main during validation.
+It is integrated before the final feature build; both branches' application
+changes merge without conflicts. The earlier 0.7.126 / 402c56f candidate remains
+unselected; the final build and full CI will use the combined revision.
+
 The operator reports that opening E3 DEV TEST while normal E3 is connected
 causes normal E3 to disconnect. Source inspection confirms two ownership gaps:
 PiMachineServer discarded the supplied client UUID for admission, and a facade
@@ -45,6 +50,54 @@ installer cases, zero skips). A redundant local full run collected the earlier
 fixtures and was cancelled after its known failures; full CI is the clean gate.
 Offscreen compact/normal control-strip and machine-panel renders were visually
 inspected with synthetic status, with no clipping of the ownership message.
+
+## Installer launch and shutdown deadline correction (2026-09-13)
+
+Release 0.7.127 at 590b032 published successfully in workflow 34755865547.
+Its Windows installer matched the manifest and GitHub asset size 215,723,437
+and SHA256 53c53e4ae8fc5a7ef7b1add66efed7440e18c8378087fe62fa59ae46a659b071.
+The corrected production launcher, invoked from source, created the real Inno
+process in 8.388 seconds with no injected delay; its visible 0.7.127 setup
+window was observed. That measured creation time exceeds the old four-second
+shutdown deadline and corroborates the reproduced race. The original attempt
+was not logged, so its exact timing remains unknown. The operator must complete
+the open wizard to install this correction; completion is not yet verified.
+Launch and setup logs are retained under build/updater/published in the isolated
+worktree. All updater commits are on origin/main and the feature branch was
+removed; the main checkout's separate active Pi edits were left untouched.
+
+The operator reports regular E3 0.7.13 downloaded an update and closed after
+approval without showing the installer. The cached 7b66881966a5 package matched
+the published SHA-256 and size; a direct launch opened its 0.7.125 wizard, and
+the installed build metadata subsequently confirmed 0.7.125. The original
+attempt produced no retained launch evidence, so its exact failure is unknown.
+
+A production MainWindow subprocess regression reproduces a matching defect:
+the shutdown watchdog was armed before external process creation. A launch
+delayed beyond the shutdown budget was terminated before creating the child.
+The pre-fix test failed with no launch marker. Creation now completes after
+unsaved-project approval but before committing Close or arming the watchdog.
+Creation failure leaves the desktop running and reports the error; successful
+creation still enters the unchanged bounded teardown. Local launch-stage JSON
+and an explicit Inno Setup log are retained alongside the downloaded package.
+
+Focused Windows updater/handoff/watchdog tests pass 47 cases, including slow
+launch, failed launch without teardown, and the ordinary stuck-worker deadline.
+A PyInstaller windowed/onedir harness exercised the production MainWindow
+pre-close hook, updater, Win32 DLL boundary and a real detached marker-writing
+child. An injected 0.8-second process-creation delay exceeded the 0.4-second
+test shutdown budget; creation completed in 1.013 seconds, the child ran, and
+the parent then exited within its teardown deadline. Embedded bytecode for all
+three changed runtime modules matched the committed sources. Four foreign
+Poppler DLLs were removed from this isolated test bundle after an initial Qt
+import failure; the existing bundle guard then passed. Evidence is under
+build/updater in the update-launch-deadline worktree. This is a frozen-process
+test, not an end-to-end installed-app-to-Inno wizard test. Exact application
+revision fdbe913 passed Compatibility CI 34755229137: Windows Python 3.12
+desktop 6,188 passed / 30 skipped; Windows Python 3.10 core 4,967 passed /
+102 skipped; POSIX controller/session 617 passed; repository Ruff passed.
+Local compileall and whitespace checks also passed. No controller, motion,
+laser or user configuration changes are part of this correction.
 
 ## Correct the installed Pi companion baseline (2026-09-12)
 

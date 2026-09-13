@@ -39,13 +39,18 @@ removed. The installer is started detached, with its parent directory as the
 working directory, before E3 exits. E3 restores its own DLL search state if
 process creation fails. Once Windows creates the installer process, that child
 is authoritative even if the exiting E3 parent cannot restore its own DLL state.
-After close approval, installer handoff uses the same bounded shutdown latch and
-does not wait indefinitely for desktop workers; their late callbacks are already
-suppressed and the verified external installer is spawned before the four-second
-process deadline can force exit.
+After unsaved-project close approval, E3 creates the verified installer process
+before committing shutdown or arming its four-second forced-exit timer. A slow
+Windows process launch therefore cannot be killed by the teardown deadline.
+If creation fails, E3 remains open and reports the error. Successful creation
+then enters the ordinary bounded shutdown; worker cleanup cannot delay it
+indefinitely. The cache retains `<installer>.launch.json` with the latest launch
+stage, elapsed time, process identity or error, and `<installer>.setup.log` with
+Inno Setup diagnostics. These local files do not contain the child environment.
 If process creation fails after E3's final close, a standalone error shows the
 verified installer path for manual launch and E3 exits; the stopped desktop is
-not re-shown as if it were usable. This boundary is automated-test covered; a
+not re-shown as if it were usable. This fallback is for windows without the
+production pre-shutdown hook. This boundary is automated-test covered; a
 newly built installed package must still be exercised before calling the
 handoff package-verified. That exercise is intentionally deferred until a
 disposable interactive Windows environment is available; it must not repoint or

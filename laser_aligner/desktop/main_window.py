@@ -6927,17 +6927,17 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return True
         if not self._confirm_discard_changes():
             return False
+        # Installer creation is not teardown. Windows may take longer than our
+        # entire shutdown budget to start an external executable. Complete that
+        # handoff before committing Close or arming the process-exit watchdog.
+        # An exception here leaves the running desktop available to report it.
+        if before_shutdown_cleanup is not None:
+            before_shutdown_cleanup()
         self._close_requested = True
         shutdown_deadline = time.monotonic() + DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
         # Arm the production process boundary before any service or worker
         # cleanup can block. Unit-created windows have no watchdog connection.
         self.shutdownStarted.emit(shutdown_deadline)
-        # The updater uses this acceptance boundary to spawn its already-
-        # verified detached installer. It must happen before QSettings, dialogs,
-        # worker cancellation, or hardware-service teardown can consume the
-        # process deadline. Ordinary Close has no callback here.
-        if before_shutdown_cleanup is not None:
-            before_shutdown_cleanup()
         self._save_window_state()
         self._cancel_job_preparation("Application is closing")
         self._cancel_job_render()

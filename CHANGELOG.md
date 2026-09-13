@@ -13,6 +13,12 @@
 - Add a guarded three-module Pi companion update for the exact recorded
   workpiece-focus baseline; configuration, calibration and firmware are preserved.
 
+## Unreleased — reliable installer launch
+
+- Complete Windows installer creation before starting the desktop shutdown
+  deadline, so slow launches are not silently terminated. Failed creation keeps
+  E3 open; local launch and installer logs support diagnosis.
+
 ## Unreleased — recognize the installed Pi focus update combination
 
 - Correct the workpiece-focus companion's predecessor list to include the

@@ -23,6 +23,14 @@ bounded disconnect. Both browser/core and desktop remote execution use this
 facade and server. The desktop additionally gates its action matrix and focus
 polling while showing actual Pi/controller state. See NETWORK_MACHINE.md.
 
+## Update launch before committed shutdown
+
+The desktop pre-close hook runs after unsaved-project approval and before the
+close latch and forced-exit deadline. Installer process creation must complete
+there; failure returns to the running desktop. Successful creation enters the
+ordinary bounded teardown. The portable updater records local Windows launch
+state and requests a persistent Inno Setup log; it never changes machine state.
+
 ## Pi companion predecessor identity
 
 The workpiece-focus installer validates complete known predecessor maps.

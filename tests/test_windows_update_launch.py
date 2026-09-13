@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -46,6 +47,7 @@ def test_public_windows_launcher_passes_exact_installer_contract(
         "/CLOSEAPPLICATIONS",
         "/RESTARTAPPLICATIONS",
         "/NORESTART",
+        f"/LOG={package.resolve().with_suffix('.setup.log')}",
     ]
     assert captured["cwd"] == package.parent.resolve()
     assert captured["description"] == "Windows update installer"
@@ -58,6 +60,46 @@ def test_public_launcher_rejects_missing_package(tmp_path: Path) -> None:
 
     with pytest.raises(UpdateError, match="Downloaded update package does not exist"):
         updates.launch_downloaded_update(missing)
+
+
+def test_launch_diagnostics_retain_creation_and_failure(tmp_path, monkeypatch):
+    package = tmp_path / "E3-Setup.exe"
+    package.write_bytes(b"verified")
+    monkeypatch.setattr(updates.sys, "platform", "win32")
+
+    def start(*args, **kwargs):
+        pending = json.loads(package.with_suffix(".launch.json").read_text())
+        assert pending["stage"] == "starting"
+        return type("Child", (), {"pid": 1234})()
+
+    monkeypatch.setattr(updates, "_start_external_windows_process", start)
+    updates.launch_downloaded_update(package)
+    record = json.loads(package.with_suffix(".launch.json").read_text())
+    assert record["stage"] == "created"
+    assert record["child_pid"] == 1234
+
+    def fail(*args, **kwargs):
+        raise UpdateError("creation refused")
+
+    monkeypatch.setattr(updates, "_start_external_windows_process", fail)
+    with pytest.raises(UpdateError, match="creation refused"):
+        updates.launch_downloaded_update(package)
+    record = json.loads(package.with_suffix(".launch.json").read_text())
+    assert record["stage"] == "failed"
+    assert record["error"] == "creation refused"
+    assert "child_pid" not in record
+
+
+def test_unwritable_launch_diagnostics_do_not_prevent_launch(tmp_path, monkeypatch):
+    package = tmp_path / "E3-Setup.exe"
+    package.write_bytes(b"verified")
+    package.with_suffix(".launch.json").mkdir()
+    monkeypatch.setattr(updates.sys, "platform", "win32")
+    launches = []
+    monkeypatch.setattr(updates, "_start_external_windows_process",
+                        lambda *args, **kwargs: launches.append(args))
+    updates.launch_downloaded_update(package)
+    assert len(launches) == 1
 
 
 def test_windows_installer_rejects_non_executable_package(tmp_path: Path) -> None:
