@@ -40,7 +40,29 @@ embedded bytecode at 903c63a. It remains unselected. The coordinated remote Pi
 handoff instead uses the priority task's 0.7.132 desktop at 92a7a61: its desktop,
 remote facade and protocol match integrated sources, while the Pi chooses setup
 feeds. Direct/local-controller 0.7.132 still uses the earlier setup feeds.
-Combined companion and final integration verification are in progress.
+Integrated Windows checks passed 704 motion/ownership/desktop cases. Combined
+installer/ownership checks passed 193 cases, and all 38 legacy workpiece
+installer checks passed after correcting two merged file-count expectations;
+both protocol and motion helper imports are explicitly covered.
+Four cross-version tests at e359161 passed with zero skips: a separate process
+imports the exact archived 92a7a61 client and drives the combined Pi through
+authenticated TCP. The tests exercise every setup feed, two Pi-owned jobs,
+laser-off/lift/Home ordering, observer rejection and unsupported firmware with
+no Z travel. These use fake controllers, not physical hardware.
+Combined companion e3-pi-z-setup-speed-c7318c6e contains 17 source paths matching
+192c926, with the priority trio matching 92a7a61 and other paths matching 903c63a.
+The final isolated artifact upgrade updated nine source files, backed up eight,
+left eight already-current files intact, imported all 17 modules, and preserved
+operator data. Exact e359161 passed 746 focused Linux tests with zero skips on
+WSL Ubuntu 22.04 / Python 3.10.12, using a fresh archive/temporary environment
+and historical Git mapping for the frozen client and recorded Pi baseline.
+Final combined revision 192c926 passed Compatibility CI 34757562565: Windows
+Python 3.12 desktop 6,417 passed / 33 skipped; Windows Python 3.10 core 5,178
+passed / 106 skipped; POSIX controller/session 632 passed; repository Ruff
+passed. Follow-up e359161 adds only the four passing frozen-client tests and
+changes no runtime, package or firmware source. Final handoff selects the
+already-verified 0.7.132 desktop with the combined Pi companion and speed
+firmware; it does not rebuild or replace the normal E3 launcher.
 Firmware e3-mainboard-f401-usb-a7b5c9de is built and verified against 903c63a,
 including pinned sources, compiled images, updater, archive and manifest hashes.
 Use its application-only USB update instructions with the installed updater.
