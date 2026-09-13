@@ -7,7 +7,9 @@ blocks job focus and discards the surface. The connection and border reference
 remain available. The panel and Pi journal report the measured elevation,
 honeycomb datum, spacers and rejected thickness; correct the setup and measure
 again. No negative thickness is clamped into a valid sheet. Probe, clearance or
-communication failures still stop the machine. Physical validation is pending.
+communication failures still stop the machine. Pi companion
+`e3-pi-thickness-focus-c9917851` is installed and hash-verified with existing
+E3 DEV TEST 0.7.133. Physical validation is pending.
 
 ## Teaching hang correction (2026-09-13)
 

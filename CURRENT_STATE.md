@@ -2,7 +2,8 @@
 
 ## Invalid thickness disconnect correction (2026-09-13)
 
-Direct SSH verified all 17 installed files match ef005aa / e3-pi-thickness-focus-5f770c81.
+Initial direct SSH verified all 17 installed files matched
+ef005aa / e3-pi-thickness-focus-5f770c81.
 The running Pi service started after that installation. At 11:11, a completed
 probe/clearance sequence reached thickness derivation, rejected the derived
 value and invoked the generic post-motion STOP path. Retained machine.status
@@ -16,9 +17,39 @@ selection, retains the valid reference and connection, and reports and logs
 elevation, fixed honeycomb datum, spacer value and rejected thickness. Invalid
 thickness still cannot authorize jobs or be reused through manual focus.
 Probe, clearance, communication and STOP failures retain their stop paths.
-Windows focused verification and Pi installation are pending. No physical motion
-or focus accuracy is newly verified. Existing Windows E3 DEV TEST 0.7.133 is
-compatible; this is a Pi-only correction.
+Windows focused verification: 432 controller/protocol/job-focus cases passed;
+185 installer and offscreen desktop cases passed. The regression fails against
+the exact prior Pi implementation. Ruff, compileall and diff checks passed; an
+offscreen Windows-font render confirmed the numeric blocked-result message fits.
+Compatibility CI 34771495219 passed Python 3.10, POSIX and Ruff. Its initial
+Python 3.12 run had 6,453 passes and one unchanged lens-dialog shutdown timing
+failure (0.547 s against 0.5 s); that test passes in isolation. The failed-job
+rerun passed, completing all compatibility tiers successfully. No lens-management
+code/test changes were made. The correction is integrated into main and the
+completed development branch is removed.
+
+Pi-only companion e3-pi-thickness-focus-c9917851 is frozen at
+30e05ac and installed directly at 11:39 MDT after idle/disarmed/disconnected
+checks and exact source preflight. Only machine/laser_focus.py changed; backup
+laser_focus.py.e3-backup-jgh33hda.py is adjacent to the installed source.
+All 17 desired source hashes verify. Configuration, gauge calibration, probe XY
+offset, Z limits and cooling drop-in hashes are unchanged. The restarted service
+PID 15684 serves authenticated status and starts the camera bridge. Ender
+initially reported HALTED from the earlier stop. After the operator confirmed
+laser isolation, secure Z and probe-pin clearance, one guarded MachineService
+recovery succeeded at 11:44 MDT: Ender ready=true, fault=null, Z unknown, reference
+false; primary READY_HOME_REQUIRED and disarmed. Diagnostic control was released.
+Fresh M115 identifies Marlin 2.0.8.24F4 Sep 13 2026 05:52:19, F401 MCU 0x423 /
+256 KiB, SURFACE_HEIGHT_V2, Z_SETUP_SPEED_V1 and Z_RESTORE_V1; geometry is probe Z0,
+retract5, contact min-10/max65, ceiling80. Existing host maximum is 40 mm.
+Saved gauge teaching is bound to Sep 12 2026 14:14:00 firmware, and fresh
+calibration_compatible=false requires explicit re-teaching. No axis homing,
+travel, probing or laser firing was commanded. Recovery may cycle the probe pin;
+its physical behavior and focus accuracy are not newly qualified. Pure thickness
+acceptance/rejection and import checks also passed on the installed Pi module.
+CPU cooling resumed with FAN1=255, FAN2=0; observed temperature fell from
+70.9 C at recovery to 56.9 C. Existing Windows E3 DEV TEST 0.7.133 and its
+permanent pointer are unchanged and compatible; this is a Pi-only correction.
 
 ## Direct Pi SSH verified (2026-09-13)
 
