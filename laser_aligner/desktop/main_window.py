@@ -6357,9 +6357,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         try:
             dialog.exec()
         finally:
-            if not dialog.coordinator._closed:
-                dialog.coordinator.close()
-            dialog.bed_view.end()
+            dialog.workspace.shutdown(force=self._close_requested)
             self._laser_focus_dialog = None
             dialog.deleteLater()
             self.controller.poll_status()
@@ -6393,9 +6391,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self,
             navigation_only=navigation_target is not None,
             controller_operation_scope=self.controller.controller_worker_scope,
+            controller=self.controller,
         )
         self._machine_setup_dialog = dialog
-        dialog.laserFocusRequested.connect(self.open_laser_focus)
         if self._machine_status:
             dialog.set_machine_status(self._machine_status)
         dialog.tabs.setCurrentIndex(tab_index)
@@ -6425,6 +6423,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 QtCore.QTimer.singleShot(0, capture)
             dialog.exec()
         finally:
+            dialog.shutdown_focus_workspace(force=self._close_requested)
             self.controller.set_calibration_review_active(False)
             if self._machine_setup_dialog is dialog:
                 self._machine_setup_dialog = None
@@ -6949,7 +6948,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._invalidate_generated_job(cancel_preparation=False)
         focus_dialog = getattr(self, "_laser_focus_dialog", None)
         if focus_dialog is not None:
-            focus_dialog.coordinator.close()
+            focus_dialog.workspace.shutdown(force=True)
             QtWidgets.QDialog.done(focus_dialog, 0)
         machine_setup_dialog = getattr(self, "_machine_setup_dialog", None)
         if machine_setup_dialog is not None:

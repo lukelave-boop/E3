@@ -1,6 +1,6 @@
 # Current repository state
 
-## Clean-shutdown Z retention candidate (2026-09-12)
+## Integrated clean-shutdown Z retention candidate (2026-09-12)
 
 Implemented a Pi-owned, one-use checkpoint for an idle, disarmed, referenced
 Ender at or above its selected clearance. Normal controller disconnect or
@@ -17,6 +17,13 @@ capability E3_Z_RESTORE_V1 / M124 adopts only reset/unhomed Z or verifies an
 already-known identical native coordinate under the same strict guards. The
 host restores motor hold with M84 S0 / M17 Z and checks final readbacks. There
 is no axis travel, G92 fallback, laser output or automatic job restart.
+
+This candidate incorporates the consolidated daily focus controls and Machine
+Setup calibration layout from c68b61d. A fresh restored reference changes the
+combined button to Home / park XY, with guarded parking and no automatic
+re-probe. Without an accepted restore, the usual Home / park + reference or
+recovery reference action remains. The integrated daily/setup/telemetry UI
+checks pass 238 offscreen tests.
 
 The accepted border datum survives fresh primary XY Home. Workpiece surfaces,
 previews and job selections remain ephemeral. The new Forget saved Z action
@@ -43,6 +50,64 @@ is pending below. Local Python is 3.14.4; CI covers supported 3.10/3.12.
 No retained-Z firmware, Pi companion or Windows build has been installed or
 physically tested. Existing installed configuration and gauge teaching were
 not accessed or changed. Pre-existing console/startup/F103 edits are preserved.
+
+## Consolidated surface-focus controls and Machine Setup calibration (2026-09-12)
+
+The desktop daily Surface / laser focus window now combines Home / park XY
+and Reference border into Home / park + reference. One serialized desktop
+worker verifies parking, current controller readiness, unchanged primary/Ender
+sessions and focus parameters before referencing. Failures and STOP do not
+continue or retry. Recovery retains a reference-only action with fresh headroom
+confirmation, without another Home. Windows refreshes the remote status after
+parking so the Pi's changed state revision cannot leave a stale cache blocking
+the authorized second stage.
+
+Position probe and Move probe here are one two-stage button: select a camera
+point, inspect the target, then press the relabelled button to move. The camera
+click remains preview-only and dispatch still remaps/rechecks freshness and
+bounds. The requested XY-path and flat-patch checkboxes are removed; physical
+instructions and the remaining path, gauge-fit/removal and job-flat confirmations
+remain. MachineService motion, clearance, arming, STOP and job guards are unchanged.
+
+Machine Setup tab 7 now embeds the reference/measurement/camera workspace and
+owns the complete probe/laser XY-offset editor and 7 mm gauge teaching section.
+The daily window contains neither calibration editor nor teaching controls.
+Both use the same AppContext/controller and existing saved calibration. Setup
+and focus workers exclude one another; all exits stop observers and camera
+view ownership. No Pi files, firmware, machine configuration or saved teaching
+were changed. This affects the desktop pipeline, not browser generation.
+
+Verification: 628 focused Windows tests passed; the remote correction then
+passed 114 controls/remote and 192 desktop/setup checks. Telemetry coverage now
+includes both daily and calibration panels (44 tests passed). Full local Windows
+Python 3.14 verification passed 5,818 tests with 29 platform/privilege skips using
+four workers. Ruff and compileall passed. Fast Development CI 34726398706 at
+55d3984 passed all jobs: Windows Python 3.12, 5,822 passed / 25 skipped; POSIX,
+503 passed; dependency/bytecode and Ruff passed. The first CI attempt exposed
+three obsolete test assumptions about teaching buttons in the daily panel;
+only tests and this record changed after the frozen application revision.
+
+The daily and embedded calibration layouts were visually inspected from offscreen
+Qt renders. The combined Home/reference sequence also passed the authenticated
+loopback RemoteMachineService/PiMachineServer/PiJobService/MachineService path with
+simulated primary and Ender controllers; both status stages remained observational.
+No interactive GUI, real camera, controller, laser or new physical accuracy test
+was performed. Prior operator verification below applies to its named build.
+
+Windows 0.7.110 is packaged at exact application revision
+7402dec677ec866088dabcebd71dea12e248dd23. All 160 bundled source and compiled
+application modules match that clean source. The installer and native-library
+bundle guard passed. The permanent E3 DEV TEST pointer now selects Consolidated
+Z controls at .codex-worktrees/focus-controls/dist/E3/E3.exe, matching adjacent
+build metadata. The launcher/shortcut and production E3 were not replaced.
+Evidence: .codex-worktrees/focus-controls/build/focus-controls/ (build verification,
+CI summary/logs, full local test log, offscreen renders and previous pointer).
+
+The feature remains on codex/marlin-material-focus-controls for operator testing.
+Unrelated console/startup/F103 work and concurrent Z-retention/firmware edits in
+the main checkout are preserved; they are not included in this frozen build.
+Compatibility CI and coordinated integration remain required before merging this
+feature with that ongoing work and retiring its branch.
 
 ## Operator-confirmed focus workflow and branch integration (2026-09-12)
 

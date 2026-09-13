@@ -227,6 +227,24 @@ Pi operation and both G-code pipelines are unchanged.
 
 ## Laser focus setup boundary
 
+LaserFocusWorkspace shares the focus panel, camera view and coordinator between
+the daily dialog and Machine Setup tab 7. Calibration mode creates the measured
+probe XY offset editor and the complete 7 mm teaching controls only in Machine
+Setup. Both surfaces use AppContext's existing camera and machine services.
+
+The desktop coordinator combines Home/park and reference under one submitted
+operation. It checks fresh Ender readiness, successful primary Home and unchanged
+primary/Ender sessions before issuing the existing typed reference action; STOP
+or changed parameters cancel continuation. After Home, the Windows remote client
+performs one bounded full status RPC to refresh the changed state revision. The
+coordinator tolerates that expected cache gap only for the read and rechecks all
+motion readiness afterwards; it does not invent a ready status. Recovery uses that button for
+reference alone after the separately confirmed XY recovery. The camera button
+changes from Position probe to Move probe here only after a valid preview, and
+requires another explicit press to dispatch motion. Removing the XY-path and
+flat-patch checkboxes does not alter backend request validation; physical
+instructions and the remaining clearance, gauge and job confirmations remain.
+
 FocusBedView emits explicit raw-pixel selection metadata but owns no machine
 access. AppContext.focus_probe_target validates camera/lens/bed provenance and
 maps the selected point without motion. LaserFocusCoordinator binds the preview

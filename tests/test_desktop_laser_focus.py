@@ -80,7 +80,7 @@ def test_reconnect_preserves_required_clearance_without_restoring_motion(panel):
     panel.set_result(unavailable_result(requires_clearance=True))
     panel.path_clear.setChecked(True)
     assert panel.reconnect_ender.isEnabled()
-    assert not panel.home.isEnabled() and not panel.reference.isEnabled()
+    assert not panel.reference.isEnabled()
     panel.set_result(result(
         action="recover", recovery_available=True, requires_clearance=True,
         reference_ready=False, surface=None, preview=None, xy_sequence=None,
@@ -89,17 +89,16 @@ def test_reconnect_preserves_required_clearance_without_restoring_motion(panel):
     ))
     assert panel._result["requires_clearance"] is True
     assert panel.fresh()
-    assert not panel.home.isEnabled()
     # Referencing Z remains a separate explicit path-confirmed operation.
     assert panel.reference.isEnabled()
-    assert not panel.up.isEnabled() and not panel.move_probe.isEnabled()
+    assert not panel.up.isEnabled() and not panel.can_move_probe()
     assert "then reference the border" in panel.next_step.text()
     assert "Home / park" not in panel.next_step.text()
 
 
 @pytest.fixture
 def panel(app):
-    widget = LaserFocusPanel()
+    widget = LaserFocusPanel(calibration_mode=True)
     widget._status = status()
     widget.set_result(result())
     widget.show()
@@ -112,7 +111,6 @@ def panel(app):
 
 def confirm(panel):
     panel.path_clear.setChecked(True)
-    panel.flat_patch.setChecked(True)
 
 
 @pytest.mark.parametrize("minimum", [-10, -2])
@@ -134,8 +132,6 @@ def test_required_confirmations_are_above_their_focus_actions(panel, app):
     panel.resize(1000, 1400)
     app.processEvents()
     for checkbox, action in (
-        (panel.xy_clear, panel.move_probe), (panel.xy_clear, panel.align_probe),
-        (panel.xy_clear, panel.align_laser), (panel.flat_patch, panel.measure),
         (panel.gauge, panel.teach), (panel.gauge_removed, panel.move),
     ):
         assert checkbox.parentWidget() is action.parentWidget()
@@ -148,7 +144,7 @@ def test_recovery_prompt_does_not_invite_another_camera_move(panel):
     panel._status = status(controller_state="RECOVERING", connected=False)
     panel._sync()
     assert "Wait for controller recovery" in panel.next_step.text()
-    assert not panel.position_probe.isEnabled() and not panel.move_probe.isEnabled()
+    assert not panel.position_probe.isEnabled() and not panel.can_move_probe()
 
 
 def home_required_status(**changes):
@@ -169,10 +165,10 @@ def xy_recovery_result(**changes):
 def test_xy_recovery_has_separate_fresh_confirmation_and_never_reuses_other_paths(panel, app):
     panel._status = home_required_status()
     panel.set_result(xy_recovery_result())
-    for checkbox in (panel.path_clear, panel.xy_clear, panel.flat_patch, panel.gauge_removed):
+    for checkbox in (panel.path_clear, panel.gauge_removed):
         checkbox.setChecked(True)
     assert panel.xy_recovery_group.isVisible()
-    assert not panel.home.isEnabled() and not panel.reference.isEnabled()
+    assert not panel.reference.isEnabled()
     assert not panel.recover_xy.isEnabled()
     calls = []
     panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
@@ -183,7 +179,6 @@ def test_xy_recovery_has_separate_fresh_confirmation_and_never_reuses_other_path
     panel.recover_xy.click()
     assert calls == [("recover_xy", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0})]
     assert not panel.xy_recovery_clear.isChecked() and not panel.path_clear.isChecked()
-    assert not panel.xy_clear.isChecked() and not panel.flat_patch.isChecked()
     assert not panel.gauge_removed.isChecked()
     app.processEvents()
     assert panel.xy_recovery_clear.geometry().bottom() < panel.recover_xy.geometry().top()
@@ -253,7 +248,7 @@ def test_xy_recovery_success_still_requires_separate_reference_confirmation(coor
     assert [action for action, _ in controller.machine.calls] == ["recover_xy"]
     assert item.panel._result["requires_clearance"]
     assert not item.panel.reference.isEnabled()
-    assert not item.panel.home.isEnabled() and not item.panel.move.isEnabled()
+    assert not item.panel.reference.isEnabled() and not item.panel.move.isEnabled()
     assert not item.panel.up.isEnabled() and not any(b.isEnabled() for b in item.panel.xy_buttons)
     assert not item.panel.xy_recovery_clear.isChecked()
     item.panel.path_clear.setChecked(True)
@@ -272,7 +267,7 @@ def test_known_z_after_xy_recovery_cannot_use_clearance_instead_of_reference(pan
     assert panel.reference.isEnabled()
     assert not panel.return_clearance.isEnabled()
     assert not panel.up.isEnabled() and not panel.down.isEnabled()
-    assert not panel.home.isEnabled() and not panel.move.isEnabled()
+    assert panel._reference_only() and not panel.move.isEnabled()
     assert not any(button.isEnabled() for button in panel.xy_buttons)
     assert "then reference the border" in panel.next_step.text()
 
@@ -312,14 +307,10 @@ def test_offset_transfer_is_explicit_and_requires_fresh_clearance(panel):
     confirm(panel)
     calls = []
     panel.actionRequested.connect(lambda a, kw: calls.append((a, kw)))
-    assert not panel.align_probe.isEnabled()
-    panel.xy_clear.setChecked(True)
     assert panel.align_probe.isEnabled()
     panel.align_probe.click()
     assert calls == [("align_probe", {"confirmed": True, "clearance_z_mm": 30.0, "gap_mm": 7.0})]
-    assert not panel.xy_clear.isChecked() and not panel.flat_patch.isChecked()
     panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3], requires_clearance=True))
-    panel.xy_clear.setChecked(True)
     assert not panel.align_probe.isEnabled()
 
 
@@ -328,7 +319,6 @@ def test_probe_phase_requires_measured_return_before_teaching(panel):
                             xy_sequence={"phase": "probe"}))
     confirm(panel)
     panel.gauge.setChecked(True)
-    panel.xy_clear.setChecked(True)
     assert panel.align_laser.isEnabled()
     assert not panel.align_probe.isEnabled()
     assert not panel.down.isEnabled() and not panel.teach.isEnabled() and not panel.preview.isEnabled()
@@ -339,14 +329,13 @@ def test_probe_phase_requires_measured_return_before_teaching(panel):
     assert calls[0][0] == "align_laser" and calls[0][1]["measurement_id"] == "surface-1"
     panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=[-38.61, -3.3],
                             xy_sequence={"phase": "laser"}))
-    assert panel.down.isEnabled() and "Same measured spot" in panel.flat_patch.text()
+    assert panel.down.isEnabled()
     assert not panel.measure.isEnabled()
 
 
 def test_unset_offset_never_becomes_zero_and_drafts_block_transfer(panel):
     panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=None))
     confirm(panel)
-    panel.xy_clear.setChecked(True)
     assert not panel.align_probe.isEnabled() and not panel.apply_offset.isEnabled()
     panel.offset_x.setValue(-38.61)
     panel.offset_y.setValue(-3.30)
@@ -364,7 +353,6 @@ def test_unset_offset_never_becomes_zero_and_drafts_block_transfer(panel):
 
 def test_showing_offset_editor_does_not_authorize_unentered_axis(panel, app):
     panel.set_result(result(xy_offset_available=True, probe_xy_offset_mm=None))
-    panel.offset_toggle.click()
     app.processEvents()
     panel.offset_x.setValue(3.302)
     panel.offset_y.setFocus()
@@ -542,7 +530,6 @@ def test_move_blocking_reason_tracks_current_prerequisite(panel, cause, reason):
 def test_clearance_numeric_draft_survives_poll_and_enter_cannot_move(panel, app):
     calls = []
     panel.actionRequested.connect(lambda *args: calls.append(args))
-    panel.homeRequested.connect(lambda: calls.append("home"))
     confirm(panel)
     editor = panel.clearance.lineEdit()
     editor.setFocus()
@@ -572,7 +559,7 @@ def test_contact_floor_unknown_z_calibration_and_clearance_gates(panel):
     assert panel.up.isEnabled()
     assert panel.return_clearance.isEnabled()
     assert not any(button.isEnabled() for button in panel.xy_buttons)
-    assert panel.home.isEnabled()  # Home first performs a verified clearance lift.
+    assert panel.reference.isEnabled()  # Home first performs a verified clearance lift.
     panel.set_result(result(calibration_compatible=False))
     assert not panel.preview.isEnabled()
     assert "re-teach" in panel.calibration.text()
@@ -596,7 +583,7 @@ def test_return_to_clearance_survives_lost_reference_and_retains_prior_minimum(p
     assert panel.clearance.value() == 40
     panel.path_clear.setChecked(True)
     assert panel.return_clearance.isEnabled()
-    assert panel.home.isEnabled()  # Uses the retained Z40 clearance before XY.
+    assert panel.reference.isEnabled()  # Uses the retained Z40 clearance before XY.
     assert not any(button.isEnabled() for button in panel.xy_buttons)
     panel.clearance.setValue(30)
     assert not panel.return_clearance.isEnabled()
@@ -790,12 +777,11 @@ def test_dialog_camera_loss_cancels_selected_xy_request_before_dispatch(taught_d
     panel.set_result(camera_result(surface=None))
     panel.position_probe.click()
     select(dialog.bed_view)
-    panel.xy_clear.setChecked(True)
-    assert panel.move_probe.isEnabled()
+    assert panel.can_move_probe()
     if queued:
         coordinator.tick()
         assert len(controller.work) == 1
-    panel.move_probe.click()
+    panel.position_probe.click()
     dialog.bed_view._received_at -= 4
     dialog.bed_view._update_status()
     dialog._camera_tick()
@@ -803,7 +789,7 @@ def test_dialog_camera_loss_cancels_selected_xy_request_before_dispatch(taught_d
         controller.complete()
     assert not any(action == "position_probe" for action, _ in controller.machine.calls)
     assert "Camera target changed" in panel.message.text()
-    assert not panel.move_probe.isEnabled()
+    assert not panel.can_move_probe()
 
 
 @pytest.fixture
@@ -970,22 +956,18 @@ def test_focus_failure_survives_temporary_state_change_and_read_only_retry(coord
     assert [action for action, _ in controller.machine.calls] == ["status", "status"]
 
 
-def test_home_completion_retries_read_only_status_after_latched_failure(coordinator):
+def test_failed_read_requires_refresh_before_combined_home(coordinator):
     item, controller = coordinator
     controller.machine.error = "Ender readiness timed out"
     item.tick()
     controller.complete()
     item.panel.path_clear.setChecked(True)
-    item.panel.home.click()
-    assert controller.home_calls == 1 and item._busy
-    assert "Ender readiness timed out" in item.panel.failure_detail.text()
-    item.set_status(status())
+    assert not item.panel.reference.isEnabled()
+    item.panel.reference.click()
+    assert controller.home_calls == 0 and controller.work == []
     controller.machine.error = None
-    controller.busyChanged.emit(False)
-    item.tick()
-    assert len(controller.work) == 1
+    item.panel.refresh.click()
     controller.complete()
-    assert [action for action, _ in controller.machine.calls] == ["status", "status"]
     assert item.panel.fresh() and not item.panel.failure_detail.isVisible()
 
 
@@ -1065,7 +1047,7 @@ def test_modal_dialog_preserves_stop_during_work_and_refuses_silent_close(app):
     confirm(dialog.panel)
     dialog.show()
     app.processEvents()
-    dialog.panel.up.click()
+    dialog.panel.measure.click()
     assert dialog.stop.isEnabled()
     dialog.reject()
     assert dialog.isVisible()
@@ -1079,7 +1061,7 @@ def test_modal_dialog_preserves_stop_during_work_and_refuses_silent_close(app):
     app.processEvents()
 
 
-def test_machine_and_setup_open_same_focus_dialog_without_hardware(app, tmp_path, monkeypatch):
+def test_machine_daily_focus_and_embedded_setup_calibration_without_hardware(app, tmp_path, monkeypatch):
     from laser_aligner.desktop.machine_setup import MachineSetupDialog
     from tests.test_desktop_job_async import _dispose, _window
 
@@ -1095,8 +1077,9 @@ def test_machine_and_setup_open_same_focus_dialog_without_hardware(app, tmp_path
     def setup_exec(dialog):
         assert dialog.tabs.tabText(6) == "7 · Z / laser focus"
         assert not hasattr(dialog, "z_probe_panel")
-        dialog.laser_focus_button.click()
-        assert opened[-1] is dialog
+        assert dialog.focus_workspace.panel.calibration_mode
+        assert dialog.focus_workspace.panel.offset_x is not None
+        assert dialog.focus_workspace.panel.teach is not None
         return 0
 
     monkeypatch.setattr(LaserFocusDialog, "exec", focus_exec)
@@ -1107,7 +1090,7 @@ def test_machine_and_setup_open_same_focus_dialog_without_hardware(app, tmp_path
         assert opened == [window]
         assert window._laser_focus_dialog is None
         window.open_machine_setup(6)
-        assert len(opened) == 2
+        assert len(opened) == 1
         assert window._machine_setup_dialog is None
         assert not errors
     finally:
@@ -1128,7 +1111,7 @@ def camera_result(**changes):
                   probe_xy_offset_mm=[3.302, 38.608], **changes)
 
 
-def test_camera_selection_does_not_move_and_requires_path_confirmation(panel):
+def test_camera_selection_does_not_move_and_relabels_the_same_button(panel):
     panel.set_result(camera_result(surface=None))
     panel._camera_live = True
     confirm(panel)
@@ -1138,12 +1121,11 @@ def test_camera_selection_does_not_move_and_requires_path_confirmation(panel):
     panel.set_camera_target(camera_target())
     assert panel.position_probe.isChecked()
     assert "96.70" in panel.camera_target.text() and "81.39" in panel.camera_target.text()
-    assert not panel.move_probe.isEnabled()
+    assert panel.can_move_probe()
+    assert panel.position_probe.text() == "Move probe here"
     assert calls == []
-    panel.xy_clear.setChecked(True)
-    assert panel.move_probe.isEnabled()
     panel.clearance.setValue(40)
-    assert panel._camera_target is None and not panel.move_probe.isEnabled()
+    assert panel._camera_target is None and not panel.can_move_probe()
 
 
 @pytest.mark.parametrize("within_grid", [True, False])
@@ -1154,9 +1136,7 @@ def test_camera_preview_distinguishes_original_sample_grid_from_work_limits(pane
     panel.position_probe.click()
     panel.set_camera_target({**camera_target(), "within_original_calibration_grid": within_grid})
     assert ("Outside original calibration grid" in panel.camera_target.text()) is (not within_grid)
-    assert not panel.move_probe.isEnabled()
-    panel.xy_clear.setChecked(True)
-    assert panel.move_probe.isEnabled()
+    assert panel.can_move_probe()
 
 
 @pytest.mark.parametrize("reason", ["old_pi", "offline", "unknown_z", "low_z", "offset_draft", "stale"])
@@ -1164,9 +1144,8 @@ def test_camera_position_rejects_unready_machine(panel, reason):
     panel.set_result(camera_result(surface=None))
     panel._camera_live = True
     confirm(panel)
-    panel.xy_clear.setChecked(True)
     panel.set_camera_target(camera_target())
-    assert panel.move_probe.isEnabled()
+    assert panel.can_move_probe()
     if reason == "old_pi":
         panel._result.pop("position_probe_available")
     elif reason == "offline":
@@ -1180,7 +1159,7 @@ def test_camera_position_rejects_unready_machine(panel, reason):
     else:
         panel._received_at = time.monotonic() - FRESH_SECONDS - 1
     panel._sync()
-    assert not panel.position_probe.isEnabled() and not panel.move_probe.isEnabled()
+    assert not panel.position_probe.isEnabled() and not panel.can_move_probe()
 
 
 def test_camera_click_mapping_and_separate_move_are_integrated(app, monkeypatch):
@@ -1198,14 +1177,12 @@ def test_camera_click_mapping_and_separate_move_are_integrated(app, monkeypatch)
     dialog.panel.position_probe.click()
     dialog.bed_view.pointSelected.emit(camera_selection())
     assert controller.work == [] and controller.machine.calls == []
-    dialog.panel.xy_clear.setChecked(True)
-    dialog.panel.move_probe.click()
+    dialog.panel.position_probe.click()
     assert len(controller.work) == 1
     controller.complete()
     assert controller.machine.calls == [("position_probe", {
         "confirmed": True, "clearance_z_mm": 30.0, "value": [100.0, 120.0]})]
     assert dialog.panel._camera_target is None
-    assert not dialog.panel.flat_patch.isChecked()
     dialog.reject()
     dialog.deleteLater()
     app.processEvents()
@@ -1259,7 +1236,6 @@ def test_camera_calibration_errors_are_shown_inline_without_motion(app, monkeypa
         dialog.bed_view.pointSelected.emit(camera_selection())
     else:
         dialog.panel.set_camera_target(camera_target())
-        dialog.panel.xy_clear.setChecked(True)
         if phase == "refresh":
             dialog._camera_tick()
         else:
@@ -1311,23 +1287,23 @@ def test_rejected_click_keeps_pixel_but_revokes_old_move_target(app, monkeypatch
         publish(dialog.bed_view)
         dialog._camera_tick()
         confirm(dialog.panel)
-        dialog.panel.xy_clear.setChecked(True)
         dialog.panel.position_probe.click()
         select(dialog.bed_view)
-        assert dialog.panel.move_probe.isEnabled()
+        assert dialog.panel.can_move_probe()
         select(dialog.bed_view, x=.25)
         snapshot = dialog.bed_view.selection_snapshot()
         assert snapshot["image_x"] == pytest.approx(480)
         assert dialog.bed_view._selection_rejected
         assert dialog.panel._camera_target is None
-        assert not dialog.panel.move_probe.isEnabled()
+        assert not dialog.panel.can_move_probe()
         assert "machine work area" in dialog.panel.camera_target.text()
         dialog._move_camera_probe()
-        dialog.panel.move_probe.click()
+        dialog.panel.position_probe.click()
         assert controller.machine.calls == [] and controller.work == []
+        dialog.panel.position_probe.click()  # Re-enter selection after cancelling.
         # A new accepted pixel replaces red feedback with a new move target.
         select(dialog.bed_view)
-        assert dialog.panel.move_probe.isEnabled()
+        assert dialog.panel.can_move_probe()
         assert not dialog.bed_view._selection_rejected
         assert not dialog.panel._camera_point_rejected
         select(dialog.bed_view, x=.25)
@@ -1335,7 +1311,7 @@ def test_rejected_click_keeps_pixel_but_revokes_old_move_target(app, monkeypatch
         dialog.panel.set_result(camera_result(surface=None))
         assert dialog.bed_view.selection_snapshot() is not None
         if invalidate == "offset":
-            dialog.panel.offset_x.setValue(4)
+            dialog.panel.set_result(result(**{**camera_result(surface=None), "probe_xy_offset_mm": [4, 38.608]}))
         elif invalidate == "position":
             dialog.panel.set_result(camera_result(surface=None, current_carriage_xy_mm=[90, 100]))
         elif invalidate == "session":
@@ -1345,7 +1321,7 @@ def test_rejected_click_keeps_pixel_but_revokes_old_move_target(app, monkeypatch
             dialog.bed_view._update_status()
         assert dialog.bed_view.selection_snapshot() is None
         assert not dialog.panel._camera_point_rejected
-        assert not dialog.panel.move_probe.isEnabled()
+        assert not dialog.panel.can_move_probe()
     finally:
         dialog.reject()
         dialog.deleteLater()
@@ -1448,7 +1424,7 @@ def test_saved_z_rejection_explains_why_reference_is_needed(panel):
     ))
     assert "Previous exit was not a clean shutdown" in panel.z_retention_status.text()
     assert "restored from" not in panel.z_retention_status.text()
-    assert "reference the border" in panel.next_step.text()
+    assert "Home / park + reference" in panel.next_step.text()
     assert not panel.up.isEnabled() and not panel.move.isEnabled()
 
 
@@ -1544,7 +1520,7 @@ def test_forget_saved_z_is_explicit_and_keeps_taught_offset(coordinator):
     assert "Saved Z forgotten" in item.panel.message.text()
     assert "taught gauge offset is kept" in item.panel.message.text()
     assert not item.panel.move.isEnabled() and not item.panel.up.isEnabled()
-    assert controller.home_calls == 0 and controller.xy_calls == []
+    assert controller.xy_calls == []
 
 
 def test_stop_discards_late_forget_saved_z_reply(coordinator):
@@ -1561,3 +1537,112 @@ def test_stop_discards_late_forget_saved_z_reply(coordinator):
     assert not item.panel.fresh() and not item.panel.forget_z.isEnabled()
     assert not item.panel.up.isEnabled() and not item.panel.move.isEnabled()
     assert controller.machine.calls == [("forget_z", {"confirmed": True})]
+@pytest.mark.parametrize("calibration_mode", [False, True])
+def test_calibration_controls_exist_only_in_machine_setup(app, calibration_mode):
+    panel = LaserFocusPanel(calibration_mode=calibration_mode)
+    try:
+        assert (panel.offset_x is not None) is calibration_mode
+        assert (panel.offset_y is not None) is calibration_mode
+        assert (panel.teach is not None) is calibration_mode
+        assert (panel.gauge is not None) is calibration_mode
+        assert (panel.down is not None) is calibration_mode
+        assert not hasattr(panel, "xy_clear")
+        assert not hasattr(panel, "flat_patch")
+        assert not hasattr(panel, "home")
+        assert not hasattr(panel, "move_probe")
+        labels = [item.text() for item in panel.findChildren(QtWidgets.QCheckBox)]
+        assert not any("XY transfer path" in label or "Solid, flat patch" in label for label in labels)
+        assert panel.reference.text() == "Home / park + reference"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize("calibration_mode", [False, True])
+def test_daily_and_setup_retained_home_never_references_or_forgets_automatically(app, calibration_mode):
+    panel = LaserFocusPanel(calibration_mode=calibration_mode)
+    controller = FakeController()
+    coordinator = LaserFocusCoordinator(panel, controller)
+    coordinator._timer.stop()
+    controller.machine.snapshot = status(controller_state="READY_HOME_REQUIRED", jog_ready=False,
+                                         coordinate_reference_ready=False)
+    controller.machine.payload = retained_result(
+        surface=None, ender={"ready": True, "generation": 4, "recovery_required": False},
+    )
+    homes = []
+
+    def home():
+        homes.append("home")
+        controller.machine.snapshot = status()
+
+    controller.machine.prepare_photo_position = home
+    try:
+        coordinator.set_status(controller.machine.snapshot)
+        panel.set_result(controller.machine.payload)
+        panel.show()
+        app.processEvents()
+        assert panel.z_retention_group.isVisible()
+        assert panel.reference.text() == "Home / park XY"
+        assert "no border probe" in panel.next_step.text()
+        assert not panel.reference.isEnabled()
+        assert controller.machine.calls == [] and homes == []
+        panel.path_clear.setChecked(True)
+        panel.reference.click()
+        controller.complete()
+        assert homes == ["home"]
+        assert [action for action, _ in controller.machine.calls] == ["status", "status"]
+        assert panel._result["reference_ready"] is True
+        assert "Saved Z reference retained" in panel.message.text()
+        assert panel._result["surface"] is None and panel._preview_id is None
+        assert (panel.teach is not None) is calibration_mode
+        panel.forget_z.click()
+        controller.complete()
+        assert controller.machine.calls[-1] == ("forget_z", {"confirmed": True})
+        assert homes == ["home"]
+    finally:
+        coordinator.close()
+        panel.close()
+        panel.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize("phase", ["before_home", "after_home"])
+@pytest.mark.parametrize("changed", ["restoration", "reference", "known_z", "recovery"])
+def test_lost_retained_reference_never_falls_back_to_probing(coordinator, phase, changed):
+    item, controller = coordinator
+    controller.machine.payload = retained_result(
+        surface=None, ender={"ready": True, "generation": 4, "recovery_required": False},
+    )
+    item.panel.set_result(controller.machine.payload)
+    item.panel.path_clear.setChecked(True)
+    homes = []
+
+    def lose_reference():
+        payload = controller.machine.payload
+        if changed == "restoration":
+            payload["z_retention"]["restored"] = False
+        elif changed == "reference":
+            payload["reference_ready"] = False
+        elif changed == "known_z":
+            payload["current_readback"]["z_known"] = False
+        else:
+            payload["xy_recovery_pending_reference"] = True
+
+    def home():
+        homes.append("home")
+        if phase == "after_home":
+            lose_reference()
+
+    controller.machine.prepare_photo_position = home
+    item.panel.reference.click()
+    if phase == "before_home":
+        lose_reference()
+    controller.complete()
+    assert homes == ([] if phase == "before_home" else ["home"])
+    assert all(action == "status" for action, _ in controller.machine.calls)
+    assert item._error and not item.panel.fresh()
+    assert not item.panel.move.isEnabled() and not item.panel.measure.isEnabled()
+    item._last_request = -100
+    item.tick()
+    assert not controller.work

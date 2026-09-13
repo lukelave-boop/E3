@@ -8,7 +8,9 @@
 - Restore only with matching configuration and restore-capable firmware. The
   guarded M124 command verifies an already-known matching Z or adopts the saved
   coordinate from unknown reset Z0 without travel; the host enables Z hold.
-- Retain the restored border datum through fresh XY Home / park. Discard prior
+- Retain the restored border datum through fresh XY Home / park. The integrated
+  focus controls use Home / park XY after a fresh restore, without re-probing.
+  Discard prior
   surface measurements, previews and next-job selections across sessions.
 - Show saved-Z status and add **Forget saved Z**, preserving taught calibration
   while requiring a new border reference. Physical drift or setup movement
@@ -16,6 +18,20 @@
 - Matching desktop/Pi/firmware installation and physical power-cycle acceptance
   are pending. Exact-firmware gauge binding remains; no automatic calibration
   migration is introduced. See [saved Z](docs/Z_RETENTION.md).
+
+## Unreleased — consolidate Z controls
+
+- Combine Home/park and border referencing into one guarded action, with the
+  reference stage contingent on successful Home and unchanged sessions. Recovery
+  retains a reference-only action after the separate XY recovery.
+- Reuse one Position probe / Move probe here button: select and preview a camera
+  target, then explicitly press the same button again to move at clearance.
+- Move probe XY offset editing and the complete 7 mm gauge teaching section into
+  the embedded **7 · Z / laser focus** Machine Setup tab. Daily focus uses the
+  existing saved calibration.
+- Remove the separate XY transfer-path and flat-patch checkboxes while retaining
+  physical instructions, headroom/Z-path, gauge and job confirmations, and
+  backend motion safeguards. No Pi, firmware or calibration migration is needed.
 
 ## Unreleased — retain job focus through parking
 

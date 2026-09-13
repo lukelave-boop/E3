@@ -22,6 +22,7 @@ from ..units import parse_to_mm
 from .columns import configure_resizable_columns
 from .controls import MeasurementSpinBox, NumericDoubleSpinBox
 from .coordinate_audit import CoordinateAuditPanel
+from .laser_focus import LaserFocusWorkspace
 from .machine_state import (
     ControllerUiState,
     controller_node_boot_id,
@@ -783,7 +784,6 @@ class MachineSetupDialog(QtWidgets.QDialog):
     calibrationChanged = QtCore.Signal()
     registrationJobPrepared = QtCore.Signal(object)
     validationJobPrepared = QtCore.Signal(object)
-    laserFocusRequested = QtCore.Signal()
 
     def __init__(
         self,
@@ -792,11 +792,19 @@ class MachineSetupDialog(QtWidgets.QDialog):
         *,
         navigation_only: bool = False,
         controller_operation_scope: Callable[[int], AbstractContextManager[None]] | None = None,
+        controller: Any | None = None,
     ) -> None:
         super().__init__(parent)
         self.runtime = runtime
         self.context = runtime.context
-        self._controller_operation_scope = controller_operation_scope
+        self._controller = controller
+        self._controller_busy = bool(getattr(controller, "_active_tasks", 0))
+        self.focus_workspace: LaserFocusWorkspace | None = None
+        self._focus_shutdown = False
+        self._controller_operation_scope = (
+            controller_operation_scope
+            or getattr(controller, "controller_worker_scope", None)
+        )
         self._navigation_only = bool(navigation_only)
         self._bed_image: np.ndarray | None = None
         self._surface_capture_binding: dict[str, Any] | None = None
@@ -910,22 +918,23 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._build_registration_tab()
         self._build_check_tab()
         self._build_coordinate_audit_tab()
-        probe_tab = QtWidgets.QWidget()
-        probe_layout = QtWidgets.QVBoxLayout(probe_tab)
-        focus_note = QtWidgets.QLabel(
-            "Use Surface / laser focus to establish the border reference, measure a flat "
-            "surface (including raised work), and teach the laser's 7 mm gauge offset. "
-            "Then preview and move to a 7, 5 or 3 mm gap.\n\n"
-            "The taught gauge offset is saved for future surfaces. Focus positioning "
-            "is an explicit laser-off setup step before a job."
-        )
-        focus_note.setWordWrap(True)
-        probe_layout.addWidget(focus_note)
-        self.laser_focus_button = QtWidgets.QPushButton("Surface / laser focus…")
-        self.laser_focus_button.clicked.connect(self.laserFocusRequested)
-        probe_layout.addWidget(self.laser_focus_button)
-        probe_layout.addStretch()
-        self._add_scrollable_tab(probe_tab, "7 · Z / laser focus")
+        if controller is not None:
+            self.focus_workspace = LaserFocusWorkspace(
+                controller, self, calibration_mode=True,
+            )
+            self.tabs.addTab(self.focus_workspace, "7 · Z / laser focus")
+        else:
+            probe_tab = QtWidgets.QWidget()
+            probe_layout = QtWidgets.QVBoxLayout(probe_tab)
+            focus_note = QtWidgets.QLabel(
+                "Z / laser focus calibration needs the running desktop controller. "
+                "Open Machine Setup from the main E3 window to configure the probe / "
+                "laser XY offset and teach the 7 mm gauge setting."
+            )
+            focus_note.setWordWrap(True)
+            probe_layout.addWidget(focus_note)
+            probe_layout.addStretch()
+            self._add_scrollable_tab(probe_tab, "7 · Z / laser focus")
         self._restore_preferences()
         footer = QtWidgets.QHBoxLayout()
         self.operation_status = QtWidgets.QLabel(self._operation_outcome)
@@ -964,7 +973,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._lens_index_poll_timer = QtCore.QTimer(self)
         self._lens_index_poll_timer.setInterval(100)
         self._lens_index_poll_timer.timeout.connect(self._poll_lens_index_progress)
+        if controller is not None:
+            controller.busyChanged.connect(self._controller_busy_changed)
         self.refresh_all()
+        self._sync_operation_controls()
 
     def _message(self, title: str, operation: Any) -> Any | None:
         try:
@@ -976,7 +988,29 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     @property
     def operation_busy(self) -> bool:
-        return self._active_task is not None
+        focus = self.focus_workspace
+        return bool(
+            self._active_task is not None
+            or self._controller_busy
+            or (focus is not None and focus.coordinator.mutation_busy)
+        )
+
+    def _controller_busy_changed(self, busy: bool) -> None:
+        self._controller_busy = bool(busy)
+        self._sync_operation_controls()
+        # Controller busyChanged(False) precedes the focus completion callback.
+        QtCore.QTimer.singleShot(0, self._sync_operation_controls)
+
+    def _sync_operation_controls(self) -> None:
+        if self._shutdown_started or self._focus_shutdown:
+            return
+        local_busy = self._active_task is not None
+        busy = self.operation_busy
+        self.tabs.setEnabled(not local_busy)
+        for index in range(self.tabs.count()):
+            self.tabs.setTabEnabled(index, not busy or index == 6)
+        self.close_button.setEnabled(not busy)
+        self.set_machine_status(self._machine_status)
 
     def _register_motion_action(self, action: QtWidgets.QWidget) -> None:
         action.setProperty("controllerDomainEnabled", action.isEnabled())
@@ -1032,6 +1066,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def set_machine_status(self, status: dict[str, Any] | None) -> None:
         self._machine_status = dict(status or {})
+        if self.focus_workspace is not None and not self._focus_shutdown:
+            self.focus_workspace.set_machine_status(self._machine_status)
         self._machine_ui_state = project_machine_state(
             self._machine_status,
             operation_busy=self.operation_busy,
@@ -1210,6 +1246,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         task = FunctionTask(scoped_operation, label=f"Machine Setup: {name}")
         self._active_task = task
+        if self.focus_workspace is not None:
+            self.focus_workspace.coordinator.set_external_busy(True)
         task.signals.succeeded.connect(
             lambda result, generation=generation: self._operation_succeeded(
                 generation,
@@ -1393,25 +1431,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._active_task = None
         self._active_operation_name = None
         self._stop_requested_generation = None
+        if self.focus_workspace is not None:
+            self.focus_workspace.coordinator.set_external_busy(False)
         self.operation_progress.hide()
         self.operation_status.setText(self._operation_outcome)
         self.tabs.setEnabled(True)
         self.close_button.setEnabled(True)
         self.set_machine_status(self.context.machine.status())
+        self._sync_operation_controls()
 
     def request_software_stop(self) -> None:
         """Use the same non-waiting stop latch as the main desktop STOP control."""
         try:
+            if self._controller is not None:
+                self._controller.stopInitiated.emit()
             self.context.machine.request_stop(emergency=True)
         except Exception as exc:
             self.operation_status.setText(f"Software STOP failed: {exc}")
             QtWidgets.QMessageBox.critical(self, "Software STOP", str(exc))
             return
         self._set_photo_pose_confirmed(False)
-        if self.operation_busy:
+        if self._active_task is not None:
             self._stop_requested_generation = self._operation_generation
         suffix = (
-            f" Waiting for {self._active_operation_name} to finish cleanup."
+            f" Waiting for {self._active_operation_name or 'the controller operation'} to finish cleanup."
             if self.operation_busy
             else ""
         )
@@ -1422,7 +1465,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
             return False
         if self.operation_busy:
             self.operation_status.setText(
-                f"{self._active_operation_name} is still running. Use STOP / LASER OFF "
+                f"{self._active_operation_name or 'A controller operation'} is still running. "
+                "Use STOP / LASER OFF "
                 "for motion, then wait for cleanup before closing."
             )
             return True
@@ -4264,6 +4308,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if self._shutdown_started:
             return
         self._shutdown_started = True
+        self.shutdown_focus_workspace(force=True)
         self._lens_index_start_timer.stop()
         self._lens_index_poll_timer.stop()
         self._lens_index_cancel_event.set()
@@ -4282,24 +4327,36 @@ class MachineSetupDialog(QtWidgets.QDialog):
         finally:
             super().reject()
 
+    def shutdown_focus_workspace(self, *, force: bool = False) -> bool:
+        """Release this tab's observers and view while retaining the shared services."""
+        if self._focus_shutdown:
+            return True
+        if self.focus_workspace is not None:
+            if not self.focus_workspace.shutdown(force=force):
+                return False
+        self._focus_shutdown = True
+        if self._controller is not None:
+            self._controller.busyChanged.disconnect(self._controller_busy_changed)
+        return True
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        if self._close_blocked():
+        if self._close_blocked() or not self.shutdown_focus_workspace():
             event.ignore()
             return
         self._save_preferences()
         super().closeEvent(event)
 
     def accept(self) -> None:
-        if self._close_blocked():
-            return
-        self._save_preferences()
-        super().accept()
+        self.done(QtWidgets.QDialog.DialogCode.Accepted)
 
     def reject(self) -> None:
-        if self._close_blocked():
+        self.done(QtWidgets.QDialog.DialogCode.Rejected)
+
+    def done(self, result: int) -> None:
+        if self._close_blocked() or not self.shutdown_focus_workspace():
             return
         self._save_preferences()
-        super().reject()
+        super().done(result)
 
     def clear_bed(self) -> None:
         if (

@@ -9,7 +9,8 @@ reference conventions and remaining probe/production integration.
 > **Operator directions:** Follow the packaged
 > [Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
 > It is the canonical current-version five-step calibration sequence. Machine
-> Setup also includes a sixth read-only Coordinate Audit tab after those steps.
+> Setup also includes a sixth read-only Coordinate Audit tab and a seventh
+> Z / laser focus tab after those steps.
 > This document explains implementation details and optional diagnostics; it is
 > not a competing step order.
 
@@ -104,7 +105,7 @@ and it is not a substitute for the physical emergency stop. Each submitted
 worker is bound to the machine's request-time STOP generation, so Home / park
 that was queued before STOP cannot begin afterward.
 
-All six setup pages scroll inside the center of the dialog when their controls
+All seven setup pages scroll inside the center of the dialog when their controls
 need more room. The safety warning, machine connection and STOP controls, tabs,
 operation status, and Close action therefore remain visible at compact window
 sizes.
@@ -605,6 +606,30 @@ display pixel to corrected source pixel, desired beam/machine coordinate,
 honeycomb-local coordinate when valid, and spot-corrected carriage coordinate.
 Containment results are informational and never expand motion or laser-output
 authority.
+
+## 7. Z / laser focus
+
+This tab embeds the current laser-off focus workspace, including its live bed
+view, reference/measurement helpers, and focus previews. It owns the **Probe /
+laser XY offset** editor and the complete **Teach once with the 7 mm gauge**
+section: teaching jogs, the physical gauge-fit confirmation, Save and Forget.
+Those calibration controls are absent from the daily **Surface / laser focus…**
+window, which continues to display and use the saved offsets.
+
+**Home / park + reference** runs border referencing only after verified XY
+parking and unchanged controller sessions. Recovery keeps its separate operator
+sequence; after Recover XY, the same button becomes **Reference border** and
+does not Home again. **Position probe** enables a camera selection, then the
+same button becomes **Move probe here** for the explicit movement request.
+Selecting a point never moves automatically.
+
+The removed XY transfer-path and flat-patch checkboxes are replaced by physical
+path and target instructions. Headroom/Z-path, gauge-fit, gauge-removal, flat-job
+and recovery confirmations remain. The page shares the existing machine and
+camera services, operation ownership and STOP behavior. It does not change
+firmware, Pi software, calibration persistence or backend motion limits. See
+[the focus guide](LASER_FOCUS.md) for the calibration sequence and physical
+verification limits.
 
 ## Browser parity
 

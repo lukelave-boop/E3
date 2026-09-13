@@ -25,8 +25,9 @@ current automated and build verification record.
    command as part of restoration; it enables Z motor hold after the coordinate
    check. Surface / laser focus shows whether restoration succeeded or why it
    was rejected. There is no routine startup confirmation dialog.
-4. Complete fresh **Home / park XY**. This restores XY readiness while preserving
-   the accepted border datum. Select and measure the current workpiece surface
+4. Complete fresh **Home / park XY**. After a valid restore, the combined Home
+   button uses this label and parks without probing again. This restores XY
+   readiness while preserving the accepted border datum. Select and measure the current workpiece surface
    before a new preview or **Use measured focus for next job** selection.
 
 A Windows exit while a Pi-owned job is still running is not a clean idle
@@ -72,7 +73,7 @@ connection admission.
 
 E3 cannot detect movement by hand, unpowered Z drift or a changed physical
 reference setup. If the Z axis, probe mount or border/support moved while E3 was
-off, use **Forget saved Z**, then separately **Reference border** again before
+off, use **Forget saved Z**, then use the reference action again before
 positioning Z. Use the same action whenever the retained position is doubtful.
 No software check proves that the axis stayed still with power removed.
 
