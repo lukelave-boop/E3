@@ -1,5 +1,12 @@
 # Roadmap
 
+## Focus/cooling hang correction (2026-09-13)
+
+A simulated regression reproduces and corrects a focus/cooling lock inversion
+before teaching motion. Complete focused platform verification and hand off the
+Pi-only update for controlled operator validation. The reported loss of SSH is
+not established as a consequence of this application deadlock.
+
 ## Thickness-derived workpiece focus (2026-09-13)
 
 Implemented the operator-selected linear 7-to-3 mm gap over 0-to-6 mm thickness,

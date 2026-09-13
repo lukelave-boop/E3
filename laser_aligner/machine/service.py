@@ -4471,7 +4471,10 @@ class MachineService:
 
             @contextmanager
             def guard(*, require_secondary=True):
-                with self._secondary_write_gate, self._stop_epoch_lock:
+                # Cooling and Ender exchanges own the controller before taking
+                # the write gate. The initial primary M5 must use that same
+                # order: ready reads the owner lock, even before focus is active.
+                with probe.owner._lock, self._secondary_write_gate, self._stop_epoch_lock:
                     if self._stop_epoch != epoch or not self._same_controller_session(self._session, session):
                         raise MachineError("Focus operation cancelled or session changed")
                     if require_secondary and action != "recover" and (not probe.owner.ready or probe.owner.generation != secondary_generation):

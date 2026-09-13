@@ -1,5 +1,14 @@
 # Architecture
 
+## Focus and CPU cooling lock order
+
+Focus guards acquire the Ender owner lock before the secondary write gate and
+STOP epoch lock. Readiness reads acquire the owner lock, so the initial primary
+M5 must follow this order even before the focus-active flag is set. Cooling
+already owns Ender before its guarded writes. Reversing those acquisitions can
+deadlock both operations. Connection/session/deadline validation follows lock
+acquisition; waiting cannot preserve expired motion authority.
+
 ## Thickness-derived daily focus
 
 `machine/laser_focus.py` owns the UI-neutral thickness policy and the typed

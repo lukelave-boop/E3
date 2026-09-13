@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — focus/cooling deadlock correction
+
+- Keep focus and CPU cooling lock acquisition in the same order, preventing
+  a teaching request from deadlocking before its first Z movement.
+- Preserve connection cancellation and motion checks after waiting for Ender.
+  The Pi update requires no firmware change or additional gauge teaching.
+
 ## Unreleased — thickness-derived workpiece focus
 
 - Replace the daily manual 7/5/3 mm selector with a continuous 7-to-3 mm gap

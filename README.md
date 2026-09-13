@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+A Pi-side focus/cooling deadlock correction is undergoing verification; see
+[focus teaching status](docs/LASER_FOCUS.md). It preserves the existing gauge
+calibration and automatic thickness rule. Operator verification remains pending.
+
 ## Automatic focus from material thickness
 
 Daily **Machine → Z axis · Ender → Measure surface** selects the focus gap automatically:

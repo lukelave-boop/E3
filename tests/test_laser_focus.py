@@ -443,6 +443,97 @@ def test_service_serial_owner_and_controller_limits(focus_machine):
     assert not machine.armed
 
 
+@pytest.mark.parametrize("disconnect_while_waiting", [False, True])
+def test_teaching_jog_and_cooling_use_same_lock_order(focus_machine, monkeypatch,
+                                                    disconnect_while_waiting):
+    machine, focus, _ = focus_machine
+    machine.focus_control("reference", confirmed=True)
+    measured_result = machine.focus_control("measure", confirmed=True)
+    machine.cpu_cooling_enabled = True
+    cooling_entered, focus_waiting = threading.Event(), threading.Event()
+    monitor_lost = threading.Event()
+    cooling_results, cooling_errors = [], []
+    original_owner_lock = focus.owner._lock
+    main_thread = threading.get_ident()
+
+    class OwnerLock:
+        def acquire(self, blocking=True):
+            if threading.get_ident() == main_thread and cooling_entered.is_set():
+                focus_waiting.set()
+            return original_owner_lock.acquire(blocking)
+
+        def release(self):
+            original_owner_lock.release()
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *_):
+            self.release()
+
+    class BoundedGate:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if not self.lock.acquire(timeout=2):
+                raise RuntimeError("Focus/cooling lock inversion")
+            return self
+
+        def __exit__(self, *_):
+            self.lock.release()
+
+    def cooling_exchange(owner, pwm, *, guard):
+        # update_cpu_cooling already owns Ender here. Force overlap with the
+        # focus request's initial primary M5 guard, before any teaching move.
+        cooling_entered.set()
+        assert focus_waiting.wait(2)
+        with guard():
+            pass
+        if disconnect_while_waiting:
+            monitor_lost.set()
+        return {"changed": False}
+
+    def cool():
+        try:
+            cooling_results.append(machine.update_cpu_cooling(255))
+        except Exception as exc:
+            cooling_errors.append(exc)
+
+    worker = threading.Thread(target=cool)
+    original_send = machine.send_command
+
+    def send(command, **kwargs):
+        if command == "M5" and not worker.ident:
+            worker.start()
+            assert cooling_entered.wait(2)
+        return original_send(command, **kwargs)
+
+    monkeypatch.setattr(focus.owner, "_lock", OwnerLock())
+    monkeypatch.setattr(machine, "_secondary_write_gate", BoundedGate())
+    monkeypatch.setattr("laser_aligner.machine.cpu_cooling.update_fan", cooling_exchange)
+    monkeypatch.setattr(machine, "send_command", send)
+    focus.serial.writes.clear()
+    try:
+        expectation = (pytest.raises(MachineError, match="monitoring connection was lost")
+                       if disconnect_while_waiting else nullcontext())
+        with expectation:
+            machine.focus_control("jog", confirmed=True, value=-1,
+                                  measurement_id=measured_result["surface"]["id"],
+                                  _connection_alive=lambda: not monitor_lost.is_set())
+    finally:
+        focus_waiting.set()
+        if worker.ident:
+            worker.join(3)
+    assert not worker.is_alive()
+    assert not cooling_errors
+    assert cooling_results == [{"changed": False, "state": "active"}]
+    assert focus.serial.z == (30 if disconnect_while_waiting else 29)
+    if disconnect_while_waiting:
+        assert not any(line.startswith("G1 Z") for line in focus.serial.writes)
+
+
 @pytest.mark.parametrize("action", ["jog", "home", "arm", "job"])
 def test_below_clearance_blocks_other_motion_and_output(focus_machine, action):
     machine, focus, primary = focus_machine

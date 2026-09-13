@@ -34,6 +34,16 @@ INTEGRATED = {
     "laser_aligner/machine/job_focus.py": "416ca7900d4156617083d957577f45b966fc3734865755d8605c8359991633cc",
     "laser_aligner/machine/z_retention.py": "f6f5ac717b12272365b8635b4c4874824e644d42594a99e0e7c94b1dd88ee812"
 }
+THICKNESS_REVISION = '7ef632d4246bbe4aab9d64a65b1c55af60aaa2fd'
+THICKNESS = {
+    **INTEGRATED,
+    'laser_aligner/machine/service.py': 'a4c7aaba8311efd9284ead5c2c485be2ab38086ae0ee532d553695792e295a2c',
+    'laser_aligner/machine/remote_service.py': 'b118ead440f39b29dd8e93b58a30d3dd001090bd0483cc5da9b5c1a36b70a9d7',
+    'laser_aligner/machine/pi_machine_server.py': 'b7299b102841d4a530a8a5653eb4edb08243f270fb6379d6cdf3612dde757d21',
+    'laser_aligner/machine/laser_focus.py': '3f1610cbe953f8e34301b038d74c9577109622b8d53bdf42a210ad697680b5d7',
+    'laser_aligner/machine/job_focus.py': '54c7dbfcd86a79de20dd14948f59dd4a73d3e7d2e2a7968d0a4c5204bd1ae653',
+}
+
 
 
 def source(revision, name):
@@ -50,6 +60,7 @@ def package(destination, revision, version):
         "predecessors": [
             {"revision": "installed-workpiece-focus-568b1cc9", "files": PREVIOUS},
             {"revision": INTEGRATED_REVISION, "files": INTEGRATED},
+            {"revision": THICKNESS_REVISION, "files": THICKNESS},
         ],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
@@ -69,7 +80,9 @@ def package(destination, revision, version):
     windows_source = str(folder.resolve()).replace("'", "''")
     guide = f"""# Install automatic thickness-derived focus
 
-Use E3 DEV TEST {version}, revision `{revision}`, with this exact companion.
+Use E3 DEV TEST {version} with this exact Pi companion, revision `{revision}`.
+The companion fixes a focus/cooling lock inversion that could block a teaching
+jog before motion. The existing Windows 0.7.133 build remains compatible.
 It includes the integrated faster-Z and first-app-priority sources. Normal Z
 travel still requires `Cap:E3_Z_SETUP_SPEED_V1:1`; use the previously supplied
 matching speed firmware. This installer does not flash firmware or operate hardware.
@@ -77,7 +90,8 @@ If the speed firmware is already installed, this focus rule needs no new flash
 or gauge teaching. A firmware identity change still requires reference and teaching.
 
 Accepted predecessors: the recorded installed 568b1cc9 companion or the integrated
-speed/priority sources at `{INTEGRATED_REVISION}`. Unknown edits reject. Operator
+speed/priority sources at `{INTEGRATED_REVISION}`, or the thickness-focus sources
+at `{THICKNESS_REVISION}`. Unknown edits reject. Operator
 configuration, calibration and saved-Z data are preserved; replaced sources are
 backed up. Default installation is a read-only preview.
 

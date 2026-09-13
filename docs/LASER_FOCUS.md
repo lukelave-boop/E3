@@ -1,5 +1,14 @@
 # Surface height and gauge-taught laser focus
 
+## Teaching hang correction (2026-09-13)
+
+A Pi-side correction gives focus and CPU cooling a consistent lock order. Their
+previous lock inversion could block a teaching request before any Z movement.
+It changes no firmware, gauge offset or thickness policy and remains compatible
+with E3 DEV TEST 0.7.133. A guarded companion accepts the original thickness-focus
+source set as a predecessor. Operator verification is pending; a reported loss
+of SSH during a freeze is not explained by the simulated application deadlock.
+
 ## Automatic thickness rule (2026-09-13)
 
 Current handoff: **E3 DEV TEST 0.7.133** with Pi companion

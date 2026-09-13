@@ -1,5 +1,24 @@
 # Current repository state
 
+## Focus/cooling deadlock correction in progress (2026-09-13)
+
+Operator reports: teaching Z moves twice produced no movement and an unresponsive
+app; SSH later stopped responding. The old boot journal was volatile and lost.
+The rebooted Pi reports throttled=0x0, 565 MiB available memory, no swap use and
+22 GiB free storage. These current-boot readings do not explain the SSH failure.
+
+A deterministic simulated concurrency regression reproduces a separate software
+deadlock: focus's initial primary M5 takes the secondary write gate before its
+Ender readiness check, while CPU cooling owns Ender and waits for that gate.
+Focus now takes Ender before the write gate and STOP epoch lock, consistently
+with cooling and normal owned secondary exchanges. Connection/session/deadline
+checks remain inside the guard, after waiting. The regression also rejects a
+lost monitoring connection without any Z motion. No firmware/calibration change.
+
+Windows focused verification is running; hardware and SSH failure attribution
+remain unverified. Preparing a guarded Pi-only companion compatible with the
+existing E3 DEV TEST 0.7.133; nothing has been installed on the operator's Pi.
+
 ## Automatic thickness focus verified and selected (2026-09-13)
 
 The permanent E3 DEV TEST pointer selects **Automatic thickness focus**, Windows
