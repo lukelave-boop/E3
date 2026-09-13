@@ -19,7 +19,20 @@ and an explicit Inno Setup log are retained alongside the downloaded package.
 
 Focused Windows updater/handoff/watchdog tests pass 47 cases, including slow
 launch, failed launch without teardown, and the ordinary stuck-worker deadline.
-Frozen-process verification and compatibility CI follow. No controller, motion,
+A PyInstaller windowed/onedir harness exercised the production MainWindow
+pre-close hook, updater, Win32 DLL boundary and a real detached marker-writing
+child. An injected 0.8-second process-creation delay exceeded the 0.4-second
+test shutdown budget; creation completed in 1.013 seconds, the child ran, and
+the parent then exited within its teardown deadline. Embedded bytecode for all
+three changed runtime modules matched the committed sources. Four foreign
+Poppler DLLs were removed from this isolated test bundle after an initial Qt
+import failure; the existing bundle guard then passed. Evidence is under
+build/updater in the update-launch-deadline worktree. This is a frozen-process
+test, not an end-to-end installed-app-to-Inno wizard test. Exact application
+revision fdbe913 passed Compatibility CI 34755229137: Windows Python 3.12
+desktop 6,188 passed / 30 skipped; Windows Python 3.10 core 4,967 passed /
+102 skipped; POSIX controller/session 617 passed; repository Ruff passed.
+Local compileall and whitespace checks also passed. No controller, motion,
 laser or user configuration changes are part of this correction.
 
 ## Correct the installed Pi companion baseline (2026-09-12)
