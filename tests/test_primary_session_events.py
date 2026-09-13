@@ -132,7 +132,9 @@ def test_idle_telemetry_and_firmware_diagnostic_preserve_held_reference(
 
         # A real subsequent exchange also proves that the benign events did not
         # steal its acknowledgement or poison the input boundary.
-        assert "ok" in machine.send_command("$I")
+        # Allow receiver scheduling on loaded CI workers; this acceptance check
+        # does not exercise the shared fixture's 20 ms fault-injection deadline.
+        assert "ok" in machine.send_command("$I", timeout=0.5)
 
         status = machine.status()
         assert status["controller_state"] == "READY_MOTION"
