@@ -18,10 +18,20 @@ changed endpoint/baudrate/mapping and failed persistence remain blocked. It
 sends no controller command and leaves ordinary preflight and temporary arming
 requirements intact. The new acceptance regression fails on previous source;
 113 focused Windows Pi-service/store/secondary/end-to-end tests pass corrected.
-Ruff and compileall pass. Companion packaging accepts exact installed de6cdc1
-as an additional predecessor. Full compatibility CI, Pi verification, packaging
-and guarded installation are pending. Existing regular E3 0.7.153 and E3 DEV TEST
-0.7.150 remain compatible; no Windows rebuild or pointer change is needed.
+Ruff and compileall pass. All 52 installer tests pass, including exact installed
+de6cdc1 acceptance and unknown-edit rejection. On Pi Linux/Python 3.13.5, all 11
+new recovery cases pass with fake controllers in isolated committed source under
+/tmp; test dependencies do not modify the service environment. Frozen companion
+e3-pi-thickness-focus-b9940a5c (54f199e) is staged locally and on the Pi. Its
+read-only preview accepts all 17 source files and would replace only
+machine/pi_job_service.py. Compatibility CI 34839057759 passed all Windows 3.10,
+Windows 3.12 desktop, POSIX controller and lint jobs. Guarded
+installation is pending with the E3 client still connected. Existing regular
+E3 0.7.153 and E3 DEV TEST 0.7.150 remain compatible; no Windows rebuild or pointer
+change is needed. The prepared ignored helper build/apply_stop_air_idle_pi.py
+requires disconnected, disarmed idle state and no machine/camera client sockets,
+protects calibration/configuration hashes, resets failed state before applying,
+and starts the service after source verification. Physical retest remains pending.
 
 ## Captured Home/cooling deadlock (2026-09-13, installed and verified)
 
