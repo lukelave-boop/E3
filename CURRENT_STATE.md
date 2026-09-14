@@ -1,5 +1,28 @@
 # Current repository state
 
+## STOP Air Assist recovery reconciliation (2026-09-14, source tested)
+
+Operator reports successful cuts using regular E3 0.7.153, then STOP followed
+by Ender recovery, Home/reference and a fresh measurement. The next Start rejects
+with unresolved secondary Air Assist OFF recovery. Pi PID764 journal at 05:23:28
+records the OFF exchange interrupted during STOP and job 5ba7c57a marked stopped.
+Authenticated read-only status later reports READY_MOTION, disarmed, no active
+job, exact secondary owner ready with acknowledged OFF, and a reusable measured
+focus still present. The terminal watcher checked OFF before later recovery;
+Start never rechecked the pending durable binding. This is separate from the
+previous Home/cooling lock inversion. No remote motion or restart was issued.
+
+Start now reconciles terminal jobs through the existing exact typed owner OFF
+check before rejecting unresolved bindings. Active records, unconfirmed OFF,
+changed endpoint/baudrate/mapping and failed persistence remain blocked. It
+sends no controller command and leaves ordinary preflight and temporary arming
+requirements intact. The new acceptance regression fails on previous source;
+113 focused Windows Pi-service/store/secondary/end-to-end tests pass corrected.
+Ruff and compileall pass. Companion packaging accepts exact installed de6cdc1
+as an additional predecessor. Full compatibility CI, Pi verification, packaging
+and guarded installation are pending. Existing regular E3 0.7.153 and E3 DEV TEST
+0.7.150 remain compatible; no Windows rebuild or pointer change is needed.
+
 ## Captured Home/cooling deadlock (2026-09-13, installed and verified)
 
 After operator use of saved-height build 0.7.150, the desktop reports Pi timeout

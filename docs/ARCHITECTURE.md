@@ -2464,6 +2464,13 @@ contamination or a framing rejection cannot be confirmed from that log alone.
 
 ## Pre-start secondary OFF recovery
 
+Before admission, PiJobService rechecks pending terminal-job recovery bindings
+using its existing exact-owner acknowledged-OFF predicate. This reconciles late
+STOP cleanup or later operator recovery without opening serial or restarting
+the node. Active records are excluded; mismatched or unconfirmed OFF and failed
+durable compare-and-clear still block. Ordinary pre-start OFF and session guards
+remain required after reconciliation.
+
 Pre-start secondary OFF permits exactly one fresh-session recovery after a
 persistent-session synchronization, write, acknowledgement, or framing failure.
 The existing owner closes the uncertain session, reopens, settles, synchronizes,

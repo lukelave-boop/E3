@@ -67,6 +67,13 @@ HONEYCOMB = {
 }
 
 
+HOME_COOLING_REVISION = "de6cdc1ed1530522321298c3965cf91fa9bfcdf7"
+HOME_COOLING = {
+    **HONEYCOMB,
+    "laser_aligner/machine/job_focus.py": "731600da08627675ebd85a27b3b047570362bb8e985a367012ee064a740d6e59",
+}
+
+
 def source(revision, name):
     return subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT).replace(b"\r\n", b"\n")
 
@@ -85,6 +92,7 @@ def package(destination, revision, version):
             {"revision": COOLING_REVISION, "files": COOLING},
             {"revision": REJECTION_REVISION, "files": REJECTION},
             {"revision": HONEYCOMB_REVISION, "files": HONEYCOMB},
+            {"revision": HOME_COOLING_REVISION, "files": HOME_COOLING},
         ],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
@@ -105,6 +113,10 @@ def package(destination, revision, version):
     guide = f"""# Install automatic thickness-derived focus
 
 Use E3 DEV TEST {version} with this exact Pi companion, revision `{revision}`.
+It also supports regular E3 0.7.153. After STOP and controller recovery, Start
+rechecks terminal jobs' pending Air Assist OFF against the exact owner's
+acknowledged OFF state. Unconfirmed OFF or a different binding still blocks.
+No Air Assist ON, motion or laser command is sent by this reconciliation.
 This companion corrects the observed Home/park and job-completion cooling
 deadlock by acquiring Ender before STOP/write gates. It remains compatible
 with the existing saved-honeycomb-height Windows 0.7.150 build.
@@ -123,7 +135,8 @@ Accepted predecessors: the recorded installed 568b1cc9 companion or the integrat
 speed/priority sources at `{INTEGRATED_REVISION}`, or the thickness-focus sources
 at `{THICKNESS_REVISION}`, the cooling fix at `{COOLING_REVISION}`, or the installed
 invalid-thickness correction at `{REJECTION_REVISION}`, or the installed saved
-honeycomb height build at `{HONEYCOMB_REVISION}`.
+honeycomb height build at `{HONEYCOMB_REVISION}`, or the installed Home/cooling
+correction at `{HOME_COOLING_REVISION}`.
 Unknown edits reject. Operator
 configuration, calibration and saved-Z data are preserved; replaced sources are
 backed up. Default installation is a read-only preview.

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased - Air Assist recovery after STOP
+
+- Recheck pending terminal-job OFF bindings when Start is requested after
+  controller recovery, avoiding a stale restart-only block once the exact owner
+  acknowledges OFF. Preserve active-job, mapping, preflight and arming guards.
+
 ## Unreleased - Home/cooling deadlock correction
 
 - Correct the captured lock inversion between Home focus preservation and

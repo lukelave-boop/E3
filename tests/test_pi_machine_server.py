@@ -1706,8 +1706,15 @@ def test_pi_restart_marks_persisted_running_job_interrupted_without_resume(
         restarted.shutdown(stop_machine=False)
 
 
-def test_start_is_blocked_while_prior_secondary_recovery_is_unresolved(
+@pytest.mark.parametrize("recovery", [
+    "unavailable", "acknowledged", "enabled", "unknown", "not_ready",
+    "wrong_mapping", "wrong_port", "wrong_baudrate", "status_failure", "active",
+    "persist_failure",
+])
+def test_start_rechecks_prior_secondary_recovery_after_controller_reconnect(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery: str,
 ) -> None:
     machine = _machine(SimulatedTransport())
     store = PiJobStore(tmp_path / "pending-secondary")
@@ -1736,20 +1743,57 @@ def test_start_is_blocked_while_prior_secondary_recovery_is_unresolved(
         pending_id,
         secondary_recovery_binding=binding,
     )
-    store.update_state(pending_id, "failed", error="restart OFF unavailable")
+    if recovery != "active":
+        store.update_state(pending_id, "stopped", error="STOP OFF was interrupted")
     next_id = str(uuid.uuid4())
     next_program = prepare(next_id)
 
+    # The terminal watcher already ran without OFF. The recovered exact owner
+    # reports its later acknowledged OFF; no serial operation is needed here.
+    status = {
+        "ready": True, "enabled": False, "mapping_digest": binding.mapping_digest,
+        "port": binding.port, "baudrate": binding.baudrate,
+    }
+    changes = {
+        "enabled": {"enabled": True}, "unknown": {"enabled": None},
+        "not_ready": {"ready": False}, "wrong_mapping": {"mapping_digest": "other"},
+        "wrong_port": {"port": "other-controller"}, "wrong_baudrate": {"baudrate": 9600},
+    }
+    status.update(changes.get(recovery, {}))
+    original_status = machine.status
+    def recovered_status():
+        if recovery == "status_failure":
+            raise MachineError("status unavailable")
+        return {**original_status(), "secondary_air_assist": status}
+    if recovery != "unavailable":
+        monkeypatch.setattr(machine, "status", recovered_status)
+    if recovery == "persist_failure":
+        def fail_clear(*args, **kwargs):
+            raise OSError("persistence unavailable")
+        monkeypatch.setattr(store, "clear_secondary_recovery", fail_clear)
+
+    reached_preflight = []
+    def preflight(*args, **kwargs):
+        reached_preflight.append(True)
+        raise PiJobServiceError("reached independent program validation")
+    monkeypatch.setattr(service, "_preflight_committed_program", preflight)
+
     try:
-        with pytest.raises(PiJobServiceError, match="unresolved secondary"):
+        expected = "independent program validation" if recovery == "acknowledged" else "unresolved secondary"
+        with pytest.raises(PiJobServiceError, match=expected):
             service.start(
                 next_id,
                 authorization_phrase=MachineService.ARM_PHRASE,
                 **_service_binding(next_program),
             )
-        assert machine.status()["connected"] is False
-        assert store.get(next_id)["state"] == "prepared"
+        assert original_status()["connected"] is False
+        assert not machine.armed
+        assert bool(reached_preflight) == (recovery == "acknowledged")
+        pending = store.pending_secondary_recoveries()
+        assert bool(pending) == (recovery != "acknowledged")
+        assert store.get(next_id)["state"] == ("failed" if recovery == "acknowledged" else "prepared")
     finally:
+        monkeypatch.setattr(machine, "status", original_status)
         service.shutdown(stop_machine=False)
 
 

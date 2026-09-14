@@ -1,5 +1,13 @@
 # E3 Raspberry Pi hardware node
 
+After STOP, a terminal job's pending Air Assist OFF binding is rechecked at
+the next explicit Start. A recovered exact owner must report ready and
+acknowledged OFF with matching endpoint, baudrate and mapping before that
+record clears. Reconciliation sends no commands and never resumes the old job.
+Active records and uncertain or mismatched OFF remain blocked. This handles
+OFF acknowledgement after the terminal watcher has already recorded the stop;
+startup recovery remains available for unresolved bindings after restart.
+
 This design keeps project authoring, calibration, vision, Preview, and the first
 exact-program preflight on the operator computer while moving persistent job
 storage and normal controller execution onto a Raspberry Pi beside the machine.

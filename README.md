@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The Pi Start path now recognizes acknowledged Air Assist OFF after controller
+recovery from STOP, clearing the matching terminal job's stale recovery block.
+See [deployment status](CURRENT_STATE.md) and [Pi recovery](docs/NETWORK_MACHINE.md).
+
 A captured Pi Home/cooling deadlock correction covers Home / park and job
 completion while retaining measured focus. It preserves the Windows 0.7.150
 interface and saved calibration. See [focus status](docs/LASER_FOCUS.md).

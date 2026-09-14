@@ -1,5 +1,11 @@
 # Roadmap
 
+## STOP Air Assist recovery
+
+Rechecking terminal-job OFF recovery at Start is implemented and focused tests
+pass. Pi installation and operator STOP/recover/new-job validation are tracked
+in CURRENT_STATE.md. Unconfirmed OFF and mismatched bindings remain blocked.
+
 ## Home/cooling concurrency correction
 
 The lock inversion captured on the Pi is corrected across Home and job-focus

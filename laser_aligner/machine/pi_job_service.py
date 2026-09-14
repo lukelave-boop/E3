@@ -1038,6 +1038,14 @@ class PiJobService:
             if state != "prepared":
                 raise PiJobServiceError("Only a fully prepared job can be started")
             pending_recovery = self.store.pending_secondary_recoveries()
+            # STOP cleanup can finish after the terminal watcher, or the operator
+            # can reconnect the exact owner later. Reconcile that acknowledged
+            # OFF without requiring a node restart. Never clear active jobs.
+            for pending in pending_recovery:
+                previous = self.store.get(pending.job_id)
+                if previous.get("state") in _TERMINAL_STATES:
+                    self._clear_recovery_if_acknowledged(previous)
+            pending_recovery = self.store.pending_secondary_recoveries()
             if pending_recovery:
                 raise PiJobServiceError(
                     "A previous Pi job still has unresolved secondary Air Assist "
