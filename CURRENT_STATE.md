@@ -1,6 +1,6 @@
 # Current repository state
 
-## STOP Air Assist recovery reconciliation (2026-09-14, source tested)
+## STOP Air Assist recovery reconciliation (2026-09-14, installed and verified)
 
 Operator reports successful cuts using regular E3 0.7.153, then STOP followed
 by Ender recovery, Home/reference and a fresh measurement. The next Start rejects
@@ -10,7 +10,7 @@ Authenticated read-only status later reports READY_MOTION, disarmed, no active
 job, exact secondary owner ready with acknowledged OFF, and a reusable measured
 focus still present. The terminal watcher checked OFF before later recovery;
 Start never rechecked the pending durable binding. This is separate from the
-previous Home/cooling lock inversion. No remote motion or restart was issued.
+previous Home/cooling lock inversion. Initial diagnosis used read-only requests.
 
 Start now reconciles terminal jobs through the existing exact typed owner OFF
 check before rejecting unresolved bindings. Active records, unconfirmed OFF,
@@ -22,16 +22,27 @@ Ruff and compileall pass. All 52 installer tests pass, including exact installed
 de6cdc1 acceptance and unknown-edit rejection. On Pi Linux/Python 3.13.5, all 11
 new recovery cases pass with fake controllers in isolated committed source under
 /tmp; test dependencies do not modify the service environment. Frozen companion
-e3-pi-thickness-focus-b9940a5c (54f199e) is staged locally and on the Pi. Its
-read-only preview accepts all 17 source files and would replace only
-machine/pi_job_service.py. Compatibility CI 34839057759 passed all Windows 3.10,
-Windows 3.12 desktop, POSIX controller and lint jobs. Guarded
-installation is pending with the E3 client still connected. Existing regular
+e3-pi-thickness-focus-b9940a5c (54f199e) is installed after operator authorization,
+fresh disconnected/disarmed idle checks and no machine/camera client sockets.
+Only machine/pi_job_service.py changed; all 17 source hashes verified. The backup
+is adjacent pi_job_service.py.e3-backup-0en5c3cj.py. Compatibility CI 34839057759
+passed all Windows 3.10, Windows 3.12 desktop, POSIX controller and lint jobs.
+Existing regular
 E3 0.7.153 and E3 DEV TEST 0.7.150 remain compatible; no Windows rebuild or pointer
 change is needed. The prepared ignored helper build/apply_stop_air_idle_pi.py
 requires disconnected, disarmed idle state and no machine/camera client sockets,
 protects calibration/configuration hashes, resets failed state before applying,
-and starts the service after source verification. Physical retest remains pending.
+and starts the service after source verification. Before/after protected hashes
+confirm gauge calibration, saved honeycomb, XY offset, Z limits, configuration
+and cooling drop-in preserved. Service restarted at 06:03:53 MDT, PID20912;
+startup acknowledged OFF for the persisted matching secondary binding at
+06:03:57. Authenticated status responds DISCONNECTED/disarmed with the expected
+pi-thickness-focus-v2 capability. Cooling resumed with FAN1 255 and FAN2 0.
+All 11 new regression cases also pass against the actual installed module with
+fake controllers (1.86 seconds). Temporary-file datum persistence and thickness
+policy checks pass. No remote Home, probe, job or laser-output command was issued.
+Physical STOP/recover/new-job retest remains pending. Source is integrated into
+main and its completed development branch removed.
 
 ## Captured Home/cooling deadlock (2026-09-13, installed and verified)
 
