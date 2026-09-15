@@ -21,9 +21,11 @@ STOP_RECOVERY = {
     **previous.HOME_COOLING,
     "laser_aligner/machine/pi_job_service.py": "9f847f4468a17fbd93796c173b1e6c32388399cb3f619ebcee28ee36c7e08469",
 }
-# Every previously accepted complete companion has these same preview bytes.
-# Pin them explicitly so a shallow checkout can package without reading history.
+# Git-tree predecessors use these preview bytes. Older companion installers did
+# not update preview.py, so the verified installed baseline below retains it.
 _PREVIEW_PREDECESSOR = "0620b59f8f64d25f19aab48a8081c490631f9bc65c730ab3c9e0de9c8eb0fff3"
+INSTALLED_PREVIEW_REVISION = "7da9843bfacd7c2f6bb1106d68f5744037d04fb7"
+INSTALLED_PREDECESSOR = "installed-stop-recovery-54f199e-preview-7da9843"
 PREDECESSORS = {
     revision: {SURFACE_MODULE: None, PREVIEW_MODULE: _PREVIEW_PREDECESSOR, **files}
     for revision, files in {
@@ -36,6 +38,11 @@ PREDECESSORS = {
         previous.HOME_COOLING_REVISION: previous.HOME_COOLING,
         STOP_RECOVERY_REVISION: STOP_RECOVERY,
     }.items()
+}
+PREDECESSORS[INSTALLED_PREDECESSOR] = {
+    SURFACE_MODULE: None,
+    PREVIEW_MODULE: "73549ad4b5fcb5f75ede2fe30c7ee5cfb797fc7e9a559fef7b58282c8b4583bf",
+    **STOP_RECOVERY,
 }
 SOURCE_FILES = tuple(next(iter(PREDECESSORS.values())))
 

@@ -129,7 +129,8 @@ def test_retry_current_files_and_reject_active_service(kit, monkeypatch):
     assert snapshot(project) == before
 
 
-def test_exact_installed_stop_recovery_predecessor_upgrades_and_imports(tmp_path, bundle):
+@pytest.mark.parametrize("installed_preview", [False, True])
+def test_exact_installed_stop_recovery_predecessor_upgrades_and_imports(tmp_path, bundle, installed_preview):
     folder, installer, _ = bundle
     revision = packager.STOP_RECOVERY_REVISION
     result = subprocess.run(["git", "cat-file", "-e", revision], cwd=packager.ROOT, capture_output=True)
@@ -141,11 +142,19 @@ def test_exact_installed_stop_recovery_predecessor_upgrades_and_imports(tmp_path
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
         assert all((project / member.filename).resolve().is_relative_to(project.resolve()) for member in archive.infolist())
         archive.extractall(project)
-    for name, expected in packager.PREDECESSORS[revision].items():
+    baseline = revision
+    if installed_preview:
+        baseline = packager.INSTALLED_PREDECESSOR
+        preview = subprocess.run(["git", "show", f"{packager.INSTALLED_PREVIEW_REVISION}:{packager.PREVIEW_MODULE}"],
+                                 cwd=packager.ROOT, capture_output=True)
+        if preview.returncode:
+            pytest.skip("Pinned installed preview revision is unavailable in this shallow checkout")
+        (project / packager.PREVIEW_MODULE).write_bytes(preview.stdout)
+    for name, expected in packager.PREDECESSORS[baseline].items():
         path = project / name
         assert (hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest() if path.exists() else None) == expected
     before = snapshot(project)
-    assert revision in installer.install(project, bundle=folder)["compatible_predecessors"]
+    assert baseline in installer.install(project, bundle=folder)["compatible_predecessors"]
     assert snapshot(project) == before
     installer.install(project, bundle=folder, apply=True)
     subprocess.run(
