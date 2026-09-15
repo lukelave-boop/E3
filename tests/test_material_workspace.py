@@ -85,6 +85,31 @@ def test_saved_honeycomb_change_invalidates_model_and_qualification_binding(acti
         context.precision_setup_binding()
 
 
+def test_physical_setup_binding_tracks_gauge_and_geometry_but_not_measurement_or_session(active_surface, monkeypatch):
+    context, plan = active_surface
+    setup = {
+        "reference_id": "reference-1", "session": [1, 2, 3], "calibration_compatible": True,
+        "calibration": {"id": "gauge-1", "focus_offset_mm": 10., "gauge_mm": 7.,
+                        "firmware": "firmware-1", "geometry": {"probe_z_mm": -2.},
+                        "taught_at": 100., "taught_contact_z_mm": 3.},
+        "probe_xy_offset_mm": [3., 38.], "firmware_geometry": {"probe_z_mm": -2.},
+    }
+    monkeypatch.setattr(context.machine, "setup_evidence_snapshot", lambda: copy.deepcopy(setup), raising=False)
+    original = context.precision_setup_binding()
+    setup["session"] = [2, 3, 4]
+    setup["reference_id"] = "reference-2"
+    setup["calibration"]["taught_at"] = 200.
+    plan["measurement_id"] = "new-surface"
+    assert context.precision_setup_binding() == original
+    setup["calibration"]["id"] = "gauge-2"
+    assert context.precision_setup_binding() != original
+    setup["calibration"]["id"] = "gauge-1"
+    setup["probe_xy_offset_mm"][0] += 1
+    assert context.precision_setup_binding() != original
+    monkeypatch.setattr(context.machine, "setup_evidence_snapshot", lambda: None)
+    assert context.precision_setup_binding()["focus_setup"] is None
+
+
 def test_native_detail_rectification_keeps_original_bed_and_dimensions(active_surface):
     context, _ = active_surface
     image = np.zeros((1080, 1920, 3), dtype=np.uint8)
@@ -273,6 +298,53 @@ def test_replaced_photo_during_unsuccessful_detection_rejects_result(active_surf
     monkeypatch.setattr(app_module, "detect_workpiece", replaced)
     with pytest.raises(CalibrationError, match="Capture the measured surface"):
         context.detect_workpiece(capture_id=capture["capture_id"])
+
+
+def test_browser_exact_job_review_expires_on_same_height_recapture(active_surface, monkeypatch):
+    from test_app_simulation import _browser_generation_payload
+    context, _ = active_surface
+    monkeypatch.setattr(context, "capture_parked_trace_frame", lambda **kwargs: np.zeros((10, 10, 3), dtype=np.uint8))
+    first = context.capture_browser_placement()
+    generated = context.generate_gcode({**_browser_generation_payload(), "capture_id": first["capture_id"]})
+    context.validate_browser_placement_program(generated["gcode"])
+    with context.browser_placement_program_review(generated["gcode"]):
+        pass
+    with pytest.raises(CalibrationError, match="exact browser job"):
+        context.validate_browser_placement_program(generated["gcode"] + "\n; edited")
+    second = context.capture_browser_placement()
+    assert first["material_surface"] == second["material_surface"]
+    with pytest.raises(CalibrationError, match="exact browser job"):
+        context.validate_browser_placement_program(generated["gcode"])
+    renewed = context.generate_gcode({**_browser_generation_payload(), "capture_id": second["capture_id"]})
+    context.validate_browser_placement_program(renewed["gcode"])
+    context.enable_material_height_correction(False)
+    context.validate_browser_placement_program("legacy program without browser capture")
+
+
+def test_browser_acceptance_lock_blocks_recapture_before_positioning(active_surface, monkeypatch):
+    import threading
+    context, _ = active_surface
+    positioning = threading.Event()
+    started = threading.Event()
+    monkeypatch.setattr(context, "capture_parked_trace_frame", lambda **kwargs: np.zeros((10, 10, 3), dtype=np.uint8))
+    capture = context.capture_browser_placement()
+    context.record_browser_placement_program("exact generated text", capture["capture_id"])
+    def photo(**kwargs):
+        positioning.set()
+        return np.zeros((10, 10, 3), dtype=np.uint8)
+    monkeypatch.setattr(context, "capture_parked_trace_frame", photo)
+    def recapture():
+        started.set()
+        context.capture_browser_placement()
+    thread = threading.Thread(target=recapture)
+    with context.browser_placement_program_review("exact generated text"):
+        thread.start()
+        assert started.wait(1.)
+        assert not positioning.wait(.02)
+    thread.join(2.)
+    assert not thread.is_alive() and positioning.is_set()
+    with pytest.raises(CalibrationError, match="exact browser job"):
+        context.validate_browser_placement_program("exact generated text")
 
 
 def test_status_reports_blocked_surface_without_throwing(active_surface, monkeypatch):

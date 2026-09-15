@@ -220,8 +220,20 @@ class MaterialWorkspaceMixin:
     def precision_setup_binding(self) -> dict[str, Any]:
         state = self._surface_placement_state()
         model = self.solve_surface_height_model() if state.get("enabled") else None
+        setup_snapshot = getattr(self.machine, "setup_evidence_snapshot", lambda: None)()
+        focus_setup = None
+        if (setup_snapshot is not None and setup_snapshot.get("calibration_compatible") is True
+                and setup_snapshot.get("calibration") is not None):
+            calibration = setup_snapshot["calibration"]
+            focus_setup = copy.deepcopy({
+                "calibration": {key: calibration.get(key) for key in
+                                ("id", "focus_offset_mm", "gauge_mm", "firmware", "geometry")},
+                "probe_xy_offset_mm": setup_snapshot.get("probe_xy_offset_mm"),
+                "firmware_geometry": setup_snapshot.get("firmware_geometry"),
+            })
         return {"schema_version": 1, "camera": self.surface_calibration_binding(),
                 "mount_revision": state.get("mount_revision"), "datum_id": state.get("reference"),
+                "focus_setup": focus_setup,
                 "bed_mapping_digest": self.bed_mapping_digest(),
                 "capture_pose": [self.settings.machine.photo_x, self.settings.machine.photo_y,
                                  self.settings.machine.photo_z],

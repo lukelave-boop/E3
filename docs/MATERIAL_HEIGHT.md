@@ -327,7 +327,17 @@ Record the reference location, measurement method and uncertainty before
 automatic measurement is enabled. Check that Home / park places the deployed probe over solid
 border with the current XY/probe offsets. A support move invalidates that setup.
 
-## Two-height calibration study
+## Legacy two-height calibration study (schema 1)
+
+This section records the older diagnostic map-import workflow. For current
+production acquisition, open **Collect height calibration** from the Machine
+Setup guide and follow the [precision placement procedure](PRECISION_PLACEMENT.md#height-calibration).
+Its dedicated lower/upper/check captures preserve the working support map and
+save schema-2 evidence. The legacy map-import controls remain available under
+**Show legacy diagnostic map import** for reviewing older studies; schema-1
+evidence cannot enable production height correction.
+
+The original diagnostic workflow was:
 
 Open **Tools > Machine Setup > 3 · Bed mapping > Show manual / CSV fallback >
 Material height calibration study**.
@@ -372,12 +382,14 @@ camera/lens/machine/profile/work-area provenance. A future or malformed schema
 is rejected, not silently replaced. Fit and check results are recomputed from
 evidence when the study is reopened; no saved `valid` boolean grants authority.
 
-The study never replaces `bed_calibration.json`, installs its model into
+The legacy study never replaces `bed_calibration.json`, installs its model into
 `BedMapper`, changes support coordinates, edits project objects, or modifies
 G-code. The ordinary base-mapping actions used to acquire its inputs still
 replace the active base map as before. Keep that distinction in mind before
 returning to ordinary work: the last base map is valid at its own measured
-height. The study is not yet a selector for the production calibration plane.
+height. The legacy import itself does not select a production calibration plane.
+Current schema-2 acquisition and explicit model activation provide that separate
+path without replacing the support map.
 
 ## Probe redesign and archived work
 
@@ -434,21 +446,21 @@ The new measurement contract must be conservative:
   geometry, support/datum identity, point coordinates, time and repeatability.
   Historical saved values are measurements to review, not live motion authority.
 
-## Remaining production integration
+## Production integration and remaining physical qualification
 
-After independent physical height checks, connect the accepted surface model to
-an explicit material-plane selection in `AppContext`. Support detection and
-support teaching must continue to use the support-height transform; material
-images, clicks, overlays and tracing use the top-surface transform. Never
-globally swap the active bed homography and accidentally move the honeycomb
-frame with it. Keep height-specific fine/residual corrections separate until
-their transfer across height is physically validated.
+The accepted schema-2 model now has an explicit immutable material-plane
+selection in `AppContext`. Support detection and support teaching retain their
+support-height transform; material images, clicks, overlays and tracing use the
+selected measured top. The support homography and fixed output bounds remain
+unchanged. Support-plane fine/residual corrections do not transfer to another
+height.
 
-Add height/model/source identities to capture and trace provenance, preview
-invalidation, project persistence (explicit migration), and execution preflight.
-Recheck identity at START. Changing a plane requires recapture/regeneration,
-not silent resizing of already placed geometry. Test both desktop and browser
-consumers of shared calibration and preserve fixed machine output bounds.
+Capture and trace provenance, preview invalidation, schema-4 project persistence,
+and execution preflight now include height/model/source identities. Arm and
+Start recheck the selected surface. Changing a plane requires recapture and
+review; it does not resize or move already placed geometry. Desktop and browser
+share these application methods. Numerical model acceptance enables testing,
+not a physical accuracy claim.
 
 Physical acceptance should cover independently measured lower, middle and upper
 heights, all bed regions, repeated border homing, known gauge thicknesses, no

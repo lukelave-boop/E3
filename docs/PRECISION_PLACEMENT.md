@@ -77,6 +77,10 @@ Use the precision assessment with an independent holdout pattern:
   explicit operator action. Compare point-to-point variation between the two
   groups. Larger variation after Home / park suggests a positioning or restraint
   contribution; it does not by itself identify a particular mechanical fault.
+- A completed baseline retains its recorded plane when a later workpiece is
+  measured. A camera, lens, support map, mounting or datum change invalidates it.
+  A new or different height model leaves the old baseline as diagnostic history;
+  it cannot qualify that model automatically.
 - Measure actual laser-center marks relative to independent intended locations
   across all nine XY regions. Record signed X and Y error, the measurement method
   and radial uncertainty. Do not use the same fitted camera map as the sole
@@ -126,8 +130,9 @@ fresh production evidence.
 Height-error allowance is derived separately. Diagnostics report local
 `XY change / height change`. Multiply this sensitivity by the probe-height error
 to estimate its XY contribution. The displayed remaining-budget estimate uses
-the numerical model residual; it does not include unmeasured mechanical,
-localization or metrology contributions. Do not interpret it as a certified
+the larger fit/holdout optical residual, the 0.025 mm curve allowance and radial
+coordinate rounding. It does not include unmeasured mechanical, localization or
+metrology contributions. Do not interpret it as a certified
 probe tolerance. Repeated measurements against an independently measured height
 are required to establish probe error.
 

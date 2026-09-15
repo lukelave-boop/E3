@@ -31,7 +31,7 @@ from .job_focus import program_binding as job_focus_binding
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
-from .laser_focus import THICKNESS_CAPABILITY, validate_thickness_plan
+from .laser_focus import THICKNESS_CAPABILITY, validate_setup_evidence, validate_thickness_plan
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
@@ -316,6 +316,7 @@ class RemoteMachineService:
         self._retired_boot_ids: set[str] = set()
         self._selected_job_focus: dict[str, Any] | None = None
         self._material_honeycomb_height: float | None = None
+        self._setup_evidence: dict[str, Any] | None = None
         self._job_focus_required = False
         self._workpiece_focus_observed = False
         self._focus_observation_epoch = 0
@@ -1056,6 +1057,13 @@ class RemoteMachineService:
             if WORKPIECE_FOCUS_CAPABILITY in (self._node_capabilities or ()):
                 if focus_observation_epoch is None or focus_observation_epoch == self._focus_observation_epoch:
                     self._cache_workpiece_focus(status.get("workpiece_focus"))
+                    try:
+                        self._setup_evidence = validate_setup_evidence(
+                            status.get("setup_evidence"), primary_generation=self._controller_session_generation,
+                        ) if MATERIAL_SURFACE_CAPABILITY in (self._node_capabilities or ()) else None
+                    except SafetyError as exc:
+                        self._setup_evidence = None
+                        raise PiJobProtocolError(str(exc)) from exc
                 # An idle focus edit need not change the primary state revision.
                 # A status request begun before its accepted reply cannot undo it.
                 status["workpiece_focus"] = copy.deepcopy({
@@ -1066,6 +1074,7 @@ class RemoteMachineService:
                                                if self._selected_job_focus is None else None),
                 })
                 status["honeycomb_height_mm"] = self._material_honeycomb_height
+                status["setup_evidence"] = copy.deepcopy(self._setup_evidence)
             self._last_machine_status_monotonic = time.monotonic()
             self._last_node_response_monotonic = time.monotonic()
             self._machine_observation_sequence += 1
@@ -1843,6 +1852,21 @@ class RemoteMachineService:
         if MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ()):
             raise SafetyError("Update the Pi companion before using material-plane corrected jobs")
 
+    def setup_evidence_snapshot(self) -> dict[str, Any] | None:
+        """Return fresh accepted setup provenance without an RPC or motion grant."""
+        with self._state_lock:
+            if (self._setup_evidence is None or self._detached or not self._capabilities_verified
+                    or self._setup_evidence.get("controller_session") != self._controller_session_generation
+                    or MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ())
+                    or self._controller_state != "READY_MOTION"
+                    or self._status_cache.get("connected") is not True
+                    or self._status_cache.get("status_stale") is not False
+                    or self._status_cache.get("monitor_connected") is not True
+                    or self._last_machine_status_monotonic is None
+                    or time.monotonic() - self._last_machine_status_monotonic > _MACHINE_STATUS_MAX_AGE_SECONDS):
+                return None
+            return validate_setup_evidence(self._setup_evidence, primary_generation=self._controller_session_generation)
+
     def material_surface_snapshot(self) -> dict[str, Any] | None:
         """Return accepted, fresh Pi measurement evidence without network I/O."""
         with self._state_lock:
@@ -2181,6 +2205,8 @@ class RemoteMachineService:
             self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
             if workpiece_supported:
                 self._focus_observation_epoch += 1
+                self._setup_evidence = None
+                self._status_cache["setup_evidence"] = None
                 self._cache_workpiece_focus(result)
         result["workpiece_focus_available"] = workpiece_supported
         result["thickness_focus_available"] = THICKNESS_CAPABILITY in (self._node_capabilities or ())

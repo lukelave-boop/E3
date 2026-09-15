@@ -61,7 +61,7 @@ from .job_focus import check_context as check_job_focus_context
 from .job_focus import move as move_job_focus
 from .job_focus import preserve_through_park, program_binding, retain_after_job, selected_plan
 from .job_focus import selection_snapshot as focus_selection_snapshot
-from .laser_focus import LaserFocus
+from .laser_focus import LaserFocus, validate_setup_evidence
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
 from .mainboard import validate_control
@@ -5698,6 +5698,34 @@ class MachineService:
         if material_surface_binding(program.lines) is not None:
             validate_program_binding(program.lines, self.material_surface_snapshot())
 
+    def setup_evidence_snapshot(self) -> dict[str, Any] | None:
+        """Read retained setup provenance without a controller query or motion grant."""
+        with self._lock:
+            probe, primary, focus = self._z_probe, self._session, self._laser_focus
+            if (probe is None or primary is None or not self._connected or self._job.running
+                    or self._focus_operation_active or self._z_probe_active
+                    or self._controller_state is not ControllerState.READY_MOTION
+                    or not probe.owner.recovery_status()["ready"] or focus.xy_recovery_pending_reference):
+                return None
+            reference = focus.retain_z_reference(probe.owner.generation)
+            if reference is None or focus._reference_id is None:
+                return None
+            calibration = focus.calibration
+            evidence = {
+                "schema_version": 1, "reference": reference, "reference_id": focus._reference_id,
+                "controller_session": primary.generation,
+                "session": [probe.owner.generation, primary.generation, self._operation_stop_epoch()],
+                "calibration": calibration,
+                "calibration_compatible": (calibration is not None and calibration["firmware"] == reference["firmware"]
+                                           and calibration["geometry"] == reference["geometry"]),
+                "probe_xy_offset_mm": focus.probe_xy_offset_mm,
+                "firmware_geometry": reference["geometry"],
+            }
+            try:
+                return validate_setup_evidence(evidence, primary_generation=primary.generation)
+            except SafetyError:
+                return None
+
     def material_surface_snapshot(self) -> dict[str, Any] | None:
         """Return currently validated measured-plane evidence without controller I/O."""
         with self._lock:
@@ -6847,6 +6875,7 @@ class MachineService:
             "z_retention": self._retained_z_status(),
             "workpiece_focus": workpiece_focus,
             "honeycomb_height_mm": workpiece_focus["honeycomb_height_mm"],
+            "setup_evidence": self.setup_evidence_snapshot(),
             "z_probe": {
                 "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
                 "unavailable_reason": _PROBE_SUSPENSION_REASON or None,

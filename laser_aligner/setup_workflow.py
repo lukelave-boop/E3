@@ -96,8 +96,10 @@ def evaluate_setup_steps(
     try:
         if evidence.get("bed_survey") is not None:
             survey = BedSurvey.from_dict(evidence["bed_survey"])
-            if survey.binding != survey_binding:
-                intrinsic["datum"] = ("stale", "Border reference changed or is unavailable; repeat the survey.")
+            if survey_binding is None:
+                intrinsic["datum"] = ("review", "Current reference is unavailable; refresh machine status to review the saved survey.")
+            elif survey.binding != survey_binding:
+                intrinsic["datum"] = ("stale", "Border reference changed; repeat the survey.")
             elif survey.saved_datum and survey.saved_datum["value_mm"] != saved_datum_mm:
                 intrinsic["datum"] = ("stale", "Saved datum changed; review and explicitly save the survey datum again.")
             elif survey.summary()["complete"] and survey.saved_datum:
@@ -404,6 +406,8 @@ class PrecisionQualification:
         reasons = []
         if binding_json(current_binding) != self.binding:
             reasons.append("Setup identity changed; acquire fresh independent evidence")
+        if "focus_setup" in current_binding and current_binding["focus_setup"] is None:
+            reasons.append("Current focus setup evidence is unavailable; refresh or teach the gauge before physical qualification")
         planes = ("lower",) if self.lower_mm == self.upper_mm else ("lower", "middle", "upper")
         expected = {(plane, region) for plane in planes for region in REGIONS}
         if {(item.plane, item.region) for item in self.observations} != expected:

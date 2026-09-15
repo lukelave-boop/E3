@@ -392,12 +392,13 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                                 "G-code is required before laser control can be armed"
                             )
                         self.context.machine.ensure_connected()
-                        self.context.validate_material_surface_program(gcode)
-                        program = self.context.machine.preflight_program(gcode)
-                        until = self.context.machine.arm_program(
-                            str(payload.get("phrase", "")),
-                            program,
-                        )
+                        with self.context.browser_placement_program_review(gcode):
+                            self.context.validate_material_surface_program(gcode)
+                            program = self.context.machine.preflight_program(gcode)
+                            until = self.context.machine.arm_program(
+                                str(payload.get("phrase", "")),
+                                program,
+                            )
                 except Exception:
                     # A STOP after this request began already revoked its grant.
                     # Do not let the stale request disarm a newer connection's
@@ -422,13 +423,12 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, **result})
             elif path == "/api/machine/run":
-                self.context.validate_material_surface_program(str(payload["gcode"]))
-                result = self._with_controller(
-                    lambda: self.context.machine.start_job(
-                        str(payload["gcode"]),
-                        str(payload.get("name", "job.gcode")),
-                    )
-                )
+                def start_reviewed_job():
+                    gcode = str(payload["gcode"])
+                    with self.context.browser_placement_program_review(gcode):
+                        self.context.validate_material_surface_program(gcode)
+                        return self.context.machine.start_job(gcode, str(payload.get("name", "job.gcode")))
+                result = self._with_controller(start_reviewed_job)
                 self._send_json({"ok": True, "job": result}, status=HTTPStatus.ACCEPTED)
             elif path == "/api/machine/stop":
                 self.context.machine.stop_job(

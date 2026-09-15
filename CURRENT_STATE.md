@@ -1,6 +1,6 @@
 # Current repository state
 
-## Precision placement and guided setup (2026-09-15, feature verification)
+## Precision placement and guided setup (2026-09-15 UTC, feature verification)
 
 The active feature implements the approved 0.10 mm maximum radial XY placement
 target, including measurement uncertainty, on one flat parallel surface through
@@ -27,12 +27,25 @@ frozen capture identity and stale-job validation. Old Pi services reject jobs
 requiring the new surface capability; their ordinary legacy jobs remain supported.
 
 Focused Windows simulator, geometry, migration, fake-controller, remote protocol
-and offscreen widget tests have passed during development. Full compatibility CI,
-the exact frozen build and final counts are recorded below when completed. No
+and offscreen widget tests have passed during development. The broad local
+Windows Python 3.14 run reported 6,723 passed, 29 skipped and 13 failures; these
+exposed integration fixtures, companion dependency closure and a disarm-lock
+regression that were repaired and rechecked with focused acceptance/rejection
+tests. The final material/workspace/machine guard batch passed 307 tests. Full
+compatibility CI is pending before integration; its supported Python 3.10 and
+3.12 results and the exact frozen build will be recorded when complete. No
 interactive operator GUI session, real-camera test, physical probe test or laser
 accuracy qualification is implied by these automated tests. The planned handoff
 is the permanent E3 DEV TEST launcher plus a hash-checked compatible Pi companion.
 Current installed Pi/regular E3 behavior remains the historical record below.
+
+Linux verification: 371 isolated fake-controller and camera-model tests passed
+on the actual Pi in 98.39 seconds, using Python 3.13.5 ARM64, NumPy 2.5.3,
+OpenCV 4.14.0 and pytest 8.4.2. Source manifest SHA256 is
+`da01d0c2ff984755bbcf13488db41a5ebf1c6cf8725249bc2f035e95dfe7f550`.
+The matching calibration/backend files remain identical to that tested snapshot.
+The installed service, installed source and hardware were untouched. The same
+371 focused tests also passed under WSL Ubuntu 22.04 / Python 3.10.12.
 
 Operator qualification: establish one-height sampling and ten still/ten Home-park
 captures first; independently measure laser-center errors and uncertainty across

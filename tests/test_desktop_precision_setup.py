@@ -224,3 +224,55 @@ def test_failed_height_capture_does_not_offer_save(app, tmp_path):
     assert not dialog.save_capture_button.isEnabled()
     assert "No independently identified" in dialog.result_status.text()
     dialog.close()
+
+
+def test_checklist_uses_validated_setup_snapshot_after_navigation_and_retained_home(app, tmp_path):
+    from laser_aligner.setup_workflow import SURVEY_REGIONS, BedSurvey, SurveyObservation, binding_json
+
+    setup = FakeSetup(tmp_path)
+    setup.binding["honeycomb_height_mm"] = -1.5
+    panel = LaserFocusPanel(calibration_mode=True)
+    panel._status = status()
+    panel.set_result(result(reference={"border_z_mm": 0.}, reference_id="reference-1"))
+    setup.focus_workspace = SimpleNamespace(panel=panel)
+    snapshot = {
+        "reference": {"border_z_mm": 0.}, "reference_id": "reference-1", "controller_session": 8,
+        "probe_xy_offset_mm": [3., 38.], "firmware_geometry": {"probe_z_mm": -2.},
+        "calibration_compatible": True,
+    }
+    setup.context.machine = SimpleNamespace(setup_evidence_snapshot=lambda: snapshot)
+    setup.context.camera_calibration_readiness = lambda: {"state": "READY", "expected_resolution": [1920, 1080]}
+    setup.context.lens = SimpleNamespace(model=SimpleNamespace(quality={"gate": "pass"}, image_size=(1920, 1080)))
+    setup.context.bed_status = lambda: {"calibrated": True}
+    survey_identity = binding_json({
+        "reference": snapshot["reference"], "reference_id": snapshot["reference_id"],
+        "controller_session": snapshot["controller_session"], "probe_offset": snapshot["probe_xy_offset_mm"],
+        "firmware_geometry": snapshot["firmware_geometry"],
+    })
+    survey = BedSurvey(survey_identity)
+    for index, region in enumerate(SURVEY_REGIONS):
+        xy = ((0, 0), (100, 0), (100, 100), (0, 100), (50, 50))[index]
+        survey.record(SurveyObservation(region, f"probe-{index}", 3.5, 5., xy, 100.), survey_identity)
+    survey.associate_saved_datum(-1.5, 200., survey_identity)
+    PrecisionEvidenceStore(tmp_path).save(bed_survey=survey)
+    guide = SetupGuideDialog(setup)
+    assert guide.step_statuses["datum"].state == "complete"
+    panel.invalidate("Z controls paused while another setup tab is active")
+    assert not panel.fresh()
+    guide.refresh_status()
+    assert guide.step_statuses["datum"].state == guide.step_statuses["gauge"].state == "complete"
+    # Successful Home clears immediate probe controls but keeps validated datum evidence.
+    panel.set_result(result(reference=None, reference_id=None, reference_ready=False))
+    guide.refresh_status()
+    assert guide.step_statuses["datum"].state == "complete"
+    snapshot["controller_session"] = 9
+    guide.refresh_status()
+    assert guide.step_statuses["datum"].state == "stale"
+    setup.context.machine.setup_evidence_snapshot = lambda: None
+    guide.refresh_status()
+    assert guide.step_statuses["datum"].state == "review"
+    assert guide.step_statuses["gauge"].state == "blocked"
+    assert not setup.calls
+    guide.close()
+    panel.close()
+    setup.close()

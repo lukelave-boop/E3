@@ -114,8 +114,20 @@ class SetupGuideDialog(QtWidgets.QDialog):
             bed = inspect(lambda: context.bed_status(), {})
             readiness["bed"] = bed.get("calibrated") is True
             datum = None if current is None else current.get("honeycomb_height_mm")
+            snapshot_method = getattr(getattr(context, "machine", None), "setup_evidence_snapshot", None)
+            setup_snapshot = inspect(snapshot_method) if callable(snapshot_method) else None
+            if setup_snapshot is not None:
+                readiness["gauge"] = setup_snapshot.get("calibration_compatible") is True
+                survey_identity = binding_json({
+                    "reference": setup_snapshot["reference"], "reference_id": setup_snapshot["reference_id"],
+                    "controller_session": setup_snapshot["controller_session"],
+                    "probe_offset": setup_snapshot.get("probe_xy_offset_mm"),
+                    "firmware_geometry": setup_snapshot.get("firmware_geometry"),
+                })
+            # Older services can display a fresh focus readback, but an unavailable
+            # new snapshot must never fall back to stale widget authority.
             panel = getattr(getattr(self.parent(), "focus_workspace", None), "panel", None)
-            if panel is not None and panel.fresh():
+            if not callable(snapshot_method) and panel is not None and panel.fresh():
                 result = panel._result
                 readiness["gauge"] = result.get("calibration_compatible") is True
                 if result.get("reference_ready") and result.get("reference") and result.get("reference_id"):

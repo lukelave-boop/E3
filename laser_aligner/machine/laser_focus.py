@@ -6,6 +6,7 @@ may restore the border datum; surfaces and movement previews never survive.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 import re
@@ -126,6 +127,65 @@ def parse_geometry(lines):
     if not all(math.isfinite(v) for v in values) or not -10 <= values[0] <= 0 or not 0 < values[1] <= 5 or values[2] not in (-10, -2) or values[3:] != (65, 80):
         raise MachineError("Unsupported E3 surface geometry")
     return dict(zip(("probe_z_mm", "retract_mm", "min_mm", "max_mm", "ceiling_mm"), values, strict=True))
+
+
+def validate_setup_evidence(raw, *, primary_generation=None):
+    """Validate observational setup provenance; it never grants motion authority."""
+    if raw is None:
+        return None
+    fields = {"schema_version", "reference", "reference_id", "controller_session", "session",
+              "calibration", "calibration_compatible", "probe_xy_offset_mm", "firmware_geometry"}
+    if (type(raw) is not dict or set(raw) != fields or type(raw["schema_version"]) is not int
+            or raw["schema_version"] != 1 or type(raw["calibration_compatible"]) is not bool):
+        raise SafetyError("Invalid setup evidence schema")
+    session = raw["session"]
+    if (type(session) is not list or len(session) != 3
+            or any(type(value) is not int or value < 0 for value in session)
+            or type(raw["controller_session"]) is not int or raw["controller_session"] != session[1]
+            or (primary_generation is not None and session[1] != primary_generation)):
+        raise SafetyError("Setup evidence controller session changed")
+    reference = raw["reference"]
+    try:
+        if type(raw["reference_id"]) is not str or str(uuid.UUID(raw["reference_id"])) != raw["reference_id"]:
+            raise ValueError("invalid reference identity")
+        if (type(reference) is not dict or set(reference) != {"border_z_mm", "firmware", "geometry"}
+                or type(reference["firmware"]) is not str or not 1 <= len(reference["firmware"]) <= 8192):
+            raise ValueError("invalid reference")
+        finite_number(reference["border_z_mm"], "Border reference", -.5, .5)
+        geometry = parse_geometry(reference["firmware"].splitlines())
+        if reference["geometry"] != geometry or raw["firmware_geometry"] != geometry:
+            raise ValueError("reference geometry differs")
+        calibration = raw["calibration"]
+        if calibration is not None:
+            calibration_fields = {"id", "focus_offset_mm", "gauge_mm", "taught_z_mm", "taught_contact_z_mm",
+                                  "taught_at", "firmware", "geometry"}
+            if (type(calibration) is not dict or set(calibration) != calibration_fields
+                    or type(calibration.get("id")) is not str
+                    or str(uuid.UUID(calibration["id"])) != calibration["id"]
+                    or type(calibration.get("gauge_mm")) not in (int, float) or calibration["gauge_mm"] != 7
+                    or type(calibration["firmware"]) is not str):
+                raise ValueError("invalid gauge identity")
+            gauge_geometry = parse_geometry(calibration["firmware"].splitlines())
+            if calibration["geometry"] != gauge_geometry:
+                raise ValueError("gauge geometry differs")
+            finite_number(calibration["taught_z_mm"], "Taught Z", 0, 80)
+            finite_number(calibration["taught_at"], "Taught time", 0, 1e12)
+            finite_number(calibration["taught_contact_z_mm"], "Taught contact", gauge_geometry["min_mm"], gauge_geometry["max_mm"])
+            finite_number(calibration["focus_offset_mm"], "Gauge focus offset", -80, 80 - gauge_geometry["min_mm"])
+            if abs(calibration["taught_z_mm"] - calibration["taught_contact_z_mm"] - calibration["focus_offset_mm"]) > 1e-6:
+                raise ValueError("gauge offset differs")
+        compatible = (calibration is not None and calibration.get("firmware") == reference["firmware"]
+                      and calibration.get("geometry") == geometry)
+        if raw["calibration_compatible"] is not compatible:
+            raise ValueError("gauge compatibility differs")
+        if raw["probe_xy_offset_mm"] is not None:
+            if validate_xy_offset(raw["probe_xy_offset_mm"]) != raw["probe_xy_offset_mm"]:
+                raise ValueError("noncanonical probe offset")
+        # Reject nested nonfinite values and return an independent snapshot.
+        strict_json_loads(json.dumps(raw, allow_nan=False))
+    except (ValueError, TypeError, KeyError, MachineError) as exc:
+        raise SafetyError("Invalid retained setup reference or gauge evidence") from exc
+    return copy.deepcopy(raw)
 
 
 class LaserFocus:

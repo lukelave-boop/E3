@@ -230,3 +230,11 @@ def test_frozen_evidence_copies_mutable_constructor_coordinates_and_collections(
     contact = SurveyObservation("center", "probe-1", 3.5, 5., xy, 100.)
     xy[0] = 999.
     assert contact.carriage_xy_mm == (10., 20.)
+
+
+def test_unknown_focus_setup_can_save_diagnostics_but_cannot_qualify_physical_accuracy():
+    binding = dict(BINDING, focus_setup=None)
+    evidence = replace(qualification(), binding=binding_json(binding))
+    result = evidence.review(binding)
+    assert not result["passed"]
+    assert any("focus setup evidence is unavailable" in reason for reason in result["reasons"])

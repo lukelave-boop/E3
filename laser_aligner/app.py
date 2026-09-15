@@ -4592,6 +4592,7 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
         text = self.bind_material_surface_program(program.text)
         if surface != self.validate_browser_placement(payload.get("capture_id")):
             raise CalibrationError("Surface changed while preparing the browser job; capture again")
+        self.record_browser_placement_program(text, payload.get("capture_id"))
         safe_base = (
             _SAFE_NAME_RE.sub("-", Path(name).stem).strip("-.")[:80] or "design"
         )

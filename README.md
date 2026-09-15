@@ -1030,7 +1030,10 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 - CSS stylesheets, clipping paths, masks, markers, dashed strokes, and
   geometry-changing CSS are not supported and are explicitly rejected rather
   than imported with a mismatched cut path.
-- The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
+- Height correction uses an accepted measured-surface model within its calibrated
+  height interval. With correction disabled, mapping applies only to the support
+  calibration plane. The 0.10 mm XY target still needs independent physical
+  qualification; see [precision placement](docs/PRECISION_PLACEMENT.md).
 - Cutting-template identification and alignment have automated coverage but
   have not been verified with real corrected label-sheet images. Automated
   tests cannot validate lens/bed calibration, parallax, camera pose, material height,
