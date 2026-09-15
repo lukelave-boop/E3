@@ -19,8 +19,21 @@ Desktop navigation only; no browser or Pi companion changes.
 Verification: 270 focused Windows desktop/setup tests passed, repository Ruff
 and compileall passed. Offscreen simulator screenshots at 900 x 680 show Step 4
 instructions, navigation and the highlighted save control without overlap;
-STOP remains visible. Interactive operator acceptance is pending. The replacement
-frozen feature build is in progress.
+STOP remains visible. The bed-measurement dialog was also visually inspected
+offscreen. Interactive operator acceptance and real hardware testing are pending.
+
+Frozen handoff: E3 DEV TEST selects Clearer setup wizard, version 0.7.165,
+branch codex/setup-wizard, revision 29c42e2fabcfa91176092171494eeb19e2db2032.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\setup-wizard-clear-dev\dist\E3\E3.exe`.
+Built using packaging/build_windows.ps1 in an isolated checkout with installed
+dependencies and a restricted build PATH. All 33 changed packaged Python modules
+and changed application resources match that revision. SHA-256:
+`b573eb33916f639420be1510a06677d347fa88982d16d1227a5066fefb1dec98`.
+Frozen offscreen startup passed with native Qt loaded, isolated simulator state,
+camera autostart disabled and motion disabled. Permanent pointer updated with
+set_dev_test_feature.py and read back through the launcher validator.
+Local verification records: build/setup-wizard-clear-frozen-verification.json
+and build/setup-wizard-clear-frozen-smoke.json (intentionally untracked).
 No hardware commands or physical calibration tests have been performed here.
 Compatibility CI/integration still await the earlier GitHub upload approval.
 
