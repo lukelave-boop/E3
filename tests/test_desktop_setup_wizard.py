@@ -158,3 +158,27 @@ def test_observational_refresh_preserves_focus_evidence(app, dialog):
     settle(app, dialog)
     assert True not in busy_transitions
     assert payload == {"measurement": "current"}
+
+
+def test_evidence_read_preserves_photo_pose_but_controller_change_invalidates(app, dialog, monkeypatch):
+    ready = {
+        **dialog.context.machine.status(), "controller_state": "READY_MOTION",
+        "controller_session_generation": 4, "controller_state_revision": 10,
+        "coordinate_reference_ready": True, "allow_motion": True,
+    }
+    monkeypatch.setattr(dialog.context.machine, "status", lambda: dict(ready))
+    dialog.set_machine_status(ready)
+    dialog._photo_pose_confirmed = True
+    dialog._photo_pose_confirmed_generation = 4
+    dialog._sync_recapture_actions()
+    assert dialog.registration_recapture_button.isEnabled()
+    dialog.setup_wizard.begin()
+    assert dialog._photo_pose_confirmed
+    assert not dialog.registration_recapture_button.isEnabled()
+    settle(app, dialog)
+    assert dialog._photo_pose_confirmed
+    assert dialog.registration_recapture_button.isEnabled()
+    ready["controller_session_generation"] = 5
+    dialog.set_machine_status(ready)
+    assert not dialog._photo_pose_confirmed
+    assert not dialog.registration_recapture_button.isEnabled()

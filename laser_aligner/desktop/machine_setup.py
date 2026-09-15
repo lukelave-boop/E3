@@ -833,6 +833,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._bed_dependent_result_actions: list[QtWidgets.QWidget] = []
         self._thread_pool = QtCore.QThreadPool.globalInstance()
         self._active_task: FunctionTask | None = None
+        self._active_observational_read = False
         self._active_operation_name: str | None = None
         self._operation_generation = 0
         self._stop_requested_generation: int | None = None
@@ -1092,10 +1093,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._machine_status,
             operation_busy=self.operation_busy,
         )
+        pose_state = self._machine_ui_state
+        if self._active_observational_read and not self._controller_busy:
+            pose_state = pose_state.with_busy(False)
         if self._photo_pose_confirmed and (
             self._machine_ui_state.session_generation
             != self._photo_pose_confirmed_generation
-            or not self._machine_ui_state.can_recapture_without_homing
+            or not pose_state.can_recapture_without_homing
         ):
             self._photo_pose_confirmed = False
             self._photo_pose_confirmed_generation = None
@@ -1270,6 +1274,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         task = FunctionTask(scoped_operation, label=f"Machine Setup: {name}")
         self._active_task = task
+        self._active_observational_read = observational_read
         if self.focus_workspace is not None and not observational_read:
             self.focus_workspace.coordinator.set_external_busy(True)
         self._sync_operation_controls()
@@ -1454,6 +1459,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "its stale completion was discarded."
             )
         self._active_task = None
+        self._active_observational_read = False
         self._active_operation_name = None
         self._stop_requested_generation = None
         if self.focus_workspace is not None:
@@ -4376,6 +4382,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         active_task = self._active_task
         lens_index_task = self._lens_index_task
         self._active_task = None
+        self._active_observational_read = False
         self._lens_index_task = None
         self._active_operation_name = None
         for task in (active_task, lens_index_task):

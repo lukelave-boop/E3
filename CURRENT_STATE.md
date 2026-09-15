@@ -15,7 +15,7 @@ the selected tab remains stable during local work, and software STOP remains
 available. Results after either dialog or external STOP are discarded; stale
 qualification remains visibly stale. These controls are not safety-rated.
 
-Verification: 105 focused Windows offscreen wizard, setup, asynchronous setup,
+Verification: 106 focused Windows offscreen wizard, setup, asynchronous setup,
 precision and evidence tests passed; all 161 focused laser-focus tests passed.
 Repository Ruff and application compileall pass. Normal 1080x780 and compact
 900x680 layouts were rendered offscreen with Windows Segoe UI and inspected.
