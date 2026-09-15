@@ -1641,6 +1641,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._rectangle_preview_item: QtWidgets.QGraphicsPathItem | None = None
         self._point_pick_active = False
         self.snap_enabled = True
+        self.precision_placement_enabled = False
+        self._precision_previous_snap = True
         self.snap_step_mm = 1.0
         self._panning = False
         self._pan_start = QtCore.QPoint()
@@ -2965,7 +2967,22 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
 
     def set_snap_enabled(self, enabled: bool) -> None:
-        self.snap_enabled = bool(enabled)
+        if self.precision_placement_enabled:
+            self._precision_previous_snap = bool(enabled)
+        else:
+            self.snap_enabled = bool(enabled)
+
+    def set_precision_placement_enabled(self, enabled: bool) -> None:
+        """Suspend grid rounding without discarding the operator's snap preference."""
+        enabled = bool(enabled)
+        if enabled == self.precision_placement_enabled:
+            return
+        if enabled:
+            self._precision_previous_snap = self.snap_enabled
+            self.snap_enabled = False
+        else:
+            self.snap_enabled = self._precision_previous_snap
+        self.precision_placement_enabled = enabled
 
     def set_snap_step(self, step_mm: float) -> None:
         self.snap_step_mm = max(0.001, float(step_mm))

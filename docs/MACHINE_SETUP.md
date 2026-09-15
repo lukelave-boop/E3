@@ -1,16 +1,17 @@
 # Native machine setup
 
-The optional **Material height calibration study** lives under Bed mapping's
-**Show manual / CSV fallback** controls. It preserves measured maps at two
-heights and checks an independent intermediate plane. It provides diagnostic
-image previews only; see [the height workflow](MATERIAL_HEIGHT.md) for fixed-border
-reference conventions and remaining probe/production integration.
+The guided setup checklist links to camera/lens, support mapping, five-position
+leveling/datum, gauge focus, precision assessment, surface-height calibration and
+independent XY qualification. Height calibration acquires lower/upper observations
+and a separate middle check without replacing the support map. The selected
+measured top plane can then drive placement. Legacy study imports remain
+diagnostic. See [precision placement](PRECISION_PLACEMENT.md) for the 0.10 mm target,
+evidence requirements and physical qualification procedure.
 
 > **Operator directions:** Follow the packaged
 > [Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
-> It is the canonical current-version five-step calibration sequence. Machine
-> Setup also includes a sixth read-only Coordinate Audit tab and a seventh
-> Z / laser focus tab after those steps.
+> It covers the camera/support calibration sequence and guided precision setup.
+> Machine Setup retains its read-only Coordinate Audit and Z / laser focus tabs.
 > This document explains implementation details and optional diagnostics; it is
 > not a competing step order.
 

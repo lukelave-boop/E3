@@ -27,7 +27,8 @@ def _validate_main_view_selection(controller: Any, selection: dict[str, Any]) ->
     if selection.get("main_view") is not True:
         return
     context = controller.runtime.context
-    if (not controller.review_signature_is_current(selection.get("review_signature"))
+    validator = getattr(controller, "focus_review_signature_is_current", controller.review_signature_is_current)
+    if (not validator(selection.get("review_signature"))
             or controller._camera_review_active()
             or controller._camera_source_generation != selection.get("source_generation")
             or getattr(getattr(context.lens, "model", None), "model_id", None)
@@ -48,6 +49,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None, *, calibration_mode: bool = False) -> None:
         super().__init__(parent)
         self.calibration_mode = calibration_mode
+        self.precision_evidence_store = None
         self._camera_location = "live image" if calibration_mode else "main view on the left"
         self._camera_prompt = f"Choose Position probe, then click a solid spot in the {self._camera_location}."
         self._status: dict[str, Any] = {}
@@ -131,6 +133,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.honeycomb_note = QtWidgets.QLabel("Enter the measured bed height relative to the border. Saving clears the workpiece measurement; measure again before running a job.")
         self.honeycomb_note.setWordWrap(True)
         honeycomb_layout.addWidget(self.honeycomb_note)
+        self.bed_survey_button = QtWidgets.QPushButton("Bed leveling and datum — five-position survey")
+        self.bed_survey_button.clicked.connect(self.open_bed_survey)
+        honeycomb_layout.addWidget(self.bed_survey_button)
         layout.addWidget(self.honeycomb_group)
         self.honeycomb_group.setVisible(calibration_mode)
         self.honeycomb_height.valueChanged.connect(self._edit_honeycomb)
@@ -231,6 +236,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.clear_surface = QtWidgets.QPushButton("Clear measurement")
         grid.addWidget(self.measure, 12, 0, 1, 2)
         grid.addWidget(self.clear_surface, 12, 2, 1, 2)
+        if calibration_mode:
+            # Measurement and its required XY return form one step directly before teaching.
+            grid.removeWidget(self.align_laser)
+            grid.removeWidget(self.clear_surface)
+            grid.addWidget(self.align_laser, 12, 2, 1, 2)
+            grid.addWidget(self.clear_surface, 13, 0, 1, 4)
         self.position_note = QtWidgets.QLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
         if not calibration_mode:
             self.position_note.setText(
@@ -289,7 +300,6 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 offset_layout.addWidget(editor, 1, column + 1)
             self.apply_offset = QtWidgets.QPushButton("Save measured XY offset")
             offset_layout.addWidget(self.apply_offset, 2, 0, 1, 4)
-            layout.addWidget(self.offset_editor)
 
             teach = QtWidgets.QGroupBox("Teach once with the 7 mm gauge")
             teach_layout = QtWidgets.QGridLayout(teach)
@@ -319,6 +329,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.teaching_limits.setWordWrap(True)
             teach_layout.addWidget(self.teaching_limits, 4, 0, 1, 4)
             layout.addWidget(teach)
+            layout.addWidget(self.offset_editor)
 
         self.preview_group = QtWidgets.QGroupBox("Preview and position" if calibration_mode else "Workpiece focus", self)
         focus_layout = QtWidgets.QGridLayout(self.preview_group)
@@ -447,7 +458,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             f"Probe target: X {x:.2f}, Y {y:.2f} mm · Head: X {x-ox-sx:.2f}, Y {y-oy-sy:.2f} mm. "
             + ("Outside original calibration grid. "
                if target.get("within_original_calibration_grid") is False else "")
-            + "Bed-plane estimate; check probe alignment before measuring raised work."
+            + ("Approximate support-plane preview only. Choose a broad solid patch and check the probe alignment; measure before placing artwork."
+               if target.get("approximate_support_preview") else
+               "Measured material-plane target; check the physical probe path."
+               if target.get("height_corrected") else
+               "Bed-plane estimate; check probe alignment before measuring raised work.")
         )
         self._sync()
 
@@ -707,6 +722,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "recover_xy": "XY recovered at the current height. Separately confirm headroom and reference the border.",
         }.get(str(result.get("action")), "Reported position is refreshed while idle."))
         self._sync()
+        survey = getattr(self, "_bed_survey_dialog", None)
+        if survey is not None and result.get("action") == "set_honeycomb_height":
+            survey.record_saved_datum()
 
     def _preview_matches(self, preview: Any) -> bool:
         surface = self._result.get("surface")
@@ -1052,6 +1070,19 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Automatic workpiece focus requires the matching Pi companion update."
         )
         return False
+
+    def open_bed_survey(self) -> None:
+        from .precision_setup import BedSurveyDialog
+
+        if not self.calibration_mode:
+            return
+        dialog = getattr(self, "_bed_survey_dialog", None)
+        if dialog is None:
+            dialog = BedSurveyDialog(self)
+            self._bed_survey_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def request(self, action: str, value: float | None = None) -> None:
         self._sync()

@@ -12,6 +12,10 @@ from pathlib import Path
 import pytest
 
 from scripts.package_pi_control_priority import PREVIOUS, PREVIOUS_PACKAGE, PREVIOUS_REVISION, ROOT, package
+from scripts.package_source_dependencies import MATERIAL_PREDECESSORS
+from scripts.package_z_setup_speed import PREVIOUS as COMPLETE_PREVIOUS
+
+CURRENT_FILES = {**COMPLETE_PREVIOUS, **MATERIAL_PREDECESSORS}
 
 
 def load_installer(bundle):
@@ -33,8 +37,9 @@ def kit(tmp_path, monkeypatch):
     manifest = json.loads((bundle / "manifest.json").read_bytes())
     project = (tmp_path / "project").resolve()
     (project / "laser_aligner/machine").mkdir(parents=True)
-    originals = {name: f"# installed {name}\r\n".encode() for name in PREVIOUS}
+    originals = {name: f"# installed {name}\r\n".encode() for name, digest in CURRENT_FILES.items() if digest is not None}
     for name, original in originals.items():
+        (project / name).parent.mkdir(parents=True, exist_ok=True)
         (project / name).write_bytes(original)
         manifest["predecessors"][0]["files"][name] = hashlib.sha256(original.replace(b"\r\n", b"\n")).hexdigest()
     data = json.dumps(manifest).encode()
@@ -44,11 +49,11 @@ def kit(tmp_path, monkeypatch):
     return installer, project, bundle, originals
 
 
-def test_upgrade_only_three_modules_preserves_backups_newlines_and_operator_data(kit):
+def test_current_upgrade_includes_capability_implementation_and_preserves_operator_data(kit):
     installer, project, bundle, originals = kit
     preserved = ("config/pi-hardware.json", "config/pi-hardware.json.laser-focus.json",
                  "config/pi-hardware.json.z-limits.json", "config/pi-hardware.json.laser-focus.json.z-retention.json",
-                 "laser_aligner/machine/service.py", "laser_aligner/machine/cpu_cooling.py", "firmware/firmware.bin")
+                 "laser_aligner/machine/cpu_cooling.py", "firmware/firmware.bin")
     for name in preserved:
         path = project / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,18 +66,22 @@ def test_upgrade_only_three_modules_preserves_backups_newlines_and_operator_data
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["compatible_predecessors"] == [PREVIOUS_PACKAGE]
     assert result["applied"] and not result["service_started"]
-    assert len(result["files"]) == 3
+    assert len(result["files"]) == 19
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
         assert entry["status"] == "updated"
-        assert Path(entry["backup"]).read_bytes() == originals[relative]
-        assert target.read_bytes().count(b"\r\n") == target.read_bytes().count(b"\n")
+        if relative in originals:
+            assert Path(entry["backup"]).read_bytes() == originals[relative]
+            assert target.read_bytes().count(b"\r\n") == target.read_bytes().count(b"\n")
+        else:
+            assert "backup" not in entry
         assert target.read_bytes().replace(b"\r\n", b"\n") == (bundle / relative).read_bytes()
     assert all((project / name).read_bytes() == before[name] for name in preserved)
     again = installer.install(project, bundle=bundle, apply=True)
     assert all(entry["status"] == "already_current" for entry in again["files"])
-    assert len(list(project.rglob("*.e3-backup-*"))) == 3
+    assert len(list(project.rglob("*.e3-backup-*"))) == len(originals)
+    assert b"validate_program_binding" in (project / "laser_aligner/machine/service.py").read_bytes()
 
 
 @pytest.mark.parametrize("name", PREVIOUS)
@@ -154,10 +163,10 @@ def test_package_contains_exact_paths_and_reviewable_idle_installation_commands(
     bundle = package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
     assert manifest["source_revision"] is None
-    assert manifest["predecessors"] == [{"revision": PREVIOUS_PACKAGE, "files": PREVIOUS}]
-    assert {entry["path"] for entry in manifest["files"]} == PREVIOUS.keys()
+    assert manifest["predecessors"] == [{"revision": PREVIOUS_PACKAGE, "files": CURRENT_FILES}]
+    assert {entry["path"] for entry in manifest["files"]} == CURRENT_FILES.keys()
     assert {path.relative_to(bundle).as_posix() for path in (bundle / "laser_aligner").rglob("*")
-            if path.is_file()} == PREVIOUS.keys()
+            if path.is_file()} == CURRENT_FILES.keys()
     for entry in manifest["files"]:
         assert (bundle / entry["path"]).read_bytes() == (ROOT / entry["path"]).read_bytes().replace(b"\r\n", b"\n")
     guide = (bundle / "INSTALL.md").read_text(encoding="utf-8")
@@ -185,6 +194,27 @@ def test_explicit_revision_packages_exact_git_payload(tmp_path):
     assert {entry["path"]: entry["sha256_lf"] for entry in manifest["files"]} == PREVIOUS
 
 
+def test_current_package_needs_no_git_history(tmp_path, monkeypatch):
+    def reject_history(*args, **kwargs):
+        raise AssertionError("Current source packaging must work in a shallow checkout")
+    monkeypatch.setattr(subprocess, "check_output", reject_history)
+    bundle = package(tmp_path / "dist")
+    manifest = json.loads((bundle / "manifest.json").read_bytes())
+    assert len(manifest["files"]) == 19
+
+
+@pytest.mark.parametrize("name", [*MATERIAL_PREDECESSORS, "laser_aligner/machine/service.py"])
+def test_current_capability_dependencies_reject_unknown_edits_before_replacement(kit, name):
+    installer, project, bundle, _ = kit
+    path = project / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"# unrecognized operator source\n")
+    before = snapshot(project)
+    with pytest.raises(ValueError, match="unknown local changes"):
+        installer.install(project, bundle=bundle, apply=True)
+    assert snapshot(project) == before
+
+
 def test_real_installed_workpiece_predecessor_upgrades_and_imports_without_hardware(tmp_path, monkeypatch):
     require_predecessor_git()
     source = subprocess.check_output(["git", "archive", "--format=zip", PREVIOUS_REVISION, "laser_aligner"], cwd=ROOT)
@@ -204,8 +234,8 @@ def test_real_installed_workpiece_predecessor_upgrades_and_imports_without_hardw
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["compatible_predecessors"] == [PREVIOUS_PACKAGE]
     assert not result["service_started"]
-    assert all((project / name).read_bytes() == data for name, data in before.items() if name not in PREVIOUS)
-    modules = [name.removesuffix(".py").replace("/", ".") for name in PREVIOUS]
+    assert all((project / name).read_bytes() == data for name, data in before.items() if name not in CURRENT_FILES)
+    modules = [name.removesuffix(".py").replace("/", ".") for name in CURRENT_FILES]
     subprocess.run([sys.executable, "-c", "import " + ", ".join([*modules, "laser_aligner.remote_node"])],
                    cwd=project, check=True, capture_output=True)
     for name in PREVIOUS:

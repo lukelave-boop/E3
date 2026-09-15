@@ -1,4 +1,13 @@
 # Material height and camera geometry
+
+## Current precision placement workflow
+
+Use [Precision placement](PRECISION_PLACEMENT.md) for the current guided setup,
+non-destructive lower/upper/middle acquisition and measured-surface production
+mapping. The following development notes document earlier firmware/probe studies
+and their verification history; they are not the current daily setup procedure.
+The new 0.10 mm XY target and 20 mm height interval remain physically unqualified.
+
 The [mainboard SD package](../firmware/marlin_mainboard/README.md) is the current
 physical-validation build. It includes both real fan channels, probe and Z
 control, and the previously tested bounded G39 implementation. Follow its

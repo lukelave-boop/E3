@@ -1,5 +1,16 @@
 # Roadmap
 
+## Precision placement qualification
+
+The measured-surface placement path and initial guided setup checklist are
+implemented. Complete independent one-height assessment, then lower/middle/upper
+physical trials through 20 mm above the honeycomb including spacers. Qualify only
+points where radial XY error plus measurement uncertainty is at most 0.10 mm.
+Publish tested area and interval, identify limiting contributions on failure,
+and qualify arbitrary tracing separately. Keep the current camera; a full wizard
+can reuse the UI-neutral workflow after this checklist is operator-tested.
+See [precision workflow](docs/PRECISION_PLACEMENT.md) and CURRENT_STATE.md.
+
 ## STOP Air Assist recovery
 
 Rechecking terminal-job OFF recovery at Start is implemented and focused tests
@@ -19,7 +30,7 @@ Home/park and job-completion testing remains operator qualification.
 An explicit saved height editor in Step 7 is implemented for the paired
 desktop/Pi feature build; automated checks pass and the Pi companion is installed; operator physical
 verification remains pending in CURRENT_STATE.md. Guided four-corner/center surveying, manual leveling guidance
-and measurement/return-button regrouping remain pending. Continuous bed mesh
+and measurement/return-button regrouping are implemented for precision setup. Continuous bed mesh
 compensation is separate scope. Small-negative thickness tolerance was canceled.
 
 
@@ -343,13 +354,11 @@ repeated G30 procedure is withdrawn.
 The supplied terminal history confirms a completed native test with final Z 20;
 verify the 5 mm version and the corrected repeat/pre-check handling next.
 
-Material-height work now has a two-plane camera calibration study with a
-separate intermediate-height check and an operator-positioned probe measurement
-using the existing Creality/Air Assist owner. The first operator border reference
-succeeded. Next: validate the corrected deployment sequence, known thicknesses,
-tall-material behavior and interruption, then integrate
-explicit material/support planes and provenance into tracing and execution.
-See [height model and probe redesign](docs/MATERIAL_HEIGHT.md).
+Material-height work now includes production material/support-plane separation,
+measured-height selection and bound tracing/placement/jobs. Physical acceptance
+of the 0.10 mm XY target through the intended height range remains pending.
+See [precision placement](docs/PRECISION_PLACEMENT.md); the earlier
+[height/probe study](docs/MATERIAL_HEIGHT.md) is retained as history.
 
 Development release publication now includes package retention: current plus
 two recent versions, followed by a seven-day retirement grace for older packages.

@@ -1,11 +1,42 @@
 # Permanent Camera Setup Runbook
 
-Applies to E3 Positioning System `0.7.x`, its five numbered calibration steps,
-and the sixth read-only **Coordinate Audit** tab in **Machine Setup**.
+Applies to E3 Positioning System `0.7.x`, its existing calibration tabs,
+read-only **Coordinate Audit**, **Z / laser focus**, and guided precision setup.
 
-This is the canonical operator sequence. Follow the tabs from left to right.
-Technical background belongs in `docs/MACHINE_SETUP.md`; it must not add an
-unlisted calibration step or interrupt a tab transition described here.
+Use Steps 1–5 to establish the camera and support mapping. The guided checklist
+then links to the leveling survey, measured focus, one-height precision
+assessment, surface-height calibration and independent XY qualification. Existing
+tabs remain available. A diagnostic calibration PASS is not a 0.10 mm XY claim.
+
+## Precision setup and daily placement
+
+The target is **0.10 mm maximum radial XY error including measurement
+uncertainty**, on one flat parallel surface through a qualified interval reaching
+20 mm above the honeycomb including spacers. Physical qualification is pending.
+
+After camera/support mapping, use the checklist to survey a known-thickness rigid
+target at four corners and center and explicitly save the reviewed honeycomb
+datum. Measure a solid patch, return the laser to that measured spot, then teach
+with the existing gauge action. Measure ten stationary captures and ten separate
+Home / park captures against independent holdouts before extending the height
+range. Compare optical and positioning variation and independently measure
+laser-center errors across corners, edges and center.
+
+Surface-height calibration collects lower/upper marks and a separate middle
+check without replacing the working support map. Enter measured top elevation
+relative to the same reference and its uncertainty; follow the existing guarded
+mark/preview/run/capture actions. Numerical acceptance enables model testing.
+Independent physical observations, including repeated Home / park, must satisfy
+`sqrt(X_error² + Y_error²) + uncertainty <= 0.10 mm` throughout the reported area
+and height interval. Keep this limit on failure and identify the dominant error.
+
+Daily: **Measure surface → Capture for placement → optional Align to workpiece →
+Place designs → Preview → Run**. Precision capture retains native detail,
+suspends snapping and keeps template dimensions fixed. Height changes invalidate
+the photograph and review without moving or resizing saved designs. Before a
+first measurement the probe-selection image is explicitly approximate. A new
+compatible Pi companion is required for height-aware jobs. Neither image matching
+nor camera-fit scores establish cut dimensions or physical laser placement.
 
 ## Safety Boundary
 

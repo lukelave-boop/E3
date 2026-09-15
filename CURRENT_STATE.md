@@ -1,5 +1,47 @@
 # Current repository state
 
+## Precision placement and guided setup (2026-09-15, feature verification)
+
+The active feature implements the approved 0.10 mm maximum radial XY placement
+target, including measurement uncertainty, on one flat parallel surface through
+an intended interval reaching 20 mm above the honeycomb including spacers. The
+target and interval are **not physically qualified**. No hardware operation,
+camera calibration acquisition or laser placement test has been performed for
+this feature. Historical fitted-point passes do not satisfy this target.
+
+Implemented: native-detail precision captures; continuous rigid template
+placement and snapping suspension; reviewed alignment against a frozen capture;
+explicit trace-tolerance evidence; an immutable selected measured surface;
+non-destructive schema-2 lower/upper/middle observations; consistent material
+mapping for photographs, probe clicks, detection and template/trace placement;
+separate fixed support bounds; stale asynchronous/capture/job rejection; strict
+E3SURFACE v1 job metadata and Pi capability validation; schema-4 project provenance
+with schema 1–3 geometry migration; a UI-neutral checklist/evidence foundation;
+five-position leveling survey and explicit datum saving; measurement/return/gauge
+grouping; one-height repeatability and independent XY qualification records.
+
+An initial unmeasured probe-selection view is explicitly approximate and supplies
+no placement authority. Precision placement also works at a valid single-plane
+base map before height calibration. Browser placement shares the same mapping,
+frozen capture identity and stale-job validation. Old Pi services reject jobs
+requiring the new surface capability; their ordinary legacy jobs remain supported.
+
+Focused Windows simulator, geometry, migration, fake-controller, remote protocol
+and offscreen widget tests have passed during development. Full compatibility CI,
+the exact frozen build and final counts are recorded below when completed. No
+interactive operator GUI session, real-camera test, physical probe test or laser
+accuracy qualification is implied by these automated tests. The planned handoff
+is the permanent E3 DEV TEST launcher plus a hash-checked compatible Pi companion.
+Current installed Pi/regular E3 behavior remains the historical record below.
+
+Operator qualification: establish one-height sampling and ten still/ten Home-park
+captures first; independently measure laser-center errors and uncertainty across
+corners, edges and center; repeat at lower, middle and upper heights. Every
+`hypot(X error, Y error) + uncertainty` must be <=0.10 mm for the published area
+and interval. Diagnose the limiting contribution on failure and retain the
+threshold. Arbitrary outline tracing and finished cut dimensions are separate.
+See [the implementation and test procedure](docs/PRECISION_PLACEMENT.md).
+
 ## STOP Air Assist recovery reconciliation (2026-09-14, installed and verified)
 
 Operator reports successful cuts using regular E3 0.7.153, then STOP followed

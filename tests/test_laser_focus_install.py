@@ -12,6 +12,9 @@ from pathlib import Path
 import pytest
 
 from scripts.package_laser_focus import PREVIOUS, PREVIOUS_REVISION, ROOT, package
+from scripts.package_source_dependencies import MATERIAL_PREDECESSORS
+
+CURRENT_FILES = {**PREVIOUS, **MATERIAL_PREDECESSORS}
 
 
 def test_packaged_guide_uses_its_own_installer_baseline_and_existing_install_link(tmp_path):
@@ -48,6 +51,7 @@ def kit(tmp_path, monkeypatch):
         if entry["previous_sha256_lf"]:
             original = b"# previous installed source\r\n"
             entry["previous_sha256_lf"] = hashlib.sha256(original.replace(b"\r\n", b"\n")).hexdigest()
+            (project / entry["path"]).parent.mkdir(parents=True, exist_ok=True)
             (project / entry["path"]).write_bytes(original)
     data = json.dumps(manifest).encode()
     (bundle / "manifest.json").write_bytes(data)
@@ -67,7 +71,7 @@ def test_upgrade_preserves_configuration_and_cooling_and_is_idempotent(kit):
     cooler.write_bytes(b"existing temperature control\n")
     result = installer.install(project, bundle=bundle, apply=True)
     assert not result["service_started"]
-    assert len(result["files"]) == len(PREVIOUS)
+    assert len(result["files"]) == len(CURRENT_FILES)
     assert cooler.read_bytes() == b"existing temperature control\n"
     assert all(path.read_bytes() == b"operator settings\n" for path in config.iterdir())
     for entry in result["files"]:
@@ -137,7 +141,7 @@ def test_package_applies_to_exact_main_predecessor_and_imports_without_hardware(
     spec.loader.exec_module(installer)
     monkeypatch.setattr(installer, "inactive", lambda: None)  # Isolated fixture; no real service.
     result = installer.install(project, bundle=bundle, apply=True)
-    assert len(result["files"]) == len(PREVIOUS) and not result["service_started"]
+    assert len(result["files"]) == len(CURRENT_FILES) and not result["service_started"]
     assert all(path.read_bytes() == b"operator data must remain byte-identical\n" for path in configuration.iterdir())
     assert all(entry["status"] == "already_current" for entry in installer.install(project, bundle=bundle)["files"])
     subprocess.run([sys.executable, "-c",

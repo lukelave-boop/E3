@@ -922,6 +922,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.focus_workspace = LaserFocusWorkspace(
                 controller, self, calibration_mode=True,
             )
+            from ..setup_workflow import PrecisionEvidenceStore
+
+            self.focus_workspace.panel.precision_evidence_store = PrecisionEvidenceStore(
+                self.context.surface_calibration.path.parent,
+            )
             self.tabs.addTab(self.focus_workspace, "7 · Z / laser focus")
         else:
             probe_tab = QtWidgets.QWidget()
@@ -959,6 +964,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.setup_guide_button.clicked.connect(
             lambda: show_setup_guide(self, self.tabs.currentIndex())
         )
+        self.precision_setup_button = self.dialog_buttons.addButton(
+            "Precision setup", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.precision_setup_button.clicked.connect(self.open_precision_setup)
         self.close_button = self.dialog_buttons.button(
             QtWidgets.QDialogButtonBox.StandardButton.Close
         )
@@ -2434,12 +2443,44 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def open_surface_height_study(self) -> None:
         from .surface_height import SurfaceHeightDialog
 
-        preview = ImagePicker()
-        dialog = SurfaceHeightDialog(
-            self.context, preview, self._bed_image, self,
-            image_binding=self._surface_capture_binding,
-        )
-        dialog.exec()
+        dialog = getattr(self, "_surface_height_dialog", None)
+        if dialog is None:
+            dialog = SurfaceHeightDialog(
+                self.context, ImagePicker(), self._bed_image, self,
+                image_binding=self._surface_capture_binding,
+            )
+            self._surface_height_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def capture_surface_height_evidence(self) -> None:
+        self.open_surface_height_study()
+        self._surface_height_dialog.capture_evidence()
+
+    def open_precision_setup(self, *, qualification: bool = False) -> None:
+        from .precision_setup import PrecisionSetupDialog
+
+        dialog = getattr(self, "_precision_setup_dialog", None)
+        if dialog is None:
+            dialog = PrecisionSetupDialog(self)
+            self._precision_setup_dialog = dialog
+        dialog.tabs.setCurrentIndex(1 if qualification else 0)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def navigate_setup_step(self, action: str) -> None:
+        tabs = {"camera": 0, "lens": 1, "bed": 2, "focus": 6, "datum": 6}
+        if action in tabs:
+            self.tabs.setCurrentIndex(tabs[action])
+            if action == "datum" and self.focus_workspace is not None:
+                self.focus_workspace.panel.open_bed_survey()
+        elif action == "heights":
+            self.tabs.setCurrentIndex(2)
+            self.open_surface_height_study()
+        elif action in {"precision", "qualification"}:
+            self.open_precision_setup(qualification=action == "qualification")
 
     def _remember_surface_capture_binding(self) -> None:
         try:

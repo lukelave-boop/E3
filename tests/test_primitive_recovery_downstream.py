@@ -135,7 +135,7 @@ def test_recovered_geometry_round_trips_and_retains_guarded_gcode_contract() -> 
     document.add_object(item)
 
     project_payload = document.to_dict()
-    assert project_payload["schema_version"] == 3
+    assert project_payload["schema_version"] == 4
     assert project_payload["objects"][0]["geometry"] == native_payload
     restored = ProjectDocument.from_dict(project_payload)
     restored_geometry = restored.objects[0].path_geometry()

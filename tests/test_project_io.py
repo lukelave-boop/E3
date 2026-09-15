@@ -46,7 +46,7 @@ def test_save_and_load_preserves_honeycomb_local_coordinate_space(tmp_path):
     raw = json.loads(path.read_text(encoding="utf-8"))
     restored = load_project(path)
 
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
     assert raw["coordinate_space"] == "honeycomb_local"
     assert restored.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
     assert restored.work_area == Bounds(0.0, 0.0, 190.0, 190.0)
@@ -64,7 +64,7 @@ def test_load_schema_one_migrates_to_explicit_machine_coordinates(tmp_path):
     migrated_payload = json.loads(migrated.read_text(encoding="utf-8"))
 
     assert restored.coordinate_space is CoordinateSpace.MACHINE
-    assert migrated_payload["schema_version"] == 3
+    assert migrated_payload["schema_version"] == 4
     assert migrated_payload["coordinate_space"] == "machine"
 
 
@@ -109,7 +109,7 @@ def test_load_legacy_path_migrates_in_memory_without_rewriting_source(
     restored = load_project(source)
 
     assert source.read_bytes() == before
-    assert restored.to_dict()["schema_version"] == 3
+    assert restored.to_dict()["schema_version"] == 4
     assert "polylines" not in restored.objects[0].geometry
     assert restored.objects[0].path_geometry().fill_rule is PathFillRule.EVENODD
 
@@ -138,7 +138,7 @@ def test_explicit_save_of_migrated_path_writes_schema_three_and_backs_up_legacy(
     save_project(restored, source)
     saved = json.loads(source.read_text(encoding="utf-8"))
 
-    assert saved["schema_version"] == 3
+    assert saved["schema_version"] == 4
     assert saved["objects"][0]["geometry"]["path_version"] == 1
     assert "polylines" not in saved["objects"][0]["geometry"]
     assert source.with_suffix(".e3laser.bak").read_bytes() == legacy_bytes
@@ -179,7 +179,7 @@ def test_native_cubic_save_reopen_and_autosave_round_trip_exactly(tmp_path):
     assert load_project(project).to_dict() == document.to_dict()
     assert load_project(autosave).to_dict() == document.to_dict()
     raw = json.loads(project.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
     assert raw["objects"][0]["geometry"] == geometry.to_dict()
 
 

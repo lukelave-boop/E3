@@ -65,6 +65,10 @@ from .laser_focus import LaserFocus
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
 from .mainboard import validate_control
+from .material_surface import PREFIX as MATERIAL_SURFACE_PREFIX
+from .material_surface import parse as parse_material_surface
+from .material_surface import program_binding as material_surface_binding
+from .material_surface import snapshot_from_plan, validate_program_binding
 from .probe_pin import ProbePinDiagnosticError, run_pin_diagnostic
 from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
@@ -272,7 +276,9 @@ def _add_exception_note(error: BaseException, note: str) -> None:
 def _program_line_contains_motion(line: str) -> bool:
     """Exclude strict E3-owned auxiliary instructions from G-code parsing."""
 
-    return focus_binding_id(line) is None and not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) and contains_motion(line)
+    return (focus_binding_id(line) is None
+            and not line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX))
+            and contains_motion(line))
 
 
 class _ControllerCommandRejected(MachineError):
@@ -2576,13 +2582,18 @@ class MachineService:
             if self._authorization_epoch != arm_authorization_epoch:
                 raise MachineError("Arming was cancelled by disarm")
             self._clear_arm_authorization()
+        # Full program validation may be expensive. Keep command ownership free
+        # so disarm can issue M5 and cancel this attempt while it is validating.
         self._require_current_safety_profile(program)
-        return self.arm(
-            phrase,
-            program_digest=program.digest,
-            _expected_stop_epoch=arm_stop_epoch,
-            _expected_authorization_epoch=arm_authorization_epoch,
-        )
+        with self._command_lock:
+            if material_surface_binding(program.lines) is not None:
+                validate_program_binding(program.lines, self.material_surface_snapshot())
+            return self.arm(
+                phrase,
+                program_digest=program.digest,
+                _expected_stop_epoch=arm_stop_epoch,
+                _expected_authorization_epoch=arm_authorization_epoch,
+            )
 
     def disarm(self) -> None:
         # Authorization has its own generation so disarm can defeat an arm
@@ -5286,6 +5297,10 @@ class MachineService:
         lines: list[str] = []
         for raw_line_number, raw_line in enumerate(text.splitlines(), start=1):
             instruction = raw_line.strip()
+            if instruction.startswith(MATERIAL_SURFACE_PREFIX):
+                parse_material_surface(instruction)
+                lines.append(instruction)
+                continue
             try:
                 air_assist_kind = self._air_assist_command_kind(
                     instruction,
@@ -5311,6 +5326,7 @@ class MachineService:
             raise SafetyError("G-code program exceeds the 250,000-line safety limit")
 
         job_focus_id = program_binding(lines)
+        material_surface_binding(lines)
         seen_mm = False
         seen_absolute = False
         seen_initial_m5 = False
@@ -5327,7 +5343,7 @@ class MachineService:
         last_line_is_m5 = False
 
         for index, line in enumerate(lines, start=1):
-            if focus_binding_id(line) is not None:
+            if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
                 continue
             words, g_codes, m_codes = self._validate_stream_line(line)
             last_line_is_m5 = m_codes == {5}
@@ -5679,6 +5695,23 @@ class MachineService:
 
     def _require_current_safety_profile(self, program: ValidatedProgram) -> None:
         self._require_validated_program_integrity(program)
+        if material_surface_binding(program.lines) is not None:
+            validate_program_binding(program.lines, self.material_surface_snapshot())
+
+    def material_surface_snapshot(self) -> dict[str, Any] | None:
+        """Return currently validated measured-plane evidence without controller I/O."""
+        with self._lock:
+            plan = self._laser_focus.job_plan
+            if (plan is None or not self._connected or self._job.running
+                    or self._controller_state is not ControllerState.READY_MOTION):
+                return None
+            try:
+                return snapshot_from_plan(
+                    focus_selection_snapshot(self, plan["id"]),
+                    honeycomb_height_mm=self._laser_focus.honeycomb_height_mm,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SafetyError("Selected material surface metadata is invalid; measure the workpiece again") from exc
 
     def _require_validated_program_integrity(self, program: ValidatedProgram) -> None:
         if type(program) is not ValidatedProgram:
@@ -6133,6 +6166,8 @@ class MachineService:
         return True
 
     def _selected_job_focus(self, program):
+        if material_surface_binding(program.lines) is not None:
+            validate_program_binding(program.lines, self.material_surface_snapshot())
         return selected_plan(self, program)
 
     def _move_job_focus(self, context, *, clearance):
@@ -6274,7 +6309,7 @@ class MachineService:
             if context.focus_plan is not None:
                 self._move_job_focus(context, clearance=True)
             for index, line in enumerate(lines, start=1):
-                if focus_binding_id(line) is not None:
+                if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
                     continue
                 focus_words = ({word.letter: word.value for word in parse_words(line)}
                                if context.focus_plan is not None and not focused
@@ -6348,7 +6383,7 @@ class MachineService:
                     final_xy = tuple((context.focus_plan or context.retained_workpiece_plan)["xy"])
                     for line in lines:
                         if (focus_binding_id(line) is not None
-                                or line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX)):
+                                or line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX))):
                             continue
                         words = {word.letter: word.value for word in parse_words(line)}
                         if words.get("G") in (0, 1):
@@ -6695,6 +6730,7 @@ class MachineService:
             workpiece_focus = copy.deepcopy({
                 "job_focus_required": self._laser_focus.job_focus_required,
                 "job_focus": self._laser_focus.job_plan,
+                "honeycomb_height_mm": self._laser_focus.honeycomb_height_mm,
                 "job_focus_block_reason": (self._laser_focus.job_focus_block_reason
                                            if self._laser_focus.job_plan is None else None),
             })
@@ -6810,6 +6846,7 @@ class MachineService:
             "ender_z_telemetry": ender_z_telemetry,
             "z_retention": self._retained_z_status(),
             "workpiece_focus": workpiece_focus,
+            "honeycomb_height_mm": workpiece_focus["honeycomb_height_mm"],
             "z_probe": {
                 "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
                 "unavailable_reason": _PROBE_SUSPENSION_REASON or None,

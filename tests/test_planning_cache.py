@@ -188,7 +188,8 @@ def test_cache_hit_rehydrates_current_artifact_identity(monkeypatch) -> None:
     assert second.metadata.scene_revision.revision == document.revision
 
 
-def test_stage_one_flattened_cache_entry_is_not_reused_for_native_stage_two() -> None:
+@pytest.mark.parametrize("old_stage_version", [1, 2])
+def test_older_flattened_cache_entry_is_not_reused_for_current_stage(old_stage_version) -> None:
     document = ProjectDocument.new("Native cache", Bounds(0, 0, 100, 100))
     document.add_object(
         SceneObject.native_path(
@@ -220,7 +221,7 @@ def test_stage_one_flattened_cache_entry_is_not_reused_for_native_stage_two() ->
     )
     stale_digest = stage_dependency_digest(
         PlanningStage.NORMALIZED_GEOMETRY,
-        1,
+        old_stage_version,
         toolpath_module._normalized_layer_dependency_payload(document, layer),
     )
     cache.put_normalized(stale_digest, stale_paths, (99.0, 99.0, 100.0, 100.0))
@@ -232,8 +233,8 @@ def test_stage_one_flattened_cache_entry_is_not_reused_for_native_stage_two() ->
         planning_cache=cache,
     )
 
-    assert artifact.metadata.stage_version == 2
-    assert artifact.metadata.artifact_id.endswith(":v2")
+    assert artifact.metadata.stage_version == 3
+    assert artifact.metadata.artifact_id.endswith(":v3")
     assert artifact.paths_for_layer(layer.id)[0].source_tag != "stale-stage-one"
     assert cache.stats.normalized_hits == 0
     assert cache.stats.normalized_misses == 1

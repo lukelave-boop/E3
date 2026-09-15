@@ -23,6 +23,29 @@ server_harness = helpers.server_harness
 focus = focus_helpers.focus
 
 
+@pytest.mark.parametrize("invalid", [False, True])
+def test_new_companion_reference_identity_is_validated_before_acceptance(remote_focus, monkeypatch, invalid):
+    from laser_aligner.machine.material_surface import CAPABILITY
+    service, pi, result = remote_focus
+    pi.capabilities.append(CAPABILITY)
+    geometry = {"probe_z_mm": 0., "retract_mm": 5., "min_mm": -2., "max_mm": 65., "ceiling_mm": 80.}
+    reference = {"border_z_mm": 0., "firmware": "test-firmware", "geometry": geometry}
+    result.update(reference_ready=True, reference=reference, reference_id=str(uuid.uuid4()), firmware_geometry=geometry)
+    if invalid:
+        result["reference_id"] = "not-a-reference-identity"
+        def forbidden(_raw):
+            pytest.fail("Malformed reference must not be accepted into focus state")
+        monkeypatch.setattr(service, "_cache_workpiece_focus", forbidden)
+        with pytest.raises(MachineError, match="reference identity"):
+            service.focus_control("status")
+        assert service._selected_job_focus is None
+        assert not service._workpiece_focus_observed
+    else:
+        accepted = service.focus_control("status")
+        assert accepted["reference_id"] == result["reference_id"]
+        assert accepted["reference"] == reference
+
+
 def test_selected_job_focus_is_bound_into_remote_program_bytes(remote_focus):
     service, pi, result = remote_focus
     from laser_aligner.machine.job_focus import CAPABILITY

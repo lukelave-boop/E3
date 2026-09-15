@@ -109,7 +109,7 @@ _NATIVE_PATH_TOPOLOGY_ALGORITHM_VERSION = 2
 _NATIVE_PATH_TOPOLOGY_MAX_TESTS = _MAX_SCANLINE_EDGE_TESTS
 _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_FLOOR_MM = 1e-9
 _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_RELATIVE = 1e-12
-_NORMALIZED_GEOMETRY_STAGE_VERSION = 2
+_NORMALIZED_GEOMETRY_STAGE_VERSION = 3
 
 
 class ToolpathGenerationCancelled(RuntimeError):
@@ -178,6 +178,7 @@ class ProjectJob:
     coordinate_frame_signature: tuple[str, int, str] | None = None
     execution_signature: tuple[Any, ...] | None = None
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
+    placement_capture_signature: tuple[Any, ...] | None = None
 
 
 # An 8x8 Bayer matrix preserves deterministic grayscale detail without requiring
@@ -501,6 +502,17 @@ def _flatten_object_native_path(
     ]
 
 
+def _bounded_arc_segments(radius_mm: float, sweep_radians: float, minimum: int) -> int:
+    """Keep the curve-to-chord envelope in physical millimetres at every size."""
+    if radius_mm <= NATIVE_PATH_FLATTEN_TOLERANCE_MM:
+        return minimum
+    step = 4.0 * math.asin(math.sqrt(NATIVE_PATH_FLATTEN_TOLERANCE_MM / (2.0 * radius_mm)))
+    required = math.ceil(sweep_radians / step)
+    if required + 1 > _NATIVE_PATH_FLATTEN_MAX_POINTS:
+        raise ValueError("Shape exceeds the bounded point limit at the 0.025 mm curve tolerance")
+    return max(minimum, required)
+
+
 def _rounded_rectangle_points(
     radius_fraction_x: float,
     radius_fraction_y: float,
@@ -544,13 +556,20 @@ def object_polylines(item: SceneObject) -> list[Polyline]:
         return []
     if item.kind == ObjectKind.RECTANGLE:
         radius_mm = float(item.geometry.get("corner_radius_mm", 0.0))
+        actual_radius = max(min(radius_mm, item.transform.width_mm / 2),
+                            min(radius_mm, item.transform.height_mm / 2))
         points = _rounded_rectangle_points(
             radius_mm / item.transform.width_mm,
             radius_mm / item.transform.height_mm,
+            segments_per_corner=_bounded_arc_segments(actual_radius, math.pi / 2, 8),
         )
         return [Polyline(_transform_points(points, item), closed=True, source_tag=item.name)]
     if item.kind == ObjectKind.ELLIPSE:
-        angles = np.linspace(0.0, 2.0 * math.pi, 73)
+        segments = _bounded_arc_segments(max(item.transform.width_mm, item.transform.height_mm) / 2,
+                                        2.0 * math.pi, 72)
+        # Include all four extrema so requested dimensions remain exact.
+        segments = 4 * math.ceil(segments / 4)
+        angles = np.linspace(0.0, 2.0 * math.pi, segments + 1)
         points = np.column_stack([0.5 * np.cos(angles), 0.5 * np.sin(angles)])
         return [Polyline(_transform_points(points, item), closed=True, source_tag=item.name)]
     if item.kind == ObjectKind.LINE:

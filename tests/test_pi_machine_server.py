@@ -1575,6 +1575,7 @@ def test_trace_capture_prepares_before_remote_hold_without_lease_timeout(
 
     context = SimpleNamespace(
         _require_valid_bed_calibration=lambda: events.append("calibration:valid"),
+        material_surface_signature=lambda: None,
         machine=remote,
         settings=SimpleNamespace(
             machine=remote_settings,

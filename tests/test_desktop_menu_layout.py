@@ -46,6 +46,7 @@ class _MenuHarness(QtWidgets.QMainWindow):
         )
         self.controller = SimpleNamespace(
             retry_camera_image=no_op,
+            capture_for_placement=no_op,
             emergency_stop=no_op,
         )
         for callback_name in (
@@ -80,6 +81,7 @@ class _MenuHarness(QtWidgets.QMainWindow):
             "_toggle_maximized",
             "_reset_window_size",
             "_reset_workspace_layout",
+            "_precision_placement_changed",
             "show_about",
         ):
             setattr(self, callback_name, no_op)

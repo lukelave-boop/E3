@@ -167,7 +167,7 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
     spot_offset_x = spot_offset_y = 0.0
     segments: list[GcodeSegment] = []
     for raw_line in text.splitlines():
-        if raw_line.strip().startswith((AIR_ASSIST_DIRECTIVE_PREFIX, "E3FOCUS")):
+        if raw_line.strip().startswith((AIR_ASSIST_DIRECTIVE_PREFIX, "E3FOCUS", "E3SURFACE")):
             continue
         metadata = parse_e3_metadata_comment(raw_line)
         if metadata is not None and metadata[0] == "job" and not segments:

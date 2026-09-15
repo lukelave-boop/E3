@@ -175,7 +175,7 @@ def test_snapshot_rejects_corrected_or_inconsistent_base_map(tmp_path, rig, chan
     assert not (tmp_path / "surface_height_calibration.json").exists()
 
 
-@pytest.mark.parametrize("raw", [{}, {"schema_version": True, "evidence": {}}, {"schema_version": 2, "evidence": {}}, {"schema_version": 1, "evidence": {"bad": {}}}])
+@pytest.mark.parametrize("raw", [{}, {"schema_version": True, "evidence": {}}, {"schema_version": 3, "evidence": {}}, {"schema_version": 1, "evidence": {"bad": {}}}])
 def test_rejects_invalid_and_future_schema_without_overwriting(tmp_path, rig, raw):
     store = SurfaceCalibrationStore(tmp_path)
     store.path.write_text(json.dumps(raw))

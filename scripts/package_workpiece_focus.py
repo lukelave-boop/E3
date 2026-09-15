@@ -9,10 +9,12 @@ if __package__:
     from .package_laser_focus import PREVIOUS as INSTALLED_FOCUS
     from .package_laser_focus import PREVIOUS_REVISION as INSTALLED_FOCUS_REVISION
     from .package_laser_focus import packaged_focus_guide
+    from .package_source_dependencies import material_dependencies
 else:
     from package_laser_focus import PREVIOUS as INSTALLED_FOCUS
     from package_laser_focus import PREVIOUS_REVISION as INSTALLED_FOCUS_REVISION
     from package_laser_focus import packaged_focus_guide
+    from package_source_dependencies import material_dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
 SAVED_Z_REVISION = "c638b3683faf83b10bb8483dd53fa8a4726b25c8"
@@ -103,8 +105,9 @@ def package(destination: Path) -> Path:
     if any(previous.keys() != SAVED_Z.keys() for previous in PREDECESSORS.values()):
         raise ValueError("Each predecessor must describe the complete companion payload")
     sources = {name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in SAVED_Z}
+    dependencies = material_dependencies(sources, lambda name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n"))
     manifest = json.dumps({
-        "predecessors": [{"revision": revision, "files": previous}
+        "predecessors": [{"revision": revision, "files": {**previous, **dependencies}}
                          for revision, previous in PREDECESSORS.items()],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],

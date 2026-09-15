@@ -449,10 +449,14 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image: np.ndarray | None = None
         self._trace_sample_area: WorkArea | None = None
         self._trace_sample_signature: tuple[object, ...] | None = None
+        self._trace_sample_pixels_per_mm: float | None = None
         self._template_match_request_id = 0
         self._template_match_cancel_event = threading.Event()
         self._template_review_active = False
         self._template_review_signature: tuple[object, ...] | None = None
+        self._placement_review_active = False
+        self._placement_capture_epoch = 0
+        self._placement_capture: dict[str, Any] | None = None
         self._live_camera_enabled = False
         self._live_camera_interval_ms = _DEFAULT_LIVE_CAMERA_INTERVAL_MS
         self._reported_terminal_job: tuple[object, object] | None = None
@@ -461,6 +465,7 @@ class DesktopController(QtCore.QObject):
         self._last_controller_session_generation: int | None = None
         self._last_controller_state_revision: int | None = None
         self._workspace_coordinate_space = "machine"
+        self._precision_placement_enabled = True
         self._shutdown_started = False
         self._shutdown_finalized = False
         self._shutdown_deadline_monotonic: float | None = None
@@ -487,6 +492,7 @@ class DesktopController(QtCore.QObject):
         if value == self._workspace_coordinate_space:
             return
         self._workspace_coordinate_space = value
+        self.release_placement_capture()
         self._camera_source_generation += 1
         self._invalidate_camera_image()
         self._trace_request_id += 1
@@ -1128,6 +1134,14 @@ class DesktopController(QtCore.QObject):
                 else tuple(coordinate_frame.provenance_signature)
             ),
         )
+        surface_provider = getattr(self.runtime.context, "material_preview_signature", None)
+        if callable(surface_provider):
+            try:
+                expected_revision = (*expected_revision, surface_provider())
+            except Exception as exc:
+                self._invalidate_camera_image()
+                self.cameraOverlayErrorOccurred.emit(str(exc))
+                return
         camera_area = (
             WorkArea(
                 0.0,
@@ -1145,6 +1159,8 @@ class DesktopController(QtCore.QObject):
 
         def corrected_image() -> QtGui.QImage:
             options: dict[str, Any] = {}
+            if callable(getattr(self.runtime.context, "material_preview_signature", None)):
+                options["approximate_support_preview"] = True
             if camera_area is not None:
                 options["work_area"] = camera_area
             if coordinate_frame is not None:
@@ -1201,6 +1217,7 @@ class DesktopController(QtCore.QObject):
 
     def retry_camera_image(self) -> None:
         """Refresh a healthy camera or release/reopen a failed camera device."""
+        self.release_placement_capture()
         self._camera_error_latched = None
         self._camera_mapping_latched = None
         self._camera_overlay_error_latched = None
@@ -1283,6 +1300,7 @@ class DesktopController(QtCore.QObject):
 
     def calibration_changed(self) -> None:
         """Invalidate an old corrected-frame result and request one replacement."""
+        self.release_placement_capture()
         self._camera_source_generation += 1
         self._camera_error_latched = None
         self._camera_mapping_latched = None
@@ -1389,11 +1407,21 @@ class DesktopController(QtCore.QObject):
         current_signature = (
             None if frame is None else tuple(frame.provenance_signature)
         )
-        return current_signature == expected_revision[2]
+        if current_signature != expected_revision[2]:
+            return False
+        if len(expected_revision) > 3:
+            provider = getattr(self.runtime.context, "material_preview_signature", None)
+            try:
+                return callable(provider) and provider() == expected_revision[3]
+            except Exception:
+                return False
+        return True
 
     def _current_review_signature(
         self,
         coordinate_frame: Any | None = None,
+        *,
+        preview_only: bool = False,
     ) -> tuple[object, ...]:
         context = self.runtime.context
         if coordinate_frame is None and self._workspace_coordinate_space == "honeycomb_local":
@@ -1421,17 +1449,49 @@ class DesktopController(QtCore.QObject):
             if coordinate_frame is None
             else tuple(coordinate_frame.provenance_signature)
         )
-        return (
+        signature = (
             self._workspace_coordinate_space,
             frame_signature,
             mapping_digest,
         )
+        surface_provider = getattr(context, "material_preview_signature" if preview_only else "material_surface_signature", None)
+        surface_signature = surface_provider() if callable(surface_provider) else None
+        return signature if surface_signature is None else (*signature, surface_signature)
+
+    def set_precision_placement_enabled(self, enabled: bool) -> None:
+        self._precision_placement_enabled = bool(enabled)
+
+    def _precision_capture_options(self, area: WorkArea) -> dict[str, float]:
+        context = self.runtime.context
+        provider = getattr(context, "precision_pixels_per_mm", None)
+        if not getattr(self, "_precision_placement_enabled", True) or not callable(provider):
+            return {}
+        ppm = float(provider())
+        if not math.isfinite(ppm) or ppm <= 0:
+            raise ValueError("Precision placement requires a finite source resolution")
+        # Trace may include the full support span outside the calibrated rectangle.
+        # Do not silently discard native detail to fit an expanded analysis area.
+        if round(area.width * ppm) * round(area.height * ppm) > 16_000_000:
+            raise ValueError("Native-detail placement capture exceeds the 16-million-pixel analysis limit")
+        return {"pixels_per_mm": ppm}
+
+    def _material_surface_metadata(self) -> dict[str, Any] | None:
+        provider = getattr(self.runtime.context, "material_surface_metadata", None)
+        return copy.deepcopy(provider()) if callable(provider) else None
 
     def review_signature_is_current(self, signature: object) -> bool:
         if not isinstance(signature, (tuple, list)):
             return False
         try:
             return tuple(signature) == self._current_review_signature()
+        except Exception:
+            return False
+
+    def focus_review_signature_is_current(self, signature: object) -> bool:
+        if not isinstance(signature, (tuple, list)):
+            return False
+        try:
+            return tuple(signature) == self._current_review_signature(preview_only=True)
         except Exception:
             return False
 
@@ -1471,7 +1531,7 @@ class DesktopController(QtCore.QObject):
                     or area_values["x_min"] >= area_values["x_max"]
                     or area_values["y_min"] >= area_values["y_max"]):
                 return None
-            signature = self._current_review_signature()
+            signature = self._current_review_signature(preview_only=True)
             if signature[2] != mapping:
                 return None
             return ({
@@ -1482,6 +1542,10 @@ class DesktopController(QtCore.QObject):
                 "source_generation": self._camera_source_generation,
                 "lens_model_id": lens_id, "pixels_per_mm": float(ppm),
                 "camera_image_area": area_values,
+                "approximate_support_preview": bool(
+                    callable(getattr(context, "material_preview_is_approximate", None))
+                    and context.material_preview_is_approximate()
+                ),
             }, float(age))
         except (AttributeError, KeyError, TypeError, ValueError, RuntimeError, LaserAlignerError):
             return None
@@ -1650,7 +1714,23 @@ class DesktopController(QtCore.QObject):
             self._camera_live_timer.stop()
 
     def _camera_review_active(self) -> bool:
-        return self._template_review_active or self._trace_review_active
+        return self._template_review_active or self._trace_review_active or getattr(self, "_placement_review_active", False)
+
+    def release_placement_capture(self) -> None:
+        self._placement_review_active = False
+        self._placement_capture = None
+        self._placement_capture_epoch += 1
+        self._sync_camera_timer()
+
+    def placement_capture_signature(self) -> tuple | None:
+        provider = getattr(self.runtime.context, "material_surface_signature", None)
+        surface = provider() if callable(provider) else None
+        if surface is None:
+            return None
+        capture = self._placement_capture
+        if capture is None or not self.review_signature_is_current(capture["review_signature"]):
+            raise ValueError("Use Capture for placement and review artwork on the measured surface before generating")
+        return self._placement_capture_epoch, capture["review_signature"]
 
     def _resume_live_camera_after_review(self, was_held: bool) -> None:
         self._sync_camera_timer()
@@ -1713,6 +1793,73 @@ class DesktopController(QtCore.QObject):
             on_success=lambda path: self.notice.emit(f"Saved {path.name}"),
             label="Camera capture",
         )
+
+    def capture_for_placement(self) -> None:
+        """Capture once at the guarded photography pose, then freeze review pixels."""
+        self._placement_capture_epoch += 1
+        self._placement_capture = None
+        epoch = self._placement_capture_epoch
+        source_generation = self._camera_source_generation
+        self.cancel_trace_detection()
+        self.cancel_template_match()
+        self._placement_review_active = True
+        self._sync_camera_timer()
+
+        def operation() -> dict[str, Any]:
+            if epoch != self._placement_capture_epoch or source_generation != self._camera_source_generation:
+                raise ValueError("Placement capture was cancelled before positioning")
+            context = self.runtime.context
+            frame = (context.current_honeycomb_coordinate_frame()
+                     if self._workspace_coordinate_space == "honeycomb_local" else None)
+            if self._workspace_coordinate_space == "honeycomb_local" and frame is None:
+                raise ValueError("Capture requires a current honeycomb coordinate frame")
+            area = (WorkArea(0, frame.width_mm, 0, frame.height_mm) if frame is not None
+                    else context.trace_camera_work_area())
+            signature = self._current_review_signature(frame)
+            precision = self._precision_capture_options(area)
+            options: dict[str, Any] = dict(work_area=area, **precision)
+            if frame is not None:
+                options["coordinate_frame"] = frame
+            source = context.capture_parked_trace_frame(**options)
+            if not self.review_signature_is_current(signature):
+                raise ValueError("Material surface or camera mapping changed during capture; capture again")
+            return {
+                "image": image_to_qimage(source),
+                "_source_image": source,
+                "_source_area": area,
+                "pixels_per_mm": precision.get("pixels_per_mm", self.runtime.settings.calibration.bed.pixels_per_mm),
+                "camera_image_area": {key: float(getattr(area, key)) for key in ("x_min", "x_max", "y_min", "y_max")},
+                "material_surface": self._material_surface_metadata(),
+                "review_signature": signature,
+            }
+
+        def success(payload: dict[str, Any]) -> None:
+            if (epoch != self._placement_capture_epoch or source_generation != self._camera_source_generation
+                    or self._shutdown_started):
+                return
+            if not self.review_signature_is_current(payload["review_signature"]):
+                failure("Material surface changed; capture again")
+                return
+            source = np.ascontiguousarray(payload.pop("_source_image")).copy()
+            source.setflags(write=False)
+            self._placement_capture = {
+                "image": source, "area": payload.pop("_source_area"),
+                "pixels_per_mm": payload["pixels_per_mm"],
+                "review_signature": payload["review_signature"],
+            }
+            self._camera_image_published = True
+            self.cameraImageReady.emit(payload)
+            self.notice.emit("Placement photograph captured and held. Refresh camera to return to live viewing.")
+
+        def failure(message: str) -> None:
+            if epoch != self._placement_capture_epoch:
+                return
+            self.release_placement_capture()
+            self._invalidate_camera_image()
+            self.errorOccurred.emit(f"Capture for placement failed: {message}")
+
+        self._run(operation, on_success=success, on_failure=failure,
+                  label="Capture for placement (Home and park)", requires_controller=True)
 
     @staticmethod
     def _sharpness_score(image: np.ndarray) -> float:
@@ -2021,6 +2168,11 @@ class DesktopController(QtCore.QObject):
                         ),
                     )
             capture_options: dict[str, Any] = {"work_area": camera_area}
+            precision_options = self._precision_capture_options(camera_area)
+            capture_options.update(precision_options)
+            pixels_per_mm = precision_options.get(
+                "pixels_per_mm", self.runtime.settings.calibration.bed.pixels_per_mm,
+            )
             if coordinate_frame is not None:
                 capture_options["coordinate_frame"] = coordinate_frame
             capture_timing: dict[str, float] = {}
@@ -2036,8 +2188,10 @@ class DesktopController(QtCore.QObject):
                 background_image = background_provider(
                     work_area=camera_area,
                     coordinate_frame=coordinate_frame,
+                    **precision_options,
                 )
             options = TraceOptions.from_mapping(raw_options)
+            options.precision_placement = bool(precision_options)
             guarded_output = _guarded_output_work_area(self.runtime)
             guarded_polygon = _configured_guarded_output_polygon(self.runtime)
 
@@ -2059,6 +2213,7 @@ class DesktopController(QtCore.QObject):
                             "y_max": float(camera_area.y_max),
                         },
                         "review_signature": review_signature,
+                        "pixels_per_mm": pixels_per_mm,
                     },
                 )
 
@@ -2067,7 +2222,7 @@ class DesktopController(QtCore.QObject):
                 image,
                 options,
                 camera_area,
-                self.runtime.settings.calibration.bed.pixels_per_mm,
+                pixels_per_mm,
                 output_work_area=(
                     guarded_output
                     if coordinate_frame is None
@@ -2142,9 +2297,12 @@ class DesktopController(QtCore.QObject):
             }
             payload["request_id"] = request_id
             payload["camera_image"] = image_to_qimage(image)
+            payload["pixels_per_mm"] = pixels_per_mm
+            payload["material_surface"] = self._material_surface_metadata()
             payload["_trace_sample_image"] = image
             payload["_trace_sample_area"] = camera_area
             payload["_trace_sample_signature"] = review_signature
+            payload["_trace_sample_pixels_per_mm"] = pixels_per_mm
             payload["review_signature"] = review_signature
             timing["request_total_seconds"] = (
                 time.perf_counter() - request_started
@@ -2178,6 +2336,7 @@ class DesktopController(QtCore.QObject):
         sample_image = payload.pop("_trace_sample_image", None)
         sample_area = payload.pop("_trace_sample_area", None)
         sample_signature = payload.pop("_trace_sample_signature", None)
+        sample_ppm = payload.pop("_trace_sample_pixels_per_mm", None)
         if (
             sample_signature is None
             and sample_image is None
@@ -2216,6 +2375,7 @@ class DesktopController(QtCore.QObject):
             sample_area if isinstance(sample_area, WorkArea) else None
         )
         self._trace_sample_signature = tuple(sample_signature)
+        self._trace_sample_pixels_per_mm = sample_ppm
         self.traceResultReady.emit(payload)
 
     @QtCore.Slot(int, str, bool)
@@ -2475,10 +2635,22 @@ class DesktopController(QtCore.QObject):
             "refresh": True,
             "precision": True,
         }
+        precision_options = self._precision_capture_options(camera_area)
+        frame_options.update(precision_options)
+        pixels_per_mm = precision_options.get("pixels_per_mm", pixels_per_mm)
         if coordinate_frame is not None:
             frame_options["work_area"] = camera_area
             frame_options["coordinate_frame"] = coordinate_frame
-        image = context.rectified_frame(**frame_options)
+        surface_provider = getattr(context, "material_surface_signature", None)
+        if callable(surface_provider) and surface_provider() is not None:
+            capture = self._placement_capture
+            if capture is None or capture["review_signature"] != review_signature:
+                raise ValueError("Capture for placement before aligning the template to this measured surface")
+            image, camera_area = capture["image"], capture["area"]
+            pixels_per_mm = capture["pixels_per_mm"]
+            precision_options = {"pixels_per_mm": pixels_per_mm} if self._precision_placement_enabled else {}
+        else:
+            image = context.rectified_frame(**frame_options)
         if image is None or image.size == 0:
             raise ValueError("The corrected camera frame is empty")
         background_image = None
@@ -2491,6 +2663,7 @@ class DesktopController(QtCore.QObject):
             background_image = background_provider(
                 work_area=camera_area,
                 coordinate_frame=coordinate_frame,
+                **precision_options,
             )
 
         option_groups: dict[
@@ -2499,6 +2672,7 @@ class DesktopController(QtCore.QObject):
         ] = {}
         for template in templates:
             options = TraceOptions.from_mapping(template.trace_options)
+            options.precision_placement = bool(precision_options)
             key = json.dumps(
                 options.to_dict(),
                 sort_keys=True,
@@ -2683,6 +2857,8 @@ class DesktopController(QtCore.QObject):
                 "y_max": float(camera_area.y_max),
             },
             "review_signature": review_signature,
+            "pixels_per_mm": pixels_per_mm,
+            "material_surface": self._material_surface_metadata(),
             "detections": [
                 detection.to_dict()
                 for detection in winning_trace.detections
@@ -2803,6 +2979,7 @@ class DesktopController(QtCore.QObject):
         )
         cached_area = self._trace_sample_area
         cached_signature = self._trace_sample_signature
+        cached_ppm = getattr(self, "_trace_sample_pixels_per_mm", None)
 
         def operation() -> dict[str, Any]:
             context = self.runtime.context
@@ -2867,9 +3044,8 @@ class DesktopController(QtCore.QObject):
                 if fresh_area is not None
                 else self.runtime.settings.machine.work_area
             )
-            ppm = float(
-                self.runtime.settings.calibration.bed.pixels_per_mm
-            )
+            ppm = float(cached_ppm if cached_image is not None and cached_ppm is not None
+                        else self.runtime.settings.calibration.bed.pixels_per_mm)
             pixel_x = (float(x_mm) - area.x_min) * ppm
             pixel_y = (area.y_max - float(y_mm)) * ppm
             payload = sample_color(image, pixel_x, pixel_y, radius_px=6)
@@ -2938,6 +3114,7 @@ class DesktopController(QtCore.QObject):
         arm_phrase: str | None = None,
         honeycomb_signature: tuple[Any, ...] | None = None,
         guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
+        placement_capture_signature: tuple | None = None,
     ) -> None:
         def operation() -> dict[str, Any]:
             machine = self.runtime.context.machine
@@ -2945,6 +3122,12 @@ class DesktopController(QtCore.QObject):
                 # Reject malformed, stale calibration, or out-of-envelope
                 # programs before the already-homed controller starts motion.
                 self.runtime.context.validate_powered_calibration_support(gcode, name)
+                validate_surface = getattr(self.runtime.context, "validate_material_surface_program", None)
+                if callable(validate_surface):
+                    validate_surface(gcode)
+                if (placement_capture_signature is not None
+                        and placement_capture_signature != self.placement_capture_signature()):
+                    raise ValueError("Placement photograph changed after preview; review and generate the job again")
                 program = (
                     machine.preflight_program(gcode)
                     if guarded_output_polygon_mm is None

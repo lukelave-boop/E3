@@ -1,5 +1,17 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Precision placement and guided setup
+
+The precision workflow targets **0.10 mm maximum radial XY error including
+measurement uncertainty**, on a flat parallel surface up to 20 mm above the
+honeycomb including spacers. Physical qualification is pending. Use
+**Measure surface → Capture for placement → optional Align to workpiece →
+place designs → Preview → Run**. Native-detail analysis, continuous template
+placement, measured-height mapping, stale-job rejection and a guided setup
+checklist are described in [Precision placement](docs/PRECISION_PLACEMENT.md).
+Height-aware jobs require the matching Pi companion. New saves use project
+schema 4; existing schema 1–3 geometry is preserved on load.
+
 The Pi Start path now recognizes acknowledged Air Assist OFF after controller
 recovery from STOP, clearing the matching terminal job's stale recovery block.
 See [deployment status](CURRENT_STATE.md) and [Pi recovery](docs/NETWORK_MACHINE.md).
@@ -352,10 +364,11 @@ does not report material thickness; physical verification is pending.
 The test accepts either reset position or already-homed Z 20 clearance, and a
 rejected pre-check no longer shuts down otherwise healthy connections.
 
-An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
-can preserve two measured-height base maps, check a third height independently,
-and preview a height-specific camera correction. It does not yet apply height
-compensation to tracing/jobs. Machine Setup's seventh tab is now **7 · Z / laser
+The [production height workflow](docs/PRECISION_PLACEMENT.md) acquires lower,
+upper and independent middle-height observations without replacing the support
+map. Its selected measured plane applies consistently to photographs, tracing,
+template placement and bound jobs. Physical qualification remains pending.
+Machine Setup's seventh tab is **7 · Z / laser
 focus**, with the current surface-height V2 workflow, probe XY offset calibration
 and 7 mm gauge teaching. It replaces the earlier Material height page;
 [the focus guide](docs/LASER_FOCUS.md) and [current state](CURRENT_STATE.md) record
@@ -498,14 +511,14 @@ Native desktop workflow:
   overlapping frame work
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
-- Schema-3 native PATH/POLYGON geometry with versioned line and cubic Bézier
+- Schema-4 projects retain native PATH/POLYGON geometry with versioned line and cubic Bézier
   segments, multiple open or closed subpaths, and explicit even-odd or nonzero
   fill rules. Curves remain native through project editing, transforms,
   duplication, grouping, save/reopen, autosave, recovery, and workspace
   rendering; planning flattens them deterministically in physical millimetres
-  at one controlled boundary. Saving as schema 3 is forward-incompatible with
-  older E3 builds that understand only schema 2; those builds reject the newer
-  file instead of silently discarding native geometry
+  at one controlled boundary. Schema 4 adds validated optional material-surface
+  provenance. Older E3 builds reject newer project files; schema 1–3 projects
+  migrate without changing geometry
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
   imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
   output-disabled speed/power layers, vector outline text, and automatically

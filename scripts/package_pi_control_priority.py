@@ -9,8 +9,12 @@ from pathlib import Path
 
 if __package__:
     from .install_workpiece_focus import canonical
+    from .package_source_dependencies import material_dependencies, requires_material_surface
+    from .package_z_setup_speed import PREVIOUS as COMPLETE_PREVIOUS
 else:
     from install_workpiece_focus import canonical
+    from package_source_dependencies import material_dependencies, requires_material_surface
+    from package_z_setup_speed import PREVIOUS as COMPLETE_PREVIOUS
 
 ROOT = Path(__file__).resolve().parents[1]
 PREVIOUS_REVISION = "671b235f272b8a0e910ff5039006c0d431bb9cd8"
@@ -35,10 +39,13 @@ def installation_guide(folder: Path) -> str:
         "priority remains reserved until its explicit Disconnect or a Pi service restart; "
         "closing that desktop or losing Wi-Fi does not release priority. Use Disconnect "
         "while idle before changing between E3 and E3 DEV TEST.\n\n"
-        f"This source-only companion accepts the three exact installed {PREVIOUS_PACKAGE} "
+        f"This source-only companion accepts the exact installed {PREVIOUS_PACKAGE} "
         "module versions (application 671b235), or this companion's already-current files. "
         "It rejects unknown edits and preserves firmware, configuration, calibration, "
         "cooling and saved-Z files. Replaced sources receive byte-for-byte backups.\n\n"
+        "The manifest lists the complete payload. Current material-aware sources include the "
+        "guarded service and its dependencies; an explicitly selected historical revision "
+        "retains its original three-module payload.\n\n"
         "Copy this exact folder from Windows PowerShell:\n\n"
         "```powershell\n"
         f"scp -r '{windows_source}' greenhouse-climate@192.168.5.18:/home/greenhouse-climate/\n"
@@ -80,15 +87,21 @@ def package(destination: Path, *, revision: str | None = None) -> Path:
             ["git", "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"],
             cwd=ROOT, text=True,
         ).strip()
-    sources = {
-        name: canonical(((ROOT / name).read_bytes() if revision is None else subprocess.check_output(
+    def source(name: str) -> bytes:
+        return canonical(((ROOT / name).read_bytes() if revision is None else subprocess.check_output(
             ["git", "show", f"{revision}:{name}"], cwd=ROOT,
         )).replace(b"\r\n", b"\n"))
-        for name in PREVIOUS
-    }
+    sources = {name: source(name) for name in PREVIOUS}
+    previous_files = dict(PREVIOUS)
+    if requires_material_surface(sources):
+        # Current server capability claims need the corresponding guarded
+        # service implementation, not just enough files for imports to succeed.
+        previous_files = dict(COMPLETE_PREVIOUS)
+        sources.update({name: source(name) for name in previous_files})
+    previous_files.update(material_dependencies(sources, source))
     manifest = json.dumps({
         "source_revision": revision,
-        "predecessors": [{"revision": PREVIOUS_PACKAGE, "files": PREVIOUS}],
+        "predecessors": [{"revision": PREVIOUS_PACKAGE, "files": previous_files}],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()}
                   for name, content in sources.items()],
     }, indent=2).encode()
@@ -111,7 +124,7 @@ def package(destination: Path, *, revision: str | None = None) -> Path:
     (folder / "README.md").write_text(
         "# First-client connection priority Pi companion\n\n"
         "The first connected E3 instance keeps controller priority when another instance opens. "
-        "Only the three hashed server, protocol and remote-client modules are in this payload. "
+        f"This payload contains {len(sources)} hashed application modules, including required runtime dependencies. "
         "The installer defaults to a read-only preview, rejects unknown predecessor bytes, "
         "backs up replacements and requires the Pi service to be inactive before applying. "
         "Firmware and operator data are unchanged.\n\n"
@@ -125,7 +138,7 @@ def package(destination: Path, *, revision: str | None = None) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, default=ROOT / "dist")
-    parser.add_argument("--revision", help="Git commit/ref supplying the three exact application modules")
+    parser.add_argument("--revision", help="Git commit/ref supplying exact application modules and required dependencies")
     args = parser.parse_args()
     print(package(args.destination, revision=args.revision))
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased - precision placement and guided setup
+
+- Add native-detail precision capture, continuous rigid template placement,
+  snapping suspension and reviewed alignment against the frozen photograph.
+- Keep requested precision trace fitting tolerance and report source limitations.
+- Apply a validated two-height camera model to the measured top surface, including
+  spacers, without changing support bounds or project dimensions. Reject stale
+  captures, model bindings and height-aware jobs; require compatible Pi validation.
+- Add a reusable setup checklist, leveling survey, explicit datum saving,
+  grouped measurement/return/gauge actions and independent precision evidence.
+- Version raw surface evidence, project provenance (schema 4) and application
+  job bindings. Preserve old project geometry and diagnostic height studies.
+- Keep the 0.10 mm radial XY target fixed; physical qualification is pending.
+
 ## Unreleased - Air Assist recovery after STOP
 
 - Recheck pending terminal-job OFF bindings when Start is requested after

@@ -111,6 +111,10 @@ class _SpyContext:
     def synthetic_scene(self, scene: str) -> None:
         self.mutations.append(("synthetic_scene", scene))
 
+    def validate_material_surface_program(self, gcode: str) -> None:
+        # This harness models the legacy, unselected surface context.
+        assert isinstance(gcode, str)
+
 
 @pytest.fixture
 def http_app(tmp_path: Path):
@@ -630,6 +634,23 @@ def test_arm_preflights_then_binds_authorization_to_that_program(http_app) -> No
         ("preflight_program", gcode),
         ("arm_program", ("ARM LASER", "validated-program")),
     ]
+
+
+@pytest.mark.parametrize("path", ["/api/machine/arm", "/api/machine/run"])
+def test_browser_rejects_stale_surface_before_arm_or_start(http_app, monkeypatch, path):
+    from laser_aligner.errors import CalibrationError
+    server, context = http_app
+    def stale(_gcode):
+        raise CalibrationError("Surface changed after preview")
+    monkeypatch.setattr(context, "validate_material_surface_program", stale)
+    status, _, payload = _request(
+        server, "POST", path,
+        body=json.dumps({"phrase": "ARM LASER", "gcode": "G21\nG90\nM5", "name": "test"}),
+        headers=_authorized_headers(server, _token_from_index(server)),
+    )
+    assert status == 400
+    assert "Surface changed" in json.loads(payload)["error"]
+    assert not any(name in {"arm_program", "start_job"} for name, _ in context.mutations)
 
 
 @pytest.mark.parametrize(

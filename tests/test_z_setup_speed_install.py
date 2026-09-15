@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from scripts.package_laser_focus import PREVIOUS_REVISION as BASE_REVISION
+from scripts.package_source_dependencies import MATERIAL_PREDECESSORS
 from scripts.package_z_setup_speed import (
     DESKTOP_REVISION,
     DESKTOP_VERSION,
@@ -48,6 +49,7 @@ def kit(tmp_path, monkeypatch):
     for relative, digest in manifest["predecessors"][0]["files"].items():
         if digest is not None:
             content = f"# installed predecessor: {relative}\r\n".encode()
+            (project / relative).parent.mkdir(parents=True, exist_ok=True)
             (project / relative).write_bytes(content)
             manifest["predecessors"][0]["files"][relative] = hashlib.sha256(
                 content.replace(b"\r\n", b"\n")).hexdigest()
@@ -71,18 +73,18 @@ def test_upgrade_preserves_data_backups_and_newlines_and_is_idempotent(kit):
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["applied"] and not result["service_started"]
     assert result["compatible_predecessors"] == [INSTALLED_NAME]
-    assert len(result["files"]) == len(PREVIOUS) == 17
+    assert len(result["files"]) == len({**PREVIOUS, **MATERIAL_PREDECESSORS}) == 19
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
-        if relative == SETUP_MOTION:
+        if relative not in original:
             assert "backup" not in entry
         else:
             assert Path(entry["backup"]).read_bytes() == original[relative]
             assert target.read_bytes().count(b"\r\n") == target.read_bytes().count(b"\n")
         assert target.read_bytes().replace(b"\r\n", b"\n") == (bundle / relative).read_bytes()
     for name, content in original.items():
-        if name not in PREVIOUS:
+        if name not in {**PREVIOUS, **MATERIAL_PREDECESSORS}:
             assert (project / name).read_bytes() == content
     assert all(entry["status"] == "already_current"
                for entry in installer.install(project, bundle=bundle, apply=True)["files"])
@@ -164,13 +166,13 @@ def test_tampered_bundle_rejects_before_replacement(kit, relative):
 def test_package_pins_complete_installed_baseline_and_exact_application_payload(tmp_path):
     bundle = package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
-    assert manifest["predecessors"] == [{"revision": INSTALLED_NAME, "files": PREVIOUS}]
+    assert manifest["predecessors"] == [{"revision": INSTALLED_NAME, "files": {**PREVIOUS, **MATERIAL_PREDECESSORS}}]
     assert manifest["predecessor_application_revision"] == INSTALLED_REVISION
     assert manifest["required_firmware_capability"] == "Cap:E3_Z_SETUP_SPEED_V1:1"
     assert manifest["compatible_windows_version"] == DESKTOP_VERSION == "0.7.132"
     assert manifest["compatible_windows_revision"] == DESKTOP_REVISION
     assert manifest["pi_control_capability"] == "pi-control-owner-v1"
-    assert {entry["path"] for entry in manifest["files"]} == PREVIOUS.keys()
+    assert {entry["path"] for entry in manifest["files"]} == PREVIOUS.keys() | MATERIAL_PREDECESSORS.keys()
     assert PREVIOUS[SETUP_MOTION] is None
     assert PREVIOUS[PRIORITY_PROTOCOL] == "62aa7a9a68348cedbb848f2ede93b62797af78e0d4190e67aa56ba9904229328"
     assert all(path.startswith("laser_aligner/") for path in PREVIOUS)
@@ -235,7 +237,7 @@ def test_exact_recorded_installed_upgrade_imports_without_hardware(tmp_path, mon
     result = installer.install(project, bundle=bundle, apply=True)
     assert not result["service_started"]
     for relative, content in original.items():
-        if relative not in PREVIOUS:
+        if relative not in {**PREVIOUS, **MATERIAL_PREDECESSORS}:
             assert (project / relative).read_bytes() == content
     modules = [name.removesuffix(".py").replace("/", ".") for name in PREVIOUS]
     checks = ("import " + ", ".join(modules) + "\n"

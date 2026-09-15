@@ -2086,19 +2086,21 @@ def test_trace_options_round_trip_independent_hole_area_range() -> None:
 
 def test_trace_hole_options_are_appended_after_legacy_positional_fields() -> None:
     option_fields = fields(TraceOptions)
-    assert [item.name for item in option_fields[-3:]] == [
+    assert [item.name for item in option_fields[-4:]] == [
         "min_hole_area_mm2",
         "max_hole_area_mm2",
         "trace_detail",
+        "precision_placement",
     ]
 
-    legacy = TraceOptions(*(item.default for item in option_fields[:-3]))
-    pre_detail = TraceOptions(*(item.default for item in option_fields[:-1]))
+    legacy = TraceOptions(*(item.default for item in option_fields[:-4]))
+    pre_detail = TraceOptions(*(item.default for item in option_fields[:-2]))
 
     assert legacy.min_hole_area_mm2 == pytest.approx(legacy.min_area_mm2)
     assert legacy.max_hole_area_mm2 is None
     assert legacy.trace_detail == "full"
     assert pre_detail.trace_detail == "full"
+    assert legacy.precision_placement is False
 
 
 @pytest.mark.parametrize(

@@ -146,6 +146,7 @@ class LaserFocus:
         self.selected_clearance = 30.0
         self._z_reference = None
         self._z_reference_generation = None
+        self._reference_id = None
         self.z_reference_required = False
         self.invalidate()
 
@@ -166,6 +167,7 @@ class LaserFocus:
         self.invalidate()
         self._z_reference = copy.deepcopy(reference)
         self._z_reference_generation = owner_generation
+        self._reference_id = str(uuid.uuid4())
         self.selected_clearance = clearance
         self.z_reference_required = False
 
@@ -173,6 +175,7 @@ class LaserFocus:
         self.invalidate()
         self._z_reference = None
         self._z_reference_generation = None
+        self._reference_id = None
         if require_reference:
             self.z_reference_required = True
 
@@ -225,6 +228,7 @@ class LaserFocus:
         return copy.deepcopy({
             "action": action, "available": False, "reference_ready": False,
             "reference": None, "surface": None, "preview": None, "xy_sequence": None,
+            "reference_id": None,
             "current_readback": {"z_mm": None, "z_known": False, "fresh": False},
             "max_z_mm": maximum, "clearance_z_mm": clearance,
             "contact_min_mm": None, "contact_max_mm": clearance - 15,
@@ -530,6 +534,7 @@ class LaserFocus:
                 raise MachineError("Border contact is not near homed zero")
             move_to(clearance)
             self.reference = {"border_z_mm": border, "firmware": firmware, "geometry": geometry}
+            self._reference_id = str(uuid.uuid4())
             self._z_reference = copy.deepcopy(self.reference)
             self._z_reference_generation = owner.generation
             self.z_reference_required = False
@@ -723,6 +728,8 @@ class LaserFocus:
                 self.xy_recovery_pending_reference = False
                 self.requires_clearance = False
         return copy.deepcopy({"action": requested_action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
+                              "reference": self.reference,
+                              "reference_id": self._reference_id if self.reference is not None else None,
                               "thickness_focus_available": True,
                               "workpiece_focus_available": True,
                               "honeycomb_height_mm": self.honeycomb_height_mm,

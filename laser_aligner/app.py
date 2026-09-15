@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from . import __version__
+from .browser_placement import BrowserPlacementMixin
 from .calibration.audit import (
     build_coordinate_audit_status,
     honeycomb_support_validity,
@@ -78,7 +79,7 @@ from .geometry.polygon import (
     convex_polygon_contains_normalized,
     normalize_convex_polygon,
 )
-from .geometry.svg import parse_svg
+from .geometry.svg import parse_svg, parse_svg_for_placement
 from .imaging import (
     decode_image_payload,
     encode_image,
@@ -92,6 +93,7 @@ from .machine.laser_focus import focus_calibration_path
 from .machine.network_transport import is_bridge_uri
 from .machine.service import MachineService, list_serial_ports
 from .machine.z_limits import mainboard_limits_path
+from .material_workspace import MaterialWorkspaceMixin
 from .storage import (
     atomic_write_bytes,
     atomic_write_bytes_if_absent,
@@ -307,7 +309,7 @@ class RunningMachineIdentity:
         )
 
 
-class AppContext:
+class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
     def __init__(
         self,
         settings: Settings,
@@ -1010,6 +1012,7 @@ class AppContext:
             None if bed is None else bed.refinement_created_at,
             None if mesh is None else mesh.created_at,
             None if mesh is None else mesh.refinement_count,
+            self.material_surface_signature(),
         )
 
     def bed_mapping_digest(self) -> str | None:
@@ -1068,11 +1071,19 @@ class AppContext:
         *,
         work_area: WorkArea | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
+        pixels_per_mm: float | None = None,
+        approximate_support_preview: bool = False,
     ) -> np.ndarray:
         lens = self.lens.model
+        signature_provider = (self.material_preview_signature if approximate_support_preview
+                              else self.material_surface_signature)
+        surface_signature = signature_provider()
+        mapper = self.material_preview_mapper() if approximate_support_preview else self.material_mapper()
+        base_calibration = self.bed.calibration
         if lens is None:
-            return self.bed.rectify(
+            return mapper.rectify(
                 image,
+                pixels_per_mm=pixels_per_mm,
                 work_area=work_area,
                 coordinate_frame=coordinate_frame,
             )
@@ -1082,7 +1093,7 @@ class AppContext:
                 "Current camera resolution does not match the lens calibration "
                 f"({width}x{height} vs {lens.image_width}x{lens.image_height})"
             )
-        calibration = self.bed.calibration
+        calibration = mapper.calibration
         if calibration is None:
             raise CalibrationError("Bed calibration has not been solved")
         if (width, height) != (calibration.image_width, calibration.image_height):
@@ -1091,7 +1102,7 @@ class AppContext:
                 f"({width}x{height} vs "
                 f"{calibration.image_width}x{calibration.image_height})"
             )
-        ppm = float(self.settings.calibration.bed.pixels_per_mm)
+        ppm = float(self.settings.calibration.bed.pixels_per_mm if pixels_per_mm is None else pixels_per_mm)
         area = self.settings.machine.work_area if work_area is None else work_area
         _frame_transform, frame_key = _coordinate_frame_transform(coordinate_frame)
         key = (
@@ -1112,7 +1123,7 @@ class AppContext:
         if cached is not None and cached[0] is lens and cached[1] is calibration:
             maps = cached[2]
         if maps is None:
-            corrected_x, corrected_y = self.bed.rectification_map(
+            corrected_x, corrected_y = mapper.rectification_map(
                 ppm,
                 work_area=area,
                 coordinate_frame=coordinate_frame,
@@ -1124,7 +1135,8 @@ class AppContext:
             raw_x.setflags(write=False)
             raw_y.setflags(write=False)
             maps = (raw_x, raw_y)
-            if self.lens.model is not lens or self.bed.calibration is not calibration:
+            if (self.lens.model is not lens or self.bed.calibration is not base_calibration
+                    or signature_provider() != surface_signature):
                 raise CalibrationError("Camera calibration changed while rectification maps were built")
             with self._workspace_lock:
                 # Keep both source models alive with the maps so an id() cannot
@@ -1138,7 +1150,8 @@ class AppContext:
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(35, 35, 35),
         )
-        if self.lens.model is not lens or self.bed.calibration is not calibration:
+        if (self.lens.model is not lens or self.bed.calibration is not base_calibration
+                or signature_provider() != surface_signature):
             raise CalibrationError("Camera calibration changed while the image was rectified")
         return rectified
 
@@ -1150,10 +1163,12 @@ class AppContext:
         persist: bool = False,
         work_area: WorkArea | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
+        pixels_per_mm: float | None = None,
+        approximate_support_preview: bool = False,
     ) -> np.ndarray:
         self._require_valid_bed_calibration()
         configured = self.settings.machine.work_area
-        uses_configured_area = coordinate_frame is None and (
+        uses_configured_area = not approximate_support_preview and pixels_per_mm is None and coordinate_frame is None and (
             work_area is None
             or (
                 abs(work_area.x_min - configured.x_min) <= 1e-9
@@ -1166,21 +1181,32 @@ class AppContext:
             cached = self._cached_workspace()
             if cached is not None:
                 return cached
-            for path in (self.workspace_path, self.legacy_workspace_path):
+            # Persisted photographs have no live measurement authority.
+            paths = () if self._surface_placement_state().get("enabled") else (self.workspace_path, self.legacy_workspace_path)
+            for path in paths:
                 image = read_image(path)
                 if image is not None:
                     self._cache_workspace(image)
                     return image
+        signature_provider = (self.material_preview_signature if approximate_support_preview
+                              else self.material_surface_signature)
+        surface_signature = signature_provider()
         image = (
             self.stable_camera_frame(undistort=False)[0]
             if precision
             else self.camera_frame(undistort=False)
         )
         rectify_options: dict[str, Any] = {}
+        if approximate_support_preview:
+            rectify_options["approximate_support_preview"] = True
+        if pixels_per_mm is not None:
+            rectify_options["pixels_per_mm"] = pixels_per_mm
         if work_area is not None:
             rectify_options["work_area"] = work_area
         if coordinate_frame is not None:
             rectify_options["coordinate_frame"] = coordinate_frame
+        if signature_provider() != surface_signature:
+            raise CalibrationError("Measured surface changed during camera capture; capture again")
         rectified = self._rectify_camera_image(image, **rectify_options)
         if uses_configured_area:
             self._cache_workspace(rectified)
@@ -1194,11 +1220,13 @@ class AppContext:
         work_area: WorkArea | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
         timing: dict[str, float] | None = None,
+        pixels_per_mm: float | None = None,
     ) -> np.ndarray:
         """Home, park, then hold only while capturing the object-trace frame."""
 
         total_started = time.perf_counter()
         self._require_valid_bed_calibration()
+        surface_signature = self.material_surface_signature()
         capture_started = time.perf_counter()
         prepare_started = time.perf_counter()
         self.machine.prepare_photo_position()
@@ -1221,6 +1249,10 @@ class AppContext:
             )
             timing["capture_seconds"] = time.perf_counter() - capture_started
         rectify_options: dict[str, Any] = {}
+        if pixels_per_mm is not None:
+            rectify_options["pixels_per_mm"] = pixels_per_mm
+        if self.material_surface_signature() != surface_signature:
+            raise CalibrationError("Measured surface changed during placement capture; capture again")
         if work_area is not None:
             rectify_options["work_area"] = work_area
         if coordinate_frame is not None:
@@ -1240,7 +1272,7 @@ class AppContext:
                 and abs(work_area.y_min - configured.y_min) <= 1e-9
                 and abs(work_area.y_max - configured.y_max) <= 1e-9
             )
-        if uses_configured_area:
+        if uses_configured_area and pixels_per_mm is None:
             self._cache_workspace(rectified)
             self._persist_workspace(rectified)
         if timing is not None:
@@ -2147,7 +2179,11 @@ class AppContext:
         if not 0 <= camera_age <= 2.0:
             raise CalibrationError("The live camera frame is stale; select a fresh point")
         self._require_valid_bed_calibration()
-        lens, calibration = self.lens.model, self.bed.calibration
+        approximate_support = self.material_preview_is_approximate()
+        mapper = self.material_preview_mapper()
+        base_calibration = self.bed.calibration
+        surface_signature = self.material_preview_signature()
+        lens, calibration = self.lens.model, mapper.calibration
         if lens is None or calibration is None:
             raise CalibrationError("Lens and bed calibration are required for camera positioning")
         if signature_from_camera_settings(self.settings.camera) != self.calibration_profiles.current:
@@ -2168,6 +2204,7 @@ class AppContext:
         except SafetyError as exc:
             raise CalibrationError(str(exc)) from exc
         state = {
+            "surface": surface_signature,
             "focus_xy_bounds": focus_bounds.polygons,
             "camera_preview": {
                 "image_size": preview_size, "source_size": source_size,
@@ -2206,7 +2243,7 @@ class AppContext:
         if not math.isfinite(float(denominator)) or abs(float(denominator)) < 1e-9:
             raise CalibrationError("Selected camera point has an undefined machine projection")
         # BedMapper includes the active fine registration and residual mesh.
-        target = self.bed.image_to_mm(float(corrected[0]), float(corrected[1]))
+        target = mapper.image_to_mm(float(corrected[0]), float(corrected[1]))
         area = self.settings.machine.work_area
         if not focus_bounds.contains(target):
             if len(focus_bounds.polygons) > 1:
@@ -2233,7 +2270,8 @@ class AppContext:
                 f"Y {area.y_min:g} to {area.y_max:g} mm. "
                 f"Source pixel ({x:.2f}, {y:.2f}) in {width}×{height}."
             )
-        if self.lens.model is not lens or self.bed.calibration is not calibration:
+        if (self.lens.model is not lens or self.bed.calibration is not base_calibration
+                or self.material_preview_signature() != surface_signature):
             raise CalibrationError("Camera calibration changed during point selection")
         if state["bed_mapping"] != self.bed_mapping_digest() or state["provenance"] != self._bed_provenance():
             raise CalibrationError("Camera mapping changed during point selection")
@@ -2245,8 +2283,9 @@ class AppContext:
             "preview_image_xy": list(preview_point),
             "preview_image_size": list(preview_size),
             "mapping_signature": signature,
-            "mapping_plane": "bed",
-            "height_corrected": False,
+            "mapping_plane": "approximate-support" if approximate_support else "material" if surface_signature is not None else "bed",
+            "height_corrected": surface_signature is not None and not approximate_support,
+            "approximate_support_preview": approximate_support,
             "within_original_calibration_grid": within_original_grid,
         }
 
@@ -2421,6 +2460,7 @@ class AppContext:
         *,
         work_area: WorkArea,
         coordinate_frame: HoneycombCoordinateFrame,
+        pixels_per_mm: float | None = None,
     ) -> np.ndarray | None:
         """Return the accepted empty honeycomb in the current Trace coordinates.
 
@@ -2429,6 +2469,8 @@ class AppContext:
         execution-grade reference; stale or legacy evidence is ignored.
         """
 
+        if self.selected_material_surface() is not None:
+            return None
         reference = self._current_honeycomb_support()
         if reference is None or not reference.is_execution_verifiable:
             return None
@@ -2465,6 +2507,7 @@ class AppContext:
         # and would apply the inverse lens map a second time here.
         return self.bed.rectify(
             image,
+            pixels_per_mm=pixels_per_mm,
             work_area=work_area,
             coordinate_frame=coordinate_frame,
         )
@@ -2516,6 +2559,8 @@ class AppContext:
         label, session = matched
         if not self._session_boolean(session, "powered", label):
             return
+        if label == "surface-height":
+            self._surface_capture_session(require_executed=False)
         expected_digest = session.get("program_digest")
         recorded_polygon = session.get("guarded_output_polygon_mm")
         actual_digest = (
@@ -2606,6 +2651,7 @@ class AppContext:
         filename: str,
     ) -> tuple[str, dict[str, Any]] | None:
         sessions = (
+            ("surface-height", self.surface_capture_path),
             ("fine registration", self.fine_registration_path),
             ("accuracy validation", self.accuracy_validation_path),
             ("dense local correction", self.dense_calibration_path),
@@ -2933,7 +2979,8 @@ class AppContext:
         ).to_dict()
 
     def solve_surface_height_model(self) -> SurfaceHeightModel:
-        binding = self.surface_calibration_binding()
+        binding = (self.production_surface_binding() if self.surface_calibration.schema_version == 2
+                   else self.surface_calibration_binding())
         lens = self.lens.model
         if lens is None:
             raise CalibrationError("Lens calibration is required")
@@ -2950,8 +2997,10 @@ class AppContext:
         )
         return calibration.to_dict()
 
-    def detect_workpiece(self) -> dict[str, Any]:
-        image = self.rectified_frame(refresh=True, precision=True)
+    def detect_workpiece(self, *, capture_id: str | None = None) -> dict[str, Any]:
+        surface = self.validate_browser_placement(capture_id)
+        image = (self.browser_placement_image(capture_id) if surface is not None
+                 else self.rectified_frame(refresh=True, precision=True))
         detection = detect_workpiece(
             image,
             min_area_ratio=self.settings.vision.workpiece_min_area_ratio,
@@ -2959,9 +3008,12 @@ class AppContext:
             canny_high=self.settings.vision.workpiece_canny_high,
         )
         if detection is None:
-            return {"detected": False}
+            if surface != self.validate_browser_placement(capture_id):
+                raise CalibrationError("Surface changed during workpiece detection; capture again")
+            return {"detected": False, "material_surface": surface}
         payload = detection.to_dict()
-        ppm = self.settings.calibration.bed.pixels_per_mm
+        ppm = (self.browser_placement_pixels_per_mm(capture_id) if surface is not None
+               else self.settings.calibration.bed.pixels_per_mm)
         area = self.settings.machine.work_area
 
         def to_mm(point: list[float]) -> list[float]:
@@ -2972,6 +3024,9 @@ class AppContext:
         payload["width_mm"] = detection.width_px / ppm
         payload["height_mm"] = detection.height_px / ppm
         payload["detected"] = True
+        if surface != self.validate_browser_placement(capture_id):
+            raise CalibrationError("Surface changed during workpiece detection; capture again")
+        payload["material_surface"] = surface
         return payload
 
     def detect_fiducials(self) -> dict[str, Any]:
@@ -3914,8 +3969,10 @@ class AppContext:
         self,
         *,
         home_first: bool = True,
+        material_plane: bool = False,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         self._require_camera_calibration_ready()
+        surface_binding = self.precision_assessment_binding() if material_plane else None
         calibration = self.bed.calibration
         if calibration is None:
             raise CalibrationError("Solve the bed mapping before accuracy validation")
@@ -3931,7 +3988,15 @@ class AppContext:
         with self.machine.temporary_stepper_hold():
             burst = self.precision_camera_burst(undistort=False)
         burst = self._prepare_camera_burst(burst, undistort=True)
-        analysis = self.analyze_accuracy_validation_burst(burst)
+        if material_plane:
+            analysis = self._analyze_accuracy_validation_capture(
+                burst.sharpest_frame, burst.frames, burst.diagnostics(), material_plane=True,
+            )
+            if self.precision_assessment_binding() != surface_binding:
+                raise CalibrationError("Measured surface changed during precision assessment")
+            analysis["surface_binding"] = surface_binding
+        else:
+            analysis = self.analyze_accuracy_validation_burst(burst)
         selected = analysis.get("precision_capture", {}).get("aggregation", {}).get("selected_frame_index")
         image = burst.frames[int(selected)].copy() if selected is not None else burst.sharpest_frame
         return image, analysis
@@ -3951,8 +4016,11 @@ class AppContext:
         image: np.ndarray,
         images: tuple[np.ndarray, ...],
         camera_diagnostics: dict[str, Any] | None,
+        *,
+        material_plane: bool = False,
     ) -> dict[str, Any]:
         calibration = self.bed.calibration
+        mapper = self.material_mapper() if material_plane else self.bed
         if calibration is None:
             raise CalibrationError("Solve the bed mapping before accuracy validation")
         session = read_json(self.accuracy_validation_path, {})
@@ -3981,7 +4049,7 @@ class AppContext:
         for item in raw_targets:
             machine_x = float(item["machine_x"])
             machine_y = float(item["machine_y"])
-            image_x, image_y = self.bed.mm_to_image(machine_x, machine_y)
+            image_x, image_y = mapper.mm_to_image(machine_x, machine_y)
             expected_points.append(
                 {
                     "id": int(item["id"]),
@@ -4055,7 +4123,7 @@ class AppContext:
 
         measurements = []
         for point in detection["points"]:
-            observed_x, observed_y = self.bed.image_to_mm(float(point["image_x"]), float(point["image_y"]))
+            observed_x, observed_y = mapper.image_to_mm(float(point["image_x"]), float(point["image_y"]))
             measurement = {
                 "id": int(point["id"]),
                 "machine_x": float(point["machine_x"]),
@@ -4435,6 +4503,9 @@ class AppContext:
 
     def analyze_svg(self, svg_text: str) -> dict[str, Any]:
         geometry = parse_svg(svg_text)
+        geometry = parse_svg_for_placement(
+            svg_text, geometry.intrinsic_width_mm or 50., geometry.intrinsic_height_mm or 50.,
+        )
         return {
             "bounds": list(geometry.bounds),
             "intrinsic_width_mm": geometry.intrinsic_width_mm,
@@ -4494,6 +4565,7 @@ class AppContext:
         )
 
     def generate_gcode(self, payload: dict[str, Any]) -> dict[str, Any]:
+        surface = self.validate_browser_placement(payload.get("capture_id"))
         svg_text = payload.get("svg")
         if type(svg_text) is not str:
             raise ValueError("svg must be a JSON string")
@@ -4506,8 +4578,9 @@ class AppContext:
         name = payload.get("name", "design.svg")
         if type(name) is not str:
             raise ValueError("name must be a JSON string")
-        geometry = parse_svg(svg_text)
         placement = self._placement(raw_placement)
+        geometry = (parse_svg_for_placement(svg_text, placement.width_mm, placement.height_mm)
+                    if surface is not None else parse_svg(svg_text))
         options = self._toolpath_options(raw_toolpath)
         program = generate_vector_gcode(
             geometry,
@@ -4516,6 +4589,9 @@ class AppContext:
             self.settings.machine.work_area,
             design_name=name,
         )
+        text = self.bind_material_surface_program(program.text)
+        if surface != self.validate_browser_placement(payload.get("capture_id")):
+            raise CalibrationError("Surface changed while preparing the browser job; capture again")
         safe_base = (
             _SAFE_NAME_RE.sub("-", Path(name).stem).strip("-.")[:80] or "design"
         )
@@ -4523,13 +4599,15 @@ class AppContext:
             self.settings.app.data_dir / "generated",
             stem=safe_base,
             suffix=".gcode",
-            data=program.text.encode("utf-8"),
+            data=text.encode("utf-8"),
         )
         return {
             "filename": filename,
             "download_url": f"/api/generated/{filename}",
-            "gcode": program.text,
-            "metadata": program.metadata(),
+            "gcode": text,
+            "metadata": {**program.metadata(), "material_surface": surface,
+                         "curve_approximation_mm": geometry.curve_approximation_mm,
+                         "controller_xy_rounding_mm": math.sqrt(2) * .0005},
         }
 
     def status(self) -> dict[str, Any]:
@@ -4551,6 +4629,7 @@ class AppContext:
             "calibration_profile": self.calibration_profiles.status(),
             "lens": lens_status,
             "bed": self.bed_status(lens_model_id=lens_model_id),
+            "material_placement": self.material_placement_status(),
             "machine": self.machine.status(),
             "devices": {
                 "cameras": list_video_devices(),

@@ -77,6 +77,7 @@ class SvgGeometry:
     view_box: tuple[float, float, float, float] | None = None
     warnings: list[str] = field(default_factory=list)
     user_to_mm: np.ndarray | None = field(default=None, repr=False)
+    curve_approximation_mm: float | None = None
 
     @property
     def width(self) -> float:
@@ -124,6 +125,7 @@ class _GeometryBudget:
     point_count: int = 0
     flattened_point_count: int = 0
     element_visits: int = 0
+    strict_tolerance: bool = False
 
     def consume_element(self, depth: int) -> None:
         if depth > _MAX_SVG_NESTING:
@@ -429,6 +431,15 @@ def _distance_to_line(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> 
     return abs(float(cross)) / length
 
 
+def _distance_to_segment(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    delta = end - start
+    length_squared = float(np.dot(delta, delta))
+    if length_squared <= 1e-30:
+        return float(np.linalg.norm(point - start))
+    fraction = float(np.clip(np.dot(point - start, delta) / length_squared, 0., 1.))
+    return float(np.linalg.norm(point - (start + fraction * delta)))
+
+
 def _flatten_cubic(
     p0: np.ndarray,
     p1: np.ndarray,
@@ -438,7 +449,11 @@ def _flatten_cubic(
     budget: _GeometryBudget,
     depth: int = 0,
 ) -> list[np.ndarray]:
-    if depth >= 14 or max(_distance_to_line(p1, p0, p3), _distance_to_line(p2, p0, p3)) <= tolerance:
+    distance = _distance_to_segment if budget.strict_tolerance else _distance_to_line
+    within_tolerance = max(distance(p1, p0, p3), distance(p2, p0, p3)) <= tolerance
+    if depth >= 14 and not within_tolerance and budget.strict_tolerance:
+        raise SvgError("SVG cubic cannot meet the precision curve tolerance within the subdivision limit")
+    if depth >= 14 or within_tolerance:
         budget.consume_flattened()
         return [p3]
     p01 = (p0 + p1) / 2
@@ -460,7 +475,11 @@ def _flatten_quadratic(
     budget: _GeometryBudget,
     depth: int = 0,
 ) -> list[np.ndarray]:
-    if depth >= 14 or _distance_to_line(p1, p0, p2) <= tolerance:
+    distance = _distance_to_segment if budget.strict_tolerance else _distance_to_line
+    within_tolerance = distance(p1, p0, p2) <= tolerance
+    if depth >= 14 and not within_tolerance and budget.strict_tolerance:
+        raise SvgError("SVG quadratic cannot meet the precision curve tolerance within the subdivision limit")
+    if depth >= 14 or within_tolerance:
         budget.consume_flattened()
         return [p2]
     p01 = (p0 + p1) / 2
@@ -528,12 +547,16 @@ def _flatten_arc(
         theta_delta += 2 * math.pi
 
     radius = max(rx, ry)
-    if tolerance <= 0 or tolerance >= radius:
+    if budget.strict_tolerance:
+        max_step = 4 * math.asin(math.sqrt(min(1., tolerance / (2 * radius))))
+        segments = max(2, math.ceil(abs(theta_delta) / max_step))
+    elif tolerance <= 0 or tolerance >= radius:
         max_step = math.pi / 8
+        segments = max(2, min(2048, int(math.ceil(abs(theta_delta) / max_step))))
     else:
         max_step = 2.0 * math.acos(max(-1.0, min(1.0, 1.0 - tolerance / radius)))
         max_step = max(max_step, math.radians(1.0))
-    segments = max(2, min(2048, int(math.ceil(abs(theta_delta) / max_step))))
+        segments = max(2, min(2048, int(math.ceil(abs(theta_delta) / max_step))))
     budget.consume_flattened(segments)
     points: list[np.ndarray] = []
     for index in range(1, segments + 1):
@@ -802,7 +825,10 @@ def _sample_ellipse(
     radius = max(rx, ry)
     if radius <= 0:
         return np.empty((0, 2))
-    if tolerance >= radius:
+    if budget.strict_tolerance:
+        step = 4 * math.asin(math.sqrt(min(1., tolerance / (2 * radius))))
+        segments = max(24, 4 * math.ceil((2 * math.pi / step) / 4))
+    elif tolerance >= radius:
         segments = 24
     else:
         step = 2.0 * math.acos(max(-1.0, min(1.0, 1.0 - tolerance / radius)))
@@ -885,10 +911,15 @@ def _shape_polylines(
                     (x + rx, y + height - ry, math.pi / 2, math.pi),
                     (x + rx, y + ry, math.pi, 3 * math.pi / 2),
                 ]
+                corner_points = 8
+                if budget.strict_tolerance:
+                    step = 4 * math.asin(math.sqrt(min(1., tolerance / (2 * max(rx, ry)))))
+                    corner_points = max(8, math.ceil((math.pi / 2) / step) + 1)
+                    budget.consume_flattened(4 * corner_points + 1)
                 for center_x, center_y, start, end in centers:
-                    segment_angles = np.linspace(start, end, 8, endpoint=True)
+                    segment_angles = np.linspace(start, end, corner_points, endpoint=True)
                     arc = [np.array([center_x + rx * math.cos(a), center_y + ry * math.sin(a)]) for a in segment_angles]
-                    points.extend(arc if not points else arc[1:])
+                    points.extend(arc if budget.strict_tolerance or not points else arc[1:])
             _append_path(output, points, True, matrix, tag)
     elif tag == "circle":
         radius = _number(element, "r")
@@ -933,7 +964,9 @@ def _bounds(polylines: Iterable[Polyline]) -> tuple[float, float, float, float]:
     return float(minimum[0]), float(minimum[1]), float(maximum[0]), float(maximum[1])
 
 
-def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeometry:
+def parse_svg(
+    svg_text: str, curve_tolerance_ratio: float = 0.0005, *, curve_tolerance_units: float | None = None,
+) -> SvgGeometry:
     if isinstance(curve_tolerance_ratio, bool) or not isinstance(
         curve_tolerance_ratio,
         Real,
@@ -942,6 +975,11 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
     tolerance_ratio = float(curve_tolerance_ratio)
     if not math.isfinite(tolerance_ratio) or tolerance_ratio <= 0.0:
         raise SvgError("curve_tolerance_ratio must be a finite positive number")
+    if curve_tolerance_units is not None and (
+        type(curve_tolerance_units) not in (int, float)
+        or not math.isfinite(curve_tolerance_units) or curve_tolerance_units <= 0
+    ):
+        raise SvgError("curve_tolerance_units must be a finite positive number")
     if len(svg_text) > MAX_SVG_TEXT_CHARACTERS:
         raise SvgError("SVG is larger than the 10 MB parser limit")
     if svg_text.count("<") > _MAX_SVG_XML_MARKERS:
@@ -962,7 +1000,8 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
     width_mm = _root_length_mm(root, "width")
     height_mm = _root_length_mm(root, "height")
     reference = max(view_box[2], view_box[3]) if view_box else 1000.0
-    tolerance = max(reference * tolerance_ratio, 1e-4)
+    tolerance = (max(reference * tolerance_ratio, 1e-4) if curve_tolerance_units is None
+                 else curve_tolerance_units)
 
     id_map: dict[str, ET.Element] = {}
     for element in root.iter():
@@ -975,7 +1014,7 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
     warnings: list[str] = []
     polylines: list[Polyline] = []
     ignored_tags: set[str] = set()
-    budget = _GeometryBudget()
+    budget = _GeometryBudget(strict_tolerance=curve_tolerance_units is not None)
 
     def visit(
         element: ET.Element,
@@ -1012,8 +1051,15 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
         supported = {"path", "line", "polyline", "polygon", "rect", "circle", "ellipse"}
         if tag in supported and not in_defs:
             try:
+                local_tolerance = tolerance
+                if budget.strict_tolerance:
+                    magnification = float(np.linalg.svd(local_matrix[:2, :2], compute_uv=False)[0])
+                    if not math.isfinite(magnification):
+                        raise SvgError("SVG transform has nonfinite precision magnification")
+                    if magnification > 0:
+                        local_tolerance /= magnification
                 polylines.extend(
-                    _shape_polylines(element, tolerance, local_matrix, budget)
+                    _shape_polylines(element, local_tolerance, local_matrix, budget)
                 )
             except SvgError as exc:
                 raise SvgError(f"Could not parse SVG <{tag}>: {exc}") from exc
@@ -1054,3 +1100,27 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
         warnings=warnings,
         user_to_mm=user_to_mm,
     )
+
+
+def parse_svg_for_placement(
+    svg_text: str, width_mm: float, height_mm: float, *, curve_tolerance_mm: float = .025,
+) -> SvgGeometry:
+    """Bound physical chord error, including normalization to requested dimensions.
+
+    Reserve two thirds of the envelope for the effect of sampled curve bounds
+    on placement normalization. Subdivision and source transforms remain bounded.
+    """
+    for label, value in (("width_mm", width_mm), ("height_mm", height_mm),
+                         ("curve_tolerance_mm", curve_tolerance_mm)):
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise SvgError(f"{label} must be a finite positive number")
+    geometry = parse_svg(svg_text)
+    for _attempt in range(4):
+        scale = max(width_mm / geometry.width, height_mm / geometry.height)
+        tolerance = curve_tolerance_mm / (3 * scale)
+        geometry = parse_svg(svg_text, curve_tolerance_units=tolerance)
+        consumed = 3 * tolerance * max(width_mm / geometry.width, height_mm / geometry.height)
+        if consumed <= curve_tolerance_mm * (1 + 1e-10):
+            geometry.curve_approximation_mm = min(consumed, curve_tolerance_mm)
+            return geometry
+    raise SvgError("SVG cannot establish the requested physical curve tolerance; simplify the source")

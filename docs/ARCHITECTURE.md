@@ -1,5 +1,25 @@
 # Architecture
 
+## Precision material-surface placement
+
+`AppContext` owns the shared UI-neutral `MaterialWorkspaceMixin`. It derives an
+immutable `MaterialPlaneSelection` from a currently validated focus measurement,
+schema-2 raw camera evidence and camera/datum/pose provenance. Its transient
+`BedMapper` replaces only the image-plane transform and removes plane-specific
+fine correction; the persisted support map and execution bounds remain fixed.
+Camera images, raw clicks, detection and template analysis share this mapping.
+Native sampling determines precision analysis resolution; display resizing does
+not. Captures and asynchronous results bind the exact selected surface.
+
+Schema-4 projects retain prior geometry and optional historical material
+provenance; loaded metadata never restores measurement authority. `E3SURFACE 1`
+metadata participates in immutable program digests, is validated with the current
+measurement at Arm/Start and is consumed before serial output. The Pi advertises
+support explicitly. `setup_workflow.py` stores independent checklist, survey,
+repeatability and physical qualification evidence without Qt or controller calls.
+The desktop renders these definitions with links to existing guarded actions.
+See [precision placement](PRECISION_PLACEMENT.md) for qualification boundaries.
+
 ## Home/job focus and cooling lock order
 
 Every job-focus guard that checks Ender readiness acquires the Ender owner lock
@@ -588,10 +608,10 @@ The material-height calibration study in `calibration/surface.py` fits a single
 camera pose to original undistorted correspondences at two known Z planes using
 fixed lens intrinsics. A third plane is scored independently. `AppContext` owns
 its profile-scoped atomic evidence store; `desktop/surface_height.py` provides
-collection and diagnostic image review. It never replaces the active bed map or
-enters the current desktop/browser execution pipeline. The remaining explicit
-support/material-plane integration and probe physical acceptance are specified
-in [MATERIAL_HEIGHT.md](MATERIAL_HEIGHT.md).
+collection and diagnostic image review. Schema-2 acquisition does not replace
+the active bed map. Validated measured-plane selection now enters the shared
+desktop/browser pipeline described above. Schema-1 studies remain diagnostic;
+physical qualification is specified in [PRECISION_PLACEMENT.md](PRECISION_PLACEMENT.md).
 
 `machine/probe_pin.py` is a separate typed diagnostic client. The operator-run
 `probe_diagnostic.py` CLI submits one inspect/deploy/stow action to the Pi; it

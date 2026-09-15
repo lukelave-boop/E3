@@ -164,7 +164,7 @@ def test_honeycomb_coordinate_space_round_trips_explicitly():
     payload = document.to_dict()
     restored = ProjectDocument.from_dict(payload)
 
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["coordinate_space"] == "honeycomb_local"
     assert restored.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
 
@@ -177,7 +177,7 @@ def test_schema_one_project_migrates_as_machine_coordinates():
     restored = ProjectDocument.from_dict(payload)
 
     assert restored.coordinate_space is CoordinateSpace.MACHINE
-    assert restored.to_dict()["schema_version"] == 3
+    assert restored.to_dict()["schema_version"] == 4
 
 
 def test_schema_one_project_cannot_claim_honeycomb_coordinates():
@@ -357,9 +357,9 @@ def test_schema_mismatch_is_rejected(schema: object):
 
 def test_newer_project_schema_is_rejected_without_downconversion():
     payload = ProjectDocument.new().to_dict()
-    payload["schema_version"] = 4
+    payload["schema_version"] = 5
 
-    with pytest.raises(ProjectFormatError, match="Unsupported project schema 4"):
+    with pytest.raises(ProjectFormatError, match="Unsupported project schema 5"):
         ProjectDocument.from_dict(payload)
 
 
@@ -421,7 +421,7 @@ def test_legacy_project_path_geometry_migrates_to_canonical_native_lines(schema)
     restored = ProjectDocument.from_dict(payload)
     geometry = restored.objects[0].path_geometry()
 
-    assert restored.to_dict()["schema_version"] == 3
+    assert restored.to_dict()["schema_version"] == 4
     assert restored.coordinate_space is CoordinateSpace.MACHINE
     assert "polylines" not in restored.objects[0].geometry
     assert geometry.fill_rule is PathFillRule.EVENODD
@@ -465,7 +465,8 @@ def test_legacy_project_path_rejects_unexpected_polyline_child_fields(schema):
         ProjectDocument.from_dict(payload)
 
 
-def test_schema_three_rejects_legacy_polyline_geometry():
+@pytest.mark.parametrize("schema", [3, 4])
+def test_native_project_schemas_reject_legacy_polyline_geometry(schema):
     document = ProjectDocument.new("Spoofed current project")
     item = SceneObject.path(
         document.active_layer_id,
@@ -473,11 +474,12 @@ def test_schema_three_rejects_legacy_polyline_geometry():
     )
     document.add_object(item)
     payload = document.to_dict()
+    payload["schema_version"] = schema
     payload["objects"][0]["geometry"] = {
         "polylines": [{"points": [[-0.5, -0.5], [0.5, 0.5]], "closed": False}]
     }
 
-    with pytest.raises(ProjectFormatError, match="schema 3.*canonical native"):
+    with pytest.raises(ProjectFormatError, match=f"schema {schema}.*canonical native"):
         ProjectDocument.from_dict(payload)
 
 

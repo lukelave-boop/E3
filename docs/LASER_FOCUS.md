@@ -1,5 +1,23 @@
 # Surface height and gauge-taught laser focus
 
+## Precision setup additions
+
+The guided setup checklist now links to a four-corner-plus-center survey. Measure
+a known-thickness rigid target at each position, review the inferred honeycomb
+heights, then explicitly save the chosen datum. Survey evidence records distinct
+contact/reference identities and actual XY; it cannot silently authorize a new
+reference. Measure surface and Return laser to measured spot are grouped directly
+before gauge teaching. Existing guarded actions and clearance checks remain.
+
+The camera's height correction uses top elevation including supports, whereas
+automatic focus uses the separately derived material thickness. The precision
+workflow requires the matching `pi-material-surface-v1` companion. At tall surfaces
+the existing contact/clearance bounds still apply; select physically adequate
+clearance using the current setup controls. No higher Z limit is installed by
+this feature. See [precision placement](PRECISION_PLACEMENT.md) and CURRENT_STATE.md
+for the current build and pending physical qualification. Earlier handoffs below
+remain the historical focus verification record.
+
 ## Home / park timeout correction
 
 Pi-only companion **e3-pi-thickness-focus-1ccd58e0** (`de6cdc1`) is installed and

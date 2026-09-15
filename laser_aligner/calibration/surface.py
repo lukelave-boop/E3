@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -65,14 +65,17 @@ class SurfaceEvidence:
     binding_json: str
     # image_x, image_y, machine_x, machine_y, all from the original observations.
     points: tuple[tuple[float, float, float, float], ...]
+    height_uncertainty_mm: float = 0.0
 
     @classmethod
     def from_dict(cls, raw: Any) -> SurfaceEvidence:
-        if not isinstance(raw, dict) or set(raw) != {
-            "height_mm", "reference", "source_digest", "binding", "points",
-        }:
+        required = {"height_mm", "reference", "source_digest", "binding", "points"}
+        if not isinstance(raw, dict) or not required <= set(raw) or set(raw) - required - {"height_uncertainty_mm"}:
             raise CalibrationError("Malformed surface-height evidence")
         height = _number(raw["height_mm"], "Surface height")
+        uncertainty = _number(raw.get("height_uncertainty_mm", 0.), "Height uncertainty")
+        if not 0 <= uncertainty <= 1:
+            raise CalibrationError("Height uncertainty must be between 0 and 1 mm")
         if not -1000 <= height <= 1000:
             raise CalibrationError("Surface height must be between -1000 and 1000 mm relative to the datum")
         reference = raw["reference"]
@@ -97,7 +100,7 @@ class SurfaceEvidence:
             binding_json = _json(raw["binding"])
         except (TypeError, ValueError) as exc:
             raise CalibrationError("Surface provenance must contain finite JSON values") from exc
-        return cls(height, reference.strip(), digest, binding_json, tuple(rows))
+        return cls(height, reference.strip(), digest, binding_json, tuple(rows), uncertainty)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +109,7 @@ class SurfaceEvidence:
             "source_digest": self.source_digest,
             "binding": json.loads(self.binding_json),
             "points": [list(row) for row in self.points],
+            "height_uncertainty_mm": self.height_uncertainty_mm,
         }
 
 
@@ -125,6 +129,37 @@ class SurfaceHeightModel:
     fit_max_mm: float
     check_rms_mm: float | None = None
     check_max_mm: float | None = None
+    reference: str = ""
+    binding_json: str = "{}"
+    evidence_source_ids: tuple[str, ...] = ()
+    evidence_schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        # Direct construction must be as immutable as solver-produced models.
+        # Copy caller-owned arrays/lists before a selection caches this model.
+        for field in ("camera_matrix", "rotation"):
+            try:
+                values = np.asarray(getattr(self, field), dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise CalibrationError(f"Surface model {field} must be a finite 3x3 matrix") from exc
+            if values.shape != (3, 3) or not np.isfinite(values).all():
+                raise CalibrationError(f"Surface model {field} must be a finite 3x3 matrix")
+            object.__setattr__(self, field, tuple(tuple(float(value) for value in row) for row in values))
+        for field, length in (("translation", 3), ("area", 4), ("image_size", 2)):
+            try:
+                values = tuple(getattr(self, field))
+            except TypeError as exc:
+                raise CalibrationError(f"Surface model {field} must contain {length} values") from exc
+            if len(values) != length:
+                raise CalibrationError(f"Surface model {field} must contain {length} values")
+            values = tuple(_number(value.item() if isinstance(value, np.generic) else value,
+                                   f"Surface model {field}") for value in values)
+            if field == "image_size":
+                if any(value <= 0 or value != int(value) for value in values):
+                    raise CalibrationError("Surface model image dimensions must be positive integers")
+                values = tuple(int(value) for value in values)
+            object.__setattr__(self, field, values)
+        object.__setattr__(self, "evidence_source_ids", tuple(self.evidence_source_ids))
 
     @property
     def check_passed(self) -> bool:
@@ -249,6 +284,8 @@ def fit_surface_model(
         tuple(float(v) for v in tvec.reshape(3)), lower.height_mm, upper.height_mm,
         lens.image_size, (work_area.x_min, work_area.x_max, work_area.y_min, work_area.y_max),
         _digest({"evidence": [item.to_dict() for item in evidence], "lens": lens.model_id}), 0, 0,
+        reference=lower.reference, binding_json=expected,
+        evidence_source_ids=tuple(item.source_digest for item in evidence),
     )
     errors = [
         np.linalg.norm(model.image_to_machine(row[:, :2], item.height_mm) - row[:, 2:], axis=1)
@@ -276,21 +313,29 @@ class SurfaceCalibrationStore:
     def __init__(self, directory: Path):
         self.path = directory / "surface_height_calibration.json"
 
+    @property
+    def schema_version(self) -> int:
+        """Read evidence version; legacy evidence is never promoted by loading."""
+        return self._load_document()[0]
+
     def load(self) -> dict[str, SurfaceEvidence]:
+        return self._load_document()[1]
+
+    def _load_document(self) -> tuple[int, dict[str, SurfaceEvidence]]:
         if not self.path.exists():
-            return {}
+            return 1, {}
         if self.path.stat().st_size > _MAX_FILE_BYTES:
             raise CalibrationError("Surface-height evidence file exceeds its size limit")
         try:
             raw = read_json(self.path, None)
             if not isinstance(raw, dict) or set(raw) != {"schema_version", "evidence"}:
                 raise ValueError("Malformed surface-height calibration")
-            if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+            if type(raw["schema_version"]) is not int or raw["schema_version"] not in (1, 2):
                 raise ValueError("Unsupported surface-height calibration schema")
             entries = raw["evidence"]
             if not isinstance(entries, dict) or any(key not in _SLOTS for key in entries):
                 raise ValueError("Invalid surface-height evidence slots")
-            return {key: SurfaceEvidence.from_dict(value) for key, value in entries.items()}
+            return raw["schema_version"], {key: SurfaceEvidence.from_dict(value) for key, value in entries.items()}
         except (ValueError, KeyError, TypeError) as exc:
             raise CalibrationError(f"Cannot load surface-height calibration: {exc}") from exc
 
@@ -329,11 +374,55 @@ class SurfaceCalibrationStore:
         atomic_write_json(self.path, payload)
         return result
 
-    def solve(self, *, lens: LensModel, work_area: WorkArea, binding: dict[str, Any]) -> SurfaceHeightModel:
+    def save_observations(
+        self, slot: str, *, height_mm: float, reference: str,
+        points: list[BedPoint], source_digest: str, lens: LensModel,
+        work_area: WorkArea, binding: dict[str, Any],
+        height_uncertainty_mm: float = 0.0,
+    ) -> SurfaceEvidence:
+        """Save original undistorted observations without changing a bed map.
+
+        A schema-1 study remains readable. Reacquiring its endpoints under the
+        explicit production provenance replaces evidence one plane at a time;
+        mixed old/new evidence cannot fit because its bindings differ.
+        """
+        from .material_plane import validate_production_binding
+
+        if slot not in _SLOTS:
+            raise CalibrationError("Choose lower, upper, or check evidence")
+        validate_production_binding(binding, reference=reference)
+        result = SurfaceEvidence.from_dict({
+            "height_mm": height_mm, "reference": reference,
+            "height_uncertainty_mm": height_uncertainty_mm,
+            "source_digest": source_digest, "binding": binding,
+            "points": [[p.image_x, p.image_y, p.machine_x, p.machine_y] for p in points],
+        })
+        rows = _validate_coverage(result, lens, work_area)
+        try:
+            inverse, _ = cv2.findHomography(rows[:, :2], rows[:, 2:], method=0)
+            if inverse is None or abs(float(np.linalg.det(inverse))) < 1e-9:
+                raise CalibrationError("Original surface observations cannot define a plane")
+            errors = np.linalg.norm(_project(inverse, rows[:, :2]) - rows[:, 2:], axis=1)
+        except cv2.error as exc:
+            raise CalibrationError("Original surface observations cannot define a plane") from exc
+        if np.sqrt(np.mean(errors ** 2)) > _FIT_RMS_MM or np.max(errors) > _FIT_MAX_MM:
+            raise CalibrationError("Original observations do not pass the base-map fit limits")
         entries = self.load()
+        entries[slot] = result
+        if slot != "check":
+            entries.pop("check", None)
+        payload = {"schema_version": 2, "evidence": {key: value.to_dict() for key, value in entries.items()}}
+        if len(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False).encode("utf-8")) + 1 > _MAX_FILE_BYTES:
+            raise CalibrationError("Surface-height evidence exceeds its storage limit")
+        atomic_write_json(self.path, payload)
+        return result
+
+    def solve(self, *, lens: LensModel, work_area: WorkArea, binding: dict[str, Any]) -> SurfaceHeightModel:
+        schema_version, entries = self._load_document()
         if "lower" not in entries or "upper" not in entries:
             raise CalibrationError("Save separately measured lower and upper bed maps first")
-        return fit_surface_model(
+        model = fit_surface_model(
             entries["lower"], entries["upper"], check=entries.get("check"),
             lens=lens, work_area=work_area, binding=binding,
         )
+        return replace(model, evidence_schema_version=schema_version)

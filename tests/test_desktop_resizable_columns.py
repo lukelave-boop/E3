@@ -21,6 +21,8 @@ from laser_aligner.desktop.job_preflight import JobPreflightView
 from laser_aligner.desktop.job_preview import JobPreviewDialog
 from laser_aligner.desktop.machine_setup import MachineSetupDialog
 from laser_aligner.desktop.panels import LayerPanel, ObjectPanel, TracePanel
+from laser_aligner.desktop.precision_setup import PrecisionSetupDialog, BedSurveyDialog
+from laser_aligner.desktop.laser_focus import LaserFocusPanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
 from laser_aligner.gcode.job_plan import build_job_plan
 from laser_aligner.project import ImportScanManifest, ProjectDocument
@@ -40,6 +42,9 @@ _VIEW_INVENTORY = {
     ("machine_setup.py", "self.points"),
     ("machine_setup.py", "self.registration_results"),
     ("machine_setup.py", "self.validation_results"),
+    ("precision_setup.py", "self.sampling_table"),
+    ("precision_setup.py", "self.qual_table"),
+    ("precision_setup.py", "self.table"),
 }
 
 
@@ -80,6 +85,9 @@ def column_views(qt_application, tmp_path: Path):
     config.write_text(json.dumps(payload), encoding="utf-8")
     runtime = CoreRuntime.from_config(config, hardware_enabled=False)
     setup = MachineSetupDialog(runtime, navigation_only=True)
+    precision = PrecisionSetupDialog(setup)
+    focus = LaserFocusPanel(calibration_mode=True)
+    survey = BedSurveyDialog(focus)
     layers = LayerPanel()
     objects = ObjectPanel()
     trace = TracePanel()
@@ -104,13 +112,16 @@ def column_views(qt_application, tmp_path: Path):
         "Bed points": setup.points,
         "Registration": setup.registration_results,
         "Validation": setup.validation_results,
+        "Source sampling": precision.sampling_table,
+        "Physical qualification": precision.qual_table,
+        "Datum survey": survey.table,
     }
     assert len(views) == len(_VIEW_INVENTORY)
     yield views
     for view in views.values():
         view.close()
         view.deleteLater()
-    for widget in (setup, layers, objects, trace, audit, preflight, imports, preview):
+    for widget in (precision, survey, focus, setup, layers, objects, trace, audit, preflight, imports, preview):
         widget.close()
         widget.deleteLater()
     runtime.stop()

@@ -290,7 +290,9 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self._send_bytes(self.context.encode_jpeg(image, 96), "image/jpeg")
             elif path == "/api/workspace/frame.jpg":
                 refresh = query.get("refresh", ["0"])[0] == "1"
-                image = self.context.rectified_frame(refresh=refresh)
+                capture_id = query.get("capture_id", [""])[0]
+                image = (self.context.browser_placement_image(capture_id) if capture_id
+                         else self.context.rectified_frame(refresh=refresh))
                 self._send_bytes(self.context.encode_jpeg(image, 94), "image/jpeg")
             elif path == "/api/machine/status":
                 self._send_json({"ok": True, **self.context.machine.status()})
@@ -362,14 +364,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/calibration/bed/auto-accept":
                 self._send_json({"ok": True, **self.context.replace_bed_points(payload)})
             elif path == "/api/workspace/capture":
-                image = self.context.rectified_frame(
-                    refresh=True,
-                    precision=True,
-                    persist=True,
-                )
-                self._send_json({"ok": True, "width": image.shape[1], "height": image.shape[0]})
+                result = self._with_controller(self.context.capture_browser_placement)
+                self._send_json({"ok": True, **result})
             elif path == "/api/vision/workpiece":
-                self._send_json({"ok": True, **self.context.detect_workpiece()})
+                self._send_json({"ok": True, **self.context.detect_workpiece(capture_id=payload.get("capture_id"))})
             elif path == "/api/design/analyze":
                 self._send_json({"ok": True, **self.context.analyze_svg(str(payload["svg"]))})
             elif path == "/api/design/gcode":
@@ -394,6 +392,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                                 "G-code is required before laser control can be armed"
                             )
                         self.context.machine.ensure_connected()
+                        self.context.validate_material_surface_program(gcode)
                         program = self.context.machine.preflight_program(gcode)
                         until = self.context.machine.arm_program(
                             str(payload.get("phrase", "")),
@@ -423,6 +422,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, **result})
             elif path == "/api/machine/run":
+                self.context.validate_material_surface_program(str(payload["gcode"]))
                 result = self._with_controller(
                     lambda: self.context.machine.start_job(
                         str(payload["gcode"]),

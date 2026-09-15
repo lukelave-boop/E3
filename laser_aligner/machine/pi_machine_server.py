@@ -18,6 +18,7 @@ from typing import Any
 
 from ..errors import MachineError, SafetyError
 from ..identity import application_version, build_revision
+from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
@@ -107,6 +108,7 @@ MACHINE_ACTIONS = frozenset(
 )
 
 SERVER_CAPABILITIES = (
+    MATERIAL_SURFACE_CAPABILITY,
     "pi-mainboard-z-v1",
     "pi-laser-focus-v1",
     "pi-laser-focus-xy-v1",

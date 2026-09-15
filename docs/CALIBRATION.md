@@ -209,7 +209,13 @@ consensus strategy described above.
 
 ## Height/parallax limitation
 
-A planar homography is exact only for the plane used during calibration. A workpiece top surface above or below that plane appears shifted, especially near image edges. Until height compensation is implemented, perform bed mapping on the actual material top plane or keep material top surfaces at the calibrated height.
+A planar homography is exact only for the plane used during calibration. A workpiece
+top surface above or below that plane appears shifted, especially near image edges.
+The [precision placement workflow](PRECISION_PLACEMENT.md) uses fresh two-height
+camera evidence plus an independent middle check and a validated probe measurement
+to select the top plane. It preserves the support map and requires physical
+qualification. With height correction disabled, placement remains valid only for
+the calibrated plane; a diagnostic calibration pass does not establish 0.10 mm XY.
 
 ## Recalibrate when
 

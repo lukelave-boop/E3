@@ -954,6 +954,7 @@ class CameraPanel(QtWidgets.QWidget):
     monitorRequested = QtCore.Signal()
     refreshRequested = QtCore.Signal()
     captureRequested = QtCore.Signal()
+    placementCaptureRequested = QtCore.Signal()
     lensCalibrationRequested = QtCore.Signal()
     bedCalibrationRequested = QtCore.Signal()
     opacityChanged = QtCore.Signal(float)
@@ -1041,7 +1042,12 @@ class CameraPanel(QtWidgets.QWidget):
 
         self.refresh_button = QtWidgets.QPushButton("Refresh now")
         self.capture_button = QtWidgets.QPushButton("Save still image")
+        self.placement_capture_button = QtWidgets.QPushButton("Capture for placement")
+        self.placement_capture_button.setToolTip(
+            "Home and park with laser off, then capture the measured material surface. Keep the travel path clear."
+        )
         overlay_layout.addWidget(self.refresh_button)
+        overlay_layout.addWidget(self.placement_capture_button)
         overlay_layout.addWidget(self.capture_button)
         layout.addWidget(overlay_group)
 
@@ -1127,6 +1133,7 @@ class CameraPanel(QtWidgets.QWidget):
         self.refresh_button.clicked.connect(self.refreshRequested)
         self.monitor_button.clicked.connect(self.monitorRequested)
         self.capture_button.clicked.connect(self.captureRequested)
+        self.placement_capture_button.clicked.connect(self.placementCaptureRequested)
         self.lens_button.clicked.connect(self.lensCalibrationRequested)
         self.bed_button.clicked.connect(self.bedCalibrationRequested)
         self.opacity_slider.valueChanged.connect(
@@ -1234,6 +1241,7 @@ class CameraPanel(QtWidgets.QWidget):
         self.live_check.setEnabled(overlay_enabled)
         self.live_rate.setEnabled(overlay_enabled)
         self.refresh_button.setEnabled(overlay_enabled)
+        self.placement_capture_button.setEnabled(overlay_enabled)
         if not ready:
             self.image_state.setText(
                 "Bed mapping is required for a corrected overlay"

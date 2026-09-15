@@ -9,6 +9,7 @@ from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
 from ..errors import MachineError, SafetyError
 from .focus_bounds import FocusXYBounds
 from .mainboard import parse_status, validate_max_z
+from .material_surface import PREFIX as MATERIAL_SURFACE_PREFIX
 from .setup_motion import require_z_setup_speed, z_feed_mm_min
 from .z_probe import parse_position
 
@@ -57,7 +58,7 @@ def selected_plan(machine, program):
     # A first-move endpoint check alone cannot validate travel from the measured spot.
     from ..gcode.preview import parse_words
     for line in program.lines[1:]:
-        if line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
+        if line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX)):
             continue
         words = {w.letter: w.value for w in parse_words(line)}
         if words.get("G") in (0, 1):

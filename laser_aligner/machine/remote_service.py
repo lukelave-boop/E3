@@ -36,6 +36,9 @@ from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import validate_control
+from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
+from .material_surface import program_binding as material_surface_binding
+from .material_surface import snapshot_from_plan, validate_program_binding
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
@@ -312,6 +315,7 @@ class RemoteMachineService:
         self._monitor_wake = threading.Event()
         self._retired_boot_ids: set[str] = set()
         self._selected_job_focus: dict[str, Any] | None = None
+        self._material_honeycomb_height: float | None = None
         self._job_focus_required = False
         self._workpiece_focus_observed = False
         self._focus_observation_epoch = 0
@@ -1057,9 +1061,11 @@ class RemoteMachineService:
                 status["workpiece_focus"] = copy.deepcopy({
                     "job_focus_required": self._job_focus_required,
                     "job_focus": self._selected_job_focus,
+                    "honeycomb_height_mm": self._material_honeycomb_height,
                     "job_focus_block_reason": (self._job_focus_block_reason
                                                if self._selected_job_focus is None else None),
                 })
+                status["honeycomb_height_mm"] = self._material_honeycomb_height
             self._last_machine_status_monotonic = time.monotonic()
             self._last_node_response_monotonic = time.monotonic()
             self._machine_observation_sequence += 1
@@ -1800,10 +1806,13 @@ class RemoteMachineService:
             with self._state_lock:
                 self._require_workpiece_focus()
                 text = attach_job_focus(text, self._selected_job_focus)
-        return self._policy.preflight_program(
+        result = self._policy.preflight_program(
             text,
             guarded_output_polygon_mm=guarded_output_polygon_mm,
         )
+        if material_surface_binding(result.lines) is not None:
+            self._require_material_surface_capability()
+        return result
 
     def _require_current_program(self, program: ValidatedProgram) -> None:
         if type(program) is not ValidatedProgram:
@@ -1826,6 +1835,40 @@ class RemoteMachineService:
                     raise SafetyError("Workpiece focus changed after preflight; prepare the job again")
                 if token is not None and self._selected_job_focus is None:
                     raise SafetyError("Measured workpiece focus is no longer current; measure the workpiece again")
+        if material_surface_binding(program.lines) is not None:
+            self._require_material_surface_capability()
+            validate_program_binding(program.lines, self.material_surface_snapshot())
+
+    def _require_material_surface_capability(self) -> None:
+        if MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ()):
+            raise SafetyError("Update the Pi companion before using material-plane corrected jobs")
+
+    def material_surface_snapshot(self) -> dict[str, Any] | None:
+        """Return accepted, fresh Pi measurement evidence without network I/O."""
+        with self._state_lock:
+            now = time.monotonic()
+            if (self._selected_job_focus is None or self._detached
+                    or self._status_cache.get("connected") is not True
+                    or self._controller_state != "READY_MOTION"):
+                return None
+            if (
+                MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ())
+                or not self._capabilities_verified or not self._workpiece_focus_observed
+                or self._last_machine_status_monotonic is None
+                or now - self._last_machine_status_monotonic > _MACHINE_STATUS_MAX_AGE_SECONDS
+                or self._status_cache.get("status_stale") is not False
+                or self._status_cache.get("monitor_connected") is not True
+            ):
+                raise SafetyError("Selected material surface status is stale or incompatible; refresh the Pi and measure again")
+            try:
+                result = snapshot_from_plan(
+                    self._selected_job_focus, honeycomb_height_mm=self._material_honeycomb_height,
+                )
+                if result["session"][1] != self._controller_session_generation:
+                    raise SafetyError("Selected material surface controller session changed; measure the workpiece again")
+                return result
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SafetyError("Selected material surface metadata is invalid; measure the workpiece again") from exc
 
     def _require_workpiece_focus(self) -> None:
         capabilities = self._node_capabilities or ()
@@ -1839,6 +1882,7 @@ class RemoteMachineService:
     def _cache_workpiece_focus(self, raw: object) -> None:
         """Cache only accepted Pi evidence; this never creates focus authority."""
         self._selected_job_focus = None
+        self._material_honeycomb_height = None
         self._workpiece_focus_observed = False
         if not isinstance(raw, Mapping) or type(raw.get("job_focus_required")) is not bool:
             self._job_focus_required = True
@@ -1848,6 +1892,13 @@ class RemoteMachineService:
         if reason is not None and (type(reason) is not str or not 1 <= len(reason) <= 2048):
             raise PiJobProtocolError("Pi returned an invalid workpiece focus reason")
         self._job_focus_block_reason = reason or "Measure the workpiece before starting a powered job"
+        honeycomb = raw.get("honeycomb_height_mm")
+        if honeycomb is not None:
+            try:
+                self._material_honeycomb_height = finite_number(honeycomb, "Honeycomb height", -10, 10)
+                self._status_cache["honeycomb_height_mm"] = self._material_honeycomb_height
+            except SafetyError as exc:
+                raise PiJobProtocolError(str(exc)) from exc
         plan = raw.get("job_focus")
         if plan is None:
             self._workpiece_focus_observed = True
@@ -1904,6 +1955,9 @@ class RemoteMachineService:
             with self._state_lock:
                 if self._authorization_epoch != authorization_epoch:
                     raise MachineError("Arming was cancelled by disarm")
+                if material_surface_binding(program.lines) is not None:
+                    self._require_material_surface_capability()
+                    validate_program_binding(program.lines, self.material_surface_snapshot())
                 self._armed_until = time.time() + timeout
                 self._armed_until_monotonic = time.monotonic() + timeout
                 self._armed_program_digest = program.digest
@@ -2103,6 +2157,23 @@ class RemoteMachineService:
             validate_max_z(result.get("max_z_mm"))
         except SafetyError as exc:
             raise PiJobProtocolError(str(exc)) from exc
+        if MATERIAL_SURFACE_CAPABILITY in (self._node_capabilities or ()):
+            reference, reference_id = result.get("reference"), result.get("reference_id")
+            try:
+                if result.get("reference_ready") is True:
+                    if (type(reference) is not dict or set(reference) != {"border_z_mm", "firmware", "geometry"}
+                            or type(reference_id) is not str or str(uuid.UUID(reference_id)) != reference_id
+                            or type(reference["firmware"]) is not str or not reference["firmware"]
+                            or reference["geometry"] != result.get("firmware_geometry")):
+                        raise ValueError("inconsistent reference identity")
+                    finite_number(reference["border_z_mm"], "Border reference", -.5, .5)
+                elif result.get("reference_ready") is not False or reference is not None or reference_id is not None:
+                    raise ValueError("unexpected reference without current authority")
+            except (ValueError, TypeError, SafetyError) as exc:
+                with self._state_lock:
+                    self._selected_job_focus = None
+                    self._workpiece_focus_observed = False
+                raise PiJobProtocolError("Pi returned an invalid current border reference identity") from exc
         self._require_operation_current(generation)
         with self._stop_epoch_lock, self._state_lock:
             if self._stop_epoch != generation:
@@ -2721,6 +2792,9 @@ class RemoteMachineService:
                 raise
 
             try:
+                if material_surface_binding(program.lines) is not None:
+                    self._require_material_surface_capability()
+                    validate_program_binding(program.lines, self.material_surface_snapshot())
                 authorization_phrase = self._authorization_phrase_for_start(
                     authorization
                 )

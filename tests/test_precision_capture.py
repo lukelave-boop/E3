@@ -338,7 +338,8 @@ def test_dense_capture_uses_precision_burst_and_explicit_grid_mode() -> None:
     assert int(image[0, 0, 0]) == 20
 
 
-def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> None:
+@pytest.mark.parametrize("pixels_per_mm", [None, 8.0])
+def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path, pixels_per_mm) -> None:
     calls: list[str] = []
     frame = np.full((8, 8, 3), 80, dtype=np.uint8)
     holding = False
@@ -377,6 +378,7 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
     harness = SimpleNamespace(
         _simulation_workspace_lock=threading.RLock(),
         _simulation_workspace_image=None,
+        material_surface_signature=lambda: None,
         _require_valid_bed_calibration=lambda: calls.append("validate"),
         machine=SimpleNamespace(
             temporary_stepper_hold=temporary_hold,
@@ -390,7 +392,7 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
             _sharpness_score=score,
         ),
         lens=SimpleNamespace(model=None),
-        _rectify_camera_image=lambda image: calls.append("rectify") or image.copy(),
+        _rectify_camera_image=lambda image, **options: calls.append("rectify") or image.copy(),
         workspace_path=tmp_path / "trace-workspace.png",
         _cache_workspace=lambda image: calls.append("cache"),
         _persist_workspace=lambda image: (
@@ -404,7 +406,7 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
     )
 
     timing: dict[str, float] = {}
-    result = AppContext.capture_parked_trace_frame(harness, timing=timing)
+    result = AppContext.capture_parked_trace_frame(harness, timing=timing, pixels_per_mm=pixels_per_mm)
 
     assert calls == [
         "validate",
@@ -414,11 +416,9 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
         "hold:end",
         "score:False",
         "rectify",
-        "cache",
-        "persist",
-    ]
+    ] + (["cache", "persist"] if pixels_per_mm is None else [])
     assert np.array_equal(result, frame)
-    assert harness.workspace_path.exists()
+    assert harness.workspace_path.exists() is (pixels_per_mm is None)
     assert timing.keys() == {
         "prepare_photo_seconds",
         "hold_acquisition_seconds",
@@ -453,6 +453,7 @@ def test_trace_capture_home_failure_never_acquires_stepper_hold() -> None:
         raise MachineError("simulated Home / park failure")
 
     harness = SimpleNamespace(
+        material_surface_signature=lambda: None,
         _require_valid_bed_calibration=lambda: calls.append("validate"),
         machine=SimpleNamespace(
             prepare_photo_position=fail_home,
@@ -487,6 +488,7 @@ def test_trace_capture_exception_releases_stepper_hold() -> None:
         raise CameraError("simulated capture cancellation")
 
     harness = SimpleNamespace(
+        material_surface_signature=lambda: None,
         _require_valid_bed_calibration=lambda: calls.append("validate"),
         machine=SimpleNamespace(
             prepare_photo_position=lambda: calls.append("home"),

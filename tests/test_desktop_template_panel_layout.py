@@ -80,7 +80,7 @@ def test_template_panel_actions_fit_360px_with_large_windows_text(
     ] == [
         "Save project",
         "Auto align",
-        "Align selected",
+        "Align workpiece",
         "Create cuts",
         "Generate",
         "Clear preview",
@@ -120,7 +120,7 @@ def test_template_panel_restores_full_actions_when_space_is_available(
     )
     assert panel.save_button.text() == "From current project…"
     assert panel.auto_button.text() == "Auto identify and align"
-    assert panel.match_selected_button.text() == "Align selected template"
+    assert panel.match_selected_button.text() == "Align to workpiece"
     assert panel.apply_button.text() == "Create aligned cut objects"
     assert panel.generate_button.text() == "Generate"
     assert panel.clear_button.text() == "Clear template preview"
