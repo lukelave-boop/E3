@@ -10,12 +10,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from laser_aligner.desktop import setup_wizard
+from laser_aligner.desktop.laser_focus import LaserFocusPanel
 from laser_aligner.desktop.machine_setup import MachineSetupDialog
 from laser_aligner.desktop.qt import require_qt
 from laser_aligner.setup_workflow import SETUP_STEPS, StepStatus, evaluate_setup_steps
 from tests.test_desktop_machine_setup import _runtime, _wait_until
 
-_, _, QtWidgets = require_qt()
+QtCore, _, QtWidgets = require_qt()
 
 
 @pytest.fixture
@@ -57,8 +58,8 @@ def test_navigation_and_review_do_not_dispatch_actions_or_write_evidence(app, di
         settle(app, dialog)
         assert wizard.index == index
     assert not calls
-    assert "does not establish" in wizard.instructions.text()
-    assert "BLOCKED" in wizard.evidence.toPlainText()
+    assert "does not establish" in wizard.instructions.toPlainText()
+    assert "Finish Step" in wizard.evidence.toPlainText()
     assert list(dialog.context.surface_calibration.path.parent.glob("*precision*")) == before
     wizard.next.click()
     assert not wizard.isVisible()
@@ -134,12 +135,12 @@ def test_refresh_replaces_accepted_snapshot_with_stale_reason(app, dialog, monke
     settle(app, dialog)
     wizard.select_step(7)
     settle(app, dialog)
-    assert "COMPLETE" in wizard.evidence.toPlainText()
+    assert "saved result is current" in wizard.evidence.toPlainText()
     current["qualification"] = StepStatus("qualification", "stale", "Setup identity changed", "qualification")
     wizard.refresh.click()
     settle(app, dialog)
-    assert "STALE: Setup identity changed" in wizard.evidence.toPlainText()
-    assert "COMPLETE" not in wizard.evidence.toPlainText()
+    assert "no longer matches" in wizard.evidence.toPlainText()
+    assert "saved result is current" not in wizard.evidence.toPlainText()
 
 
 def test_observational_refresh_preserves_focus_evidence(app, dialog):
@@ -175,6 +176,8 @@ def test_evidence_read_preserves_photo_pose_but_controller_change_invalidates(ap
     dialog.setup_wizard.begin()
     assert dialog._photo_pose_confirmed
     assert not dialog.registration_recapture_button.isEnabled()
+
+
     settle(app, dialog)
     assert dialog._photo_pose_confirmed
     assert dialog.registration_recapture_button.isEnabled()
@@ -182,3 +185,77 @@ def test_evidence_read_preserves_photo_pose_but_controller_change_invalidates(ap
     dialog.set_machine_status(ready)
     assert not dialog._photo_pose_confirmed
     assert not dialog.registration_recapture_button.isEnabled()
+
+
+def test_focus_steps_reveal_exact_controls_and_name_the_missing_step(app, dialog):
+    panel = LaserFocusPanel(calibration_mode=True)
+    scroll = QtWidgets.QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setWidget(panel)
+    dialog.tabs.removeTab(6)
+    dialog.tabs.addTab(scroll, "Focus")
+    dialog.focus_workspace = SimpleNamespace(
+        panel=panel,
+        coordinator=SimpleNamespace(mutation_busy=False, set_external_busy=lambda busy: None),
+        set_machine_status=lambda status: None, shutdown=lambda **kwargs: True,
+    )
+    actions = []
+    panel.actionRequested.connect(lambda *args: actions.append(args))
+    dialog.show()
+    wizard = dialog.setup_wizard
+    wizard.begin()
+    settle(app, dialog)
+    wizard.select_step(4)
+    settle(app, dialog)
+    assert dialog._navigation_highlighted_widget is panel.measure
+    assert "Finish Step 4" in wizard.evidence.toPlainText()
+    assert "save honeycomb height" in wizard.prerequisite.text()
+    assert "datum" not in wizard.evidence.toPlainText()
+    wizard.prerequisite.click()
+    settle(app, dialog)
+    assert wizard.index == 3
+    assert dialog._navigation_highlighted_widget is panel.save_honeycomb
+    assert "Copy average to Honeycomb height" in wizard.instructions.toPlainText()
+    assert "Save honeycomb height" in wizard.instructions.toPlainText()
+    for target, control in (("focus_reference", panel.reference), ("focus_teach", panel.teach),
+                            ("honeycomb_height", panel.save_honeycomb)):
+        wizard.follow_instruction(QtCore.QUrl("machine_setup." + target))
+        app.processEvents()
+        assert dialog._navigation_highlighted_widget is control
+        point = control.mapTo(scroll.viewport(), control.rect().center())
+        assert scroll.viewport().rect().contains(point)
+    assert not actions
+
+
+def test_instruction_links_only_dispatch_known_tools(app, dialog, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dialog, "navigate_setup_step", calls.append)
+    wizard = dialog.setup_wizard
+    for link in ("tool:datum", "tool:precision", "tool:heights", "tool:qualification"):
+        wizard.follow_instruction(QtCore.QUrl(link))
+    assert calls == ["datum", "precision", "heights", "qualification"]
+    wizard.follow_instruction(QtCore.QUrl("tool:home"))
+    wizard.follow_instruction(QtCore.QUrl("https://example.com"))
+    assert len(calls) == 4
+
+
+def test_compact_wizard_keeps_navigation_above_tools_and_restores_layout(app, dialog):
+    dialog.show()
+    dialog.resize(900, 680)
+    policy = dialog.tabs.sizePolicy()
+    note_hidden = dialog.preferences_note.isHidden()
+    wizard = dialog.setup_wizard
+    wizard.begin()
+    settle(app, dialog)
+    wizard.select_step(3)
+    settle(app, dialog)
+    app.processEvents()
+    assert wizard.geometry().bottom() < dialog.tabs.geometry().top()
+    assert wizard.next.geometry().bottom() <= wizard.rect().bottom()
+    assert wizard.instructions.geometry().bottom() < wizard.evidence.geometry().top()
+    assert dialog.machine_stop_button.isVisible()
+    wizard.begin()
+    settle(app, dialog)
+    wizard.leave()
+    assert dialog.tabs.sizePolicy() == policy
+    assert dialog.preferences_note.isHidden() == note_hidden

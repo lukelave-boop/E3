@@ -1723,6 +1723,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def focus_navigation_target(self, target: str) -> bool:
         """Select and visibly focus a stable, UI-only Machine Setup destination."""
 
+        if self.operation_busy or self._shutdown_started:
+            return False
         destinations: dict[str, tuple[int, QtWidgets.QWidget]] = {
             "machine_setup.camera": (0, self.camera_guidance),
             "machine_setup.lens": (1, self.lens_guidance),
@@ -1731,6 +1733,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
             "machine_setup.accuracy_validation": (4, self.validation_guidance),
             "machine_setup.coordinate_audit": (5, self.audit_guidance),
         }
+        panel = getattr(self.focus_workspace, "panel", None)
+        if panel is not None:
+            destinations.update({
+                "machine_setup.focus_reference": (6, panel.reference),
+                "machine_setup.focus_probe": (6, panel.position_probe),
+                "machine_setup.honeycomb_height": (6, panel.save_honeycomb),
+                "machine_setup.focus_measure": (6, panel.measure),
+                "machine_setup.focus_teach": (6, panel.teach),
+            })
         destination = destinations.get(str(target))
         if destination is None:
             return False
@@ -1738,12 +1749,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         previous = self._navigation_highlighted_widget
         if previous is not None and previous is not widget:
             previous.setProperty("navigationHighlighted", False)
-            previous.setStyleSheet("")
+            previous.setStyleSheet(previous.property("navigationOriginalStyle") or "")
+        if previous is not widget:
+            widget.setProperty("navigationOriginalStyle", widget.styleSheet())
         self._navigation_highlighted_widget = widget
         widget.setProperty("navigationHighlighted", True)
-        selector = (
-            "QGroupBox" if isinstance(widget, QtWidgets.QGroupBox) else "QFrame"
-        )
+        if not widget.objectName():
+            widget.setObjectName(str(target).replace(".", "_"))
+        selector = ("QPushButton" if isinstance(widget, QtWidgets.QPushButton) else
+                    "QGroupBox" if isinstance(widget, QtWidgets.QGroupBox) else "QFrame")
         widget.setStyleSheet(
             f"{selector}#{widget.objectName()} {{ border: 2px solid #4f9cff; "
             "border-radius: 4px; }}"
@@ -1751,7 +1765,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
         self.tabs.setCurrentIndex(tab_index)
-        scroll = self.tabs.widget(tab_index)
+        scroll = widget.parentWidget()
+        while scroll is not None and not isinstance(scroll, QtWidgets.QScrollArea):
+            scroll = scroll.parentWidget()
 
         def reveal() -> None:
             if isinstance(scroll, QtWidgets.QScrollArea):

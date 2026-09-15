@@ -1,5 +1,16 @@
 # Precision placement and measured surface height
 
+## Plain-language wizard controls
+
+Follow the wizard pages in order. Each now shows numbered actions and clickable
+links to the relevant controls. **Check progress** checks saved settings and
+measurements; **Troubleshooting details** explains technical failures.
+**Level the bed and save honeycomb height** replaces the former datum title.
+Honeycomb height means bare-bed height relative to the black border. The wizard
+links directly to border referencing, bed-leveling measurements and the separate
+**Save honeycomb height** button, so completing Step 4 has an explicit last action.
+
+
 ## Target and present status
 
 The acceptance target is **0.10 mm maximum radial XY placement error, including

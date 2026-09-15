@@ -1,5 +1,26 @@
 # Native machine setup
 
+## Follow the wizard instructions
+
+Each wizard page now explains the purpose and gives numbered actions with links
+to the exact controls. **Check progress** reads saved photos, measurements and
+settings; **Troubleshooting details** holds the technical reasons. A missing
+step is named with its number and plain-language title.
+
+Step 4 is **Level the bed and save honeycomb height**. Honeycomb height is the
+height of the bare honeycomb relative to the black border, also called a datum.
+Use the linked border-reference controls, open **Bed leveling measurements**,
+record five fresh measurements of the same known-thickness rigid block, review
+the heights, and use **Copy average to Honeycomb height**. Close that window and
+explicitly click **Save honeycomb height**, then **Check progress**. Copying is
+not saving. The link reveals and highlights the actual save button.
+
+Step 5 links to **Position probe**, **Measure surface**, and the gauge controls.
+Its instructions put **Return laser to measured spot** between measuring and
+teaching the 7 mm gap. Follow the wizard order; the separate tool tabs have their
+own older numbering. Navigation never presses a movement or save button.
+
+
 The **Setup wizard** presents eight stages: camera restraint and controls, lens
 calibration, support mapping, five-position leveling/datum, gauge focus, precision
 assessment, surface-height calibration and independent XY qualification. A final
@@ -37,7 +58,7 @@ Registration, Accuracy Validation and Coordinate Audit. Choose **Setup wizard**
 again to return to the same guided stage. **Setup guide** still opens the
 runbook and checklist. These checklist marks remain operator notes.
 
-Refresh evidence to read the shared current setup snapshot. Unavailable, blocked
+Check progress to read the shared current setup snapshot. Unavailable, blocked
 or stale evidence remains visible with its reason. The final review reports
 those statuses; browsing to it does not establish calibration or physical
 placement accuracy. Navigation is held while an operation is active, and the

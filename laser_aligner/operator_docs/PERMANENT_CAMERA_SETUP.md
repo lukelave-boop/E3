@@ -1,11 +1,34 @@
 # Permanent Camera Setup Runbook
 
+## Start with the wizard
+
+Follow **Setup wizard** pages 1 through 8. The detailed tool chapters below use
+their older tool numbering. The wizard gives numbered actions and links that
+reveal the actual buttons. **Check progress** checks saved settings and
+measurements; detailed technical reasons are under **Troubleshooting details**.
+
+For Step 4, **Level the bed and save honeycomb height**:
+
+1. Follow the link to establish the black-border reference using the guarded
+   reference controls and their physical clearance confirmations.
+2. Open **Bed leveling measurements**. Measure the same rigid block of known
+   thickness at four corners and the center; reopen the measurements window
+   after each reading and use **Record this position**.
+3. Review the five heights. Repeat all five readings after any leveling change.
+4. Choose **Copy average to Honeycomb height**, close the measurements window,
+   and explicitly click the highlighted **Save honeycomb height** button.
+5. Click **Check progress**, then continue to Step 5 for the 7 mm gauge.
+
+Honeycomb height is the bare-bed height relative to the black border. Older
+technical descriptions call it the datum. Copying the average does not save it.
+
+
 Applies to E3 Positioning System `0.7.x`, its existing calibration tabs,
 read-only **Coordinate Audit**, **Z / laser focus**, and guided precision setup.
 
 Use this runbook's Steps 1–5 to establish the camera and support mapping. In
 Machine Setup, **Setup wizard** presents eight guided stages and a final
-evidence review using the existing controls. It links to the leveling survey,
+progress review using the existing controls. It links to the leveling survey,
 measured focus, one-height precision assessment, surface-height calibration and
 independent XY qualification. **Back** and **Next** only browse the stages; use
 the explicit controls to perform actions and save evidence.
@@ -13,7 +36,7 @@ the explicit controls to perform actions and save evidence.
 Choose **All setup tools** for the seven tabs used in this runbook, including
 Fine Registration, Accuracy Validation and Coordinate Audit. **Setup wizard**
 resumes the same stage when reopened. **Setup guide** retains this runbook and
-the checklist. Refresh evidence after using a tool; the review lists current,
+the checklist. Check progress after using a tool; the review lists current,
 missing and stale evidence without declaring the machine calibrated. Navigation
 is held during an active operation, and **STOP / LASER OFF** remains available.
 A diagnostic calibration PASS is not a 0.10 mm XY claim.

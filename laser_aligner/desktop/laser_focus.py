@@ -133,7 +133,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.honeycomb_note = QtWidgets.QLabel("Enter the measured bed height relative to the border. Saving clears the workpiece measurement; measure again before running a job.")
         self.honeycomb_note.setWordWrap(True)
         honeycomb_layout.addWidget(self.honeycomb_note)
-        self.bed_survey_button = QtWidgets.QPushButton("Bed leveling and datum — five-position survey")
+        self.bed_survey_button = QtWidgets.QPushButton("Bed leveling measurements (5 positions)")
         self.bed_survey_button.clicked.connect(self.open_bed_survey)
         honeycomb_layout.addWidget(self.bed_survey_button)
         layout.addWidget(self.honeycomb_group)

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - clearer setup wizard
+
+- Replace evidence jargon with numbered instructions, Check progress and named
+  prerequisite steps. Keep technical reasons in Troubleshooting details.
+- Reveal and highlight the actual reference, probing, measurement, gauge and
+  Save honeycomb height controls from instruction links.
+- Give the bed-leveling window an explicit measure/record/copy/save sequence.
+  Copying an average still requires a separate explicit save.
+
+
 ## Unreleased - step-by-step Machine Setup wizard
 
 - Add eight guided setup stages and a final evidence review within Machine

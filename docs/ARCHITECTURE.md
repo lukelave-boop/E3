@@ -1,5 +1,15 @@
 # Architecture
 
+## Wizard instructions and navigation
+
+`desktop/setup_instructions.py` translates shared step IDs and statuses into
+operator instructions. IDs, saved records and completion rules remain unchanged.
+Links only select and reveal allowlisted existing tools. Focus destinations
+scroll to the actual button in the nested workspace and retain its normal style
+after highlighting. Busy navigation is rejected. Machine commands still require
+their original explicit controls and guards.
+
+
 ## Precision material-surface placement
 
 `AppContext` owns the shared UI-neutral `MaterialWorkspaceMixin`. It derives an

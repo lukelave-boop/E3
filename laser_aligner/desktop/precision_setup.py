@@ -408,14 +408,16 @@ class BedSurveyDialog(QtWidgets.QDialog):
         self.panel = panel
         self.store = getattr(panel, "precision_evidence_store", None)
         self.survey: BedSurvey | None = None
-        self.setWindowTitle("Bed leveling and datum — five positions")
+        self.setWindowTitle("Bed leveling measurements (5 positions)")
         self.resize(650, 540)
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(_note(
-            "First reference the fixed border. Place the same rigid target of known thickness at each "
-            "corner and center. Position the probe over solid material using the existing controls, "
-            "measure, then record that position here. Adjust leveling screws manually and repeat the "
-            "whole survey. This records bed shape; it does not perform mesh compensation."
+            "1. Establish the black-border reference in the main setup page first.\n"
+            "2. Put the same rigid, flat block at the selected corner or center. Enter its measured thickness below.\n"
+            "3. Show probe positioning controls, select a solid spot on the block, and explicitly use Measure surface.\n"
+            "4. Reopen Bed leveling measurements and click Record this position. Repeat for all five positions.\n"
+            "5. Compare the heights. After any screw adjustment, start a new survey and repeat all five. "
+            "Copy the reviewed average, close this window, then explicitly Save honeycomb height."
         ))
         self.region = QtWidgets.QComboBox()
         for region in SURVEY_REGIONS:
@@ -423,18 +425,18 @@ class BedSurveyDialog(QtWidgets.QDialog):
         self.thickness = _spin(0, 100)
         form = QtWidgets.QFormLayout()
         form.addRow("Target position", self.region)
-        form.addRow("Known rigid target thickness", self.thickness)
+        form.addRow("Block thickness (measured)", self.thickness)
         layout.addLayout(form)
         row = QtWidgets.QHBoxLayout()
-        position = QtWidgets.QPushButton("Use existing probe positioning")
+        position = QtWidgets.QPushButton("Show probe positioning controls")
         position.clicked.connect(self._position)
-        self.record = QtWidgets.QPushButton("Record current measured surface")
+        self.record = QtWidgets.QPushButton("Record this position")
         self.record.clicked.connect(self._record)
         row.addWidget(position)
         row.addWidget(self.record)
         layout.addLayout(row)
         self.table = QtWidgets.QTableWidget(5, 3)
-        self.table.setHorizontalHeaderLabels(("Position", "Measured carriage X / Y mm", "Bed elevation mm"))
+        self.table.setHorizontalHeaderLabels(("Position", "Machine X / Y (mm)", "Honeycomb height (mm)"))
         configure_resizable_columns(self.table, (130, 260, 155))
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         for row, region in enumerate(SURVEY_REGIONS):
@@ -442,7 +444,7 @@ class BedSurveyDialog(QtWidgets.QDialog):
         layout.addWidget(self.table)
         self.summary = _note("No survey recorded.")
         layout.addWidget(self.summary)
-        self.use_mean = QtWidgets.QPushButton("Copy surveyed mean into honeycomb height editor")
+        self.use_mean = QtWidgets.QPushButton("Copy average to Honeycomb height")
         self.use_mean.setEnabled(False)
         self.use_mean.clicked.connect(self._use_mean)
         layout.addWidget(self.use_mean)
@@ -475,6 +477,11 @@ class BedSurveyDialog(QtWidgets.QDialog):
     def _position(self) -> None:
         self.panel.position_probe.setChecked(True)
         self.hide()
+        setup = self.parentWidget()
+        while setup is not None and not hasattr(setup, "focus_navigation_target"):
+            setup = setup.parentWidget()
+        if setup is not None:
+            setup.focus_navigation_target("machine_setup.focus_probe")
 
     def _reset(self) -> None:
         self.survey = None
@@ -522,8 +529,8 @@ class BedSurveyDialog(QtWidgets.QDialog):
             if result["count"] == 5 and not result["coverage_valid"]:
                 text += "Measured XY does not cover four distinct corners and the center. "
             if self.survey.saved_datum:
-                text += f"Associated saved honeycomb datum: {self.survey.saved_datum['value_mm']:+.3f} mm. "
-            text += "Review tilt and center deviation before saving a datum."
+                text += f"Saved honeycomb height: {self.survey.saved_datum['value_mm']:+.3f} mm. "
+            text += "Compare the five heights before saving Honeycomb height."
             self.summary.setText(text)
         try:
             current = self._binding() == self.survey.binding
@@ -557,6 +564,11 @@ class BedSurveyDialog(QtWidgets.QDialog):
                 raise ValueError("Survey mean is outside the honeycomb datum editor range")
             self.panel.honeycomb_height.setValue(value)
             self.panel._edit_honeycomb()
-            self.summary.setText("Mean copied. Review it, then use Save honeycomb height explicitly. No command was sent.")
+            setup = self.parentWidget()
+            while setup is not None and not hasattr(setup, "focus_navigation_target"):
+                setup = setup.parentWidget()
+            if setup is not None:
+                setup.focus_navigation_target("machine_setup.honeycomb_height")
+            self.summary.setText("Average copied, but not saved. Close this window and click Save honeycomb height on the highlighted control.")
         except Exception as exc:
             self.summary.setText(str(exc))

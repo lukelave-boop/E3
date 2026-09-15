@@ -1,5 +1,30 @@
 # Current repository state
 
+## Clearer setup wizard (2026-09-15, operator feedback)
+
+Operator testing of 0.7.163 found the wizard unclear: Step 5 requested "datum",
+but Step 4 did not visibly reveal the Honeycomb height controls or explain how
+to complete the step. This is interactive operator feedback, not a physical
+calibration result. Earlier offscreen tests did not establish usability.
+
+The wizard now uses plain-language titles, numbered instructions, Check progress
+and named prerequisite buttons. Technical status reasons move to Troubleshooting
+details. Instruction links reveal and highlight the exact nested reference,
+probe-position, surface-measurement, gauge and Save honeycomb height controls.
+Bed leveling measurements explains the five-measurement sequence and the
+separate copy-average and explicit-save actions. Existing step IDs, completion
+rules, file schemas, controller handlers and safety gates remain unchanged.
+Desktop navigation only; no browser or Pi companion changes.
+
+Verification: 270 focused Windows desktop/setup tests passed, repository Ruff
+and compileall passed. Offscreen simulator screenshots at 900 x 680 show Step 4
+instructions, navigation and the highlighted save control without overlap;
+STOP remains visible. Interactive operator acceptance is pending. The replacement
+frozen feature build is in progress.
+No hardware commands or physical calibration tests have been performed here.
+Compatibility CI/integration still await the earlier GitHub upload approval.
+
+
 ## Step-by-step setup wizard (2026-09-15 UTC, feature verification)
 
 The desktop now has Machine Setup > Setup wizard: eight shared setup stages,

@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Clearer setup instructions
+
+The Setup wizard now gives numbered instructions and links that reveal the exact
+controls. Step 4 is **Level the bed and save honeycomb height**; Step 5 names that
+step when it needs finishing. **Check progress** checks saved settings and
+measurements; technical reasons are available under **Troubleshooting details**.
+
+
 ## Precision placement and guided setup
 
 The precision workflow targets **0.10 mm maximum radial XY error including
@@ -9,7 +17,7 @@ honeycomb including spacers. Physical qualification is pending. Use
 place designs → Preview → Run**. Native-detail analysis, continuous template
 placement, measured-height mapping and stale-job rejection are described in
 [Precision placement](docs/PRECISION_PLACEMENT.md). Open **Tools → Machine
-Setup… → Setup wizard** for eight guided stages and an evidence review.
+Setup… → Setup wizard** for eight guided stages and an progress review.
 **Back** and **Next** browse setup; use each stage's explicit controls to perform
 actions or save evidence. **All setup tools** restores the seven setup tabs.
 Height-aware jobs require the matching Pi companion. New saves use project

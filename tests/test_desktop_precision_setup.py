@@ -172,7 +172,7 @@ def test_survey_only_copies_complete_current_results_into_editor(app, tmp_path):
     assert survey.use_mean.isEnabled()
     survey.use_mean.click()
     assert not events
-    assert "No command was sent" in survey.summary.text()
+    assert "Average copied, but not saved" in survey.summary.text()
     assert panel.honeycomb_height.value() == pytest.approx(-.98)
     assert panel.precision_evidence_store.load()["bed_survey"]["saved_datum"] is None
     panel.set_result(dict(payload, action="set_honeycomb_height", honeycomb_height_mm=-.98))

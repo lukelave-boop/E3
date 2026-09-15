@@ -1,5 +1,13 @@
 # Roadmap
 
+## Setup wizard operator feedback
+
+The operator found the progress wording and Step 4/5 handoff unclear. Plain
+step names, ordered instructions and direct control links address this feedback.
+Retest the complete setup path with the operator; software checks alone do not
+verify usability or physical calibration.
+
+
 ## Precision placement qualification
 
 The measured-surface placement path and step-by-step Machine Setup wizard are
