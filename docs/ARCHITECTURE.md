@@ -17,8 +17,16 @@ metadata participates in immutable program digests, is validated with the curren
 measurement at Arm/Start and is consumed before serial output. The Pi advertises
 support explicitly. `setup_workflow.py` stores independent checklist, survey,
 repeatability and physical qualification evidence without Qt or controller calls.
-The desktop renders these definitions with links to existing guarded actions.
-See [precision placement](PRECISION_PLACEMENT.md) for qualification boundaries.
+The desktop guide and embedded Machine Setup wizard share one observational
+evidence snapshot and the same status evaluator. The wizard presents eight
+stages plus evidence review around the existing tab controls. Back/Next select
+a stage; explicit tool buttons dispatch the existing survey, height and precision
+dialogs. Navigation does not perform an action or complete evidence. Wizard
+position is separate from the seven physical tab indices, and All setup tools
+restores those tabs while retaining the selected wizard stage. Busy operations
+hold navigation; the existing STOP control remains available. This is a desktop
+presentation change with no new controller, motion or Pi path. See
+[precision placement](PRECISION_PLACEMENT.md) for qualification boundaries.
 
 ## Home/job focus and cooling lock order
 

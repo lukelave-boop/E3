@@ -7,8 +7,11 @@ measurement uncertainty**, on a flat parallel surface up to 20 mm above the
 honeycomb including spacers. Physical qualification is pending. Use
 **Measure surface → Capture for placement → optional Align to workpiece →
 place designs → Preview → Run**. Native-detail analysis, continuous template
-placement, measured-height mapping, stale-job rejection and a guided setup
-checklist are described in [Precision placement](docs/PRECISION_PLACEMENT.md).
+placement, measured-height mapping and stale-job rejection are described in
+[Precision placement](docs/PRECISION_PLACEMENT.md). Open **Tools → Machine
+Setup… → Setup wizard** for eight guided stages and an evidence review.
+**Back** and **Next** browse setup; use each stage's explicit controls to perform
+actions or save evidence. **All setup tools** restores the seven setup tabs.
 Height-aware jobs require the matching Pi companion. New saves use project
 schema 4; existing schema 1–3 geometry is preserved on load.
 

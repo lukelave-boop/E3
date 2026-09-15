@@ -910,6 +910,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.preferences_note.setWordWrap(True)
         self.preferences_note.setObjectName("mutedLabel")
         layout.addWidget(self.preferences_note)
+        from .setup_wizard import SetupWizardPanel
+
+        self.setup_wizard = SetupWizardPanel(self)
+        self.setup_wizard.hide()
+        layout.addWidget(self.setup_wizard)
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs, 1)
         self._build_camera_tab()
@@ -964,6 +969,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.setup_guide_button.clicked.connect(
             lambda: show_setup_guide(self, self.tabs.currentIndex())
         )
+        self.setup_wizard_button = self.dialog_buttons.addButton(
+            "Setup wizard", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.setup_wizard_button.clicked.connect(self.setup_wizard.begin)
         self.precision_setup_button = self.dialog_buttons.addButton(
             "Precision setup", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
         )
@@ -1017,8 +1026,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         busy = self.operation_busy
         self.tabs.setEnabled(not local_busy)
         for index in range(self.tabs.count()):
-            self.tabs.setTabEnabled(index, not busy or index == 6)
+            self.tabs.setTabEnabled(index, not busy or local_busy or index == 6)
         self.close_button.setEnabled(not busy)
+        self.setup_wizard_button.setEnabled(not busy)
+        self.setup_wizard.set_busy(busy)
         self.set_machine_status(self._machine_status)
 
     def _register_motion_action(self, action: QtWidgets.QWidget) -> None:
@@ -1130,6 +1141,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         requires_controller: bool = False,
         recapture_without_homing: bool = False,
         machine_bound: bool = False,
+        observational_read: bool = False,
         invalidate: Callable[[], None] | None = None,
         on_failure: Callable[[str], None] | None = None,
     ) -> bool:
@@ -1258,8 +1270,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         task = FunctionTask(scoped_operation, label=f"Machine Setup: {name}")
         self._active_task = task
-        if self.focus_workspace is not None:
+        if self.focus_workspace is not None and not observational_read:
             self.focus_workspace.coordinator.set_external_busy(True)
+        self._sync_operation_controls()
         task.signals.succeeded.connect(
             lambda result, generation=generation: self._operation_succeeded(
                 generation,
@@ -2471,6 +2484,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         dialog.activateWindow()
 
     def navigate_setup_step(self, action: str) -> None:
+        if self.operation_busy or self._shutdown_started:
+            return
         tabs = {"camera": 0, "lens": 1, "bed": 2, "focus": 6, "datum": 6}
         if action in tabs:
             self.tabs.setCurrentIndex(tabs[action])

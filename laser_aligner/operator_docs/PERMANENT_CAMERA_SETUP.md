@@ -3,10 +3,20 @@
 Applies to E3 Positioning System `0.7.x`, its existing calibration tabs,
 read-only **Coordinate Audit**, **Z / laser focus**, and guided precision setup.
 
-Use Steps 1–5 to establish the camera and support mapping. The guided checklist
-then links to the leveling survey, measured focus, one-height precision
-assessment, surface-height calibration and independent XY qualification. Existing
-tabs remain available. A diagnostic calibration PASS is not a 0.10 mm XY claim.
+Use this runbook's Steps 1–5 to establish the camera and support mapping. In
+Machine Setup, **Setup wizard** presents eight guided stages and a final
+evidence review using the existing controls. It links to the leveling survey,
+measured focus, one-height precision assessment, surface-height calibration and
+independent XY qualification. **Back** and **Next** only browse the stages; use
+the explicit controls to perform actions and save evidence.
+
+Choose **All setup tools** for the seven tabs used in this runbook, including
+Fine Registration, Accuracy Validation and Coordinate Audit. **Setup wizard**
+resumes the same stage when reopened. **Setup guide** retains this runbook and
+the checklist. Refresh evidence after using a tool; the review lists current,
+missing and stale evidence without declaring the machine calibrated. Navigation
+is held during an active operation, and **STOP / LASER OFF** remains available.
+A diagnostic calibration PASS is not a 0.10 mm XY claim.
 
 ## Precision setup and daily placement
 
@@ -14,13 +24,15 @@ The target is **0.10 mm maximum radial XY error including measurement
 uncertainty**, on one flat parallel surface through a qualified interval reaching
 20 mm above the honeycomb including spacers. Physical qualification is pending.
 
-After camera/support mapping, use the checklist to survey a known-thickness rigid
+After camera/support mapping, use the wizard to survey a known-thickness rigid
 target at four corners and center and explicitly save the reviewed honeycomb
 datum. Measure a solid patch, return the laser to that measured spot, then teach
-with the existing gauge action. Measure ten stationary captures and ten separate
-Home / park captures against independent holdouts before extending the height
-range. Compare optical and positioning variation and independently measure
-laser-center errors across corners, edges and center.
+with the existing gauge action. At the repeatability stage, **Prepare holdout
+marks** opens Accuracy Validation for its existing guarded mark/Preview/Run
+sequence. Measure ten stationary captures and ten separate Home / park captures
+against independent holdouts before extending the height range. Compare optical
+and positioning variation and independently measure laser-center errors across
+corners, edges and center.
 
 Surface-height calibration collects lower/upper marks and a separate middle
 check without replacing the working support map. Enter measured top elevation

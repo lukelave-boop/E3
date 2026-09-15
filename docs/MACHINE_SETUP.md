@@ -1,12 +1,13 @@
 # Native machine setup
 
-The guided setup checklist links to camera/lens, support mapping, five-position
-leveling/datum, gauge focus, precision assessment, surface-height calibration and
-independent XY qualification. Height calibration acquires lower/upper observations
-and a separate middle check without replacing the support map. The selected
-measured top plane can then drive placement. Legacy study imports remain
-diagnostic. See [precision placement](PRECISION_PLACEMENT.md) for the 0.10 mm target,
-evidence requirements and physical qualification procedure.
+The **Setup wizard** presents eight stages: camera restraint and controls, lens
+calibration, support mapping, five-position leveling/datum, gauge focus, precision
+assessment, surface-height calibration and independent XY qualification. A final
+review shows the evidence status for every stage. Height calibration acquires
+lower/upper observations and a separate middle check without replacing the
+support map. The selected measured top plane can then drive placement. Legacy
+study imports remain diagnostic. See [precision placement](PRECISION_PLACEMENT.md)
+for the 0.10 mm target, evidence requirements and physical qualification procedure.
 
 > **Operator directions:** Follow the packaged
 > [Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
@@ -19,6 +20,29 @@ Open **Tools > Machine Setup…** in the desktop application. The Camera panel's
 **Calibrate lens…** and **Bed alignment…** buttons open the same window at the
 relevant step. The dialog uses the shared `AppContext`; it does not start a web
 server or create a second camera owner.
+
+## Guided navigation
+
+Choose **Setup wizard** in the Machine Setup footer. **Back** and **Next** browse
+the stages and their existing controls; moving to another stage does not perform
+an action, save evidence or mark a calibration complete. Read the current
+evidence and prerequisite explanation, then use the stage's explicit controls.
+Dedicated buttons open the leveling survey, height calibration and precision
+dialogs or take you to a prerequisite stage. In the repeatability stage,
+**Prepare holdout marks** opens Accuracy Validation, where the existing
+mark/Preview/Run controls prepare the required target.
+
+**All setup tools** restores the full seven-tab interface, including Fine
+Registration, Accuracy Validation and Coordinate Audit. Choose **Setup wizard**
+again to return to the same guided stage. **Setup guide** still opens the
+runbook and checklist. These checklist marks remain operator notes.
+
+Refresh evidence to read the shared current setup snapshot. Unavailable, blocked
+or stale evidence remains visible with its reason. The final review reports
+those statuses; browsing to it does not establish calibration or physical
+placement accuracy. Navigation is held while an operation is active, and the
+existing **STOP / LASER OFF** control remains available. All measurement, motion,
+marking and save actions retain their existing guards.
 
 ## Saved machines and the running process
 

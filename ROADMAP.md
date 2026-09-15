@@ -2,14 +2,16 @@
 
 ## Precision placement qualification
 
-The measured-surface placement path and initial guided setup checklist are
-implemented. Complete independent one-height assessment, then lower/middle/upper
-physical trials through 20 mm above the honeycomb including spacers. Qualify only
-points where radial XY error plus measurement uncertainty is at most 0.10 mm.
-Publish tested area and interval, identify limiting contributions on failure,
-and qualify arbitrary tracing separately. Keep the current camera; a full wizard
-can reuse the UI-neutral workflow after this checklist is operator-tested.
-See [precision workflow](docs/PRECISION_PLACEMENT.md) and CURRENT_STATE.md.
+The measured-surface placement path and step-by-step Machine Setup wizard are
+implemented. The wizard reuses the existing controls and UI-neutral evidence
+workflow; its operator walkthrough and physical qualification remain pending.
+Complete independent one-height assessment, then lower/middle/upper physical
+trials through 20 mm above the honeycomb including spacers. Qualify only points
+where radial XY error plus measurement uncertainty is at most 0.10 mm. Publish
+tested area and interval, identify limiting contributions on failure, and qualify
+arbitrary tracing separately. Keep the current camera. See
+[precision workflow](docs/PRECISION_PLACEMENT.md) and CURRENT_STATE.md for current
+verification and build status.
 
 ## STOP Air Assist recovery
 

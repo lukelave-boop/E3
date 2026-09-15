@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from importlib.resources import files
 
-from ..setup_workflow import SETUP_STEPS, PrecisionEvidenceStore, binding_json, evaluate_setup_steps
+from ..setup_workflow import SETUP_STEPS, PrecisionEvidenceStore, StepStatus, binding_json, evaluate_setup_steps
 from .qt import require_qt
 
 QtCore, _QtGui, QtWidgets = require_qt()
@@ -24,6 +24,69 @@ def load_setup_runbook() -> str:
         .joinpath("PERMANENT_CAMERA_SETUP.md")
         .read_text(encoding="utf-8")
     )
+
+
+def read_setup_status(setup: QtWidgets.QWidget | None) -> tuple[dict[str, StepStatus], tuple[str, ...]]:
+    """Read setup evidence without creating a dialog, probing, capturing or moving."""
+    context = getattr(setup, "context", None)
+    readiness, evidence = {}, {}
+    current = assessment = survey_identity = datum = None
+    errors = []
+
+    def inspect(operation, default=None):
+        try:
+            return operation()
+        except Exception as exc:
+            errors.append(str(exc))
+            return default
+
+    if context is not None and hasattr(context, "surface_calibration"):
+        store = PrecisionEvidenceStore(context.surface_calibration.path.parent)
+        evidence = inspect(store.load, {})
+    if context is not None:
+        current = inspect(context.precision_setup_binding)
+        assessment = inspect(lambda: binding_json(context.precision_assessment_binding()))
+        camera = inspect(lambda: context.camera_calibration_readiness(), {})
+        readiness["camera"] = camera.get("state") == "READY"
+        model = getattr(getattr(context, "lens", None), "model", None)
+        readiness["lens"] = bool(model and model.quality.get("gate") in {"pass", "warning"}
+                                 and list(model.image_size) == camera.get("expected_resolution"))
+        bed = inspect(lambda: context.bed_status(), {})
+        readiness["bed"] = bed.get("calibrated") is True
+        datum = None if current is None else current.get("honeycomb_height_mm")
+        snapshot_method = getattr(getattr(context, "machine", None), "setup_evidence_snapshot", None)
+        setup_snapshot = inspect(snapshot_method) if callable(snapshot_method) else None
+        if setup_snapshot is not None:
+            readiness["gauge"] = setup_snapshot.get("calibration_compatible") is True
+            survey_identity = binding_json({
+                "reference": setup_snapshot["reference"], "reference_id": setup_snapshot["reference_id"],
+                "controller_session": setup_snapshot["controller_session"],
+                "probe_offset": setup_snapshot.get("probe_xy_offset_mm"),
+                "firmware_geometry": setup_snapshot.get("firmware_geometry"),
+            })
+        # Older services can display a fresh focus readback, but an unavailable
+        # new snapshot must never fall back to stale widget authority.
+        panel = getattr(getattr(setup, "focus_workspace", None), "panel", None)
+        if not callable(snapshot_method) and panel is not None and panel.fresh():
+            result = panel._result
+            readiness["gauge"] = result.get("calibration_compatible") is True
+            if result.get("reference_ready") and result.get("reference") and result.get("reference_id"):
+                survey_identity = binding_json({
+                    "reference": result["reference"], "reference_id": result["reference_id"],
+                    "controller_session": panel._status.get("controller_session_generation"),
+                    "probe_offset": result.get("probe_xy_offset_mm"),
+                    "firmware_geometry": result.get("firmware_geometry"),
+                })
+        def height_ready():
+            from ..calibration.material_plane import require_precision_model
+            require_precision_model(context.solve_surface_height_model())
+            return True
+        readiness["heights"] = inspect(height_ready, False)
+    statuses = evaluate_setup_steps(
+        readiness=readiness, evidence=evidence, current_binding=current,
+        assessment_binding=assessment, survey_binding=survey_identity, saved_datum_mm=datum,
+    )
+    return statuses, tuple(errors)
 
 
 class SetupGuideDialog(QtWidgets.QDialog):
@@ -89,63 +152,7 @@ class SetupGuideDialog(QtWidgets.QDialog):
 
     def refresh_status(self) -> None:
         """Read cached/service calibration status; never probe, capture or move."""
-        context = getattr(self.parent(), "context", None)
-        readiness, evidence = {}, {}
-        current = assessment = survey_identity = datum = None
-        errors = []
-
-        def inspect(operation, default=None):
-            try:
-                return operation()
-            except Exception as exc:
-                errors.append(str(exc))
-                return default
-
-        if self._store is not None:
-            evidence = inspect(self._store.load, {})
-        if context is not None:
-            current = inspect(context.precision_setup_binding)
-            assessment = inspect(lambda: binding_json(context.precision_assessment_binding()))
-            camera = inspect(lambda: context.camera_calibration_readiness(), {})
-            readiness["camera"] = camera.get("state") == "READY"
-            model = getattr(getattr(context, "lens", None), "model", None)
-            readiness["lens"] = bool(model and model.quality.get("gate") in {"pass", "warning"}
-                                     and list(model.image_size) == camera.get("expected_resolution"))
-            bed = inspect(lambda: context.bed_status(), {})
-            readiness["bed"] = bed.get("calibrated") is True
-            datum = None if current is None else current.get("honeycomb_height_mm")
-            snapshot_method = getattr(getattr(context, "machine", None), "setup_evidence_snapshot", None)
-            setup_snapshot = inspect(snapshot_method) if callable(snapshot_method) else None
-            if setup_snapshot is not None:
-                readiness["gauge"] = setup_snapshot.get("calibration_compatible") is True
-                survey_identity = binding_json({
-                    "reference": setup_snapshot["reference"], "reference_id": setup_snapshot["reference_id"],
-                    "controller_session": setup_snapshot["controller_session"],
-                    "probe_offset": setup_snapshot.get("probe_xy_offset_mm"),
-                    "firmware_geometry": setup_snapshot.get("firmware_geometry"),
-                })
-            # Older services can display a fresh focus readback, but an unavailable
-            # new snapshot must never fall back to stale widget authority.
-            panel = getattr(getattr(self.parent(), "focus_workspace", None), "panel", None)
-            if not callable(snapshot_method) and panel is not None and panel.fresh():
-                result = panel._result
-                readiness["gauge"] = result.get("calibration_compatible") is True
-                if result.get("reference_ready") and result.get("reference") and result.get("reference_id"):
-                    survey_identity = binding_json({
-                        "reference": result["reference"], "reference_id": result["reference_id"],
-                        "controller_session": panel._status.get("controller_session_generation"),
-                        "probe_offset": result.get("probe_xy_offset_mm"),
-                        "firmware_geometry": result.get("firmware_geometry"),
-                    })
-            def height_ready():
-                from ..calibration.material_plane import require_precision_model
-                require_precision_model(context.solve_surface_height_model())
-                return True
-            readiness["heights"] = inspect(height_ready, False)
-        self.step_statuses = evaluate_setup_steps(
-            readiness=readiness, evidence=evidence, current_binding=current,
-            assessment_binding=assessment, survey_binding=survey_identity, saved_datum_mm=datum,
-        )
+        self.step_statuses, errors = read_setup_status(self.parent())
         for key, status in self.step_statuses.items():
             self.step_status_labels[key].setText(f"{status.state.upper()}: {status.reason}")
             self.step_buttons[key].setToolTip(f"Suggested next action: {status.next_action}. All tabs remain available.")

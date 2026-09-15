@@ -43,28 +43,44 @@ motion, probing, arming and laser output still pass through `MachineService`.
 
 ## Guided setup
 
-Machine Setup includes a checklist linking to existing tools. Its definitions
-and evidence are independent of Qt so a later wizard can reuse them. Existing
-tabs remain accessible.
+Open **Tools → Machine Setup… → Setup wizard**. The embedded wizard uses the
+existing setup controls across eight guided stages. **Back** and
+**Next** browse stages; they do not run actions, save evidence or complete a
+calibration. Use the explicit tool and prerequisite buttons for each stage.
 
-1. **Camera and lens:** lock the camera mode, focus, exposure and mounting;
-   collect distributed sharp lens evidence at the production resolution.
-2. **Support map and XY reference:** establish the guarded keyed bed mapping
+1. **Restrain the setup:** secure the camera, cable, honeycomb and workpiece;
+   lock camera mode, focus and exposure. Review camera readiness and inspect
+   physical restraints separately.
+2. **Check lens calibration:** collect and review distributed sharp lens
+   evidence at the production resolution.
+3. **Establish the support map:** establish the guarded keyed bed mapping
    and observed support boundary at the repeatable photo pose.
-3. **Leveling survey and datum:** measure a rigid target of independently known
-   thickness at four corners and center. Each position requires a new reading.
-   Review the inferred honeycomb elevations and their span, adjust the supports
-   manually if needed, and repeat. Copying the surveyed mean into the datum
-   editor does not save it; use the explicit datum Save action.
-4. **Probe offset and focus:** measure a solid patch, return the laser to that
-   measured spot, then use the existing gauge teaching action. Disabled actions
-   explain their prerequisite beside the relevant control.
-5. **One-height precision assessment:** establish accuracy and variation at one
+4. **Survey bed leveling and datum:** measure a rigid target of independently
+   known thickness at four corners and center. Each position requires a new
+   reading. Review the inferred honeycomb elevations and their span, adjust
+   the supports manually if needed, and repeat. Copying the surveyed mean
+   into the datum editor does not save it; use the explicit datum Save action.
+5. **Measure, return and teach focus:** measure a solid patch, return the laser
+   to that measured spot, then use the existing gauge teaching action. Disabled
+   actions explain their prerequisite beside the relevant control.
+6. **Assess one-height repeatability:** use **Prepare holdout marks** to open
+   Accuracy Validation and prepare its target through the existing guarded
+   marking controls. Assess ten still and ten Home / park captures at one
    reference plane before interpreting height compensation.
-6. **Surface-height calibration:** acquire fresh lower, upper and independent
+7. **Collect height calibration:** acquire fresh lower, upper and independent
    middle-height observations. These do not replace the working support map.
-7. **Independent placement qualification:** record physical XY observations,
+8. **Record independent XY checks:** record physical XY observations,
    uncertainties, tested coordinates, area and heights.
+
+The final review lists every stage's current evidence status and reason;
+reaching it does not qualify placement. Refresh evidence after working in a
+tool. The wizard and existing **Setup guide** report the same current evidence;
+checklist marks remain operator notes.
+
+**All setup tools** returns to the seven tabs, including Fine Registration,
+Accuracy Validation and Coordinate Audit. Reopen **Setup wizard** to resume the
+same guided stage. Navigation is held during active operations, while the
+existing **STOP / LASER OFF** control remains available.
 
 ## Establish the error contributions
 

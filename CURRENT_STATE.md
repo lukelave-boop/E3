@@ -1,5 +1,33 @@
 # Current repository state
 
+## Step-by-step setup wizard (2026-09-15 UTC, feature verification)
+
+The desktop now has Machine Setup > Setup wizard: eight shared setup stages,
+Back/Next navigation, explicit secondary-tool buttons and a final evidence
+review. All setup tools returns to the full tabs; reopening resumes the same
+wizard stage. Navigation does not mark evidence complete. The original guide
+and existing calibration controls remain available. No machine protocol,
+geometry, arming, motion, project schema or Pi companion change is required.
+
+Evidence reads run under the existing background operation owner with an
+observational mode that preserves focus-panel evidence. Busy navigation is held,
+the selected tab remains stable during local work, and software STOP remains
+available. Results after either dialog or external STOP are discarded; stale
+qualification remains visibly stale. These controls are not safety-rated.
+
+Verification: 105 focused Windows offscreen wizard, setup, asynchronous setup,
+precision and evidence tests passed; all 161 focused laser-focus tests passed.
+Repository Ruff and application compileall pass. Normal 1080x780 and compact
+900x680 layouts were rendered offscreen with Windows Segoe UI and inspected.
+This is offscreen widget verification only: no interactive operator GUI trial,
+real-camera acquisition, physical probe or laser qualification was performed.
+The inherited 0.10 mm placement target remains physically unqualified.
+
+The wizard is on codex/setup-wizard, based on the locally verified precision
+feature. Frozen Windows packaging and permanent E3 DEV TEST selection are being
+prepared. Main is unchanged; the prior destination-specific GitHub upload
+approval remains unanswered, so compatibility CI and integration remain pending.
+
 ## Precision placement and guided setup (2026-09-15 UTC, feature verification)
 
 The active feature implements the approved 0.10 mm maximum radial XY placement

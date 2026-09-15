@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - step-by-step Machine Setup wizard
+
+- Add eight guided setup stages and a final evidence review within Machine
+  Setup, using the existing controls and shared evidence status.
+- Keep Back/Next as navigation; explicit controls open surveys, height
+  calibration, precision assessment and prerequisite steps.
+- Provide All setup tools and resume the same wizard stage, plus a direct
+  Prepare holdout marks link to Accuracy Validation. Preserve the setup guide.
+- Hold navigation during operations and keep software STOP available. Evidence
+  review reports current, missing and stale evidence without declaring the
+  machine calibrated. Controller, motion and Pi behavior are unchanged.
+
 ## Unreleased - precision placement and guided setup
 
 - Add native-detail precision capture, continuous rigid template placement,
