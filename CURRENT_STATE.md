@@ -5,7 +5,7 @@
 The active feature implements the approved 0.10 mm maximum radial XY placement
 target, including measurement uncertainty, on one flat parallel surface through
 an intended interval reaching 20 mm above the honeycomb including spacers. The
-target and interval are **not physically qualified**. No hardware operation,
+target and interval are **not physically qualified**. No motion, probing,
 camera calibration acquisition or laser placement test has been performed for
 this feature. Historical fitted-point passes do not satisfy this target.
 
@@ -31,21 +31,71 @@ and offscreen widget tests have passed during development. The broad local
 Windows Python 3.14 run reported 6,723 passed, 29 skipped and 13 failures; these
 exposed integration fixtures, companion dependency closure and a disarm-lock
 regression that were repaired and rechecked with focused acceptance/rejection
-tests. The final material/workspace/machine guard batch passed 307 tests. Full
-compatibility CI is pending before integration; its supported Python 3.10 and
-3.12 results and the exact frozen build will be recorded when complete. No
-interactive operator GUI session, real-camera test, physical probe test or laser
-accuracy qualification is implied by these automated tests. The planned handoff
-is the permanent E3 DEV TEST launcher plus a hash-checked compatible Pi companion.
-Current installed Pi/regular E3 behavior remains the historical record below.
+tests. The final material/workspace/machine guard batch passed 307 tests. A second
+complete four-worker Windows Python 3.14.4 run reported 6,840 passed, 29 skipped
+and two version-identity failures because the feature commit changed the Git
+version while tests were running. Both affected files plus the final setup
+snapshot tests passed in a fresh 35-test run with the revision held fixed.
+Ruff, compileall and JavaScript syntax checks pass. Additional verification
+includes 58 setup/evidence checks, 83 desktop async checks, 213 browser/server/
+material checks (one Windows privilege skip), browser capture/Arm concurrency,
+and 48 exact companion installation checks. Offscreen small-window layouts and
+resizable columns were inspected. No interactive operator GUI session,
+real-camera test, physical probe test or laser accuracy qualification is implied.
 
-Linux verification: 371 isolated fake-controller and camera-model tests passed
-on the actual Pi in 98.39 seconds, using Python 3.13.5 ARM64, NumPy 2.5.3,
+Full compatibility CI on Windows Python 3.10 and 3.12 is pending before
+integration. Automatic approval review rejected uploading the source to the
+existing GitHub remote without explicit destination-specific consent. The user
+has been asked to approve the branch push/PR; no push or merge occurred.
+`main` and regular Windows E3 remain at the historical state below. The matching
+Pi companion was subsequently installed with explicit operator approval.
+
+Linux verification: 394 isolated fake-controller and camera-model tests passed
+on the actual Pi in 102.80 seconds, using Python 3.13.5 ARM64, NumPy 2.5.3,
 OpenCV 4.14.0 and pytest 8.4.2. Source manifest SHA256 is
-`da01d0c2ff984755bbcf13488db41a5ebf1c6cf8725249bc2f035e95dfe7f550`.
-The matching calibration/backend files remain identical to that tested snapshot.
-The installed service, installed source and hardware were untouched. The same
-371 focused tests also passed under WSL Ubuntu 22.04 / Python 3.10.12.
+`0c877eb19897255dc5be3652c98ffa30620c4b8a73af7660c047144d5eba756c`.
+All 19 companion runtime files match the frozen feature source. The installed
+service, installed source and hardware were untouched during those tests. An earlier 371-test
+subset also passed under WSL Ubuntu 22.04 / Python 3.10.12; the final observational
+setup snapshot is covered by the additional Pi tests.
+
+Frozen Windows feature: **E3 DEV TEST 0.7.159**, exact application revision
+`d8766fbc393dbd302718a9e431227fcfc2ed18a0`, branch
+`codex/precision-surface-placement`. The canonical `packaging/build_windows.ps1`
+completed in the isolated `.codex-worktrees/precision-surface-dev` checkout.
+The permanent pointer selects
+`C:\Users\lukel\Documents\E3\.codex-worktrees\precision-surface-dev\dist\E3\E3.exe`.
+Adjacent build metadata matches. The EXE SHA256 is
+`599b9747c7855ce39eba99843c4c5d01cdc26f21ac2ad37eac155f4413550174`.
+All 31 changed packaged Python modules were compared as code objects against
+their exact committed source; three changed packaged resources also match.
+Frozen offscreen startup loaded native Qt under isolated simulator configuration,
+camera autostart disabled and motion disabled. The normal E3 executable,
+launcher, shortcuts and configuration were not changed.
+
+Matching companion: `dist/e3-pi-material-surface-a019f383`, frozen from the same
+application revision, with the packaging-only predecessor correction committed
+at `70a080b`. Manifest SHA256 is
+`a019f383069eb52b71108d3edc9f3ef23b26305a61bfd1b44df7b6b3ade27655`.
+Read-only installation preview accepts the exact installed STOP recovery source
+plus historical preview bytes from `7da9843`; unknown edits still reject. Seven
+source files required updates, twelve already matched. The final idle check reported
+disconnected, disarmed, no active job and no connected clients. The guarded
+installer helper `/tmp/apply_precision_idle_pi.py` was then applied after explicit
+operator approval. All seven replacements succeeded, all 19 source hashes were
+verified, replaced existing files received adjacent backups, and the service
+restarted. Before/after hashes confirm configuration, probe XY offset, taught
+gauge, saved honeycomb, Z limits and cooling configuration preserved. No Home,
+probe, travel, job or laser-output command was requested. Post-restart service
+checks report active/running PID 3887, restart at 2026-09-14 19:39:08 MDT,
+`pi-material-surface-v1` advertised, and disconnected/disarmed with no running
+job. All 19 installed source hashes match. A further 238 focused fake-controller
+tests passed in 77.56 seconds against the actual installed modules; all four
+workers verified their imported E3 module paths are under the installed project,
+with test data isolated under `/tmp/e3-installed-fake-tests-6h2ivoci`.
+Reconnect through E3 DEV TEST,
+establish the required reference, and measure again; workpiece authority does
+not survive the service restart.
 
 Operator qualification: establish one-height sampling and ten still/ten Home-park
 captures first; independently measure laser-center errors and uncertainty across
