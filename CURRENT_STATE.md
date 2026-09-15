@@ -23,10 +23,23 @@ This is offscreen widget verification only: no interactive operator GUI trial,
 real-camera acquisition, physical probe or laser qualification was performed.
 The inherited 0.10 mm placement target remains physically unqualified.
 
-The wizard is on codex/setup-wizard, based on the locally verified precision
-feature. Frozen Windows packaging and permanent E3 DEV TEST selection are being
-prepared. Main is unchanged; the prior destination-specific GitHub upload
-approval remains unanswered, so compatibility CI and integration remain pending.
+Frozen E3 DEV TEST **0.7.163**, feature **Step-by-step setup wizard**, branch
+`codex/setup-wizard`, exact application revision
+`cdaf7ce5448b3638158c0af63cf6b6cb84f97313`, is selected atomically through
+`packaging/set_dev_test_feature.py`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\setup-wizard-dev\dist\E3\E3.exe`.
+Adjacent metadata matches; EXE SHA256 is
+`af6be88f4034352d8777e45fe4cb586d3482ed739dc3ef49990b7158c52e15ef`.
+All 32 changed packaged Python modules match the exact committed source as code
+objects, and all three changed packaged resources match. Frozen offscreen
+startup loaded native Qt under an isolated simulator configuration, camera
+autostart and motion disabled. The initial canonical build's guard rejected
+foreign tool-environment DLLs; rebuilding with a restricted PATH passed that
+same guard. The installed precision Pi companion is reused. Regular E3 and its
+launcher are unchanged. Open E3 DEV TEST > Tools > Machine Setup > Setup wizard.
+
+Main is unchanged; the prior destination-specific GitHub upload approval remains
+unanswered, so compatibility CI and integration remain pending.
 
 ## Precision placement and guided setup (2026-09-15 UTC, feature verification)
 
