@@ -1,5 +1,29 @@
 # Current repository state
 
+## Confirmation/profile feedback frozen handoff (2026-09-16)
+
+E3 DEV TEST now selects Confirmation colors and profile Save highlight, version
+0.7.173, branch codex/profile-feedback, exact frozen application revision
+8f07bb97f268bb866d04e3fe2a390e741a66a21f. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\profile-feedback-dev\dist\E3\E3.exe`.
+
+The isolated checkout retains the previous saved-profile and distribution features.
+81 focused Windows tests, repository Ruff and compileall passed. The canonical
+Windows packager used a restricted PATH and passed the native DLL guard. All 176
+packaged application modules and changed resources match the committed source.
+Frozen offscreen startup passed with isolated data, native Qt, camera autostart
+disabled, motion disabled and a nonexistent serial port. No interactive operator,
+camera, controller or laser testing was performed. The permanent feature pointer
+was selected atomically and read back through the launcher validator. The normal
+E3 application and permanent launcher executable/shortcut were unchanged.
+
+EXE SHA-256: c7b00d22c1f1e7e756b20dc08e9ef0d3217b95c54fb47ba9b4ebb31349691f3d.
+Local records: build/profile-feedback-frozen-verification.json and
+build/profile-feedback-frozen-smoke.json (intentionally untracked).
+Compatibility CI/main integration remain pending. Reopen E3 DEV TEST to test
+Yes/No/Cancel colors and Save highlighting after editing a selected profile.
+
+
 Desktop confirmation and profile feedback: Yes is green, No red and Cancel
 gray regardless of the default choice. Profile Save is green when the current
 ordered layer settings differ from the selected saved profile, and clears after
