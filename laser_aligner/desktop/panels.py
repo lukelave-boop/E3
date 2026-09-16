@@ -2988,7 +2988,7 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_group.setEnabled(False)
         layout.addWidget(self.jog_group)
 
-        self.z_control = MainboardZPanel(self)
+        self.z_control = MainboardZPanel(self, daily=True)
         layout.addWidget(self.z_control)
 
         self.safety_note = _muted(

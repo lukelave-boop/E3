@@ -1012,7 +1012,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         return bool(
             self._active_task is not None
             or self._controller_busy
-            or (focus is not None and focus.coordinator.mutation_busy)
+            or (focus is not None and focus.mutation_busy)
         )
 
     def _controller_busy_changed(self, busy: bool) -> None:
@@ -1277,7 +1277,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._active_task = task
         self._active_observational_read = observational_read
         if self.focus_workspace is not None and not observational_read:
-            self.focus_workspace.coordinator.set_external_busy(True)
+            self.focus_workspace.set_external_busy(True)
         self._sync_operation_controls()
         task.signals.succeeded.connect(
             lambda result, generation=generation: self._operation_succeeded(
@@ -1464,7 +1464,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._active_operation_name = None
         self._stop_requested_generation = None
         if self.focus_workspace is not None:
-            self.focus_workspace.coordinator.set_external_busy(False)
+            self.focus_workspace.set_external_busy(False)
         self.operation_progress.hide()
         self.operation_status.setText(self._operation_outcome)
         self.tabs.setEnabled(True)

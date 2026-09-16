@@ -151,7 +151,7 @@ def test_real_home_panel_status_layout_keeps_clicked_button_position(form):
     from laser_aligner.desktop.laser_focus import LaserFocusPanel
 
     app, _, _ = form
-    panel = LaserFocusPanel()
+    panel = LaserFocusPanel(calibration_mode=True)
     area = PanelScrollArea(panel)
     area.resize(600, 440)
     area.show()

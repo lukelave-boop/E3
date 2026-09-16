@@ -12,7 +12,7 @@ from .controls import MeasurementSpinBox
 from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
 from .main_view_probe import MainViewProbe
-from .mainboard_z import _number, _read_allowed, _session
+from .mainboard_z import MainboardZCoordinator, MainboardZPanel, _number, _read_allowed, _session
 from .qt import require_qt
 from .scroll_position import StableScrollArea
 from .z_telemetry import EnderZTelemetry
@@ -69,6 +69,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._camera_live = False
         self._failure_message: str | None = None
         layout = QtWidgets.QVBoxLayout(self)
+        outer_layout = layout
+        self.setup_status = QtWidgets.QWidget(self)
+        layout = QtWidgets.QVBoxLayout(self.setup_status)
+        layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(self.setup_status)
+        self.setup_status.setVisible(calibration_mode)
         intro = QtWidgets.QLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
             "This is laser-off setup; it does not change camera calibration or start a job."
@@ -162,6 +168,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.z_retention_note.setWordWrap(True)
         retention_layout.addWidget(self.z_retention_note)
         layout.addWidget(self.z_retention_group)
+        layout = outer_layout
         self.failure_detail = QtWidgets.QLabel()
         self.failure_detail.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.failure_detail.setWordWrap(True)
@@ -254,7 +261,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         grid.addWidget(self.position_note, 11, 0, 1, 4)
         if not calibration_mode:
             # Full-width actions fit the existing narrow Machine inspector.
-            self.align_laser.setText("Return laser to spot")
+            self.align_probe.hide()
+            self.align_laser.hide()
             self.path_clear.setText("Headroom and Z path clear\nto the selected clearance")
             self.xy_recovery_group.setTitle("Interrupted probe recovery")
             self.xy_recovery_clear.setText(
@@ -271,8 +279,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 (1, self.range_note), (2, self.path_clear), (3, self.reference),
                 (4, self.return_clearance), (5, self.position_probe),
                 (7, self.camera_target), (8, self.offset_readout),
-                (9, self.align_probe), (10, self.align_laser),
-                (11, self.position_note), (12, self.measure), (13, self.clear_surface),
+                (9, self.position_note), (10, self.measure), (11, self.clear_surface),
             ):
                 grid.addWidget(widget, row, 0, 1, 2)
         layout.addWidget(self.reference_group)
@@ -1535,6 +1542,16 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.panel = LaserFocusPanel(calibration_mode=calibration_mode)
+        self.maximum_panel = None
+        self.maximum_coordinator = None
+        if calibration_mode:
+            self.maximum_panel = MainboardZPanel(self.panel, maximum_only=True)
+            self.panel.layout().insertWidget(0, self.maximum_panel)
+            self.maximum_coordinator = MainboardZCoordinator(
+                self.maximum_panel, controller, self, allow_own_modal=True,
+            )
+            self.maximum_coordinator.set_status(controller.runtime.context.machine.status())
+            self.maximum_coordinator.set_busy(bool(getattr(controller, "_active_tasks", 0)))
         context = controller.runtime.context
         self.bed_view = (MainViewProbe(controller, main_view, self) if main_view is not None
                          else FocusBedView(getattr(context, "camera", None), self))
@@ -1659,6 +1676,8 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         active = (not self._shutdown and not self._suspended and self.isVisible()
                   and not self.coordinator._modal_blocked())
         self.coordinator.set_suspended(not active)
+        if self.maximum_coordinator is not None:
+            self.maximum_coordinator.set_suspended(not active)
         self.setEnabled(active)
         if active:
             if not self.bed_view._active:
@@ -1684,12 +1703,25 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         super().hideEvent(event)
 
     def shutdown(self, *, force: bool = False) -> bool:
-        if self.coordinator.mutation_busy and not force:
+        if self.mutation_busy and not force:
             self.panel.message.setText("Wait for the operation to finish, or use Software STOP.")
             return False
         self._shutdown = True
         self.coordinator.close()
+        if self.maximum_coordinator is not None:
+            self.maximum_coordinator.close()
         self._camera_timer.stop()
         self.panel._display_timer.stop()
         self.bed_view.end()
         return True
+
+    @property
+    def mutation_busy(self) -> bool:
+        return self.coordinator.mutation_busy or bool(
+            self.maximum_coordinator is not None and self.maximum_coordinator.mutation_busy
+        )
+
+    def set_external_busy(self, busy: bool) -> None:
+        self.coordinator.set_external_busy(busy)
+        if self.maximum_coordinator is not None:
+            self.maximum_coordinator.set_external_busy(busy)

@@ -2,8 +2,8 @@
 
 **Machine → Z axis · Ender** contains the manual Z controls and daily
 **Reference and measure** workspace, including clearance, Home / park/reference,
-camera probe positioning, surface measurement, Ender recovery and saved-Z
-status/**Forget saved Z**. After an accepted saved-Z
+camera probe positioning and surface measurement. Ender recovery and saved-Z
+status/**Forget saved Z** are in **Machine Setup → 7 · Z / laser focus**. After an accepted saved-Z
 restore, the combined action remains **Home / park XY** and does not re-probe.
 Without an accepted restore it uses the existing reference/recovery sequence.
 See [saved Z](Z_RETENTION.md) and [the reference workflow](LASER_FOCUS.md).
@@ -36,7 +36,9 @@ positioning uses the configured XY travel speed. See
 [setup travel speeds](LASER_FOCUS.md#setup-travel-speeds) for firmware, gauge
 teaching and physical qualification requirements.
 
-The panel shows the active **Z maximum** and a separate editable value. Apply
+**Machine Setup → 7 · Z / laser focus → Maximum Z height** shows the active
+maximum and its editor. The daily Machine panel omits this editor and the
+duplicate focus-status, Ender reconnect and saved-Z section. Apply
 saves a value from 20 through 80 mm on the authoritative controller host. It
 cannot be lowered below the current known Z. Saving a limit does not move the
 axis. For this rig, current border-frame Z20 plus the operator-selected 60 mm

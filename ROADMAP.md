@@ -1,5 +1,17 @@
 # Roadmap
 
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
 ### Follow-up: keep the clicked button stationary during status layout changes
 
 The 0.7.175 operator recording still shows movement as live Z text wraps and a
