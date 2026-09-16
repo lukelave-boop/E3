@@ -1,5 +1,41 @@
 # Current repository state
 
+## Raster surface focus frozen build; Pi upload pending (2026-09-16)
+
+E3 DEV TEST now selects Raster 7 mm surface focus, version 0.7.181, branch
+codex/stable-panel-scroll, exact application revision
+`1e904823e134c49f319f9379b4bca665bac7bcae`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-surface-focus-dev\dist\E3\E3.exe`.
+
+The canonical Windows packager and installer completed. All 306 focused Windows
+checks passed in the isolated source checkout; repository Ruff and compileall
+passed. All 178 packaged application modules and three resources match committed
+source. Frozen offscreen startup loaded native Qt with isolated settings, camera
+autostart disabled, motion disabled and a nonexistent serial port. The permanent
+feature pointer was updated atomically and validated. Normal E3 and the permanent
+launcher executable/shortcut were unchanged. EXE SHA256:
+`e26512ab19d1b7e7cc68d1d9a5e95f669f40bf95f8a7fa83770c5230eefbc0ea`.
+Records: build/raster-focus-build.log, build/raster-focus-frozen-verification.json,
+build/raster-surface-focus-frozen-smoke.json, build/raster-frozen-source-tests.log.
+
+Matching companion is `dist/e3-pi-operation-focus-c018c2e8`, frozen from the
+same revision. Its 20-file manifest SHA256 is
+`c018c2e8c5b5b14b2c345afe05f9a3433e8daea08f41a9fbc86b43780a4b2fe0`.
+Three exact-predecessor/idempotence/unknown-edit installer checks passed. Read-only
+SSH verified all 19 installed precision-companion files against their recorded
+baseline. Pi service was active with zero restarts, idle and disarmed. The user
+subsequently confirmed both desktop clients were closed.
+
+Pi source upload was rejected by automatic approval review because the review
+requires explicit confirmation that greenhouse-climate@192.168.5.18 is the user's
+trusted destination for the update and tests. That confirmation is pending.
+No upload, source replacement or service restart occurred; no motion or laser
+command was requested. The prepared Linux fake-controller test archive has source
+manifest SHA256 6a79cf83c5fbb23fcc98e4c0f59e1a3c173bfa8892792d59bbc1eaa4996d4b01
+but has not been uploaded or run. Raster execution requires the matching Pi
+update and remeasurement. Physical focus qualification, interactive operator
+checks, compatibility CI and main integration remain pending.
+
 ## Raster surface focus source work (2026-09-16)
 
 Active shared-tree change: raster/image operations use a fixed 7 mm gap above
