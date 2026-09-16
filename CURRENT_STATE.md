@@ -1,5 +1,29 @@
 # Current repository state
 
+## Simplified Machine panel frozen handoff (2026-09-16)
+
+E3 DEV TEST selects Simplified Machine panel, version 0.7.179, branch
+codex/stable-panel-scroll, exact application revision
+`92a746ff3e94af4a55a0d9f801060e136644da20`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\machine-panel-cleanup-dev\dist\E3\E3.exe`.
+
+Includes both daily panel removals and the guarded Z-maximum editor in Machine
+Setup -> 7 - Z / laser focus, retaining prior scrolling, profile and distribution
+features. 486 focused Windows offscreen desktop/backend/remote/launcher tests,
+repository Ruff and application compileall passed in the isolated source checkout.
+177 packaged modules and three resources match committed source. The canonical
+packager's native DLL guard and isolated frozen startup check passed: camera
+autostart off, motion disabled, nonexistent serial port. No interactive operator,
+camera, controller or laser test was performed for this build.
+
+The permanent feature pointer was selected atomically and read back through the
+launcher validator. Normal E3 and the permanent launcher/shortcut are unchanged.
+EXE SHA-256: 9e6ff59b18e2621006d1f2785f3ae231466104c6be96f28e1d04168d31d8dcdd.
+Local records: build/machine-panel-cleanup-frozen-verification.json and
+build/machine-panel-cleanup-frozen-smoke.json (intentionally untracked).
+Operator validation, compatibility CI and main integration remain pending.
+
+
 Build preparation: 486 focused Windows offscreen desktop/backend/remote/launcher
 tests passed in the isolated checkout; repository Ruff and compileall passed.
 
