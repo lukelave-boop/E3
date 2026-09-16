@@ -1199,8 +1199,9 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     f"Honeycomb X{local_x:.3f} Y{local_y:.3f} · "
                     + coordinate_text
                 )
+            focus_text = "Raster gap 7 mm above surface · " if move.focus_mode == "RASTER" else ""
             self.move_label.set_full_text(
-                f"{move.layer_name} · {role} · "
+                f"{move.layer_name} · {role} · {focus_text}"
                 f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} · "
                 f"Move {move.index + 1}/{len(self.plan.moves)} · "
                 f"pass {move.pass_index}/{move.pass_count} "

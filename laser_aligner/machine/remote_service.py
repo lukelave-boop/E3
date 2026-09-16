@@ -24,6 +24,9 @@ from typing import Any
 from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from ..operation_focus import CAPABILITY as OPERATION_FOCUS_CAPABILITY
+from ..operation_focus import mode as operation_focus_mode
+from ..operation_focus import validate_targets
 from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
 from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
@@ -1821,6 +1824,7 @@ class RemoteMachineService:
         )
         if material_surface_binding(result.lines) is not None:
             self._require_material_surface_capability()
+        self._require_operation_focus(result)
         return result
 
     def _require_current_program(self, program: ValidatedProgram) -> None:
@@ -1847,6 +1851,16 @@ class RemoteMachineService:
         if material_surface_binding(program.lines) is not None:
             self._require_material_surface_capability()
             validate_program_binding(program.lines, self.material_surface_snapshot())
+
+        self._require_operation_focus(program)
+
+    def _require_operation_focus(self, program: ValidatedProgram) -> None:
+        if not any(operation_focus_mode(line) is not None for line in program.lines):
+            return
+        if OPERATION_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
+            raise SafetyError("Update the Pi companion before running raster jobs with 7 mm surface focus")
+        with self._state_lock:
+            validate_targets(program.lines, self._selected_job_focus)
 
     def _require_material_surface_capability(self) -> None:
         if MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ()):

@@ -62,7 +62,7 @@ def test_daily_measurement_immediately_displays_focus_for_every_job(daily):
     panel, _, controller = daily
     assert panel.measure.isEnabled() and panel.gap.currentData() == 7.0
     assert panel.target.isVisible() and panel.job_note.isVisible()
-    assert "every job" in panel.position_note.text()
+    assert "cut focus" in panel.position_note.text() and "7 mm raster" in panel.position_note.text()
     assert "supports" in panel.position_note.text()
     controller.machine.payload = workpiece_result()
 
@@ -75,7 +75,8 @@ def test_daily_measurement_immediately_displays_focus_for_every_job(daily):
     ]
     assert panel._result["job_focus"]["id"] == "workpiece-7"
     assert "16.000" in panel.target.text() and "7.000 mm" in panel.target.text()
-    assert "Every job" in panel.job_note.text() and "30" in panel.job_note.text()
+    assert "cut focus" in panel.job_note.text() and "7 mm raster gap" in panel.job_note.text()
+    assert "30" in panel.job_note.text() and "Raster gap: 7 mm above surface" in panel.target.text()
     assert "ready for every job" in panel.next_step.text()
     assert "Return the laser" not in panel.next_step.text()
     assert controller.xy_calls == []

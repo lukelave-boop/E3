@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Raster/image jobs use a fixed **7 mm gap above the measured material surface**,
+including when the material sits on supports. Cut/vector and Fill retain their
+existing focus settings. Mixed jobs switch focus with laser output off and a
+verified clearance move. This requires a matching Pi companion advertising
+`pi-operation-focus-v1`; measure the workpiece before preparing a raster job.
+
 ## Daily Machine panel cleanup and setup Z maximum
 
 The daily panel omits the two spot-transfer buttons and the complete marked

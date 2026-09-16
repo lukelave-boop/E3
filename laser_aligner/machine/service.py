@@ -31,6 +31,8 @@ from ..geometry.polygon import (
     convex_polygon_contains_normalized,
     normalize_convex_polygon,
 )
+from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
+from ..operation_focus import mode as operation_focus_mode
 from .controller_dialects import (
     CONTROLLER_DIALECT_REGISTRY,
     GRBL_DIALECT,
@@ -277,7 +279,7 @@ def _program_line_contains_motion(line: str) -> bool:
     """Exclude strict E3-owned auxiliary instructions from G-code parsing."""
 
     return (focus_binding_id(line) is None
-            and not line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX))
+            and not line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX, OPERATION_FOCUS_PREFIX))
             and contains_motion(line))
 
 
@@ -5325,6 +5327,8 @@ class MachineService:
         if len(lines) > 250_000:
             raise SafetyError("G-code program exceeds the 250,000-line safety limit")
 
+        has_operation_focus = any(operation_focus_mode(line) is not None for line in lines)
+        selected_focus_mode = None
         job_focus_id = program_binding(lines)
         material_surface_binding(lines)
         seen_mm = False
@@ -5344,6 +5348,13 @@ class MachineService:
 
         for index, line in enumerate(lines, start=1):
             if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
+                continue
+            focus_mode = operation_focus_mode(line)
+            if focus_mode is not None:
+                if not (seen_mm and seen_absolute and seen_initial_m5 and last_line_is_m5) or laser_on:
+                    raise SafetyError("Operation focus requires G21, G90 and an immediately preceding M5")
+                selected_focus_mode = focus_mode
+                last_line_is_m5 = False
                 continue
             words, g_codes, m_codes = self._validate_stream_line(line)
             last_line_is_m5 = m_codes == {5}
@@ -5436,6 +5447,8 @@ class MachineService:
                     air_interval_had_powered_motion = True
 
             if m_codes in ({3}, {4}):
+                if has_operation_focus and selected_focus_mode is None:
+                    raise SafetyError("Select operation focus before laser enable")
                 if not seen_mm or not seen_absolute or not seen_initial_m5:
                     raise SafetyError(f"Line {index}: G21, G90, and an initial M5 are required before laser enable")
                 if not position_established:
@@ -6198,8 +6211,8 @@ class MachineService:
             validate_program_binding(program.lines, self.material_surface_snapshot())
         return selected_plan(self, program)
 
-    def _move_job_focus(self, context, *, clearance):
-        return move_job_focus(self, context, clearance=clearance)
+    def _move_job_focus(self, context, *, clearance, focus_mode="CUT"):
+        return move_job_focus(self, context, clearance=clearance, focus_mode=focus_mode)
 
     def _finish_powered_job_home_park_and_hold(self) -> None:
         """Home and park after a successful laser job, retaining GRBL coordinate trust."""
@@ -6334,10 +6347,21 @@ class MachineService:
                 self._write_running_job_line(command)
                 self._wait_for_ack(job_ack_timeout)
             focused = False
+            active_focus_mode = "CUT"
             if context.focus_plan is not None:
                 self._move_job_focus(context, clearance=True)
             for index, line in enumerate(lines, start=1):
                 if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
+                    continue
+                requested_focus_mode = operation_focus_mode(line)
+                if requested_focus_mode is not None:
+                    if context.focus_plan is not None and focused and requested_focus_mode != active_focus_mode:
+                        self._execute_running_job_command("M5", timeout=job_ack_timeout)
+                        self._execute_running_job_command(context.session.dialect.motion_barrier_command,
+                                                          timeout=job_ack_timeout)
+                        self._move_job_focus(context, clearance=True)
+                        focused = False
+                    active_focus_mode = requested_focus_mode
                     continue
                 focus_words = ({word.letter: word.value for word in parse_words(line)}
                                if context.focus_plan is not None and not focused
@@ -6347,7 +6371,7 @@ class MachineService:
                         and (focus_words.get("M") in (3, 4) or focus_words.get("G") == 1)):
                     self._execute_running_job_command(context.session.dialect.motion_barrier_command,
                                                       timeout=job_ack_timeout)
-                    self._move_job_focus(context, clearance=False)
+                    self._move_job_focus(context, clearance=False, focus_mode=active_focus_mode)
                     focused = True
                 primary_written = self._write_running_job_line(line)
                 # GRBL may delay an acknowledgement while its planner is full or
@@ -6411,7 +6435,8 @@ class MachineService:
                     final_xy = tuple((context.focus_plan or context.retained_workpiece_plan)["xy"])
                     for line in lines:
                         if (focus_binding_id(line) is not None
-                                or line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX))):
+                                or line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX,
+                                                    OPERATION_FOCUS_PREFIX))):
                             continue
                         words = {word.letter: word.value for word in parse_words(line)}
                         if words.get("G") in (0, 1):

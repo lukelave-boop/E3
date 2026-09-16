@@ -1,5 +1,29 @@
 # Current repository state
 
+## Raster surface focus source work (2026-09-16)
+
+Active shared-tree change: raster/image operations use a fixed 7 mm gap above
+the measured surface. Cut/vector and Fill retain the existing focus rule.
+Strict immutable E3OPFOCUS instructions select targets in MachineService; mixed
+jobs lift/refocus only across laser-off, drained, verified-clearance boundaries.
+Original measurement/calibration and cut focus retention remain unchanged.
+Preview and Start Here preserve operation modes; remote jobs require the new
+`pi-operation-focus-v1` companion capability and current measured workpiece.
+
+Verification: 291 existing focus/toolpath/restart checks passed. The 403-check
+integration run passed 400 immediately; its three stale test expectations were
+corrected and passed in focused reruns. Final checks include 75 operation/UI/golden
+checks, 69 operation/UI checks after the last guard additions, and all three
+Pi-owned upload cases (cut, raster, mixed) over authenticated loopback with fake
+controllers. Repository Ruff, compileall and scoped whitespace checks passed.
+Golden executable commands, geometry, power and timing are unchanged apart from
+the new focus directive pair; preview metadata and line numbers reflect it.
+All checks used Windows Python 3.14.4. Desktop checks were offscreen widgets;
+Windows 3.10/3.12 compatibility CI has not run for this uncommitted source work.
+No new frozen build, Pi installation, real camera or physical controller/laser
+test has been performed for this change. Existing unrelated shared-tree work is
+preserved. This is not a merged/released or physically verified feature.
+
 ## Simplified Machine panel frozen handoff (2026-09-16)
 
 E3 DEV TEST selects Simplified Machine panel, version 0.7.179, branch

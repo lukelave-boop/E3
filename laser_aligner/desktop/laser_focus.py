@@ -79,8 +79,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Measure surface elevation above the border, then position the laser at a known gap. "
             "This is laser-off setup; it does not change camera calibration or start a job."
             if calibration_mode else
-            "Measure the workpiece to calculate the focus for every job on it. "
-            "The job moves to that focus before laser output."
+            "Measure the workpiece to calculate cut focus and the 7 mm raster surface gap. "
+            "Jobs select the focus for each operation before laser output."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -253,7 +253,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.position_note = QtWidgets.QLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
         if not calibration_mode:
             self.position_note.setText(
-                "Measure surface sets the focus for every job on this flat workpiece. "
+                "Measure surface sets cut focus and the 7 mm raster surface gap on this flat workpiece. "
                 "Confirm one flat surface across the job, the gauge removed, and clear Z/XY paths. "
                 "Measure again after changing the material or its supports."
             )
@@ -347,7 +347,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.spacers.setSuffix(" mm")
         self.spacers.setPrefix("Spacers: ")
         self.spacers.setToolTip("Total spacer thickness under the material. Clear measurement before changing this value.")
-        self.thickness_note = QtWidgets.QLabel("Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: waiting for saved height.")
+        self.thickness_note = QtWidgets.QLabel("Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: waiting for saved height.")
         self.thickness_note.setWordWrap(True)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
@@ -861,7 +861,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.save_honeycomb.setEnabled(bool(self.honeycomb_height.isEnabled() and self._honeycomb_edited
                                            and self.honeycomb_height.hasAcceptableInput()))
         if honeycomb is not None:
-            self.thickness_note.setText(f"Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: {honeycomb:+.3f} mm relative to border.")
+            self.thickness_note.setText(f"Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: {honeycomb:+.3f} mm relative to border.")
         self.honeycomb_note.setText(
             f"Saved: {honeycomb:+.3f} mm relative to border. Saving clears the workpiece measurement; measure again before running a job."
             if honeycomb_available else "Connect and refresh the updated Pi companion to edit the saved honeycomb height."
@@ -1066,9 +1066,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             target = _number(plan.get("target_z_mm"))
             clearance = _number(plan.get("clearance_z_mm"))
             if gap is not None and target is not None and clearance is not None:
-                self.target.setText(f"Material: {thickness:.3f} mm · automatic gap: {gap:.3f} mm\nFocus Z: {target:.3f} mm")
+                self.target.setText(f"Material: {thickness:.3f} mm · cut gap: {gap:.3f} mm\nCut Z: {target:.3f} mm · Raster gap: 7 mm above surface")
                 self.job_note.setText(
-                    f"Every job uses this focus and travels at Z{clearance:g} mm. "
+                    f"Jobs use cut focus or the 7 mm raster gap and travel at Z{clearance:g} mm. "
                     "Measure again after changing the material or its supports."
                 )
                 return True

@@ -13,6 +13,8 @@ from ..air_assist import (
     AirAssistTarget,
 )
 from ..errors import SafetyError
+from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
+from ..operation_focus import mode as operation_focus_mode
 from .preview import parse_spot_offset_comment, scan_word_state, strip_comment
 
 
@@ -69,6 +71,7 @@ class PlannedMove:
     vector_power_correction: float = 0.0
     raster_power_correction: float = 0.0
     air_assist: bool = False
+    focus_mode: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -160,6 +163,7 @@ def _build_job_plan(
     feed = max(1.0, float(default_feed_mm_min))
     spot_offset_x = spot_offset_y = 0.0
     elapsed = 0.0
+    focus_mode = None
     layer: dict[str, Any] = {}
     pass_metadata: dict[str, Any] = {}
     source: dict[str, Any] = {}
@@ -198,6 +202,10 @@ def _build_job_plan(
                 source = payload
             continue
         raw_instruction = raw_line.strip()
+        requested_focus_mode = operation_focus_mode(strip_comment(raw_instruction))
+        if requested_focus_mode is not None:
+            focus_mode = requested_focus_mode
+            continue
         try:
             air_assist_kind = (
                 None
@@ -320,6 +328,7 @@ def _build_job_plan(
             vector_power_correction=float(layer.get("vector_power_correction", 0.0)),
             raster_power_correction=float(layer.get("raster_power_correction", 0.0)),
             air_assist=layer.get("air_assist") is True,
+            focus_mode=focus_mode,
         )
         moves.append(move)
         elapsed += duration
@@ -470,8 +479,13 @@ def _restart_program_from_move(
     active_layer: tuple[str, str] | None = None
     active_power = 0.0
     air_active = False
+    active_focus_mode = None
     for move in suffix:
         _raise_if_cancelled()
+        if move.focus_mode is not None and move.focus_mode != active_focus_mode:
+            lines.extend(("M5", f"{OPERATION_FOCUS_PREFIX} {move.focus_mode}"))
+            active_power = 0.0
+            active_focus_mode = move.focus_mode
         layer_key = (move.layer_id, move.layer_name)
         if layer_key != active_layer:
             if (

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - raster surface focus
+
+- Raster/image layers use a fixed 7 mm surface gap; cut/vector and Fill keep the
+  existing thickness-derived focus.
+- Mixed jobs switch at laser-off, drained, verified-clearance boundaries.
+  Start Here preserves each operation's focus. Unreachable raster targets and
+  older Pi companions are rejected before job motion.
+
+
 ## Daily Machine panel cleanup and setup Z maximum
 
 The daily panel omits the two spot-transfer buttons and the complete marked

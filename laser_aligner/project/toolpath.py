@@ -30,6 +30,7 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
+from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
 from ..planning.cache import PlanningCache
 from ..planning.digest import (
     polyline_sequence_digest,
@@ -2990,6 +2991,11 @@ def _generate_project_gcode(
     source_order_travel = 0.0
     planned_order_travel = 0.0
 
+    operation_focus = any(
+        plan.layer.mode == LayerMode.RASTER
+        and _layer_has_powered_output(plan, power_max=controller_power_max)
+        for plan in layer_plans
+    )
     for layer_plan in layer_plans:
         _raise_if_toolpath_cancelled()
         layer = layer_plan.layer
@@ -3003,6 +3009,9 @@ def _generate_project_gcode(
             layer_has_powered_output and layer.air_assist
         ):
             air_assist.turn_off_before_layer(lines)
+        if operation_focus:
+            focus_mode = "RASTER" if layer.mode == LayerMode.RASTER else "CUT"
+            lines.extend(("M5", f"{OPERATION_FOCUS_PREFIX} {focus_mode}"))
         layer_cut = 0.0
         layer_travel = 0.0
         layer_path_count = 0

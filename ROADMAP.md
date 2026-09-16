@@ -1,5 +1,13 @@
 # Roadmap
 
+## Raster surface focus acceptance
+
+Raster/image jobs now request a 7 mm measured surface gap while cut/vector and
+Fill retain the current rule. Mixed-operation and Start Here source coverage
+uses fake controllers. Matching desktop/Pi packaging, installation and physical
+qualification remain pending; no installed firmware or calibration is changed.
+
+
 ## Daily Machine panel cleanup and setup Z maximum
 
 The daily panel omits the two spot-transfer buttons and the complete marked

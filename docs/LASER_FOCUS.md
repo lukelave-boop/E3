@@ -1,5 +1,24 @@
 # Surface height and gauge-taught laser focus
 
+## Raster surface focus (source update)
+
+Raster/image layers now use a fixed 7 mm gap above the measured material surface.
+Cut/vector and Fill retain the existing thickness-derived gap and calibration.
+The gap is relative to the measured surface, not absolute Z7: raising the material
+or its supports raises the raster target by the same amount. Measure again after
+changing the material or supports.
+
+Raster target Z is raw probe contact Z plus the saved 7 mm taught focus offset.
+A mixed job turns output off, drains XY, lifts to verified clearance, approaches
+the next operation and focuses before its output. Start Here preserves the mode.
+A target at or above clearance, above the configured maximum, or lacking current
+measurement authority is rejected. Limits are not raised automatically.
+
+This requires the matching `pi-operation-focus-v1` desktop/Pi update. Source
+verification uses fake controller I/O and Windows offscreen widgets; packaging,
+Pi deployment, interactive operation and physical focus verification are pending.
+Earlier installed builds and the historical results below remain unchanged.
+
 ## Precision setup additions
 
 The guided setup checklist now links to a four-corner-plus-center survey. Measure

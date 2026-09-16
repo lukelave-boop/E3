@@ -6,6 +6,8 @@
 G21 ; millimetres
 G90 ; absolute positioning
 M5 ; laser off before any motion
+M5
+E3OPFOCUS RASTER
 ; Layer Golden Grayscale · 900 mm/min · 25% · 1 pass(es) · vector correction +0 · raster correction +0
 ; Raster tone: deterministic 8x8 ordered grayscale dither
 ; Raster rows remain serpentine; overscan and white gaps are laser-off

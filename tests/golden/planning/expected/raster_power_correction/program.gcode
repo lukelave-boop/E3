@@ -6,6 +6,8 @@
 G21 ; millimetres
 G90 ; absolute positioning
 M5 ; laser off before any motion
+M5
+E3OPFOCUS RASTER
 ; Layer Golden Raster Correction · 1000 mm/min · 20% · 1 pass(es) · vector correction +0 · raster correction +60
 ; Raster rows remain serpentine; overscan and white gaps are laser-off
 ; @E3_LAYER {"id":"layer-golden-raster-correction","name":"Golden Raster Correction","color":"#89B85C","power_percent":20.0,"vector_power_correction":0.0,"raster_power_correction":60.0,"mode":"raster","raster_tone":""}

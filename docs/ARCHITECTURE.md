@@ -1,5 +1,26 @@
 # Architecture
 
+## Per-operation measured focus
+
+The desktop project encoder emits strict `E3OPFOCUS CUT` / `E3OPFOCUS RASTER`
+instructions for jobs containing powered raster layers. These are immutable job
+bytes, not comments or controller G-code. The parser requires G21/G90 and a
+standalone preceding M5, and requires an operation mode before laser enable.
+Cut-only output and the browser single-SVG pipeline retain their existing focus.
+
+MachineService binds the original measured workpiece plan, validates every
+requested target at admission, and owns all Z execution. Raster target Z equals
+the original target plus `7 - gap_mm`, equivalent to raw contact Z plus the taught
+7 mm calibration offset. The original cut plan remains unchanged for retention.
+Transitions drain primary motion with laser off, verify a lift to clearance,
+and descend at the next powered operation only after its XY approach drains.
+Existing session/STOP, motion permission, readback and bound guards remain.
+
+The remote client requires `pi-operation-focus-v1` and a measured plan before
+preparing or starting these jobs. The Pi repeats validation and interprets the
+instructions locally; they never reach GRBL. Preview moves retain the exact
+focus mode, allowing Start Here to reconstruct it without guessing from labels.
+
 ## Daily Machine panel cleanup and setup Z maximum
 
 The daily panel omits the two spot-transfer buttons and the complete marked
