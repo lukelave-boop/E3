@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - distribution areas
+
+- Add a chooser to horizontal and vertical Distribute: full project work area,
+  chosen rectangle, or the original selection-center span.
+- Area modes equalize edge gaps including end margins, keep the reference
+  rectangle fixed, and reject layouts that cannot fit without resizing.
+- Explain insufficient selections and already-even layouts; apply through one
+  undoable project command. Desktop source only; frozen handoff pending.
+
 ## Unreleased - cut/layer profiles
 
 - Add whole-layer-set profiles above the Cuts list: Load, Save As and Delete.

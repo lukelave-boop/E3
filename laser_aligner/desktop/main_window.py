@@ -79,7 +79,6 @@ from ..project import (
     build_job_preflight_report,
     center_selection_on_stock,
     clear_autosave,
-    distributed_transforms,
     fit_selection_to_stock,
     generate_project_gcode,
     is_stock_boundary,
@@ -125,6 +124,7 @@ from .controller import (
     image_to_qimage,
 )
 from .controls import InspectorTabs, MeasurementSpinBox, WheelGuard
+from .distribution_dialog import DistributionDialog
 from .icons import action_icon, apply_action_icons
 from .import_review import review_import_manifest
 from .job_preflight import JobPreflightDialog
@@ -625,8 +625,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("align_bottom", "Align bottom")
         action("align_center_y", "Align vertical centers")
         action("align_top", "Align top")
-        action("distribute_h", "Distribute horizontally")
-        action("distribute_v", "Distribute vertically")
+        action("distribute_h", "Distribute horizontally…")
+        action("distribute_v", "Distribute vertically…")
         action("bring_front", "Bring to front", "Ctrl+Shift+]")
         action("raise", "Raise one step", "Ctrl+]")
         action("lower", "Lower one step", "Ctrl+[")
@@ -2049,14 +2049,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def distribute_selection(self, *, horizontal: bool) -> None:
         selected = self.workspace.selected_object_ids()
-        transforms = distributed_transforms(
-            self.document,
-            selected,
-            horizontal=horizontal,
-        )
-        if not transforms:
-            self.show_notice("Select at least three objects to distribute")
+        if not selected:
+            self.show_notice("Select the objects to distribute first")
             return
+        dialog = DistributionDialog(
+            self.document, selected, horizontal=horizontal, parent=self,
+        )
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        transforms = dialog.transforms
         self.history.execute(
             UpdateTransformsCommand(
                 self.document,

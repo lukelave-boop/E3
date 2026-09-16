@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Distribute objects within an area
+
+Select objects, then open **Distribute horizontally…** or **Distribute vertically…**.
+Choose **Full bed (project work area)**, **Chosen rectangle**, or **Current selection
+span**. Bed and rectangle modes give equal empty gaps between object bounds and
+both end margins, without resizing. To use a custom area, first draw a rectangle,
+then choose it in the dialog. See [desktop distribution](docs/DESKTOP_V1.md#distribute-within-an-area).
+
 ## Saved cut/layer profiles
 
 Use **Profiles** above the Cuts list to **Save As** a named layer set and **Load**

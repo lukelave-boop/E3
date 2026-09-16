@@ -1,5 +1,22 @@
 # Architecture
 
+## Distribution area selection
+
+`project/alignment.py` extends `distributed_transforms` with explicit selection,
+bed and rectangle targets; its default preserves the existing center-spacing API.
+Bed uses the document work area in project coordinates. Rectangle mode validates
+an axis-aligned, square-cornered native rectangle and excludes it from movement.
+Area modes distribute bounding-box edge gaps including end margins, preserve
+sizes/rotation, and clamp only the other-axis position as needed for containment.
+Oversized layouts, empty areas, locked objects and stock objects as moving items
+reject before mutation. A stock rectangle can remain the fixed reference.
+
+`desktop/distribution_dialog.py` calculates without mutation, reports invalid or
+unchanged layouts, and revalidates on acceptance. The main window applies the
+result through `UpdateTransformsCommand`, preserving undo and revision-based job
+invalidation. No schema, browser pipeline, machine bounds or controller behavior
+changes. Choosing a rectangle does not change its output role or layer settings.
+
 ## Saved cut/layer sets
 
 materials/layer_profiles.py owns schema-1 layer-profile persistence and an

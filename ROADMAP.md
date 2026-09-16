@@ -1,5 +1,12 @@
 # Roadmap
 
+## Distribution area operator review
+
+Desktop source supports full-bed, chosen-rectangle and selection-span distribution.
+Focused Windows geometry and offscreen widget checks cover both directions,
+rejections, cancel and undo. Interactive review and a frozen feature build remain
+pending; compatibility CI is required before integration.
+
 ## Cut/layer profile review
 
 The 98 focused profile, menu, desktop layer and launcher tests, repository Ruff

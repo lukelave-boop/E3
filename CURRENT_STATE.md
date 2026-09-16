@@ -1,5 +1,26 @@
 # Current repository state
 
+## Distribution areas (2026-09-16 UTC, working tree)
+
+Desktop Distribute horizontally/vertically now opens an area chooser. Full bed
+uses the project work area; chosen rectangle uses an existing axis-aligned,
+square-cornered rectangle and excludes it from movement. Both distribute equal
+bounding-box edge gaps including end margins without resizing, moving on the
+other axis only as needed for containment. Current selection span preserves the
+old three-object center-spacing behavior. Invalid and already-even layouts are
+explained; Apply is one undoable edit and Cancel makes no changes.
+
+Verification: 99 focused Windows Python 3.14 tests passed in the isolated checkout (alignment, area
+acceptance/rejection, offscreen distribution dialog/history, desktop menus, layer profiles and launcher).
+Repository Ruff and application compileall passed. Offscreen dark-theme dialogs were rendered with native
+Windows Segoe UI and inspected at 560 x 330. Interactive GUI testing, a frozen
+feature build, compatibility CI and integration remain pending. No camera,
+controller or physical laser tests were performed. Browser and hardware paths
+are unchanged. The user authorized a frozen DEV TEST handoff. This isolated
+branch starts at codex/layer-profiles revision 9c07f2b, preserving the verified
+layer-profile feature. E3 DEV TEST currently selects 0.7.167 until this build
+passes verification. Compatibility CI and main integration remain pending.
+
 ## Cut/layer profiles and Tools cleanup (2026-09-16, source verified)
 
 Desktop-only implementation adds Profiles above the Cuts layer table, with

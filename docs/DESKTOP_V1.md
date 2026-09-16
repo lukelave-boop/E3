@@ -535,3 +535,34 @@ parts of the authoring backlog—have since been implemented. Use the current
    calibrated grayscale power curves.
 7. Job history and calibration profiles by material height.
 8. Stable release packaging, update checks and rollback.
+
+## Distribute within an area
+
+Select the objects to arrange and choose **Distribute horizontally…** or
+**Distribute vertically…** from the Distribute toolbar menu or Arrange menu.
+The dialog defaults to **Full bed (project work area)** and displays that area's
+size and coordinates. It offers three references:
+
+- **Full bed (project work area):** equal empty gaps between object bounding-box
+  edges, including the two end margins, across the project's width or height.
+- **Chosen rectangle:** the same spacing inside a native rectangle chosen from
+  the list. First use **Draw rectangle** to create a custom boundary, return to
+  selection, select the artwork, and choose the rectangle in the dialog. It may
+  be included in the selection; it stays fixed and is excluded from movement.
+  Use square corners and horizontal/vertical sides (90-degree rotations work).
+  The rectangle keeps its output settings; put a guide-only rectangle on a layer
+  with output disabled. A rectangular stock boundary can also be the reference.
+- **Current selection span:** original behavior, requiring three or more
+  objects. Keeps the two outermost centers fixed and spaces the others equally
+  between them. It does not use the bed or any surrounding rectangle.
+
+Area modes work with one or more movable objects. Objects retain their size,
+rotation and order along the chosen axis. The other-axis positions stay as they
+are when inside the area, or move only enough to fit. An area that is too small
+rejects the operation instead of shrinking or overlapping objects. This arranges
+individual selected objects, not a multi-row packing layout. Use Align first if
+you want a straight row or column.
+
+The dialog reports how many objects will move, or why nothing would change.
+**Distribute** applies one undoable project edit; **Cancel** changes nothing.
+Layout areas do not replace the existing execution bounds and job validation.
