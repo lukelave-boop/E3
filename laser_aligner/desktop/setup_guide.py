@@ -4,6 +4,7 @@ from importlib.resources import files
 
 from ..setup_workflow import SETUP_STEPS, PrecisionEvidenceStore, StepStatus, binding_json, evaluate_setup_steps
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, _QtGui, QtWidgets = require_qt()
 
@@ -119,7 +120,7 @@ class SetupGuideDialog(QtWidgets.QDialog):
         self.checklist_note = QtWidgets.QLabel("Checklist marks record operator progress only; each action keeps its existing guards.")
         self.checklist_note.setWordWrap(True)
         checklist_layout.addWidget(self.checklist_note, len(SETUP_STEPS) * 2, 0, 1, 2)
-        self.checklist_scroll = QtWidgets.QScrollArea()
+        self.checklist_scroll = StableScrollArea()
         self.checklist_scroll.setWidgetResizable(True)
         self.checklist_scroll.setWidget(checklist)
         self.checklist_scroll.setMinimumHeight(240)

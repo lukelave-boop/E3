@@ -31,6 +31,7 @@ from .machine_state import (
     project_machine_state,
 )
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 from .setup_guide import show_setup_guide
 from .speed_controls import PercentageSpeedSpinBox
 from .tasks import FunctionTask
@@ -1702,7 +1703,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 QtWidgets.QLayout.SizeConstraint.SetMinimumSize
             )
 
-        scroll = QtWidgets.QScrollArea()
+        scroll = StableScrollArea()
         scroll.setObjectName("machineSetupTabScroll")
         scroll.setProperty("setupTabScroll", True)
         scroll.setWidgetResizable(True)
@@ -2360,7 +2361,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         manual_body = QtWidgets.QWidget()
         manual_layout = QtWidgets.QVBoxLayout(manual_body)
         manual_layout.setContentsMargins(0, 0, 0, 0)
-        manual_scroll = QtWidgets.QScrollArea()
+        manual_scroll = StableScrollArea()
         manual_scroll.setWidgetResizable(True)
         manual_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         manual_scroll.setWidget(manual_body)

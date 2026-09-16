@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..project import DEFAULT_IMPORTER_REGISTRY, ImportScanManifest
 from .columns import configure_resizable_columns
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, _QtGui, QtWidgets = require_qt()
 
@@ -94,7 +95,7 @@ class ImportReviewDialog(QtWidgets.QDialog):
             )
         layout.addWidget(self.status_label)
 
-        self.content_scroll = QtWidgets.QScrollArea()
+        self.content_scroll = StableScrollArea()
         self.content_scroll.setWidgetResizable(True)
         self.content_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         content = QtWidgets.QWidget()

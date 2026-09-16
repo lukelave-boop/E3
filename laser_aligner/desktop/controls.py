@@ -6,6 +6,7 @@ from typing import Literal
 
 from ..units import DisplayUnit, MeasurementKind, from_mm, parse_to_mm
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -162,7 +163,7 @@ class MeasurementSpinBox(NumericDoubleSpinBox):
         return super()._draft_is_editable(candidate) or _UNIT_DRAFT.fullmatch(candidate) is not None
 
 
-class PanelScrollArea(QtWidgets.QScrollArea):
+class PanelScrollArea(StableScrollArea):
     """Opaque, vertically scrolling container for inspector panels."""
 
     def __init__(

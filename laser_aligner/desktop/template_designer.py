@@ -7,6 +7,7 @@ from typing import Any
 from ..templates import MAX_GRID_OBJECTS, ShapeKind, shape_polylines
 from .controls import MeasurementSpinBox, NumericSpinBox
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -388,7 +389,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         form_layout.addWidget(self.validation_label)
         form_layout.addStretch(1)
 
-        form_scroll = QtWidgets.QScrollArea()
+        form_scroll = StableScrollArea()
         form_scroll.setObjectName("inspectorScroll")
         form_scroll.setProperty("wheelScrollContainer", True)
         form_scroll.setWidgetResizable(True)

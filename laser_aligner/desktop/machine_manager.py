@@ -20,6 +20,7 @@ from .machine_state import (
     project_machine_state,
 )
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -288,7 +289,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         left_layout.addLayout(left_buttons)
         splitter.addWidget(left)
 
-        self.editor_scroll = QtWidgets.QScrollArea()
+        self.editor_scroll = StableScrollArea()
         self.editor_scroll.setWidgetResizable(True)
         self.editor_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         editor = QtWidgets.QWidget()

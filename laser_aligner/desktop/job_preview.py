@@ -12,6 +12,7 @@ from ..project.job_preflight import JobPreflightReport
 from .columns import configure_resizable_columns
 from .job_preflight import JobPreflightView
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 from .speed_controls import format_speed_percent, speed_tooltip
 
 if TYPE_CHECKING:
@@ -709,7 +710,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.canvas.setMinimumSize(_MIN_CANVAS_WIDTH, _MIN_CANVAS_HEIGHT)
         self.body_splitter.addWidget(self.canvas)
 
-        self.sidebar = QtWidgets.QScrollArea()
+        self.sidebar = StableScrollArea()
         self.sidebar.setObjectName("jobPreviewSidebar")
         self.sidebar.setWidgetResizable(True)
         self.sidebar.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)

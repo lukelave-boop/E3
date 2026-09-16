@@ -154,6 +154,7 @@ from .panels import (
 from .qt import require_qt
 from .raster_vectorize_dialog import RasterVectorizationDialog
 from .runtime_strip import RuntimeSafetyStrip
+from .scroll_position import StableScrollArea
 from .setup_guide import show_setup_guide
 from .speed_controls import format_speed_percent, speed_tooltip
 from .stock_layout_bar import StockLayoutToolBar
@@ -288,7 +289,7 @@ class LayerPaletteBar(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
 
-        self._scroll = QtWidgets.QScrollArea()
+        self._scroll = StableScrollArea()
         self._scroll.setObjectName("layerPaletteScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)

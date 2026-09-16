@@ -19,6 +19,7 @@ from ..setup_workflow import (
 from .columns import configure_resizable_columns
 from .controls import MeasurementSpinBox
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, _QtGui, QtWidgets = require_qt()
 
@@ -38,7 +39,7 @@ def _note(text: str) -> Any:
 
 
 def _scroll_page(widget: Any) -> Any:
-    scroll = QtWidgets.QScrollArea()
+    scroll = StableScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
     scroll.setWidget(widget)

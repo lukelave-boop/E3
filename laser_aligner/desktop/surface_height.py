@@ -10,6 +10,7 @@ import numpy as np
 from ..calibration.material_plane import require_precision_model
 from .controls import MeasurementSpinBox
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 
 QtCore, _QtGui, QtWidgets = require_qt()
 
@@ -30,7 +31,7 @@ class SurfaceHeightDialog(QtWidgets.QDialog):
         self.setWindowTitle("Material height — camera calibration")
         self.resize(920, 700)
         outer = QtWidgets.QVBoxLayout(self)
-        self.scroll = QtWidgets.QScrollArea()
+        self.scroll = StableScrollArea()
         self.scroll.setWidgetResizable(True)
         content = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(content)

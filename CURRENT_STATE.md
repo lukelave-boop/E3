@@ -1,5 +1,15 @@
 # Current repository state
 
+Verification: 398 focused Windows offscreen desktop/launcher tests, repository
+Ruff and application compileall passed. No hardware or interactive GUI testing.
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
 ## Confirmation/profile feedback frozen handoff (2026-09-16)
 
 E3 DEV TEST now selects Confirmation colors and profile Save highlight, version

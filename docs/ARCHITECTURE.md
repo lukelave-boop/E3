@@ -1,5 +1,12 @@
 # Architecture
 
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
 Desktop confirmation and profile feedback: Yes is green, No red and Cancel
 gray regardless of the default choice. Profile Save is green when the current
 ordered layer settings differ from the selected saved profile, and clears after

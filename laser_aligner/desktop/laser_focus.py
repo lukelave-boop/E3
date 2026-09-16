@@ -14,6 +14,7 @@ from .machine_state import machine_payload, project_machine_state
 from .main_view_probe import MainViewProbe
 from .mainboard_z import _number, _read_allowed, _session
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 from .z_telemetry import EnderZTelemetry
 
 QtCore, _, QtWidgets = require_qt()
@@ -1540,7 +1541,7 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         self.splitter = None
         if calibration_mode:
             self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-            scroll = QtWidgets.QScrollArea()
+            scroll = StableScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setMinimumWidth(620)
             scroll.setWidget(self.panel)
