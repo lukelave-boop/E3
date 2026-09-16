@@ -28,7 +28,25 @@ Build branch codex/layer-profiles starts at 8e58ae5 (the current setup-wizard
 feature); it excludes concurrent Arrange/distribution edits in the shared tree.
 The earlier setup/precision compatibility CI and integration remain pending;
 no GitHub upload or main merge is part of this local operator-test handoff.
-Frozen packaging and permanent launcher selection are the next steps.
+Frozen handoff: E3 DEV TEST selects **Cut and layer profiles**, version
+**0.7.167**, branch `codex/layer-profiles`, exact application revision
+`9f8159306e2abf710f1bd0585eeb6553d796318a`.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\layer-profiles-dev\dist\E3\E3.exe`.
+The canonical packaging/build_windows.ps1 completed in the isolated checkout.
+All 175 packaged application Python modules and three changed packaged resources
+match the exact committed source. EXE SHA-256:
+`316c238836b04abba9105c7a5470a6963f3556fe934d9b725f03af60cc85c2fd`.
+The first sandboxed build was rejected by the existing DLL guard because the
+sandbox re-injected tool-runtime DLL search directories. Rebuilding outside the
+sandbox with a restricted PATH passed the same guard. No guard was weakened.
+Frozen offscreen startup loaded native Qt using isolated application data,
+camera autostart disabled, motion disabled and a nonexistent serial port.
+No interactive operator, real-camera, controller or laser test was performed.
+The permanent current-feature.json was updated atomically using
+set_dev_test_feature.py and read back through the launcher validator. Regular E3
+and the permanent launcher EXE/shortcut were not changed. Local verification
+records: build/layer-profiles-frozen-verification.json and
+build/layer-profiles-frozen-smoke.json (intentionally untracked).
 
 
 ## Clearer setup wizard (2026-09-15, operator feedback)
