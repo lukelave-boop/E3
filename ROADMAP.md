@@ -1,5 +1,16 @@
 # Roadmap
 
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
 Desktop scroll stability: all form scroll areas preserve their position when
 action buttons disable and Qt transfers focus, including Home/reference.
 User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.

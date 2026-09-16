@@ -1,5 +1,21 @@
 # Current repository state
 
+Verification: 407 focused Windows offscreen desktop/launcher tests passed;
+15 scroll tests also passed in the isolated feature checkout. Repository Ruff
+and application compileall passed. New operator validation remains pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
 ## Stable panel scrolling frozen handoff (2026-09-16)
 
 E3 DEV TEST selects Stable panel scrolling, version 0.7.175, branch
