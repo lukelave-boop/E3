@@ -155,3 +155,14 @@ def test_file_menu_contains_one_import_submenu_with_short_child_labels(
     window.close()
     window.deleteLater()
     qt_application.processEvents()
+
+
+def test_tools_menu_omits_left_sidebar_duplicates(qt_application):
+    window = _MenuHarness()
+    menu = _top_level_menu(window, "Tools")
+    assert menu.actions() == [window.actions[key] for key in (
+        "refresh_camera", "capture_placement", "machine_manager", "machine_setup",
+    )]
+    for key in ("rectangle", "ellipse", "line", "text", "trace_objects", "template_alignment"):
+        assert not window.actions[key].shortcut().isEmpty()
+    window.close()

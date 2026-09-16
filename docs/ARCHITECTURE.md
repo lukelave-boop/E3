@@ -1,5 +1,19 @@
 # Architecture
 
+## Saved cut/layer sets
+
+materials/layer_profiles.py owns schema-1 layer-profile persistence and an
+undoable replacement command without Qt or HTTP dependencies. The separate
+layer-profiles.json library uses the native user-data directory and atomic JSON
+publication. Desktop LayerProfilesBar supplies explicit save/load/delete controls
+above the layer list. Profiles bind to running machine/tool profile IDs. Loading
+matches used layers by ID then unique color, rejects missing/ambiguous/merged
+assignments, and touches the document to invalidate existing prepared jobs.
+Project schema, material recipe storage and controller paths remain unchanged.
+The focused Windows tests cover persistence failure, layer matching, undo/redo,
+prepared-job invalidation and compact desktop layout.
+
+
 ## Wizard instructions and navigation
 
 `desktop/setup_instructions.py` translates shared step IDs and statuses into

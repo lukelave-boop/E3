@@ -69,7 +69,8 @@ without copying LightBurn branding or changing the E3 machine-control model:
   switches remain visibly unavailable rather than appearing active.
 
 1. Traditional File, Edit, Tools, Arrange, Laser Tools, Window, and Help menus
-   retain every existing command. File groups SVG, G-code, LightBurn-project,
+   retain application commands; drawing, template and trace commands live on
+   the left rail with their shortcuts instead of also appearing in Tools. File groups SVG, G-code, LightBurn-project,
    and raster-image actions under one **Import** submenu; the child labels omit
    the repeated word "Import" while retaining the existing shortcuts and
    implementations.

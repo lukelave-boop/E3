@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - cut/layer profiles
+
+- Add whole-layer-set profiles above the Cuts list: Load, Save As and Delete.
+- Keep profiles scoped to the running machine/tool; load through undo history
+  with used-layer matching and rejection of missing or ambiguous assignments.
+- Remove seven redundant drawing, template and trace entries from Tools.
+- 98 focused Windows tests, repository Ruff and compileall pass; operator
+  testing of the frozen build remains pending.
+
+
 ## Unreleased - clearer setup wizard
 
 - Replace evidence jargon with numbered instructions, Check progress and named

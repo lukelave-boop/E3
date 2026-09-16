@@ -135,6 +135,7 @@ from .job_preview import (
     prepare_job_preview,
 )
 from .laser_focus import LaserFocusWorkspace
+from .layer_profiles import LayerProfilesBar
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
 from .machine_state import ControllerUiState, project_machine_state
@@ -781,13 +782,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(self.actions["ungroup"])
 
         tools_menu = self.menuBar().addMenu("&Tools")
-        for key in ("rectangle", "ellipse", "line", "text"):
-            tools_menu.addAction(self.actions[key])
-        tools_menu.addSeparator()
-        tools_menu.addAction(self.actions["grid_template_designer"])
-        tools_menu.addAction(self.actions["trace_objects"])
-        tools_menu.addAction(self.actions["template_alignment"])
-        tools_menu.addSeparator()
         tools_menu.addAction(self.actions["refresh_camera"])
         tools_menu.addAction(self.actions["capture_placement"])
         tools_menu.addAction(self.actions["machine_manager"])
@@ -1047,6 +1041,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layer_panel = LayerPanel(
             max_work_feed_mm_min=self.runtime.settings.machine.max_work_feed_mm_min,
         )
+        self.layer_profiles_bar = LayerProfilesBar(self)
+        self.layer_panel.layout().insertWidget(0, self.layer_profiles_bar)
         self.object_panel = ObjectPanel()
         self.transform_panel = TransformPanel()
         self.trace_panel = TracePanel()

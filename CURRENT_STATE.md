@@ -1,5 +1,36 @@
 # Current repository state
 
+## Cut/layer profiles and Tools cleanup (2026-09-16, source verified)
+
+Desktop-only implementation adds Profiles above the Cuts layer table, with
+Load, Save As and Delete. Whole layer sets are stored atomically in the native
+user-data directory as layer-profiles.json (library schema 1), separately from
+projects, material recipes and Qt settings. Profiles are scoped to the running
+machine/tool profiles. Loading preserves matching layer IDs, otherwise matches
+unique colors; missing/ambiguous used layers and many-to-one reassignment reject.
+Loading is one undoable project command and invalidates prepared jobs through
+the existing revision/history path. Saved settings include output/show flags.
+The seven drawing/template/trace duplicates are removed from Tools; sidebar
+actions and keyboard shortcuts remain.
+
+The user authorized verification and a frozen DEV TEST build after reviewing
+the implementation. All 98 focused profile, layer editing/assignment, material
+recipe, menu, compact dock and launcher tests pass on Windows Python 3.14.4.
+Repository Ruff and application compileall pass in the isolated feature checkout.
+Offscreen full-window checks at 900 x 680 and 1080 x 780 use native Segoe UI
+13 pt text. The profile row remains usable above the table; saved settings,
+object matching, undo/redo, prepared-job invalidation and failed atomic
+publication are covered. Screenshots were visually inspected. The GUI test
+restores its temporary font registration to avoid affecting other layout tests.
+No interactive operator, real-camera or hardware test has been performed.
+
+Build branch codex/layer-profiles starts at 8e58ae5 (the current setup-wizard
+feature); it excludes concurrent Arrange/distribution edits in the shared tree.
+The earlier setup/precision compatibility CI and integration remain pending;
+no GitHub upload or main merge is part of this local operator-test handoff.
+Frozen packaging and permanent launcher selection are the next steps.
+
+
 ## Clearer setup wizard (2026-09-15, operator feedback)
 
 Operator testing of 0.7.163 found the wizard unclear: Step 5 requested "datum",

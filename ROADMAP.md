@@ -1,5 +1,13 @@
 # Roadmap
 
+## Cut/layer profile review
+
+The 98 focused profile, menu, desktop layer and launcher tests, repository Ruff
+and compileall pass on Windows. Compact layouts were inspected offscreen.
+Complete operator testing of saved layer sets in the frozen feature build.
+Compatibility CI remains required before integration.
+
+
 ## Setup wizard operator feedback
 
 The operator found the progress wording and Step 4/5 handoff unclear. Plain

@@ -1,5 +1,15 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Saved cut/layer profiles
+
+Use **Profiles** above the Cuts list to **Save As** a named layer set and **Load**
+it into another project for the same machine/tool profiles. Loading is undoable;
+review restored speed, power and output flags before Preview. Used layers must
+match by identity or unique color. Delete removes only the saved profile.
+Drawing, template and trace tools remain on the left sidebar with their shortcuts;
+their duplicate Tools-menu entries are removed.
+
+
 ## Clearer setup instructions
 
 The Setup wizard now gives numbered instructions and links that reveal the exact
