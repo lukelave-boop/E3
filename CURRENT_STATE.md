@@ -21,8 +21,24 @@ The dock fixture now uses an isolated profile library rather than operator data.
 No interactive operator, camera, controller or laser testing was performed.
 
 The isolated codex/profile-save branch starts at e0ae0eb and retains the verified
-distribution-area, layer-profile and setup changes. Frozen packaging and DEV TEST
-selection are pending; compatibility CI and main integration remain pending.
+distribution-area, layer-profile and setup changes. Compatibility CI and main
+integration remain pending.
+
+Frozen handoff: E3 DEV TEST selects **Save layer profiles**, version **0.7.171**,
+branch `codex/profile-save`, exact application revision
+`50a09adbbdaf7f18f2c98df16228cb99e182146c`.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\profile-save-dev\dist\E3\E3.exe`.
+The canonical packaging/build_windows.ps1 completed with a restricted build PATH;
+the native DLL guard passed. All 176 packaged application Python modules and
+three changed resources match the exact committed source. EXE SHA-256:
+`0b0f7eb31ff59b4118f61f0011e70d9ef4b9515eae8b2b9fd308f46c3c4f56ac`.
+Frozen offscreen startup loaded native Qt using isolated data, camera autostart
+disabled, motion disabled and a nonexistent serial port. The pointer was selected
+atomically with set_dev_test_feature.py and read back through the launcher
+validator. The permanent launcher and regular E3 were not modified. Local records:
+build/profile-save-frozen-verification.json and build/profile-save-frozen-smoke.json
+(intentionally untracked). Reopen E3 DEV TEST, select a profile, edit its layers,
+then Save and confirm Yes; No leaves the saved profile unchanged.
 
 
 ## Distribution areas (2026-09-16 UTC, frozen feature verification)
