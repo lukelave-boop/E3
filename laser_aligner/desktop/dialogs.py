@@ -8,6 +8,43 @@ from .qt import require_qt
 QtCore, _QtGui, QtWidgets = require_qt()
 
 
+class ConfirmationButtonColorFilter(QtCore.QObject):
+    """Tag dialog answers by their Qt role, independently of the default button."""
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802
+        if event.type() == QtCore.QEvent.Type.Show and isinstance(
+            watched, (QtWidgets.QMessageBox, QtWidgets.QDialogButtonBox)
+        ):
+            for button in watched.buttons():
+                role = watched.buttonRole(button)
+                roles = type(watched).ButtonRole
+                standard = type(watched).StandardButton
+                answer = ""
+                if role == roles.YesRole:
+                    answer = "yes"
+                elif role == roles.NoRole:
+                    answer = "no"
+                elif watched.standardButton(button) == standard.Cancel:
+                    answer = "cancel"
+                if button.property("confirmationAnswer") != answer:
+                    button.setProperty("confirmationAnswer", answer)
+                    button.style().unpolish(button)
+                    button.style().polish(button)
+                    button.update()
+        return False
+
+
+def install_confirmation_button_colors(application: Any) -> ConfirmationButtonColorFilter:
+    """Retain one application-wide filter for static and custom dialog APIs."""
+    existing = application.property("e3ConfirmationButtonColorFilter")
+    if isinstance(existing, ConfirmationButtonColorFilter):
+        return existing
+    event_filter = ConfirmationButtonColorFilter(application)
+    application.installEventFilter(event_filter)
+    application.setProperty("e3ConfirmationButtonColorFilter", event_filter)
+    return event_filter
+
+
 class ModalDialogFirstPaintFilter(QtCore.QObject):
     """Schedule one bounded repaint after a modal message box is exposed."""
 

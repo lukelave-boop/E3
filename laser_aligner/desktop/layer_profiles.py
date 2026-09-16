@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..materials.layer_profiles import LayerProfileStore, load_profile_command
+from ..materials.layer_profiles import LayerProfileStore, load_profile_command, validated_layers
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -13,6 +13,7 @@ class LayerProfilesBar(QtWidgets.QWidget):
         super().__init__(window)
         self.window = window
         self.store = LayerProfileStore()
+        self._saved_layers: dict[str, list[dict]] = {}
         self.setObjectName("layerProfilesBar")
         self._layout = QtWidgets.QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -85,15 +86,37 @@ class LayerProfilesBar(QtWidgets.QWidget):
         self.load_button.setEnabled(selected)
         self.overwrite_button.setEnabled(selected)
         self.delete_button.setEnabled(selected)
+        self.update_save_highlight()
+
+    def update_save_highlight(self) -> None:
+        saved = self._saved_layers.get(self.selector.currentData())
+        changed = saved is not None and saved != [
+            layer.to_dict() for layer in self.window.document.layers
+        ]
+        button = self.overwrite_button
+        if button.property("profileChanged") != changed:
+            button.setProperty("profileChanged", changed)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
+        button.setToolTip(
+            "Unsaved profile changes — save to overwrite the selected profile after confirmation"
+            if changed else
+            "Overwrite the selected profile with all current layers after confirmation"
+        )
 
     def refresh(self, selected: str = "") -> None:
         selected = selected or self.selector.currentData()
+        self._saved_layers.clear()
         self.selector.clear()
         self.selector.addItem("Choose a profile…", "")
         try:
             profiles = self.store.read()
             for name in sorted(profiles, key=str.casefold):
                 if profiles[name]["scope"] == list(self._scope()):
+                    self._saved_layers[name] = [
+                        layer.to_dict() for layer in validated_layers(profiles[name]["layers"])
+                    ]
                     self.selector.addItem(name, name)
             self.save_button.setEnabled(True)
             self.selector.setToolTip("Choose a saved layer set, then press Load")
@@ -125,6 +148,7 @@ class LayerProfilesBar(QtWidgets.QWidget):
         if not name:
             return
         self.window._commit_project_numeric_edit()
+        self.update_save_highlight()
         answer = QtWidgets.QMessageBox.question(
             self, "Overwrite layer profile?",
             f"Overwrite the existing profile '{name}' with all current cut/layer settings?",
@@ -155,6 +179,10 @@ class LayerProfilesBar(QtWidgets.QWidget):
             self.window.show_error(str(exc))
             return
         self.window.history.execute(command)
+        self._saved_layers[name] = [
+            layer.to_dict() for layer in validated_layers(profile["layers"])
+        ]
+        self.update_save_highlight()
         self.window.show_notice(f"Loaded layer profile: {name}. Review settings before Preview.")
 
     def delete_profile(self) -> None:

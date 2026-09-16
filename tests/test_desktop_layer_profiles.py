@@ -85,16 +85,21 @@ def test_profile_load_invalidates_prepared_job_and_preserves_artwork(tmp_path, m
         window.document.add_object(obj)
         bar.store.save("Whole set", bar._scope(), window.document.layers)
         bar.refresh("Whole set")
+        assert bar.overwrite_button.property("profileChanged") is False
         window._layer_edited(layer.id, {"power_percent": 19})
+        assert bar.overwrite_button.property("profileChanged") is True
         window.last_job = object()
         window.last_job_revision = window.document.revision
         bar.load_profile()
+        assert bar.overwrite_button.property("profileChanged") is False
         assert window.last_job is None
         assert window.document.get_layer(layer.id).power_percent == layer.power_percent
         assert window.document.get_object(obj.id).layer_id == layer.id
         window.history.undo()
+        assert bar.overwrite_button.property("profileChanged") is True
         assert window.document.get_layer(layer.id).power_percent == 19
         window.history.redo()
+        assert bar.overwrite_button.property("profileChanged") is False
         assert window.document.get_layer(layer.id).power_percent == layer.power_percent
         for width, height in ((1080, 780), (900, 680)):
             window.resize(width, height)
@@ -163,14 +168,80 @@ def test_save_requires_explicit_overwrite_confirmation(tmp_path, monkeypatch, an
     assert len(prompts) == 1 and commits == [True]
     assert bar.selector.currentData() == "Paper"
     if answer == "Yes":
+        assert bar.overwrite_button.property("profileChanged") is False
         assert store.read()["Paper"]["layers"][0]["power_percent"] == 41
         assert store.read()["Untouched"] == untouched
     else:
+        assert bar.overwrite_button.property("profileChanged") is True
         assert store.path.read_bytes() == before
     bar.selector.setCurrentIndex(0)
     assert not bar.overwrite_button.isEnabled()
+    assert bar.overwrite_button.property("profileChanged") is False
     bar.overwrite_profile()
     assert len(prompts) == 1
+    window.close()
+    window.deleteLater()
+    application.processEvents()
+
+
+@pytest.mark.parametrize("change", ["setting", "rename", "output", "show", "add", "remove", "reorder"])
+def test_save_highlight_compares_saved_layers(tmp_path, monkeypatch, change):
+    from copy import deepcopy
+
+    from laser_aligner.desktop.theme import DARK_STYLESHEET
+
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = LayerProfileStore(tmp_path / "profiles.json")
+    monkeypatch.setattr("laser_aligner.desktop.layer_profiles.LayerProfileStore", lambda: store)
+    window = QtWidgets.QMainWindow()
+    window.document = ProjectDocument(layers=[OperationLayer(name="A"), OperationLayer(name="B")])
+    window._running_material_profile_ids = lambda: ("machine", "tool")
+    window._commit_project_numeric_edit = lambda: None
+    errors = []
+    window.show_error = errors.append
+    window.show_notice = lambda message: None
+    store.save("Original", ("machine", "tool"), window.document.layers)
+    bar = LayerProfilesBar(window)
+    window.setCentralWidget(bar)
+    window.setStyleSheet(DARK_STYLESHEET)
+    bar.refresh("Original")
+    window.show()
+    application.processEvents()
+    before = deepcopy(window.document.layers)
+    assert bar.overwrite_button.property("profileChanged") is False
+    if change == "setting":
+        window.document.layers[0].passes += 1
+    elif change == "rename":
+        window.document.layers[0].name = "Renamed"
+    elif change == "output":
+        window.document.layers[0].output_enabled = False
+    elif change == "show":
+        window.document.layers[0].visible = False
+    elif change == "add":
+        window.document.layers.append(OperationLayer())
+    elif change == "remove":
+        window.document.layers.pop()
+    else:
+        window.document.layers.reverse()
+    bar.update_save_highlight()
+    assert bar.overwrite_button.property("profileChanged") is True
+    assert bar.overwrite_button.grab().toImage().pixelColor(3, 3).name() == "#237a43"
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *args: QtWidgets.QMessageBox.StandardButton.Yes)
+
+    def fail_save(*args, **kwargs):
+        raise OSError("Write failed")
+
+    monkeypatch.setattr(store, "save", fail_save)
+    bar.overwrite_profile()
+    assert errors == ["Write failed"]
+    assert bar.overwrite_button.property("profileChanged") is True
+    bar.selector.setCurrentIndex(0)
+    assert bar.overwrite_button.property("profileChanged") is False
+    bar.selector.setCurrentIndex(bar.selector.findData("Original"))
+    assert bar.overwrite_button.property("profileChanged") is True
+    window.document.layers = before
+    bar.update_save_highlight()
+    assert bar.overwrite_button.property("profileChanged") is False
     window.close()
     window.deleteLater()
     application.processEvents()

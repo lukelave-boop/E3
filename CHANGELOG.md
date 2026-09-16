@@ -1,5 +1,15 @@
 # Changelog
 
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
 ## Unreleased - overwrite layer profiles
 
 - Add Save beside Save As, with a named overwrite confirmation defaulting to No.

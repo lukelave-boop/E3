@@ -132,6 +132,17 @@ QToolButton::menu-indicator {
     width: 7px;
     height: 7px;
 }
+QToolButton#saveLayerProfileButton[profileChanged="true"] {
+    background: #237A43;
+    color: #FFFFFF;
+    border-color: #62C881;
+}
+QToolButton#saveLayerProfileButton[profileChanged="true"]:hover {
+    background: #2D9152;
+}
+QToolButton#saveLayerProfileButton[profileChanged="true"]:pressed {
+    background: #195C32;
+}
 
 /* Docking and inspectors */
 QDockWidget {
@@ -279,6 +290,44 @@ QPushButton:disabled {
     color: #747474;
     background: #262626;
     border-color: #393939;
+}
+
+/* Answer semantics take precedence over the generic default-button accent. */
+QPushButton[confirmationAnswer="yes"] {
+    background: #237A43;
+    color: #FFFFFF;
+    border-color: #62C881;
+}
+QPushButton[confirmationAnswer="yes"]:hover { background: #2D9152; }
+QPushButton[confirmationAnswer="yes"]:pressed { background: #195C32; }
+QPushButton[confirmationAnswer="no"] {
+    background: #A92F3E;
+    color: #FFFFFF;
+    border-color: #F06270;
+}
+QPushButton[confirmationAnswer="no"]:hover { background: #C23949; }
+QPushButton[confirmationAnswer="no"]:pressed { background: #7E222E; }
+QPushButton[confirmationAnswer="cancel"] {
+    background: #444444;
+    color: #FFFFFF;
+    border-color: #888888;
+}
+QPushButton[confirmationAnswer="cancel"]:hover { background: #555555; }
+QPushButton[confirmationAnswer="cancel"]:pressed { background: #333333; }
+QPushButton[confirmationAnswer="yes"]:default,
+QPushButton[confirmationAnswer="no"]:default,
+QPushButton[confirmationAnswer="cancel"]:default,
+QPushButton[confirmationAnswer="yes"]:focus,
+QPushButton[confirmationAnswer="no"]:focus,
+QPushButton[confirmationAnswer="cancel"]:focus {
+    border: 2px solid #FFFFFF;
+    padding: 2px 6px;
+}
+QPushButton[confirmationAnswer="yes"]:disabled,
+QPushButton[confirmationAnswer="no"]:disabled,
+QPushButton[confirmationAnswer="cancel"]:disabled {
+    color: #B0B0B0;
+    border-color: #666666;
 }
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPlainTextEdit {
@@ -557,8 +606,11 @@ QToolTip {
 def apply_dark_theme(application: object) -> None:
     """Apply the compact desktop theme while preserving OS DPI scaling."""
 
+    from .dialogs import install_confirmation_button_colors
+
     application.setStyle("Fusion")
     application.setStyleSheet(DARK_STYLESHEET)
+    install_confirmation_button_colors(application)
 
 
 __all__ = [

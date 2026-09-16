@@ -1391,6 +1391,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
         self.workspace.set_document(self.document)
         self.layer_panel.set_document(self.document, self.active_layer_id)
+        self.layer_profiles_bar.update_save_highlight()
         self.object_panel.set_document(
             self.document,
             selected_ids or self.workspace.selected_object_ids(),
