@@ -1,5 +1,29 @@
 # Current repository state
 
+## Stable panel scrolling frozen handoff (2026-09-16)
+
+E3 DEV TEST selects Stable panel scrolling, version 0.7.175, branch
+codex/stable-panel-scroll, exact frozen application revision
+`d8cd8daf7dfb09abd030774cd010007608087e81`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\stable-panel-scroll-dev\dist\E3\E3.exe`.
+
+This isolated checkout retains profile Save/highlighting, confirmation colors,
+and distribution changes. 398 focused Windows offscreen desktop/launcher tests,
+repository Ruff and application compileall passed. All 177 packaged application
+modules and three changed resources match committed source; the canonical packager's
+native DLL guard passed. Frozen offscreen startup passed with isolated data,
+camera autostart disabled, motion disabled and a nonexistent serial port.
+No interactive operator, camera, controller or laser test was performed.
+The permanent feature pointer was selected atomically and read back through the
+launcher validator. The normal application and permanent launcher are unchanged.
+
+EXE SHA-256: cf2d90042e37ec44a2a67911d0c77aef8cd3eac6318d9ad551c758673b4b32bb.
+Local records: build/stable-panel-scroll-frozen-verification.json and
+build/stable-panel-scroll-frozen-smoke.json (intentionally untracked).
+Compatibility CI/main integration remain pending. Reopen E3 DEV TEST to check
+Home/reference and other buttons retain panel position during busy transitions.
+
+
 Verification: 398 focused Windows offscreen desktop/launcher tests, repository
 Ruff and application compileall passed. No hardware or interactive GUI testing.
 
