@@ -1,5 +1,33 @@
 # Current repository state
 
+## Stable button positions frozen handoff (2026-09-16)
+
+E3 DEV TEST selects Stable button positions, version 0.7.177, branch
+codex/stable-panel-scroll, exact application revision
+`dcd935e70c3c2f6693be6225c79d2136a2b2f46b`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\stable-panel-layout-dev\dist\E3\E3.exe`.
+
+The 0.7.175 recording shows remaining layout movement when status notes appear
+and the Z readout wraps. This follow-up anchors the clicked button across those
+layout changes, while deliberate navigation releases it. The previous frozen
+build is preserved. This recording supports UI diagnosis only; it does not
+qualify controller, firmware, configuration or physical motion behavior.
+
+407 focused Windows offscreen desktop/launcher tests passed; all 15 scrolling
+regressions also passed in the isolated feature checkout. Repository Ruff and
+application compileall passed. The canonical packager's native DLL guard passed;
+177 packaged modules and three resources match the committed source. Frozen
+startup passed with isolated data, camera autostart off, motion disabled and a
+nonexistent serial port. No new interactive or physical hardware test was done.
+The permanent pointer was atomically updated and validated; normal E3 and the
+permanent launcher executable/shortcut were unchanged.
+
+EXE SHA-256: e647e81d40475d3de7ffb899da9aef8151a55cb89b76699bbf17fc59c9763719.
+Local verification records: build/stable-panel-layout-frozen-verification.json
+and build/stable-panel-layout-frozen-smoke.json (intentionally untracked).
+Operator validation, compatibility CI and main integration remain pending.
+
+
 Verification: 407 focused Windows offscreen desktop/launcher tests passed;
 15 scroll tests also passed in the isolated feature checkout. Repository Ruff
 and application compileall passed. New operator validation remains pending.
