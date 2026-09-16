@@ -19,6 +19,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from laser_aligner.config import MachineSettings
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.theme import DARK_STYLESHEET
+from laser_aligner.materials.layer_profiles import LayerProfileStore
+
+
+@pytest.fixture(autouse=True)
+def isolated_layer_profiles(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "laser_aligner.desktop.layer_profiles.LayerProfileStore",
+        lambda: LayerProfileStore(tmp_path / "layer-profiles.json"),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -38,6 +47,7 @@ class _MaterialDatabaseStub:
 
 
 class _DockLayoutHarness(QtWidgets.QMainWindow):
+    _running_material_profile_ids = E3MainWindow._running_material_profile_ids
     _dock = E3MainWindow._dock
     _create_docks = E3MainWindow._create_docks
     _create_status_bar = E3MainWindow._create_status_bar

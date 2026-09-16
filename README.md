@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Update a saved layer profile
+
+Select a profile above the Cuts list, edit the layers, then click **Save**.
+Confirm **Yes** to overwrite that named profile, or **No** to leave it unchanged.
+**Save As…** creates a separate profile. Profiles do not autosave.
+
+
 ## Distribute objects within an area
 
 Select objects, then open **Distribute horizontally…** or **Distribute vertically…**.

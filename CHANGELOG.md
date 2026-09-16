@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - overwrite layer profiles
+
+- Add Save beside Save As, with a named overwrite confirmation defaulting to No.
+- Keep Save disabled without a selected profile and reject missing or incompatible
+  profiles. Save As still refuses duplicate names; writes remain atomic.
+- Wrap profile actions below the selector in narrow inspectors.
+- Verify with 68 focused Windows tests, Ruff, compileall and offscreen visual QA.
+
+
 ## Unreleased - distribution areas
 
 - Add a chooser to horizontal and vertical Distribute: full project work area,

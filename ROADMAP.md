@@ -1,5 +1,12 @@
 # Roadmap
 
+## Saved-profile update acceptance
+
+Save with overwrite confirmation is implemented and verified by focused Windows
+tests and offscreen layout/popup inspection. Confirm the workflow interactively
+in the next DEV TEST build; profiles continue to save only on explicit request.
+
+
 ## Distribution area operator review
 
 Desktop source supports full-bed, chosen-rectangle and selection-span distribution.

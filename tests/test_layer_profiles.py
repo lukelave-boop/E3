@@ -120,3 +120,31 @@ def test_loaded_settings_are_independent_of_library_payload():
     command.undo()
     command.redo()
     assert document.layers[0].power_percent == 20
+
+
+def test_overwrite_replaces_whole_set_preserving_other_profiles(tmp_path):
+    store = LayerProfileStore(tmp_path / "profiles.json")
+    store.save("Paper", SCOPE, [OperationLayer()])
+    store.save("Other", SCOPE, [OperationLayer()])
+    other = store.read()["Other"]
+    replacement = [OperationLayer(power_percent=23, passes=3), OperationLayer()]
+    store.save("Paper", SCOPE, replacement, overwrite=True)
+    assert store.read()["Paper"] == profile(*replacement)
+    assert store.read()["Other"] == other
+
+
+@pytest.mark.parametrize("failure", ["missing", "scope", "invalid", "publication"])
+def test_overwrite_rejection_preserves_library(tmp_path, monkeypatch, failure):
+    store = LayerProfileStore(tmp_path / "profiles.json")
+    store.save("Paper", SCOPE, [OperationLayer()])
+    before = store.path.read_bytes()
+    name = "Missing" if failure == "missing" else "Paper"
+    scope = ("other", "tool") if failure == "scope" else SCOPE
+    layers = [] if failure == "invalid" else [OperationLayer(power_percent=22)]
+    if failure == "publication":
+        def fail_replace(*args):
+            raise OSError("Publication failed")
+        monkeypatch.setattr("laser_aligner.storage.os.replace", fail_replace)
+    with pytest.raises((ValueError, OSError)):
+        store.save(name, scope, layers, overwrite=True)
+    assert store.path.read_bytes() == before

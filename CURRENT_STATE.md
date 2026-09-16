@@ -1,5 +1,30 @@
 # Current repository state
 
+## Save existing layer profiles (2026-09-16, source verified)
+
+The Cuts profile controls now include Save, which overwrites the selected saved
+profile only after a named Yes/No confirmation (No is the default). No selection
+disables Save. Save As remains create-only. Saving commits pending numeric edits
+before confirmation, validates the full layer set, requires the existing profile
+and matching running machine/tool scope, then atomically publishes the library.
+Cancellation, missing profiles, incompatible scope and write failures preserve
+the saved library. The controls wrap below the selector in narrow inspectors.
+No project schema, controller, browser, motion or laser-output change is involved.
+
+Verification: 68 focused Windows Python 3.14.4 profile, layer-edit, menu, dock and
+launcher tests passed. Repository Ruff and application compileall pass. The
+900 x 680 and 1080 x 780 full-window layouts and the real overwrite popup were
+rendered offscreen with native Segoe UI and visually inspected. Tests cover
+Yes/No/dismissal, committed numeric edits, other-profile preservation, same-name
+replacement, scope/missing/invalid-data rejection and atomic publication failure.
+The dock fixture now uses an isolated profile library rather than operator data.
+No interactive operator, camera, controller or laser testing was performed.
+
+The isolated codex/profile-save branch starts at e0ae0eb and retains the verified
+distribution-area, layer-profile and setup changes. Frozen packaging and DEV TEST
+selection are pending; compatibility CI and main integration remain pending.
+
+
 ## Distribution areas (2026-09-16 UTC, frozen feature verification)
 
 Desktop Distribute horizontally/vertically opens an area chooser. Full bed uses

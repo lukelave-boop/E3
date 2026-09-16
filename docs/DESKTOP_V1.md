@@ -1,5 +1,14 @@
 # E3 native desktop v1 foundation
 
+## Updating saved cut/layer profiles
+
+Above the Cuts table, select the saved profile and use **Save** to replace its
+entire layer set after the named overwrite confirmation. **No** cancels;
+**Yes** writes the current settings. Save is unavailable without a selection.
+**Save As…** creates a new name and never overwrites. Profiles do not autosave.
+Actions wrap below the selector when the inspector is narrow.
+
+
 The `desktop-v1` foundation adds a native PySide6 workspace without removing the
 existing browser application. Both interfaces use the same calibrated camera,
 geometry, G-code, safety and controller services.

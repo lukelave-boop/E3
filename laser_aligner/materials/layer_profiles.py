@@ -44,14 +44,22 @@ class LayerProfileStore:
             validated_layers(profile.get("layers"))
         return profiles
 
-    def save(self, name: str, scope: tuple[str, str], layers: list[OperationLayer]) -> None:
+    def save(
+        self, name: str, scope: tuple[str, str], layers: list[OperationLayer],
+        *, overwrite: bool = False,
+    ) -> None:
         name = name.strip()
         if not name or len(name) > 80:
             raise ValueError("Use a profile name of 1–80 characters.")
         if not all(isinstance(value, str) and value for value in scope):
             raise ValueError("A running machine and tool profile are required.")
         profiles = self.read()
-        if name in profiles:
+        if overwrite:
+            if name not in profiles:
+                raise ValueError("That profile no longer exists. Use Save As to create it.")
+            if profiles[name]["scope"] != list(scope):
+                raise ValueError("This profile belongs to a different machine or tool head.")
+        elif name in profiles:
             raise ValueError("That profile name already exists. Use a new name.")
         payload = [layer.to_dict() for layer in layers]
         validated_layers(payload)

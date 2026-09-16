@@ -1,5 +1,17 @@
 # Architecture
 
+## Explicit layer-profile overwrite
+
+LayerProfilesBar supplies Save in addition to create-only Save As. Save captures
+the selected name, finishes pending numeric edits and requests explicit Yes/No
+confirmation. Only Yes calls LayerProfileStore.save with overwrite=True. The
+store requires an existing same-scope profile, validates the complete layer set
+and uses the existing atomic JSON publisher; it cannot silently recreate a
+missing profile or replace a different machine/tool profile. This updates the
+separate profile library, not project history or controller authority.
+The action group moves below the selector when the inspector is narrow.
+
+
 ## Distribution area selection
 
 `project/alignment.py` extends `distributed_transforms` with explicit selection,

@@ -102,9 +102,10 @@ def test_profile_load_invalidates_prepared_job_and_preserves_artwork(tmp_path, m
             application.processEvents()
             assert window.width() == width
             assert bar.geometry().bottom() < window.layer_panel.layer_list.geometry().top()
-            for button in (bar.load_button, bar.save_button, bar.delete_button):
+            for button in (bar.load_button, bar.overwrite_button, bar.save_button, bar.delete_button):
                 assert button.isVisibleTo(window)
-                assert bar.rect().contains(button.geometry())
+                assert bar.rect().contains(button.mapTo(bar, button.rect().topLeft()))
+                assert bar.rect().contains(button.mapTo(bar, button.rect().bottomRight()))
             assert bar.selector.width() >= 80
         tools_menu = next(action.menu() for action in window.menuBar().actions() if action.text() == "&Tools")
         rail = window.findChild(QtWidgets.QToolBar, "drawingToolbar")
@@ -121,3 +122,55 @@ def test_profile_load_invalidates_prepared_job_and_preserves_artwork(tmp_path, m
         if font_id >= 0:
             QtGui.QFontDatabase.removeApplicationFont(font_id)
         application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No", "Cancel"])
+def test_save_requires_explicit_overwrite_confirmation(tmp_path, monkeypatch, answer):
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = LayerProfileStore(tmp_path / "profiles.json")
+    monkeypatch.setattr("laser_aligner.desktop.layer_profiles.LayerProfileStore", lambda: store)
+    window = QtWidgets.QMainWindow()
+    window.document = ProjectDocument(layers=[OperationLayer(power_percent=17)])
+    window._running_material_profile_ids = lambda: ("machine", "tool")
+    window.show_error = lambda message: pytest.fail(message)
+    window.show_notice = lambda message: None
+    commits = []
+
+    def commit_pending_edit():
+        commits.append(True)
+        window.document.layers[0].power_percent = 41
+
+    window._commit_project_numeric_edit = commit_pending_edit
+    bar = LayerProfilesBar(window)
+    assert not bar.overwrite_button.isEnabled()
+    store.save("Paper", bar._scope(), window.document.layers)
+    store.save("Untouched", bar._scope(), window.document.layers)
+    bar.refresh("Paper")
+    before = store.path.read_bytes()
+    untouched = store.read()["Untouched"]
+    prompts = []
+
+    def confirm(parent, title, message, buttons, default):
+        assert parent is bar
+        assert "Paper" in message and "Overwrite" in message
+        assert default == QtWidgets.QMessageBox.StandardButton.No
+        assert buttons == (QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        prompts.append(message)
+        return getattr(QtWidgets.QMessageBox.StandardButton, answer)
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", confirm)
+    bar.overwrite_button.click()
+    assert len(prompts) == 1 and commits == [True]
+    assert bar.selector.currentData() == "Paper"
+    if answer == "Yes":
+        assert store.read()["Paper"]["layers"][0]["power_percent"] == 41
+        assert store.read()["Untouched"] == untouched
+    else:
+        assert store.path.read_bytes() == before
+    bar.selector.setCurrentIndex(0)
+    assert not bar.overwrite_button.isEnabled()
+    bar.overwrite_profile()
+    assert len(prompts) == 1
+    window.close()
+    window.deleteLater()
+    application.processEvents()
