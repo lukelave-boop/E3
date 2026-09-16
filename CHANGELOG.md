@@ -7,7 +7,7 @@
 - Area modes equalize edge gaps including end margins, keep the reference
   rectangle fixed, and reject layouts that cannot fit without resizing.
 - Explain insufficient selections and already-even layouts; apply through one
-  undoable project command. Desktop source only; frozen handoff pending.
+  undoable project command. Available in E3 DEV TEST 0.7.169.
 
 ## Unreleased - cut/layer profiles
 

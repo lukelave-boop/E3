@@ -1,25 +1,38 @@
 # Current repository state
 
-## Distribution areas (2026-09-16 UTC, working tree)
+## Distribution areas (2026-09-16 UTC, frozen feature verification)
 
-Desktop Distribute horizontally/vertically now opens an area chooser. Full bed
-uses the project work area; chosen rectangle uses an existing axis-aligned,
-square-cornered rectangle and excludes it from movement. Both distribute equal
-bounding-box edge gaps including end margins without resizing, moving on the
-other axis only as needed for containment. Current selection span preserves the
-old three-object center-spacing behavior. Invalid and already-even layouts are
-explained; Apply is one undoable edit and Cancel makes no changes.
+Desktop Distribute horizontally/vertically opens an area chooser. Full bed uses
+project work-area bounds; Chosen rectangle uses a square-cornered, axis-aligned
+native rectangle, fixed and excluded from movement. Both use equal bounding-box
+edge gaps including end margins, retain sizes, and move on the other axis only
+as needed to fit. Current selection span preserves the previous center-spacing
+behavior. Invalid and already-even layouts are explained. Apply is one undoable
+project edit and Cancel changes nothing. Browser/controller paths are unchanged.
 
-Verification: 99 focused Windows Python 3.14 tests passed in the isolated checkout (alignment, area
-acceptance/rejection, offscreen distribution dialog/history, desktop menus, layer profiles and launcher).
-Repository Ruff and application compileall passed. Offscreen dark-theme dialogs were rendered with native
-Windows Segoe UI and inspected at 560 x 330. Interactive GUI testing, a frozen
-feature build, compatibility CI and integration remain pending. No camera,
-controller or physical laser tests were performed. Browser and hardware paths
-are unchanged. The user authorized a frozen DEV TEST handoff. This isolated
-branch starts at codex/layer-profiles revision 9c07f2b, preserving the verified
-layer-profile feature. E3 DEV TEST currently selects 0.7.167 until this build
-passes verification. Compatibility CI and main integration remain pending.
+Verification: 99 focused Windows Python 3.14.4 checks passed in the isolated
+checkout: alignment, distribution acceptance/rejection, offscreen dialog/history,
+menus, layer profiles and DEV TEST launcher. Repository Ruff and application
+compileall passed. Offscreen dark-theme dialogs were inspected at 560 x 330 with
+Windows Segoe UI. No interactive operator, camera, controller or laser testing
+was performed. Compatibility CI and main integration remain pending.
+
+Frozen handoff: E3 DEV TEST selects **Distribution areas and layer profiles**,
+version **0.7.169**, branch `codex/distribution-areas`, exact application revision
+`2f1edd70ff81377780d5f8353c10a5749831fecc`.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\distribution-areas-dev\dist\E3\E3.exe`.
+This branch starts at the verified layer-profile branch revision 9c07f2b;
+that feature and the previous setup/precision changes are retained. The canonical
+packaging/build_windows.ps1 generated the bundle using a restricted build PATH;
+its native DLL guard passed. All 176 packaged application Python modules and
+three changed resources match the exact committed source. EXE SHA-256:
+`1c6b1e9bdd6647a1b2635eb0426a4083190a79fbb4b3d6d8c96c0a0182b2b24f`.
+Frozen offscreen startup loaded native Qt with isolated user data, camera
+autostart disabled, motion disabled and a nonexistent serial port. The permanent
+pointer was selected atomically with set_dev_test_feature.py and read back
+through the launcher validator. The permanent launcher and normal E3 were not
+modified. Local records: build/distribution-areas-frozen-verification.json and
+build/distribution-areas-frozen-smoke.json (intentionally untracked).
 
 ## Cut/layer profiles and Tools cleanup (2026-09-16, source verified)
 

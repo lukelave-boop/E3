@@ -4,7 +4,7 @@
 
 Desktop source supports full-bed, chosen-rectangle and selection-span distribution.
 Focused Windows geometry and offscreen widget checks cover both directions,
-rejections, cancel and undo. Interactive review and a frozen feature build remain
+rejections, cancel and undo. E3 DEV TEST 0.7.169 is selected; interactive review remains
 pending; compatibility CI is required before integration.
 
 ## Cut/layer profile review
