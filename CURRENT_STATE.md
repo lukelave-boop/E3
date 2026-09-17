@@ -1,5 +1,38 @@
 # Current repository state
 
+## Base-map containment frozen handoff (2026-09-17)
+
+E3 DEV TEST now selects Base-map grid containment, version 0.7.184, branch
+codex/base-map-containment, exact frozen application revision
+`1d62304d855d6a07cf8c48de4d4ebd2353f53121`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\base-map-containment-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically and read back through the launcher
+validator. Reopen E3 DEV TEST and prepare a NEW base-map job; an already prepared
+preview retains the old coordinates. No physical setup, normal E3 launcher,
+Pi installation or firmware was changed.
+
+The canonical Windows packager/installer completed after building outside the
+sandbox with a verified restricted PATH. Two sandboxed attempts were rejected
+by the native DLL guard because sandbox child processes restored injected
+Poppler library paths. The final bundle passed that guard; all 178 application
+modules and three resources match committed source. Frozen offscreen startup
+passed with isolated settings/data, camera autostart off, motion disabled and
+a nonexistent serial port. EXE SHA256:
+`01b266b16b4862713255bdb5edd208d895e1c6a3166af2c4f230515690dd665d`.
+Records in the feature checkout: build/clean-build.log,
+build/frozen-verification.json and build/frozen-smoke.json.
+
+Focused local checks passed as recorded below. Approved compatibility CI run
+35214103484 passed lint and POSIX controller recovery. Windows Python 3.10:
+5669 passed, 133 skipped, three installer-fixture errors due to missing pinned
+Git history. Windows Python 3.12: 7004 passed, 51 skipped, the same three errors
+and one existing retained-Z visibility test failure. That visibility failure
+was reproduced unchanged on the previous raster/readout source checkout.
+Thus full compatibility CI is NOT green; these separate baseline issues and
+main integration remain pending. No interactive GUI, camera, controller or
+laser test was performed. Physical calibration accuracy remains unverified.
+
+
 ## Base-map recalibration containment fix (2026-09-17)
 
 Base-map recalibration now fits its keyed grid inside the current saved
