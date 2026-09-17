@@ -1,5 +1,32 @@
 # Current repository state
 
+## Saved gauge recognition frozen handoff (2026-09-17)
+
+E3 DEV TEST selects Saved gauge recognition v0.7.185, branch codex/gauge-status,
+frozen revision `a617f3af73c1f4997902f0aa7e850232d9dbb997`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\gauge-status-dev\dist\E3\E3.exe`.
+The validated permanent pointer was updated atomically and read back. Reopen
+E3 DEV TEST and click Check progress; do not repeat gauge teaching for missing
+status. The saved Pi focus file's SHA256 remains
+`3e66e7806863a340a5ae964f535875c8a68751c3631b8ddba5ab7e0b6b8dd9c8`.
+
+The canonical Windows packager produced the EXE and passed its DLL guard.
+All 178 packaged modules and three resources match the frozen commit. Isolated
+offscreen startup passed with camera autostart off, motion disabled, isolated
+settings/data and a nonexistent serial port. This is not an interactive or
+physical hardware verification. No probing, gauge teaching or laser output was
+performed. Installer compression and compatibility CI run 35222475908 were
+still running at handoff verification; lint and POSIX recovery passed.
+No merge to main is claimed while compatibility remains incomplete.
+
+The isolated source passed all 59 focused tests, repository Ruff and compileall.
+The same tests in the original working folder passed after bringing its older
+focus-workspace test double up to date (58 passed initially; the affected
+10-test wizard file then passed). Unrelated working-tree changes were preserved.
+Records: build/clean-build.log, build/frozen-verification.json,
+build/frozen-smoke.json. The first startup-check helper could not locate
+PowerShell on the restricted PATH; using its absolute path completed the check.
+
 ## Saved gauge recognition fix (2026-09-17)
 
 The wizard's Check progress now requests read-only machine status in its existing
