@@ -14,10 +14,13 @@ the next operation and focuses before its output. Start Here preserves the mode.
 A target at or above clearance, above the configured maximum, or lacking current
 measurement authority is rejected. Limits are not raised automatically.
 
-This requires the matching `pi-operation-focus-v1` desktop/Pi update. Source
-verification uses fake controller I/O and Windows offscreen widgets; packaging,
-Pi deployment, interactive operation and physical focus verification are pending.
-Earlier installed builds and the historical results below remain unchanged.
+The matching `pi-operation-focus-v1` companion is installed and verified on the
+Pi, paired with E3 DEV TEST 0.7.181. All 322 isolated Linux/Pi fake-controller
+tests passed, and all 20 installed source files match their tested bytes. Saved
+settings and calibration were preserved. Reconnect and measure again after the
+service restart. Windows offscreen and frozen-startup checks passed; interactive
+operation and physical focus verification remain pending. See CURRENT_STATE.md
+for the exact deployment record.
 
 ## Precision setup additions
 

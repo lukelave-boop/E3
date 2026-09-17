@@ -4,8 +4,9 @@
 
 Raster/image jobs now request a 7 mm measured surface gap while cut/vector and
 Fill retain the current rule. Mixed-operation and Start Here source coverage
-uses fake controllers. Matching desktop/Pi packaging, installation and physical
-qualification remain pending; no installed firmware or calibration is changed.
+uses fake controllers. E3 DEV TEST 0.7.181 is built and selected; the matching
+Pi companion is installed and hash-verified with 322 passing Linux/Pi checks.
+Physical qualification remains pending; installed firmware and calibration are preserved.
 
 
 ## Daily Machine panel cleanup and setup Z maximum

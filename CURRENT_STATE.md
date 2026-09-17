@@ -1,5 +1,37 @@
 # Current repository state
 
+## Raster surface focus Pi deployment complete (2026-09-16)
+
+The user explicitly confirmed greenhouse-climate@192.168.5.18 and authorized the
+update. Companion `e3-pi-operation-focus-c018c2e8`, from application revision
+`1e904823e134c49f319f9379b4bca665bac7bcae`, is now installed. E3 DEV TEST remains
+selected at version 0.7.181 with the matching desktop build recorded below.
+
+All 322 isolated Linux/Pi fake-controller tests passed in 112.45 seconds on
+Python 3.13.5 ARM64 (NumPy 2.5.3, OpenCV 4.14.0, pytest 8.4.2). The test source
+manifest is 6a79cf83c5fbb23fcc98e4c0f59e1a3c173bfa8892792d59bbc1eaa4996d4b01.
+All 20 companion files match the exact tested source bytes after LF normalization.
+
+The guarded installer freshly confirmed disconnected, disarmed, idle and no
+connected E3 clients before stopping the service. Five existing files were
+replaced with adjacent backups and one new operation-focus module was added.
+All 20 installed source hashes were then verified. Configuration, probe XY
+calibration, taught gauge offset, saved honeycomb, Z limits and cooling settings
+have identical before/after hashes. No firmware flash, Home, probe, travel,
+job or laser-output request was issued.
+
+After restart the service reports active/running, PID 6005, NRestarts 0,
+ActiveEnterTimestamp Wed 2026-09-16 18:07:15 MDT, and pi-operation-focus-v1.
+Authenticated status confirms disconnected/disarmed with no active or running
+job. Records: build/raster-pi-tests.log, build/raster-pi-install-applied.log,
+build/raster-pi-installed-verification.log. The previous upload block is resolved.
+
+Reopen E3 DEV TEST, reconnect, establish any required references, and measure
+the workpiece again. Raster/image uses a 7 mm measured surface gap; cut/vector
+and Fill retain their previous focus rule. Physical focus qualification and
+interactive operator checks remain pending, as do compatibility CI and main
+integration. The Windows build itself was not rebuilt or changed by this deploy.
+
 ## Raster surface focus frozen build; Pi upload pending (2026-09-16)
 
 E3 DEV TEST now selects Raster 7 mm surface focus, version 0.7.181, branch
