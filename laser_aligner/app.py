@@ -2547,10 +2547,9 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
     def validate_powered_calibration_support(self, gcode: str, filename: str) -> None:
         """Reject any support-bound powered setup job outside its taught surface.
 
-        The fresh base-map job is intentionally not included here: it is the
-        bootstrap measurement that creates the image-to-machine transform needed
-        to locate the honeycomb in machine coordinates. Every later powered
-        camera-registration/validation job is support-bound.
+        A first base-map job can bootstrap without a saved support. Recalibration
+        with a current four-corner support is bound to that support like the
+        later camera-registration/validation jobs.
         """
 
         matched = self._calibration_support_session(filename)
@@ -2651,6 +2650,7 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
         filename: str,
     ) -> tuple[str, dict[str, Any]] | None:
         sessions = (
+            ("base bed mapping", self.base_bed_mapping_path),
             ("surface-height", self.surface_capture_path),
             ("fine registration", self.fine_registration_path),
             ("accuracy validation", self.accuracy_validation_path),
@@ -2661,6 +2661,8 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
         for label, path in sessions:
             session = read_json(path, {})
             if isinstance(session, dict) and session.get("filename") == filename:
+                if label == "base bed mapping" and session.get("honeycomb_execution_signature") is None:
+                    return None
                 return label, session
         return None
 
@@ -3103,11 +3105,8 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
         mark_size_mm: float,
         speed_mm_min: float,
     ) -> BaseBedCalibrationJob:
-        targets = base_bed_grid_targets(
-            self.settings.machine.work_area,
-            mark_size_mm=mark_size_mm,
-            boundary_margin_mm=self.settings.laser.boundary_margin_mm,
-        )
+        targets = self.base_bed_mapping_targets(mark_size_mm)
+        support = self._required_calibration_support(powered=False, label="base bed mapping")
         keyed_sizes = base_bed_grid_mark_sizes(mark_size_mm)
         program = generate_registration_program(
             targets,
@@ -3143,6 +3142,7 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
                 "targets": [target.to_dict() for target in targets],
                 "keyed_mark_sizes_mm": {str(key): value for key, value in keyed_sizes.items()},
                 "generation_geometry": self._base_bed_mapping_geometry(),
+                **self._calibration_support_fields(support),
             },
         )
         return BaseBedCalibrationJob(
@@ -3152,6 +3152,24 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
             powered=powered,
             power_percent=power_percent if powered else 0.0,
             mark_size_mm=mark_size_mm,
+        )
+
+    def base_bed_mapping_targets(self, mark_size_mm: float) -> tuple[RegistrationTarget, ...]:
+        """Share the exact support-contained grid between setup and generation."""
+        sizes = base_bed_grid_mark_sizes(mark_size_mm)
+        support = self._required_calibration_support(powered=False, label="base bed mapping")
+        if support is not None:
+            targets, _area = self._support_contained_calibration_targets(
+                base_bed_grid_targets,
+                support,
+                mark_size_mm=max(sizes.values()),
+                boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+            )
+            return targets
+        return base_bed_grid_targets(
+            self.settings.machine.work_area,
+            mark_size_mm=max(sizes.values()),
+            boundary_margin_mm=self.settings.laser.boundary_margin_mm,
         )
 
     def _base_bed_mapping_session(self, *, require_powered: bool) -> dict[str, Any]:
@@ -3169,15 +3187,26 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
             raise CalibrationError(
                 "The work area, boundary margin, or laser offset changed after this base-map job was prepared"
             )
+        support_signature = session.get("honeycomb_execution_signature")
+        if support_signature is not None and (
+            not isinstance(support_signature, list)
+            or tuple(support_signature) != self.honeycomb_execution_signature()
+        ):
+            raise CalibrationError("The honeycomb or camera map changed; prepare the base-map job again")
         try:
             mark_size_mm = float(session["mark_size_mm"])
-            expected_targets = [
-                target.to_dict()
-                for target in base_bed_grid_targets(
+            expected_grid = (
+                self.base_bed_mapping_targets(mark_size_mm)
+                if support_signature is not None
+                else base_bed_grid_targets(
                     self.settings.machine.work_area,
                     mark_size_mm=mark_size_mm,
                     boundary_margin_mm=self.settings.laser.boundary_margin_mm,
                 )
+            )
+            expected_targets = [
+                target.to_dict()
+                for target in expected_grid
             ]
             expected_key_sizes = {
                 str(key): value for key, value in base_bed_grid_mark_sizes(mark_size_mm).items()

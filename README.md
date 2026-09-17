@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Base-map grid containment (2026-09-17)
+
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
 Raster/image jobs use a fixed **7 mm gap above the measured material surface**,
 including when the material sits on supports. Cut/vector and Fill retain their
 existing focus settings. Mixed jobs switch focus with laser output off and a

@@ -14,11 +14,14 @@ from laser_aligner.calibration.bed import BedPoint
 from laser_aligner.calibration.registration import (
     base_bed_grid_mark_sizes,
     base_bed_grid_targets,
+    points_fit_support,
 )
+from laser_aligner.calibration.support import HoneycombSupportReference
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.service import FrameBurst
 from laser_aligner.config import WorkArea, load_settings
 from laser_aligner.errors import CalibrationError
+from laser_aligner.gcode.preview import parse_gcode_segments
 from laser_aligner.machine.controller_dialects import GRBL_DIALECT
 from tests.fakes.simulator_transport import SimulatedTransport
 
@@ -102,6 +105,64 @@ def test_base_grid_is_broad_keyed_and_inside_centered_honeycomb() -> None:
     assert sorted({item.machine_y for item in targets}) == pytest.approx([40, 75, 110, 145, 180])
     assert keyed_sizes == {7: 8.0, 8: 6.0}
     assert all(15 <= item.machine_x <= 205 and 15 <= item.machine_y <= 205 for item in targets)
+
+
+def _offset_support() -> HoneycombSupportReference:
+    return HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=((28.8, 38.8), (219.8, 40.1), (218.5, 231.1), (27.5, 229.8)),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=191,
+        support_height_mm=191,
+        bed_calibration_created_at=12.5,
+        taught_reference_digest="a" * 64,
+        created_at=20,
+    )
+
+
+@pytest.mark.parametrize("spot_offset", [(0., 0.), (1.5, -2.)])
+def test_base_recalibration_fits_complete_crosses_and_binds_support(tmp_path, monkeypatch, spot_offset):
+    context = _context(tmp_path)
+    support = _offset_support()
+    context.settings.laser.spot_offset_x_mm, context.settings.laser.spot_offset_y_mm = spot_offset
+    signature = ("support", "map", "image", "binding")
+    monkeypatch.setattr(context, "_current_honeycomb_support", lambda: support)
+    monkeypatch.setattr(context, "honeycomb_execution_signature", lambda: signature)
+    # The old machine-only pattern crosses the offset, slightly rotated edge.
+    assert not points_fit_support(np.array([[40., 38.]]), support)
+    job = context.prepare_base_bed_mapping_job(
+        powered=True, power_percent=10, mark_size_mm=4, speed_mm_min=1200,
+    )
+    assert job.targets == context.base_bed_mapping_targets(4)
+    assert len({target.machine_x for target in job.targets}) == 5
+    assert len({target.machine_y for target in job.targets}) == 5
+    segments = [segment for segment in parse_gcode_segments(job.program.text) if segment.laser_on]
+    assert len(segments) == 50
+    points = np.array([
+        point for segment in segments
+        for point in ((segment.start_x, segment.start_y), (segment.end_x, segment.end_y))
+    ])
+    points += np.array(spot_offset)
+    assert points_fit_support(points, support)
+    assert min(points[:, 1]) > 43.8
+    context.validate_powered_calibration_support(job.program.text, job.filename)
+    context._base_bed_mapping_session(require_powered=False)
+    assert context.calibration_job_honeycomb_signature(job.filename) == signature
+    monkeypatch.setattr(context, "honeycomb_execution_signature", lambda: None)
+    with pytest.raises(CalibrationError, match="changed"):
+        context.validate_powered_calibration_support(job.program.text, job.filename)
+    with pytest.raises(CalibrationError, match="changed"):
+        context._base_bed_mapping_session(require_powered=False)
+
+
+def test_base_recalibration_rejects_nonoverlapping_support(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+    context.settings.machine.work_area = WorkArea(0, 20, 0, 20)
+    monkeypatch.setattr(context, "_current_honeycomb_support", _offset_support)
+    with pytest.raises(CalibrationError, match="does not overlap"):
+        context.prepare_base_bed_mapping_job(
+            powered=True, power_percent=10, mark_size_mm=4, speed_mm_min=1200,
+        )
+    assert not context.base_bed_mapping_path.exists()
 
 
 def test_base_job_requires_no_existing_map_and_uses_guarded_dry_and_powered_programs(tmp_path: Path) -> None:

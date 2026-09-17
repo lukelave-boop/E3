@@ -1,5 +1,10 @@
 # Roadmap
 
+## Base-map grid containment (2026-09-17)
+
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
 ## Raster surface focus acceptance
 
 Raster/image jobs now request a 7 mm measured surface gap while cut/vector and

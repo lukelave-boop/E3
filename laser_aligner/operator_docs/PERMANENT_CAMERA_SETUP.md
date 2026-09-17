@@ -1,5 +1,8 @@
 # Permanent Camera Setup Runbook
 
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
 ## Start with the wizard
 
 Follow **Setup wizard** pages 1 through 8. The detailed tool chapters below use
@@ -149,7 +152,7 @@ and calibration readiness is `READY`.
 **Goal:** map corrected camera pixels to machine coordinates without trusting
 an old camera map.
 
-The powered base-map job is the sole support-containment bootstrap exception:
+Without a current saved support, the powered base-map job is the sole support-containment bootstrap exception:
 the image-to-machine map must exist before honeycomb corners can be expressed
 in machine coordinates. It remains bounded by the configured machine area. The
 restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.

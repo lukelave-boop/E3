@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from ..calibration.bed import BedPoint
-from ..calibration.registration import base_bed_grid_mark_sizes, base_bed_grid_targets
+from ..calibration.registration import base_bed_grid_mark_sizes
 from ..calibration.support import HoneycombSupportReference
 from ..config import effective_laser_output_area
 from ..core import CoreRuntime
@@ -4453,14 +4453,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def _refresh_base_grid_geometry_status(self) -> None:
         if not hasattr(self, "base_grid_mark_size"):
             return
-        area = self.context.settings.machine.work_area
         laser = self.context.settings.laser
         try:
-            targets = base_bed_grid_targets(
-                area,
-                mark_size_mm=self.base_grid_mark_size.value(),
-                boundary_margin_mm=laser.boundary_margin_mm,
-            )
+            targets = self.context.base_bed_mapping_targets(self.base_grid_mark_size.value())
             keyed_sizes = base_bed_grid_mark_sizes(self.base_grid_mark_size.value())
         except Exception as exc:
             self.base_grid_status.setText(str(exc))

@@ -151,6 +151,7 @@ def test_observational_refresh_preserves_focus_evidence(app, dialog):
         if busy:
             payload.clear()
     dialog.focus_workspace = SimpleNamespace(
+        mutation_busy=False, set_external_busy=lambda busy: None,
         coordinator=SimpleNamespace(mutation_busy=False, set_external_busy=external_busy),
         set_machine_status=lambda status: None,
         shutdown=lambda **kwargs: True,
@@ -195,6 +196,7 @@ def test_focus_steps_reveal_exact_controls_and_name_the_missing_step(app, dialog
     dialog.tabs.removeTab(6)
     dialog.tabs.addTab(scroll, "Focus")
     dialog.focus_workspace = SimpleNamespace(
+        mutation_busy=False, set_external_busy=lambda busy: None,
         panel=panel,
         coordinator=SimpleNamespace(mutation_busy=False, set_external_busy=lambda busy: None),
         set_machine_status=lambda status: None, shutdown=lambda **kwargs: True,

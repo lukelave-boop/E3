@@ -1,5 +1,25 @@
 # Current repository state
 
+## Base-map recalibration containment fix (2026-09-17)
+
+Base-map recalibration now fits its keyed grid inside the current saved
+four-corner honeycomb with boundary clearance for the largest mark. The UI
+and generated program share the target calculation. Prepared jobs bind the
+support/map and reject changed geometry at Start and capture. First-time
+mapping without current support retains its machine-bounded bootstrap path.
+No machine bounds, physical configuration, Pi service or firmware was changed.
+
+Verification: 163 focused Windows Python 3.14 tests passed (base mapping,
+registration, offscreen Machine Setup/wizard, height acquisition). Three
+containment cases additionally passed with zero/nonzero laser-spot offsets
+and nonoverlapping support. Repository Ruff and application compileall passed.
+Two stale wizard fakes were updated to expose existing focus-workspace busy
+methods. No interactive GUI, camera, controller or laser test was performed.
+Frozen build and operator validation are pending; compatibility CI and main
+integration remain pending. The isolated feature starts from the selected
+0.7.183 raster/readout source; unrelated shared-tree changes are preserved.
+
+
 ## Continuous raster and fixed XYZ readouts frozen handoff (2026-09-16)
 
 E3 DEV TEST now selects Continuous raster and fixed XYZ readouts, version
