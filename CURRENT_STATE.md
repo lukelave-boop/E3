@@ -1,5 +1,46 @@
 # Current repository state
 
+## Continuous raster and fixed XYZ readouts frozen handoff (2026-09-16)
+
+E3 DEV TEST now selects Continuous raster and fixed XYZ readouts, version
+0.7.183, branch codex/raster-steady-readouts, exact application revision
+`ed516c024c2e5a66591602e14453b221db051e49`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-steady-readouts-dev\dist\E3\E3.exe`.
+
+The isolated feature source retains the selected 7 mm raster-focus behavior.
+Raster uses inline zero/nonzero power through each row and explicit M5 before
+row transfers. Start Here and both preview parsers preserve this behavior.
+Fixed 154 x 38 logical-pixel X/Y/Z boxes sit above their controls. X/Y report
+completed Home/jog positions, clearing during motion or unavailable status;
+Z retains its established live/readback freshness and reference qualifications.
+No Pi update or firmware change is needed for this command sequence.
+
+Verification: 433 focused Windows checks passed, plus the expanded 26-case
+raster continuity run, 80 browser/simulation checks, 10 hardware-authorization
+unit tests and 46 final readout/telemetry tests. These counts describe runs and
+overlap. Repository Ruff, compileall and scoped whitespace checks passed.
+Native Segoe UI offscreen rendering was visually inspected. All 178 packaged
+modules and three resources match committed source. The canonical packager's
+DLL guard and frozen offscreen startup passed with isolated configuration/data,
+camera autostart off, motion disabled and a nonexistent serial port. No
+interactive GUI, camera, controller, or physical laser test was performed.
+
+The feature pointer was atomically updated and read back through the launcher
+validator. The normal E3 application, permanent launcher EXE and shortcut were
+unchanged. EXE SHA256:
+`8cadea6770450dd84668cd5108195df1ed084927112dfeda354918be3b57bd4e`.
+Local records in the feature worktree: build/final-focused.log,
+build/frozen-verification.json, build/frozen-smoke.json,
+build/axis-readouts.png and build/raster-readouts-build.log (untracked).
+The canonical Windows packager and installer completed successfully.
+
+Push and Windows compatibility CI were rejected by automatic approval review,
+which requires explicit user approval to upload the private branch/source to
+origin. Approval is pending; no push or CI dispatch occurred. Main integration
+and physical raster validation remain pending. Existing shared-tree changes
+are preserved; this task's implementation lives in the named feature worktree.
+
+
 ## Continuous raster and fixed Machine coordinate boxes (2026-09-16, source verified)
 
 Feature branch codex/raster-steady-readouts is based on the selected raster-focus
