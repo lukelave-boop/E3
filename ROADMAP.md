@@ -1,5 +1,12 @@
 # Roadmap
 
+## Saved gauge recognition
+
+Implemented: refresh wizard gauge evidence through read-only machine status,
+separate unknown/incompatible feedback, and preserve recognition of compatible
+saved teaching across bed-survey changes. Physical operator verification remains
+pending; this change does not implement an automatic bed mesh.
+
 ## Base-map grid containment (2026-09-17)
 
 Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.

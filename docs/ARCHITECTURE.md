@@ -1,5 +1,14 @@
 # Architecture
 
+## Wizard gauge evidence
+
+The wizard worker refreshes observational machine status before reading the
+validated setup-evidence snapshot. Failed refreshes cannot reuse old gauge
+evidence. The synchronous setup guide reads cached evidence only. Workflow
+presentation distinguishes unknown status from explicit incompatibility and
+recognizes a compatible gauge independently of the bed survey; execution
+continues to require existing MachineService authority.
+
 ## Base-map grid containment (2026-09-17)
 
 Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.

@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Saved gauge status
+
+Setup wizard **Check progress** refreshes read-only machine status before checking
+the saved gauge calibration. If status is unavailable, restore the connection
+and check again; do not repeat gauge teaching merely because status is missing.
+Saving honeycomb height does not require teaching the gauge offset again.
+
 ## Base-map grid containment (2026-09-17)
 
 Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.

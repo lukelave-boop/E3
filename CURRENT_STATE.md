@@ -1,5 +1,21 @@
 # Current repository state
 
+## Saved gauge recognition fix (2026-09-17)
+
+The wizard's Check progress now requests read-only machine status in its existing
+background worker before reading setup evidence. Remote focus replies invalidate
+that evidence cache; previously the wizard could mistake the resulting gap for
+an incomplete gauge calibration. Unknown status and reported incompatibility
+now have separate messages and do not send the operator to reteach the gauge.
+A compatible saved gauge offset remains complete independently of the bed survey.
+The cached setup-guide read stays free of network I/O. No calibration data,
+controller behavior, motion gates or measurement authority is changed.
+
+Focused Windows Python 3.14 tests: 59 passed (gauge status, setup snapshots,
+precision evidence and offscreen setup wizard). Repository Ruff, compileall and
+diff checks passed. Frozen-build verification remains pending. No physical probing, gauge teaching or laser test is part of this fix.
+The saved Pi gauge file was observed read-only; it was not changed.
+
 ## Base-map containment frozen handoff (2026-09-17)
 
 E3 DEV TEST now selects Base-map grid containment, version 0.7.184, branch

@@ -1,5 +1,13 @@
 # Surface height and gauge-taught laser focus
 
+## Recognizing existing gauge calibration
+
+Use the setup wizard's **Check progress** to refresh current controller evidence.
+A compatible saved gauge calibration remains complete when the bed survey changes.
+If current status is unavailable, the wizard asks for a status refresh rather
+than gauge teaching. An explicit compatibility problem is shown separately for
+inspection. Neither message erases or rewrites the saved gauge calibration.
+
 ## Raster surface focus (source update)
 
 Raster/image layers now use a fixed 7 mm gap above the measured material surface.

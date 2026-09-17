@@ -194,7 +194,9 @@ class SetupWizardPanel(QtWidgets.QWidget):
         self.open_tools.setText(_TOOLS.get(step.action, "Open step tools"))
         status = self.statuses.get(step.id)
         self.evidence.setPlainText(progress_text(step, status))
-        if status is not None and status.next_action != step.action:
+        if (status is not None and status.next_action != step.action
+                and "Current gauge status is unavailable" not in status.reason
+                and "reports no compatible gauge calibration" not in status.reason):
             required = next(item for item in SETUP_STEPS if item.action == status.next_action)
             self.prerequisite.setText("Go to " + step_name(required.id))
             self.prerequisite.show()

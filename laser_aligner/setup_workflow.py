@@ -86,8 +86,10 @@ def evaluate_setup_steps(
         "bed": ("complete" if readiness.get("bed") else "ready", "Support map is current." if
                 readiness.get("bed") else "Acquire and accept a current support map."),
         "datum": ("ready", "Measure five positions and explicitly save the survey-associated datum."),
-        "gauge": ("complete" if readiness.get("gauge") else "ready", "Saved gauge calibration is compatible." if
-                  readiness.get("gauge") else "Refresh focus status and teach the 7 mm gauge."),
+        "gauge": (("review", "Current gauge status is unavailable. The saved calibration has not been erased; refresh machine status.")
+                  if "gauge" not in readiness else
+                  ("complete", "Saved gauge calibration is compatible.") if readiness["gauge"] else
+                  ("review", "The current controller reports no compatible gauge calibration. Inspect the saved calibration and firmware identity before changing it.")),
         "precision": ("ready", "Collect ten still and ten Home / park captures at one measured height."),
         "heights": ("complete" if readiness.get("heights") else "ready", "Height model passes the numeric gate." if
                     readiness.get("heights") else "Acquire lower, upper and independent middle-height evidence."),
@@ -154,10 +156,16 @@ def evaluate_setup_steps(
     for step in SETUP_STEPS:
         state, reason = intrinsic[step.id]
         unmet = [key for key in step.prerequisites if statuses[key].state != "complete"]
+        # A compatible taught gauge is independent of the bed survey/datum.
+        # Prerequisites guide new teaching, not recognition of existing evidence.
+        if step.id == "gauge" and state == "complete":
+            unmet = []
         action = step.action
         if unmet and state != "stale":
             state = "blocked"
             reason = "First complete: " + ", ".join(key for key in unmet) + ". " + reason
+            if "gauge" in unmet:
+                reason += " " + statuses["gauge"].reason
             action = next(item.action for item in SETUP_STEPS if item.id == unmet[0])
         statuses[step.id] = StepStatus(step.id, state, reason, action)
     return statuses

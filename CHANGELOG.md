@@ -1,5 +1,11 @@
 # Changelog
 
+## Saved gauge recognition (2026-09-17)
+
+Check progress refreshes machine status before evaluating saved gauge evidence.
+Unavailable status no longer asks for gauge teaching, and a compatible saved
+gauge calibration is recognized independently of bed-survey completion.
+
 ## Base-map grid containment (2026-09-17)
 
 Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.

@@ -190,7 +190,7 @@ def test_setup_progress_invalidates_reference_surface_model_and_saved_datum():
     assert statuses["mechanics"].state == "review"
     assert all(statuses[key].state == "complete" for key in ("lens", "bed", "datum", "gauge", "precision", "heights", "qualification"))
     stale = evaluate_setup_steps(**dict(arguments, survey_binding="new-reference"))
-    assert stale["datum"].state == "stale" and stale["gauge"].state == "blocked"
+    assert stale["datum"].state == "stale" and stale["gauge"].state == "complete"
     stale = evaluate_setup_steps(**dict(arguments, saved_datum_mm=-1.4))
     assert stale["datum"].state == "stale"
     stale = evaluate_setup_steps(**dict(arguments, assessment_binding=binding_json(dict(BINDING, camera="new-camera"))))

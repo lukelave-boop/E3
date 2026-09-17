@@ -66,6 +66,10 @@ def instruction_html(step_id):
 def progress_text(step, status):
     if status is None:
         return "Click Check progress to check the saved settings and measurements for this step."
+    if "Current gauge status is unavailable" in status.reason:
+        return "Current gauge status is unavailable. This does not mean the saved calibration is lost. Check the machine connection and click Check progress; do not repeat gauge teaching."
+    if "reports no compatible gauge calibration" in status.reason:
+        return "The controller reports a gauge compatibility problem. Inspect Troubleshooting details before changing the saved calibration."
     if status.next_action != step.action:
         required = next(item for item in SETUP_STEPS if item.action == status.next_action)
         return f"Finish {step_name(required.id)} first. Use the button below to go there."

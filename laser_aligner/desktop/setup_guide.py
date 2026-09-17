@@ -27,7 +27,9 @@ def load_setup_runbook() -> str:
     )
 
 
-def read_setup_status(setup: QtWidgets.QWidget | None) -> tuple[dict[str, StepStatus], tuple[str, ...]]:
+def read_setup_status(
+    setup: QtWidgets.QWidget | None, *, refresh_machine: bool = True,
+) -> tuple[dict[str, StepStatus], tuple[str, ...]]:
     """Read setup evidence without creating a dialog, probing, capturing or moving."""
     context = getattr(setup, "context", None)
     readiness, evidence = {}, {}
@@ -45,6 +47,16 @@ def read_setup_status(setup: QtWidgets.QWidget | None) -> tuple[dict[str, StepSt
         store = PrecisionEvidenceStore(context.surface_calibration.path.parent)
         evidence = inspect(store.load, {})
     if context is not None:
+        # Check progress is explicit: obtain current observational status before
+        # consulting snapshots that a focus read/edit may have invalidated.
+        refresh = getattr(getattr(context, "machine", None), "refresh_status", None)
+        status_current = True
+        if refresh_machine and callable(refresh):
+            try:
+                refresh()
+            except Exception as exc:
+                errors.append(str(exc))
+                status_current = False
         current = inspect(context.precision_setup_binding)
         assessment = inspect(lambda: binding_json(context.precision_assessment_binding()))
         camera = inspect(lambda: context.camera_calibration_readiness(), {})
@@ -56,7 +68,7 @@ def read_setup_status(setup: QtWidgets.QWidget | None) -> tuple[dict[str, StepSt
         readiness["bed"] = bed.get("calibrated") is True
         datum = None if current is None else current.get("honeycomb_height_mm")
         snapshot_method = getattr(getattr(context, "machine", None), "setup_evidence_snapshot", None)
-        setup_snapshot = inspect(snapshot_method) if callable(snapshot_method) else None
+        setup_snapshot = inspect(snapshot_method) if callable(snapshot_method) and status_current else None
         if setup_snapshot is not None:
             readiness["gauge"] = setup_snapshot.get("calibration_compatible") is True
             survey_identity = binding_json({
@@ -68,7 +80,7 @@ def read_setup_status(setup: QtWidgets.QWidget | None) -> tuple[dict[str, StepSt
         # Older services can display a fresh focus readback, but an unavailable
         # new snapshot must never fall back to stale widget authority.
         panel = getattr(getattr(setup, "focus_workspace", None), "panel", None)
-        if not callable(snapshot_method) and panel is not None and panel.fresh():
+        if status_current and not callable(snapshot_method) and panel is not None and panel.fresh():
             result = panel._result
             readiness["gauge"] = result.get("calibration_compatible") is True
             if result.get("reference_ready") and result.get("reference") and result.get("reference_id"):
@@ -153,7 +165,7 @@ class SetupGuideDialog(QtWidgets.QDialog):
 
     def refresh_status(self) -> None:
         """Read cached/service calibration status; never probe, capture or move."""
-        self.step_statuses, errors = read_setup_status(self.parent())
+        self.step_statuses, errors = read_setup_status(self.parent(), refresh_machine=False)
         for key, status in self.step_statuses.items():
             self.step_status_labels[key].setText(f"{status.state.upper()}: {status.reason}")
             self.step_buttons[key].setToolTip(f"Suggested next action: {status.next_action}. All tabs remain available.")

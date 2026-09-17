@@ -210,10 +210,9 @@ def test_focus_steps_reveal_exact_controls_and_name_the_missing_step(app, dialog
     wizard.select_step(4)
     settle(app, dialog)
     assert dialog._navigation_highlighted_widget is panel.measure
-    assert "Finish Step 4" in wizard.evidence.toPlainText()
-    assert "save honeycomb height" in wizard.prerequisite.text()
-    assert "datum" not in wizard.evidence.toPlainText()
-    wizard.prerequisite.click()
+    assert "do not repeat gauge teaching" in wizard.evidence.toPlainText()
+    assert wizard.prerequisite.isHidden()
+    wizard.select_step(3)
     settle(app, dialog)
     assert wizard.index == 3
     assert dialog._navigation_highlighted_widget is panel.save_honeycomb
