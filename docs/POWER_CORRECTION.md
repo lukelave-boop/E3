@@ -88,7 +88,7 @@ distance with the same braking-distance estimate:
 - if overscan is short, only the uncovered portion just inside the image edge
   receives a bounded ramp;
 - white gaps remain laser-off and do not become correction regions merely
-  because `M5` changes optical output while motion continues.
+  because inline `S0` changes optical output while motion continues.
 
 Increasing safe, bounds-checked overscan is preferable to correcting image-area
 power. Overscan remains included in design and controller bounds validation.

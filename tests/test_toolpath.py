@@ -492,11 +492,11 @@ def test_raster_correction_only_enters_image_when_overscan_is_insufficient():
         for line in insufficient.text.splitlines()
     )
     assert all(
-        " S" not in line
-        for line in sufficient.text.splitlines()
-        if line.startswith("G1 ")
+        move.power == 100
+        for move in sufficient.plan.moves
+        if move.laser_on
     )
-    assert "M4 S100" in insufficient.text
+    assert "M4 S0" in insufficient.text
     assert "M3" not in insufficient.text
 
 
@@ -1652,20 +1652,18 @@ def test_image_raster_uses_contiguous_serpentine_rows_and_off_overscan(
     expected_rows = "\n".join(
         [
             "G0 X47 Y49.5 F3000",
-            "G1 X48 Y49.5 F600",
-            "M4 S100",
-            "G1 X49 Y49.5 F600",
+            "M4 S0",
+            "G1 X48 Y49.5 F600 S0",
+            "G1 X49 Y49.5 F600 S100",
+            "G1 X50 Y49.5 F600 S0",
+            "G1 X51 Y49.5 F600 S100",
+            "G1 X52 Y49.5 F600 S0",
+            "G1 X53 Y49.5 F600 S0",
             "M5",
-            "G1 X50 Y49.5 F600",
-            "M4 S100",
-            "G1 X51 Y49.5 F600",
-            "M5",
-            "G1 X52 Y49.5 F600",
-            "G1 X53 Y49.5 F600",
         ]
     )
     assert expected_rows in job.text
-    assert "G0 X53 Y50.5 F3000\nG1 X52 Y50.5 F600" in job.text
+    assert "G0 X53 Y50.5 F3000\nM4 S0\nG1 X52 Y50.5 F600 S0" in job.text
     assert job.plan is not None
     assert job.plan.planner_mode == "nearest path + fixed raster rows"
     assert job.plan.cut_distance_mm == pytest.approx(4.0)
@@ -2039,15 +2037,13 @@ def test_vector_raster_islands_share_one_constant_feed_row() -> None:
     expected_row = "\n".join(
         [
             "G0 X38 Y50 F3000",
-            "G1 X40 Y50 F600",
-            "M4 S100",
-            "G1 X48 Y50 F600",
+            "M4 S0",
+            "G1 X40 Y50 F600 S0",
+            "G1 X48 Y50 F600 S100",
+            "G1 X52 Y50 F600 S0",
+            "G1 X60 Y50 F600 S100",
+            "G1 X62 Y50 F600 S0",
             "M5",
-            "G1 X52 Y50 F600",
-            "M4 S100",
-            "G1 X60 Y50 F600",
-            "M5",
-            "G1 X62 Y50 F600",
         ]
     )
     assert expected_row in job.text

@@ -162,7 +162,7 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
     """Parse the conservative G0/G1 subset used by generated programs."""
     x = y = 0.0
     absolute = True
-    laser_on = False
+    laser_enabled = False
     power = 0.0
     spot_offset_x = spot_offset_y = 0.0
     segments: list[GcodeSegment] = []
@@ -207,12 +207,13 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
         if 91 in g_codes:
             absolute = False
         if 5 in m_codes:
-            laser_on = False
+            laser_enabled = False
             power = 0.0
         if "S" in values:
             power = values["S"]
         if m_codes.intersection({3, 4}):
-            laser_on = power > 0
+            laser_enabled = True
+        laser_on = laser_enabled and power > 0
 
         movement = 0 if 0 in g_codes else 1 if 1 in g_codes else None
         if movement is not None:

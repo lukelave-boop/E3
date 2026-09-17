@@ -1,5 +1,33 @@
 # Current repository state
 
+## Continuous raster and fixed Machine coordinate boxes (2026-09-16, source verified)
+
+Feature branch codex/raster-steady-readouts is based on the selected raster-focus
+DEV TEST source, preserving the pending ancestor features and shared-tree edits.
+Raster M3/M4 S0 is established before lead-in; inline G1 power changes retain
+one feed through engraving, gaps and overscan. Standalone M5 remains at every
+row end before rapid travel. Zero-power output never enables the laser.
+Shared preview parsers and Start Here now track modal enable separately from
+power, preserving powered spans, air assist, correction and laser-off gaps.
+The browser single-SVG generator is unchanged. Existing MachineService inline-S
+validation supports this output; no Pi service or firmware update is required.
+
+Machine X/Y readouts show existing completed Home/jog coordinates above the
+jog controls, clearing during motion, stale/error/disconnected or unreferenced
+status. Z retains its existing live telemetry/freshness and authority rules.
+All three boxes are fixed 154 x 38 logical pixels. Z qualifications are shown
+below the box and in its tooltip rather than making the box grow.
+
+Verification: 433 focused Windows Python 3.14 checks passed, plus 26 raster
+continuity cases covering M3/M4, zero/nonzero overscan, power correction,
+passes, air assist, Start Here, preview agreement and rejection guards.
+The existing MachineService test run passed all selected controller tests;
+its earlier raster failures were resolved by the preview fix and passed in the
+433-check run. Repository Ruff and application compileall passed. UI checks
+are offscreen widgets; physical motion/laser behavior remains unverified.
+Frozen build, operator testing, compatibility CI and main integration pending.
+
+
 ## Raster surface focus Pi deployment complete (2026-09-16)
 
 The user explicitly confirmed greenhouse-climate@192.168.5.18 and authorized the

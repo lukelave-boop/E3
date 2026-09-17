@@ -679,3 +679,7 @@ and requires a new acknowledged `M106 S0` before primary streaming. Failure of
 that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
 ON is never automatically replayed. Startup/restart, STOP, mapping validation,
 and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+## Continuous raster and fixed coordinate boxes (2026-09-16)
+
+Implemented inline raster power switching and matching preview/Start Here behavior, plus fixed-size X/Y/Z boxes near the Machine controls. Operator motion/engraving validation remains pending; acceleration and row reversals still limit achieved speed.

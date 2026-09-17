@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from .controls import MeasurementSpinBox
+from .controls import AxisPositionReadout, MeasurementSpinBox
 from .machine_state import (
     controller_node_boot_id,
     controller_session_generation,
@@ -71,27 +71,25 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         for value in (0.1, 1.0, 5.0):
             self.step.addItem(f"{value:g} mm", value)
         self.step.setCurrentIndex(1)
-        self.height = QtWidgets.QLabel("Z — mm")
-        self.height.setWordWrap(True)
+        self.height = AxisPositionReadout("Z")
         self.height.setObjectName("zHeightReadout")
-        self.height.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.height.setToolTip(
             "Controller Z readback; live homing coordinates are unreferenced, not an encoder measurement."
         )
-        layout.addWidget(self.down, 0, 0)
-        layout.addWidget(self.up, 0, 1)
-        layout.addWidget(self.height, 0, 2, 1, 2)
-        layout.addWidget(QtWidgets.QLabel("Step"), 1, 0)
-        layout.addWidget(self.step, 1, 1)
+        layout.addWidget(self.height, 0, 0, 1, 4)
+        layout.addWidget(self.down, 1, 0)
+        layout.addWidget(self.up, 1, 1)
+        layout.addWidget(QtWidgets.QLabel("Step"), 1, 2)
+        layout.addWidget(self.step, 1, 3)
         self.readback_note = QtWidgets.QLabel("Reported position · waiting for connection")
         self.readback_note.setWordWrap(True)
-        layout.addWidget(self.readback_note, 1, 2, 1, 2)
+        layout.addWidget(self.readback_note, 2, 0, 1, 4)
         self.confirm = QtWidgets.QCheckBox("Probe stowed and Z path clear")
-        layout.addWidget(self.confirm, 2, 0, 1, 4)
+        layout.addWidget(self.confirm, 3, 0, 1, 4)
         self.active_maximum = QtWidgets.QLabel("Active maximum: unknown")
         self.active_maximum.setObjectName("zActiveMaximum")
         self.active_maximum.setWordWrap(True)
-        layout.addWidget(self.active_maximum, 3, 0, 1, 4)
+        layout.addWidget(self.active_maximum, 4, 0, 1, 4)
         self.maximum = MeasurementSpinBox()
         self.maximum.setRange(20.0, 80.0)
         self.maximum.setDecimals(1)
@@ -103,33 +101,33 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             "The firmware ceiling is 80 mm; this setting can only lower it."
         )
         self.apply = QtWidgets.QPushButton("Apply")
-        layout.addWidget(QtWidgets.QLabel("Set max"), 4, 0)
-        layout.addWidget(self.maximum, 4, 1, 1, 2)
-        layout.addWidget(self.apply, 4, 3)
+        layout.addWidget(QtWidgets.QLabel("Set max"), 5, 0)
+        layout.addWidget(self.maximum, 5, 1, 1, 2)
+        layout.addWidget(self.apply, 5, 3)
         self.firmware_note = QtWidgets.QLabel("Firmware ceiling not confirmed")
         self.firmware_note.setObjectName("mutedLabel")
         self.firmware_note.setWordWrap(True)
-        layout.addWidget(self.firmware_note, 5, 0, 1, 4)
+        layout.addWidget(self.firmware_note, 6, 0, 1, 4)
         self.message = QtWidgets.QLabel("Connect to read the Ender Z position and limit.")
         self.message.setWordWrap(True)
         self.message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        layout.addWidget(self.message, 6, 0, 1, 3)
+        layout.addWidget(self.message, 7, 0, 1, 3)
         self.refresh = QtWidgets.QPushButton("Refresh")
-        layout.addWidget(self.refresh, 6, 3)
+        layout.addWidget(self.refresh, 7, 3)
         layout.setColumnStretch(2, 1)
         if maximum_only:
             self.setTitle("Maximum Z height")
             for index in reversed(range(layout.count())):
-                if layout.getItemPosition(index)[0] < 3:
+                if layout.getItemPosition(index)[0] < 4:
                     item = layout.takeAt(index)
                     item.widget().hide()
         elif daily:
             for index in reversed(range(layout.count())):
-                if layout.getItemPosition(index)[0] >= 3:
+                if layout.getItemPosition(index)[0] >= 4:
                     item = layout.takeAt(index)
                     item.widget().hide()
             # Keep failures readable without the routine setup/status section.
-            layout.addWidget(self.message, 3, 0, 1, 4)
+            layout.addWidget(self.message, 4, 0, 1, 4)
         self.down.clicked.connect(lambda: self._jog(-1))
         self.up.clicked.connect(lambda: self._jog(1))
         self.apply.clicked.connect(self._apply)
@@ -146,7 +144,7 @@ class MainboardZPanel(QtWidgets.QGroupBox):
 
     def attach_focus_workspace(self, workspace: QtWidgets.QWidget) -> None:
         """Place daily reference and measurement controls inside the Z section."""
-        self.layout().addWidget(workspace, 7, 0, 1, 4)
+        self.layout().addWidget(workspace, 8, 0, 1, 4)
 
     def _edit_maximum(self, *_args: object) -> None:
         self._maximum_edited = True
@@ -258,14 +256,21 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             self.invalidate("Z readback is stale; waiting for a fresh response.")
 
     def _sync_z_display(self) -> None:
+        self.height.setToolTip(
+            "Controller Z readback; live homing coordinates are unreferenced, not an encoder measurement."
+        )
         probe = self._machine_status.get("z_probe")
         active = bool(self._busy or (self._pending and not self.fresh())
                       or (isinstance(probe, Mapping) and probe.get("active") is True))
         fresh = self.fresh() and _read_allowed(self._machine_status)
         observed = self._live_z.readout(active=active, readback_at=self._received_at if fresh else None)
         if observed is not None:
-            self.height.setText(observed[0])
-            self.readback_note.setText(observed[1])
+            self.height.setText(observed[0].split(" · ", 1)[0])
+            self.height.setToolTip(observed[0] + "\n" + observed[1])
+            qualifier = observed[0].partition(" · ")[2]
+            self.readback_note.setText(
+                f"{qualifier}\n{observed[1]}" if qualifier else observed[1]
+            )
         elif fresh and not active and self._live_z.readback_current(self._received_at):
             z = _number(self._result.get("z_mm"))
             known = self._result.get("z_known") is True and z is not None

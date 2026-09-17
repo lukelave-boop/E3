@@ -2337,3 +2337,7 @@ committed, verified, and included in a release.
 - Conservative streamed G-code allowlist, compact-word parsing, coordinate checks, and rapid-with-laser rejection
 - Zero-power framing with no `M3`/`M4` command
 - Software safety gates, 20 automated tests, end-to-end simulated API validation, documentation, and Linux installation scripts
+
+## Continuous raster and Machine coordinates (2026-09-16)
+
+Raster no longer switches M4/M5 at every engraved span. Inline power changes preserve a continuous scan through blank gaps and overscan, with explicit M5 before row transfers. Preview and Start Here track zero-power laser mode correctly. Fixed-size X/Y/Z coordinate boxes cannot grow or shrink with their text. X/Y show completed Home/jog positions; unavailable positions show a dash.

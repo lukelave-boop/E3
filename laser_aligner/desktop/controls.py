@@ -11,6 +11,21 @@ from .scroll_position import StableScrollArea
 QtCore, QtGui, QtWidgets = require_qt()
 
 
+class AxisPositionReadout(QtWidgets.QLabel):
+    """A stable coordinate box; changing text never changes layout geometry."""
+
+    def __init__(self, axis: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(f"{axis} — mm", parent)
+        self.setFixedSize(154, 38)
+        self.setWordWrap(False)
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.setStyleSheet(
+            "font-size: 16px; font-weight: bold; border: 1px solid #687482; "
+            "border-radius: 4px; padding: 4px;"
+        )
+
+
 _NUMERIC_DRAFT = re.compile(
     r"^[-+]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d*)?|\.)?$"
 )

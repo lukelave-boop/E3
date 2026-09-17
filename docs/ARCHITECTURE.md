@@ -2620,3 +2620,9 @@ and requires a new acknowledged `M106 S0` before primary streaming. Failure of
 that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
 ON is never automatically replayed. Startup/restart, STOP, mapping validation,
 and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+### Continuous raster power switching
+
+The desktop project raster emitter establishes M3/M4 S0 after each laser-off rapid to a row, before lead-in. Powered G1 spans carry inline S values; white gaps and overscan carry S0 at the same operation feed. M5 follows lead-out before any subsequent rapid, reversal or operation. Zero-effective-power rows never enable laser mode. Existing bounds, arming, focus, power and command-budget validation remain authoritative.
+
+Both shared G-code preview parsers track enabled mode separately from positive power, so M4 S0 followed by inline S correctly alternates powered and unpowered motion. Start Here preserves inline raster switching, including power correction and air assist. The browser single-SVG generator is unchanged; its shared preview parser is covered by G-code tests. No Pi service/controller change is needed: the existing guarded G1 inline-S allowlist already supports these commands.

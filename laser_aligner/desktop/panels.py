@@ -15,7 +15,7 @@ from ..project import (
 )
 from ..units import parse_to_mm
 from .columns import configure_resizable_columns
-from .controls import MeasurementSpinBox, NumericDoubleSpinBox, NumericSpinBox
+from .controls import AxisPositionReadout, MeasurementSpinBox, NumericDoubleSpinBox, NumericSpinBox
 from .machine_state import ControllerUiState, project_machine_state
 from .mainboard_z import MainboardZPanel
 from .qt import require_qt
@@ -2955,6 +2955,16 @@ class MachinePanel(QtWidgets.QWidget):
         self.park_button.setToolTip("Home and park at the configured camera pose")
         layout.addWidget(self.park_button)
 
+        coordinates = QtWidgets.QHBoxLayout()
+        coordinates.setSpacing(4)
+        self.x_position = AxisPositionReadout("X")
+        self.y_position = AxisPositionReadout("Y")
+        for readout in (self.x_position, self.y_position):
+            readout.setToolTip("Position after completed Home / jog in mm; unavailable during motion.")
+            coordinates.addWidget(readout)
+        coordinates.addStretch(1)
+        layout.addLayout(coordinates)
+
         self.jog_group = QtWidgets.QGroupBox("Jog")
         jog_layout = QtWidgets.QGridLayout(self.jog_group)
         jog_layout.setContentsMargins(6, 10, 6, 6)
@@ -3054,6 +3064,24 @@ class MachinePanel(QtWidgets.QWidget):
 
     def _sync_action_buttons(self) -> None:
         state = self._ui_state.with_busy(self._busy)
+        position = self._machine_status.get("jog_position_mm")
+        available = (
+            not self._busy
+            and self._machine_status.get("connected") is True
+            and self._machine_status.get("coordinate_reference_ready") is True
+            and self._machine_status.get("status_stale") is not True
+            and not self._machine_status.get("status_refresh_error")
+            and not (self._machine_status.get("job") or {}).get("running")
+            and isinstance(position, Mapping)
+        )
+        for axis, readout in (("X", self.x_position), ("Y", self.y_position)):
+            value = position.get(axis.lower()) if available else None
+            text = (
+                f"{axis} {value:.3f} mm"
+                if type(value) in {int, float} and math.isfinite(value)
+                else f"{axis} — mm"
+            )
+            readout.setText(text)
         self.park_button.setEnabled(state.can_home)
         self.jog_group.setEnabled(state.can_jog)
         self.jog_group.setToolTip(

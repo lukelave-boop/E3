@@ -1167,3 +1167,5 @@ and requires a new acknowledged `M106 S0` before primary streaming. Failure of
 that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
 ON is never automatically replayed. Startup/restart, STOP, mapping validation,
 and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+Raster scans keep the selected engraving feed across powered spans and white gaps, using inline zero/nonzero power changes. Explicit laser-off remains at row boundaries before rapid travel. Machine-tab X, Y and Z positions have fixed-size boxes; X/Y show the last completed Home/jog position and clear during motion or unavailable status.

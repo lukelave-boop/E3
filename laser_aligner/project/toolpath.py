@@ -1161,7 +1161,7 @@ def _raster_row_command_count(
     for span in row.spans:
         if float(np.linalg.norm(span.points[0] - position)) > 1e-9:
             count += 1  # Laser-off gap.
-        count += 3  # M3/M4, powered G1, standalone M5.
+        count += 3  # Conservative: powered G1 plus the row's M3/M4 and final M5.
         if power_correction != 0.0:
             # Each image edge can add at most ``ramp_steps`` subdivisions.
             # This conservative bound keeps the final stream below its hard cap
@@ -2479,12 +2479,21 @@ def _emit_raster_row(
         f"G0 X{_fmt(lead_start[0])} Y{_fmt(lead_start[1])} "
         f"F{_fmt(laser.travel_feed_mm_min)}"
     )
+    powered_row = power > 0 and any(_points_have_motion(span.points) for span in row.spans)
+    if powered_row:
+        if layer.air_assist:
+            air_assist.turn_on(lines)
+        # Establish the mode before accelerating through the lead-in. Within
+        # the row only inline S changes are used: M4/M5 transitions drain GRBL's
+        # planner, defeating overscan and interrupting every engraved span.
+        lines.append(f"{laser.power_mode.upper()} S0")
+    off_word = " S0" if powered_row else ""
     if _points_differ(lead_start, row_start):
         distance = float(np.linalg.norm(row_start - lead_start))
         off_travel += distance
         lines.append(
             f"G1 X{_fmt(row_start[0])} Y{_fmt(row_start[1])} "
-            f"F{_fmt(layer.speed_mm_min)}"
+            f"F{_fmt(layer.speed_mm_min)}{off_word}"
         )
 
     position = row_start
@@ -2508,12 +2517,9 @@ def _emit_raster_row(
                 off_travel += gap
                 lines.append(
                     f"G1 X{_fmt(span_start[0])} Y{_fmt(span_start[1])} "
-                    f"F{_fmt(layer.speed_mm_min)}"
+                    f"F{_fmt(layer.speed_mm_min)}{off_word}"
                 )
-            if layer.air_assist:
-                air_assist.turn_on(lines)
-            lines.append(f"{laser.power_mode.upper()} S{power}")
-            commanded_power = power
+            commanded_power = None
             motions = corrected_raster_span_motions(
                 row_start,
                 row_end,
@@ -2536,7 +2542,6 @@ def _emit_raster_row(
                     f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
                     f"F{_fmt(layer.speed_mm_min)}{power_word}"
                 )
-            lines.append("M5")
             distance = _length(span.points)
             cut += distance
             point_count += len(span.points)
@@ -2547,7 +2552,7 @@ def _emit_raster_row(
             off_travel += gap
             lines.append(
                 f"G1 X{_fmt(row_end[0])} Y{_fmt(row_end[1])} "
-                f"F{_fmt(layer.speed_mm_min)}"
+                f"F{_fmt(layer.speed_mm_min)}{off_word}"
             )
             position = row_end
 
@@ -2556,8 +2561,11 @@ def _emit_raster_row(
         off_travel += distance
         lines.append(
             f"G1 X{_fmt(lead_end[0])} Y{_fmt(lead_end[1])} "
-            f"F{_fmt(layer.speed_mm_min)}"
+            f"F{_fmt(layer.speed_mm_min)}{off_word}"
         )
+    if powered_row:
+        # No rapid, row reversal, or following operation inherits enabled output.
+        lines.append("M5")
     return lead_end.copy(), cut, off_travel, point_count, path_count
 
 

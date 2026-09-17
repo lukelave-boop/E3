@@ -158,7 +158,7 @@ def _build_job_plan(
 
     x, y = (float(value) for value in start_position)
     absolute = True
-    laser_on = False
+    laser_enabled = False
     power = 0.0
     feed = max(1.0, float(default_feed_mm_min))
     spot_offset_x = spot_offset_y = 0.0
@@ -262,14 +262,15 @@ def _build_job_plan(
         if 91 in g_codes:
             absolute = False
         if 5 in m_codes:
-            laser_on = False
+            laser_enabled = False
             power = 0.0
         # Marlin's trusted air-assist command uses S255 as fan duty. It must
         # never mutate the modal laser power used by preview/restart planning.
         if "S" in values and 106 not in m_codes:
             power = float(values["S"])
         if m_codes.intersection({3, 4}):
-            laser_on = power > 0
+            laser_enabled = True
+        laser_on = laser_enabled and power > 0
         if "F" in values:
             feed = max(1.0, float(values["F"]))
 
@@ -439,10 +440,12 @@ def _restart_program_from_move(
             "resolved machine command mapping"
         )
     powered_air_by_layer: dict[tuple[str, str], bool] = {}
+    powered_layers: set[tuple[str, str]] = set()
     for move in suffix:
         _raise_if_cancelled()
         layer_key = (move.layer_id, move.layer_name)
         if move.laser_on and move.power > 0:
+            powered_layers.add(layer_key)
             if move.air_assist:
                 powered_air_by_layer[layer_key] = True
     controller_start_x = selected.start_x - plan.spot_offset_x
@@ -480,11 +483,13 @@ def _restart_program_from_move(
     active_power = 0.0
     air_active = False
     active_focus_mode = None
+    raster_enabled = False
     for move in suffix:
         _raise_if_cancelled()
         if move.focus_mode is not None and move.focus_mode != active_focus_mode:
             lines.extend(("M5", f"{OPERATION_FOCUS_PREFIX} {move.focus_mode}"))
             active_power = 0.0
+            raster_enabled = False
             active_focus_mode = move.focus_mode
         layer_key = (move.layer_id, move.layer_name)
         if layer_key != active_layer:
@@ -497,6 +502,7 @@ def _restart_program_from_move(
                 lines.extend(air_commands.program_lines(False))
                 air_active = False
                 active_power = 0.0
+                raster_enabled = False
             active_layer = layer_key
         context = (move.layer_id, move.pass_index, move.source_name)
         if context != active_context:
@@ -522,6 +528,26 @@ def _restart_program_from_move(
             active_context = context
         end_x = move.end_x - plan.spot_offset_x
         end_y = move.end_y - plan.spot_offset_y
+        if move.layer_mode == "raster" and not move.rapid and layer_key in powered_layers:
+            if not raster_enabled:
+                if active_power:
+                    lines.append("M5")
+                    active_power = 0.0
+                if powered_air_by_layer.get(layer_key, False) and not air_active:
+                    assert air_commands is not None
+                    lines.extend(air_commands.program_lines(True))
+                    air_active = True
+                lines.append(f"{power_mode.upper()} S0")
+                raster_enabled = True
+            active_power = move.power if move.laser_on else 0.0
+            lines.append(
+                f"G1 X{end_x:.3f} Y{end_y:.3f} F{move.feed_mm_min:.3f} S{active_power:g}"
+            )
+            continue
+        if raster_enabled:
+            lines.append("M5")
+            active_power = 0.0
+            raster_enabled = False
         if move.laser_on:
             if move.air_assist and not air_active:
                 # A coincident layer boundary can disappear from the move plan.

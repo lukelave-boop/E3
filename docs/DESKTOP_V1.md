@@ -615,3 +615,7 @@ you want a straight row or column.
 The dialog reports how many objects will move, or why nothing would change.
 **Distribute** applies one undoable project edit; **Cancel** changes nothing.
 Layout areas do not replace the existing execution bounds and job validation.
+
+### Fixed Machine coordinate boxes
+
+X and Y appear immediately above the XY jog controls; Z appears above its controls. Each coordinate box is fixed at 154 by 38 logical pixels regardless of text, including unknown/unavailable values. X/Y use the existing completed Home/jog position in controller work coordinates, not a live encoder feed; they clear during actions/jobs, disconnect, stale/error status or absent reference. Z retains its existing live telemetry/readback freshness rules; homing/unreferenced qualifications appear below the box and in its tooltip.
