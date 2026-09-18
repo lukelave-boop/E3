@@ -1,5 +1,37 @@
 # Current repository state
 
+## Drawing tools frozen DEV TEST handoff (2026-09-17)
+
+E3 DEV TEST now selects Stencil, polygon and rotation tools, version 0.7.190,
+branch codex/drawing-tools, exact frozen application revision
+`4f0f2270e1212eb7e559570082662253f3e0d020`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\drawing-tools-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with set_dev_test_feature.py and
+read back through the launcher validator. Reopen E3 DEV TEST to load this build.
+The normal launcher and permanent DEV launcher executable/shortcut were unchanged.
+
+Includes aligned top/bottom stencil bridges, center-first polygon creation
+with live 3–12-side preview/rejection above 12, and Ctrl-held axis rotation
+snapping across object kinds, template placement and polygon drafting. The
+baseline preserves the previous Saved gauge recognition feature build.
+
+All 231 focused Windows Python 3.14 tests, repository Ruff and application
+compileall passed in the isolated checkout. The canonical Windows packager and
+installer completed successfully with a restricted build PATH. The DLL guard
+passed; all 180 packaged application modules and three resources match the
+frozen commit. Frozen offscreen startup loaded native Qt with isolated config/
+data, camera autostart off, motion disabled and a nonexistent serial port.
+This is not interactive operator, camera, controller or laser verification.
+EXE SHA256: `456ee973ec4ef3797772d7fd60dbb04ec6b210ed901da2646e8dce54415c7361`.
+Records: build/clean-build.log, build/frozen-verification.json and
+build/frozen-smoke.json in the feature checkout. No Pi update was performed.
+
+Branch upload and GitHub compatibility CI were rejected by automatic approval
+review because they export repository contents beyond the local dev-build
+request. Explicit approval was requested and remains pending; no push, CI run
+or main integration is claimed. The feature branch is retained for operator
+and compatibility verification. Unrelated shared-tree edits were preserved.
+
 ## Drawing tools feature source (2026-09-17)
 
 Isolated feature based on the current Saved gauge recognition development build.
