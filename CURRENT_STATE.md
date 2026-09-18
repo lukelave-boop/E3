@@ -1,5 +1,20 @@
 # Current repository state
 
+## Escape cancellation fix (2026-09-18)
+
+Escape now cancels local authoring, including the polygon sides prompt, and
+clears selection instead of requesting software Stop. Unfinished object moves,
+resizes and rotations restore their original state without a history entry.
+The dedicated Stop action retains its existing controller connection.
+
+Initial focused Windows offscreen verification: 87 tests passed covering
+polygon cancellation with prompt focus, repeated Escape, all drawing stages,
+selection, point picking and transform rollback. Tests assert no stop request
+on Escape and verify explicit Stop still invokes the stop handler. Scoped
+Ruff passed. The isolated checkout subsequently passed all 239 focused Windows
+tests, repository Ruff and application compileall. Frozen-build, interactive
+and physical verification pending.
+
 ## Drawing tools frozen DEV TEST handoff (2026-09-17)
 
 E3 DEV TEST now selects Stencil, polygon and rotation tools, version 0.7.190,

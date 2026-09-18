@@ -1,5 +1,13 @@
 # Architecture
 
+## Desktop authoring cancellation
+
+The window owns an Escape action separate from the machine Stop action.
+WorkspaceView cancels drafts and point picking, releases canvas mouse grabs,
+rolls unfinished object transforms back to their original geometry, and clears
+object/trace selection. Cancellation never calls the controller or commits a
+history entry. The dedicated Stop action retains its existing controller path.
+
 ## Stencil, polygon and rotation authoring
 
 Stencil text separates exact font subpaths and groups enclosed counters by

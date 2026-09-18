@@ -665,7 +665,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("optimize_paths", "Optimize path ordering")
         action("preview_job", "Preview generated job", "Alt+P")
         action("export_gcode", "Export generated G-code…", "Ctrl+Shift+E")
-        action("stop", "Software stop / laser off", "Esc")
+        action("stop", "Software stop / laser off")
+        action("cancel_tool", "Cancel current tool / deselect", "Esc")
+        self.actions["cancel_tool"].setAutoRepeat(False)
+        self.addAction(self.actions["cancel_tool"])
+        self.actions["cancel_tool"].triggered.connect(
+            lambda: self._cancel_current_function()
+        )
         action("minimize_window", "Minimize window", "Ctrl+M")
         action("maximize_window", "Maximize / restore window", "Ctrl+Shift+M")
         action("reset_window_size", "Reset window size")
@@ -1709,6 +1715,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         command = AddObjectCommand(self.document, item, description=description)
         self.history.execute(command)
         self.workspace.select_objects([item.id])
+
+    def _cancel_current_function(self) -> None:
+        self.workspace.cancel_authoring_interaction()
+        self.actions["select_tool"].setChecked(True)
+        self.show_notice("Current tool cancelled; selection cleared")
 
     def _activate_selection_tool(self, *, show_message: bool = True) -> None:
         self.actions["select_tool"].setChecked(True)

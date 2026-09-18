@@ -111,7 +111,8 @@ def test_select_and_rectangle_actions_are_exclusive_tools(
     host.actions["rectangle"].setChecked(True)
     assert host.actions["rectangle"].isChecked()
     assert not host.actions["select_tool"].isChecked()
-    assert host.actions["stop"].shortcut() == QtGui.QKeySequence("Esc")
+    assert host.actions["stop"].shortcut().isEmpty()
+    assert host.actions["cancel_tool"].shortcut() == QtGui.QKeySequence("Esc")
 
     host.actions["stop"].trigger()
     assert stops == ["stop"]

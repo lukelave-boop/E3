@@ -6,7 +6,7 @@ QtCore, _QtGui, QtWidgets = require_qt()
 
 
 class PolygonSidesPrompt(QtWidgets.QFrame):
-    """Canvas child, so the main window's Escape/Stop shortcut remains active."""
+    """Canvas child, so Escape can cancel the active tool while typing sides."""
 
     sidesChanged = QtCore.Signal(int)
     accepted = QtCore.Signal()

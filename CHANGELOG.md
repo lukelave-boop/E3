@@ -1,5 +1,11 @@
 # Changelog
 
+## Escape cancels authoring (2026-09-18)
+
+- Escape exits the current drawing tool, discards drafts and clears selection.
+- Cancel unfinished object moves, resizes and rotations without an undo entry.
+- Remove Escape from software Stop; the dedicated Stop action stays available.
+
 ## Drawing tools (2026-09-17)
 
 - New stencil text uses aligned top-and-bottom material bridges. Stacked counters

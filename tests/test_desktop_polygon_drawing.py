@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.workspace import WorkspaceView
-from laser_aligner.project import Bounds, CommandStack, ProjectDocument
+from laser_aligner.project import Bounds, CommandStack, ProjectDocument, SceneObject
 
 
 class PolygonToolbarHost(E3MainWindow):
@@ -26,9 +26,10 @@ class PolygonToolbarHost(E3MainWindow):
         self.workspace.set_document(self.document)
         self.setCentralWidget(self.workspace)
         self.history = CommandStack()
+        self.stop_requests = []
         self.controller = SimpleNamespace(
             retry_camera_image=lambda: None, capture_for_placement=lambda: None,
-            emergency_stop=lambda: None,
+            emergency_stop=lambda: self.stop_requests.append("stop"),
         )
         self.runtime = SimpleNamespace(settings=SimpleNamespace(
             machine=SimpleNamespace(max_work_feed_mm_min=6000),
@@ -257,24 +258,92 @@ def test_snapping_applies_to_center_and_sizing_point(canvas):
     assert view._polygon_angle_deg == pytest.approx(0)
 
 
-def test_escape_still_triggers_main_window_stop_while_typing(application):
-    host = QtWidgets.QMainWindow()
-    view = WorkspaceView(Bounds(0, 0, 100, 100))
-    host.setCentralWidget(view)
-    host.resize(720, 540)
+def test_escape_cancels_polygon_prompt_and_never_calls_stop(application):
+    host = PolygonToolbarHost()
     stops = []
-    stop = QtGui.QAction(host)
-    stop.setShortcut(QtGui.QKeySequence("Esc"))
-    stop.triggered.connect(lambda: stops.append(True))
-    host.addAction(stop)
+    host.actions["stop"].triggered.connect(lambda: stops.append(True))
+    host.resize(720, 540)
     host.show()
     host.activateWindow()
+    view = host.workspace
     view.fit_work_area()
     view.set_creation_tool("polygon")
     application.processEvents()
     prompt = freeze(view)
     application.processEvents()
     QtTest.QTest.keyClick(prompt.sides_edit, QtCore.Qt.Key.Key_Escape)
+    assert stops == []
+    assert view.creation_tool == ""
+    assert view._polygon_prompt is None
+    assert view._polygon_preview_item is None
+    assert view.selected_object_ids() == []
+    assert host.actions["select_tool"].isChecked()
+    assert not host.actions["polygon"].isChecked()
+    assert host.history.depth == 0
+    # Repeated Escape remains local, including with no active tool.
+    QtTest.QTest.keyClick(view, QtCore.Qt.Key.Key_Escape)
+    assert stops == []
+    host.actions["stop"].trigger()
     assert stops == [True]
+    assert host.stop_requests == ["stop"]
     host.close()
     host.deleteLater()
+
+
+@pytest.mark.parametrize("mode", ["polygon", "polygon_sizing", "rectangle", "selection", "point_pick", "move", "resize", "rotate"])
+def test_escape_cancels_authoring_without_changing_project_or_sending_stop(application, mode):
+    host = PolygonToolbarHost()
+    view, document = host.workspace, host.document
+    item = SceneObject.rectangle(document.active_layer_id, center=(50, 50), width_mm=20, height_mm=10)
+    document.add_object(item)
+    view.set_document(document)
+    host.resize(720, 540)
+    host.show()
+    host.activateWindow()
+    view.fit_work_area()
+    view.set_snap_enabled(False)
+    application.processEvents()
+    before = document.to_dict()
+    commits = []
+    view.objectTransformCommitted.connect(lambda *args: commits.append(args))
+    view.objectMoveCommitted.connect(lambda *args: commits.append(args))
+    if mode.startswith("polygon"):
+        host.actions["polygon"].trigger()
+        if mode == "polygon_sizing":
+            click(view, 20, 20)
+            QtTest.QTest.mouseMove(view.viewport(), point(view, 30, 30))
+    elif mode == "rectangle":
+        host.actions["rectangle"].trigger()
+        QtTest.QTest.mousePress(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point(view, 20, 20))
+        QtTest.QTest.mouseMove(view.viewport(), point(view, 30, 30))
+    elif mode == "point_pick":
+        view.begin_point_pick()
+    else:
+        view.select_objects([item.id])
+        overlay = view._object_transform_overlay
+        if mode == "rotate":
+            overlay.begin_rotation(view.workspace_scene.machine_to_scene(50, 70))
+            overlay.update_rotation(view.workspace_scene.machine_to_scene(70, 50))
+        elif mode == "resize":
+            overlay.begin_resize("bottom_right", overlay.resize_handles["bottom_right"].sceneBoundingRect().center())
+            overlay.update_resize(view.workspace_scene.machine_to_scene(70, 30))
+        elif mode == "move":
+            QtTest.QTest.mousePress(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point(view, 60, 50))
+            QtTest.QTest.mouseMove(view.viewport(), point(view, 70, 60))
+    QtTest.QTest.keyClick(view, QtCore.Qt.Key.Key_Escape)
+    QtTest.QTest.mouseRelease(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point(view, 70, 30))
+    assert document.to_dict() == before
+    assert host.history.depth == 0
+    assert commits == []
+    assert host.stop_requests == []
+    assert view.creation_tool == ""
+    assert not view.point_pick_active
+    assert view.selected_object_ids() == []
+    assert view._object_transform_overlay is None
+    assert view._rectangle_preview_item is None
+    assert view._polygon_preview_item is None
+    assert view._items_by_id[item.id].pos() == QtCore.QPointF(50, -50)
+    assert view._items_by_id[item.id].rotation() == 0
+    host.close()
+    host.deleteLater()
+    application.processEvents()

@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Cancel a desktop tool
+
+Press Escape to cancel the active drawing tool or unfinished object transform
+and clear selection. This also works while typing polygon sides. Escape sends
+no machine command; use the dedicated Stop control for software stop/laser off.
+
 ## Drawing tools (2026-09-17)
 
 - New stencil text uses aligned top-and-bottom material bridges. Stacked counters

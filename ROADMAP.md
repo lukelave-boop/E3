@@ -1,5 +1,12 @@
 # Roadmap
 
+## Escape cancellation
+
+Implemented: Escape cancels desktop authoring and clears selection without
+sending a machine stop. Focused Windows offscreen tests cover polygon prompt
+focus, drawing, selection, point picking and unfinished transforms. Operator
+verification of the updated frozen build remains pending.
+
 ## Drawing tools acceptance
 
 Implemented in source: consistent vertical stencil bridges, center-first polygon

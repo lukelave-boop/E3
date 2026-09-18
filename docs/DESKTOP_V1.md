@@ -235,8 +235,8 @@ reports live width/height; release creates and selects exactly one object throug
 the command stack. Both endpoints obey the current snap setting, every drag
 direction is normalized, and zero-size drags are ignored. The tool remains
 active for repeated rectangles. Select or a canvas right-click exits drawing;
-middle-button and Space-drag still pan. Escape remains reserved for software
-stop / laser off.
+middle-button and Space-drag still pan. Escape cancels the active tool and clears selection; software stop / laser off
+remains available through the dedicated Stop control.
 
 The Operations/Layers table summarizes layer color/name, mode, speed/power,
 Output, and Show state. Inline toggles, ordering controls, the quick editor,

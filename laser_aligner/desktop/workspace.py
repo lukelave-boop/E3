@@ -1029,6 +1029,11 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
         self.apply_transform(transform)
         self._view._preview_object_transform(self.object_id, transform)
 
+    def cancel_interaction(self) -> None:
+        if self._interaction_before is not None:
+            self._preview(self._interaction_before)
+            self._finish_interaction()
+
     def _finish_interaction(self) -> None:
         before = self._interaction_before
         after = self._display_transform.copy()
@@ -1971,6 +1976,29 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.workspace_scene.removeItem(preview)
         if had_draft:
             self.rectangleDraftChanged.emit(None)
+
+    def cancel_authoring_interaction(self) -> None:
+        """Cancel local canvas edits without invoking any machine operation."""
+        grabber = self.workspace_scene.mouseGrabberItem()
+        if grabber is not None:
+            grabber.ungrabMouse()
+        if self._object_transform_overlay is not None:
+            self._object_transform_overlay.cancel_interaction()
+        for object_id in self.selected_object_ids():
+            self.refresh_object(object_id)
+        self.set_creation_tool(None)
+        self.cancel_point_pick()
+        self.select_objects([])
+        self._trace_pointer_select_active = False
+        self._trace_drag_inferred_selection = {}
+        self._syncing_trace_selection = False
+        self.set_trace_selected_ids([])
+        self.traceSelectionIdsChanged.emit([])
+        self._panning = False
+        self._space_pan = False
+        self._pan_button = QtCore.Qt.MouseButton.NoButton
+        self._restore_interaction_cursor()
+        self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
     def _restore_interaction_cursor(self) -> None:
         if self._space_pan:
