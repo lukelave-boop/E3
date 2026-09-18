@@ -1,5 +1,18 @@
 # Changelog
 
+## Drawing tools (2026-09-17)
+
+- New stencil text uses aligned top-and-bottom material bridges. Stacked counters
+  share an axis; excessive widths that erase a letter are rejected.
+- Polygon in the left sidebar: click its center, move to choose radius/angle,
+  then click to freeze. Type 3–12 sides for live preview; higher values and other
+  invalid input disable Create. Enter/Create adds one undoable polygon; Cancel
+  discards it. Right-click or Select exits the persistent drawing tool.
+- Hold Ctrl while rotating to snap to horizontal/vertical (90-degree) orientations.
+  Press/release Ctrl updates immediately; free rotation resumes when released.
+  Shift retains 15-degree object rotation, with Ctrl taking priority. Template
+  placement and initial polygon orientation also support Ctrl.
+
 ## Saved gauge recognition (2026-09-17)
 
 Check progress refreshes machine status before evaluating saved gauge evidence.

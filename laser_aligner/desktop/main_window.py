@@ -100,6 +100,7 @@ from ..project import (
     transform_native_path,
     verify_project_job_assets,
 )
+from ..project.polygon import create_regular_polygon
 from ..storage import atomic_write_text
 from ..templates import (
     CutTemplate,
@@ -217,6 +218,7 @@ _AUTHORING_ACTION_KEYS = (
     "lower",
     "send_back",
     "rectangle",
+    "polygon",
     "ellipse",
     "line",
     "text",
@@ -645,6 +647,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         action("select_tool", "Select tool", checkable=True)
         action("rectangle", "Draw rectangle", "Alt+R", checkable=True)
+        action("polygon", "Draw polygon", checkable=True)
         action("ellipse", "Add ellipse", "Alt+E")
         action("line", "Add line", "Alt+L")
         action("text", "Add text", "Alt+T")
@@ -674,6 +677,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._drawing_action_group.setExclusive(True)
         self._drawing_action_group.addAction(self.actions["select_tool"])
         self._drawing_action_group.addAction(self.actions["rectangle"])
+        self._drawing_action_group.addAction(self.actions["polygon"])
         self.actions["select_tool"].setChecked(True)
 
         apply_action_icons(self.actions, size=20)
@@ -726,6 +730,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.actions["rectangle"].triggered.connect(
             lambda checked=False: self.add_rectangle()
+        )
+        self.actions["polygon"].triggered.connect(
+            lambda checked=False: self.add_polygon()
         )
         self.actions["ellipse"].triggered.connect(self.add_ellipse)
         self.actions["line"].triggered.connect(self.add_line)
@@ -881,7 +888,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tools.setMaximumWidth(44)
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, tools)
 
-        for key in ("select_tool", "line", "rectangle", "ellipse", "text"):
+        for key in ("select_tool", "line", "rectangle", "polygon", "ellipse", "text"):
             tools.addAction(self.actions[key])
         tools.addSeparator()
         for key in (
@@ -1127,7 +1134,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.direct_edit_label.setObjectName("directEditStatus")
         self.direct_edit_label.setToolTip(
             "Drag an object to move it; use its corner and rotation handles for "
-            "direct editing. Hold Shift while rotating for 15° snapping."
+            "direct editing. Hold Ctrl for horizontal/vertical; Shift for 15° snapping."
         )
         self.cursor_label = QtWidgets.QLabel("X —  Y —")
         self.selection_label = QtWidgets.QLabel("0 objects selected")
@@ -1164,6 +1171,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.deleteRequested.connect(self.delete_selection)
         self.workspace.pointPicked.connect(self._trace_point_picked)
         self.workspace.creationToolChanged.connect(self._creation_tool_changed)
+        self.workspace.polygonDrawCommitted.connect(self._polygon_draw_committed)
         self.workspace.rectangleDraftChanged.connect(self._rectangle_draft_changed)
         self.workspace.rectangleDrawCommitted.connect(
             self._rectangle_draw_committed
@@ -1386,7 +1394,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         if not any(layer.id == self.active_layer_id for layer in self.document.layers):
             self.active_layer_id = self.document.active_layer_id
-        if self.workspace.creation_tool == "rectangle":
+        if self.workspace.creation_tool in {"rectangle", "polygon"}:
             self.workspace.set_creation_color(
                 self.document.get_layer(self.active_layer_id).color
             )
@@ -1539,7 +1547,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def set_active_layer(self, layer_id: str) -> None:
         layer = self.document.get_layer(layer_id)
         self.active_layer_id = layer_id
-        if self.workspace.creation_tool == "rectangle":
+        if self.workspace.creation_tool in {"rectangle", "polygon"}:
             self.workspace.set_creation_color(layer.color)
         self.layer_panel.set_document(self.document, layer_id)
         self.palette.set_layers(self.document.layers, layer_id)
@@ -1719,21 +1727,49 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "right-click the canvas to finish."
         )
 
+    def add_polygon(self) -> None:
+        layer = self.document.get_layer(self.active_layer_id)
+        self.actions["polygon"].setChecked(True)
+        self.workspace.set_creation_tool("polygon", color=layer.color)
+        self.show_notice(
+            "Polygon: click the center, move to set size and angle, then click again. "
+            "Enter 3–12 sides to preview; Create finishes, Cancel discards."
+        )
+
+    def _polygon_draw_committed(
+        self, center_x_mm: float, center_y_mm: float, radius_mm: float,
+        angle_deg: float, sides: int,
+    ) -> None:
+        self._add_object(
+            create_regular_polygon(
+                self.active_layer_id, (center_x_mm, center_y_mm), radius_mm, angle_deg, sides,
+            ),
+            "Add polygon",
+        )
+        self.show_notice(f"Created {sides}-sided polygon, radius {radius_mm:.3f} mm")
+
     def _creation_tool_changed(self, tool: str) -> None:
         drawing_rectangle = tool == "rectangle"
         self.actions["rectangle"].setChecked(drawing_rectangle)
-        self.actions["select_tool"].setChecked(not drawing_rectangle)
+        self.actions["polygon"].setChecked(tool == "polygon")
+        self.actions["select_tool"].setChecked(not tool)
         if drawing_rectangle:
             self.direct_edit_label.setText("Rectangle | drag to draw")
             self.direct_edit_label.setToolTip(
                 "Drag between opposite corners. The active operation color is "
                 "used; choose Select or right-click the canvas to finish."
             )
+        elif tool == "polygon":
+            self.direct_edit_label.setText("Polygon | click center, then size")
+            self.direct_edit_label.setToolTip(
+                "Click the center, move to size and rotate, then click to lock. "
+                "Type 3–12 sides for a live preview. Right-click exits drawing."
+            )
         else:
             self.direct_edit_label.setText("Move | Size | Rotate")
             self.direct_edit_label.setToolTip(
                 "Drag an object to move it; use its corner and rotation handles "
-                "for direct editing. Hold Shift while rotating for 15-degree snapping."
+                "for direct editing. Hold Ctrl for horizontal/vertical; Shift for 15-degree snapping."
             )
         self._update_status_bar_layout()
 

@@ -1,5 +1,22 @@
 # Current repository state
 
+## Drawing tools feature source (2026-09-17)
+
+Isolated feature based on the current Saved gauge recognition development build.
+Adds consistent top/bottom stencil bridges, center-first regular polygon drawing
+with a live 3–12-side prompt, and Ctrl-held horizontal/vertical rotation snapping.
+Ctrl works across all object kinds, template placement and initial polygon
+orientation; Shift retains 15-degree object rotation. Invalid side counts are
+rejected, Create commits once, and Cancel discards the draft. Native POLYGON
+paths preserve the picked circumcenter; no project schema change is required.
+
+All 231 focused tests passed on Windows Python 3.14 in this isolated checkout.
+Repository Ruff and application compileall passed. Desktop checks are offscreen
+widgets. Frozen-build verification and compatibility CI remain pending. Hardware configuration, machine motion/arming/stop
+behavior, Pi deployment and the normal launcher are unchanged. No physical
+hardware or interactive operator verification is claimed by these source edits.
+The original shared-tree edits and selected build remain intact during packaging.
+
 ## Saved gauge recognition frozen handoff (2026-09-17)
 
 E3 DEV TEST selects Saved gauge recognition v0.7.185, branch codex/gauge-status,

@@ -26,7 +26,8 @@ class VectorTextDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "Outline text cuts normal font contours. Stencil-safe text adds "
-            "material bridges so enclosed centers such as O, A, R, B, and 8 "
+            "aligned top-and-bottom material bridges so enclosed centers "
+            "such as O, A, R, B, and 8 "
             "remain attached after cutting."
         )
         intro.setWordWrap(True)
@@ -177,7 +178,7 @@ class VectorTextDialog(QtWidgets.QDialog):
             self.preview_status.setText(
                 f"Stencil-safe: {bridge_count} enclosed area"
                 f"{'s' if bridge_count != 1 else ''} bridged at "
-                f"{bridge_width:.2f} mm."
+                f"{bridge_width:.2f} mm, aligned top and bottom."
             )
         else:
             self.preview_status.setText(

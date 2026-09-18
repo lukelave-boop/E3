@@ -1,5 +1,23 @@
 # E3 native desktop v1 foundation
 
+## Drawing tools (2026-09-17)
+
+- New stencil text uses aligned top-and-bottom material bridges. Stacked counters
+  share an axis; excessive widths that erase a letter are rejected.
+- Polygon in the left sidebar: click its center, move to choose radius/angle,
+  then click to freeze. Type 3–12 sides for live preview; higher values and other
+  invalid input disable Create. Enter/Create adds one undoable polygon; Cancel
+  discards it. Right-click or Select exits the persistent drawing tool.
+- Hold Ctrl while rotating to snap to horizontal/vertical (90-degree) orientations.
+  Press/release Ctrl updates immediately; free rotation resumes when released.
+  Shift retains 15-degree object rotation, with Ctrl taking priority. Template
+  placement and initial polygon orientation also support Ctrl.
+
+Polygon center/sizing points obey snapping. The side-count prompt preserves
+center, radius and orientation, and disables Create outside the work area.
+Existing objects and saved text geometry remain unchanged. Escape still reaches
+the main Stop shortcut while the inline side-count prompt has focus.
+
 ## Daily Machine panel cleanup and setup Z maximum
 
 The daily panel omits the two spot-transfer buttons and the complete marked

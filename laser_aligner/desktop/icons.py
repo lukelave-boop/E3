@@ -219,6 +219,13 @@ def _draw_rectangle(glyph: _GlyphPainter) -> None:
     glyph.painter.drawRect(QtCore.QRectF(3.5, 5, 17, 14))
 
 
+def _draw_polygon(glyph: _GlyphPainter) -> None:
+    glyph.painter.drawPolygon(QtGui.QPolygonF([
+        QtCore.QPointF(12, 3), QtCore.QPointF(21, 9), QtCore.QPointF(18, 20),
+        QtCore.QPointF(6, 20), QtCore.QPointF(3, 9),
+    ]))
+
+
 def _draw_ellipse(glyph: _GlyphPainter) -> None:
     glyph.painter.drawEllipse(QtCore.QRectF(3, 5, 18, 14))
 
@@ -480,6 +487,7 @@ _DRAWERS: dict[str, Callable[[_GlyphPainter], None]] = {
     "duplicate": _draw_duplicate,
     "select_tool": _draw_select,
     "rectangle": _draw_rectangle,
+    "polygon": _draw_polygon,
     "ellipse": _draw_ellipse,
     "line": _draw_line,
     "text": _draw_text,

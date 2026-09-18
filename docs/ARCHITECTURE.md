@@ -1,5 +1,28 @@
 # Architecture
 
+## Stencil, polygon and rotation authoring
+
+Stencil text separates exact font subpaths and groups enclosed counters by
+parent. Vertical bridge bands share an axis through overlapping counter spans
+and are united/subtracted per letter to avoid clipping slivers and changing
+neighbours. Bridge count still means enclosed areas; an erased letter rejects
+creation. Existing PATH objects retain their saved geometry.
+
+Pure `project/polygon.py` validates 3–12 sides and generates regular vertices.
+WorkspaceView owns a transient center/radius/angle/side-count draft. The inline
+PolygonSidesPrompt redraws valid counts immediately and blocks invalid values.
+Create emits one history command using the existing native POLYGON schema;
+bounding-center normalization preserves the picked circumcenter for odd counts.
+
+Rotation retains the unsnapped pointer state. Ctrl selects absolute 90-degree
+orientation steps; object handles retain Shift's 15-degree steps. Ctrl has
+priority. Key changes reapply the stored pointer immediately. Templates snap
+the reported placement angle; polygon drafts preserve radius and remain fixed
+after their second click. Browser and machine execution paths are unchanged.
+
+The vertical stencil pattern follows the classic comparison in
+[David Jonathan Ross's typeface notes](https://djr.com/notes/nickel-stencils-font-of-the-month).
+
 ## Wizard gauge evidence
 
 The wizard worker refreshes observational machine status before reading the

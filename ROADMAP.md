@@ -1,5 +1,12 @@
 # Roadmap
 
+## Drawing tools acceptance
+
+Implemented in source: consistent vertical stencil bridges, center-first polygon
+creation with live 3–12-side preview, and Ctrl axis snapping for rotation.
+Frozen-build, compatibility CI and operator acceptance are recorded in
+CURRENT_STATE.md. Additional sidebar shapes remain future work.
+
 ## Saved gauge recognition
 
 Implemented: refresh wizard gauge evidence through read-only machine status,
