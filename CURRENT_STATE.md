@@ -1,5 +1,29 @@
 # Current repository state
 
+## Escape fix frozen DEV TEST handoff (2026-09-18)
+
+E3 DEV TEST selects Escape cancels tools, version 0.7.192, branch
+codex/escape-cancel, exact frozen application revision
+`19d29ee4502925e588d919ee2aacfdb12f326dbb`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\escape-cancel-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with set_dev_test_feature.py and
+read back through the launcher validator. Reopen the permanent E3 DEV TEST
+launcher to test. The prior stencil, polygon and rotation features are included.
+
+Escape cancels drawing/polygon prompts and point picking, clears selection, and
+rolls back unfinished object movement/resize/rotation without an undo entry or
+machine stop request. The dedicated Stop action retains its controller path.
+All 239 focused Windows Python 3.14 offscreen tests, repository Ruff and
+application compileall passed. The canonical Windows packager and installer
+completed successfully. The frozen bundle's 180 application modules and
+three packaged resources match the exact committed revision; the native DLL
+guard and isolated frozen offscreen startup smoke test passed. Camera startup
+and motion were disabled in that smoke configuration. No interactive operator,
+real camera, controller or laser verification was performed. Windows
+compatibility CI remains pending the earlier private-repository push approval;
+this feature branch is not merged into main. Prior working-tree work is retained.
+
+
 ## Escape cancellation fix (2026-09-18)
 
 Escape now cancels local authoring, including the polygon sides prompt, and
