@@ -1,5 +1,25 @@
 # Current repository state
 
+## X-only clearance confirmation; Pi deployment pending (2026-10-15)
+
+The operator reports physically verifying 6 mm of additional X clearance on both
+sides and explicitly requests preserving every Y setting and calibration file.
+This is operator-reported X evidence, not an agent hardware test or new Y travel
+qualification. The requested matched Pi update has not been applied: both saved
+SSH addresses timed out, and Tailscale reports the Pi offline while the Windows
+client is online. No machine settings or calibration files were changed.
+
+The exact selected Windows source `aac45cdb58f1e746ecfd4c08624fd74230c172f4`
+is staged locally in ignored `build/pi-raster-aac45cd-source.tar`, with a hashed
+manifest and 34 protected-file hashes in `build/x-clearance-deployment-plan.json`.
+The current saved mapping gives carriage surface X27.5065275307..219.7672592962;
+6 mm per side gives X21.5065275307..225.7672592962. Existing X10 travel would be
+retained; saved Y10..210 is to remain exact, with no added Y margin. No travel
+record is activated until the Pi source/configuration and identity evidence can
+be inspected and both sides synchronized. Idle/disconnected/disarmed checks,
+guarded installation and read-only post-deployment validation remain pending.
+No controller connection, machine movement or laser output was requested.
+
 ## Raster overscan frozen DEV TEST handoff (2026-10-15)
 
 E3 DEV TEST now selects **Raster overscan and saved Z**, version **0.7.210**,
