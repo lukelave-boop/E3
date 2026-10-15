@@ -1,24 +1,45 @@
 # Current repository state
 
-## X-only clearance confirmation; Pi deployment pending (2026-10-15)
+## Pi raster companion installed; X evidence record pending (2026-10-15)
 
-The operator reports physically verifying 6 mm of additional X clearance on both
-sides and explicitly requests preserving every Y setting and calibration file.
-This is operator-reported X evidence, not an agent hardware test or new Y travel
-qualification. The requested matched Pi update has not been applied: both saved
-SSH addresses timed out, and Tailscale reports the Pi offline while the Windows
-client is online. No machine settings or calibration files were changed.
+The Pi is online again. The operator reports physically verifying 6 mm extra X
+clearance on both sides and requires all Y settings/calibration to stay unchanged.
+The matching Pi runtime from selected Windows revision
+`aac45cdb58f1e746ecfd4c08624fd74230c172f4` is now installed. All 64 runtime
+source hashes match; 12 files were updated with adjacent byte-for-byte backups.
+Every replaced predecessor matched a known Git revision. The existing guarded
+installer accepted the complete reviewed baseline before installation and
+required the service to be inactive. The original shared working tree and the
+selected E3 DEV TEST 0.7.210 executable were not changed.
 
-The exact selected Windows source `aac45cdb58f1e746ecfd4c08624fd74230c172f4`
-is staged locally in ignored `build/pi-raster-aac45cd-source.tar`, with a hashed
-manifest and 34 protected-file hashes in `build/x-clearance-deployment-plan.json`.
-The current saved mapping gives carriage surface X27.5065275307..219.7672592962;
-6 mm per side gives X21.5065275307..225.7672592962. Existing X10 travel would be
-retained; saved Y10..210 is to remain exact, with no added Y margin. No travel
-record is activated until the Pi source/configuration and identity evidence can
-be inspected and both sides synchronized. Idle/disconnected/disarmed checks,
-guarded installation and read-only post-deployment validation remain pending.
-No controller connection, machine movement or laser output was requested.
+Actual Raspberry Pi Linux/Python 3.13 staged safety, focus, protocol, store and
+server tests passed **167 tests in 49.03 s**, using simulated transports. Staged
+compileall passed. A further **106 tests passed in 8.84 s** against the actual
+installed runtime (simulators only). Read-only authenticated status before and after installation
+shows disconnected, disarmed, no active job and no control owner. The restarted
+service advertises `pi-raster-travel-envelope-v1`. No controller connection,
+Home, motion, arming, probe operation or laser firing was requested.
+
+All 34 protected Windows settings/calibration hashes are unchanged. On the Pi,
+18 of 19 protected configuration/calibration JSON hashes are unchanged; only the
+saved-Z retention status file changed during normal service shutdown/restart.
+The main configuration, all calibration files, Y limits, offsets and park settings
+are unchanged. Saved Y remains **10..210 machine mm** on both sides. No Y clearance
+was added. Normal focus/reference/start safeguards still apply after restart.
+
+The X travel record is **not activated yet**. Saved calibration maps the surface
+carriage X extent to 27.5065275307..219.7672592962 mm. The requested 6 mm extension
+gives 21.5065275307..225.7672592962; retaining existing X10 travel gives the planned
+rectangle X10..225.7672592962, with existing Y10..210 unchanged. The disconnected
+Pi has no saved primary ESP32 firmware identity; operator firmware/unchanged-since-
+test confirmation was requested to complete the physical evidence record. Do not
+invent that identity or mark an incomplete record verified. Raster execution still
+requires this identical record on desktop and Pi, and jobs must fit preserved Y.
+
+Ignored `build/` artifacts hold before/after source and protected-file hashes,
+installer receipts, the reviewed baseline, read-only status and the deployment
+plan. The old Pi version label remains its historical packaged metadata; installed
+source hashes and the new capability are the deployment evidence.
 
 ## Raster overscan frozen DEV TEST handoff (2026-10-15)
 
