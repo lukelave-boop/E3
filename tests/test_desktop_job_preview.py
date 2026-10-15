@@ -711,7 +711,7 @@ def test_raster_detail_hides_all_off_moves_without_changing_plan(
     assert dialog.detail_check.isChecked()
     assert not dialog.travel_check.isChecked()
     assert not dialog.power_check.isEnabled()
-    assert {key[0] for key in dialog.canvas._items} == {"travel", "unpowered", "powered"}
+    assert {key[0] for key in dialog.canvas._items} == {"approach", "unpowered", "powered"}
     for key, item in dialog.canvas._items.items():
         assert item.isVisible() == (key[0] == "powered")
         if key[0] == "powered":
@@ -723,7 +723,8 @@ def test_raster_detail_hides_all_off_moves_without_changing_plan(
     dialog.travel_check.setChecked(True)
     assert dialog.canvas._active_item.isVisible()
     dialog.set_elapsed(plan.total_seconds)
-    assert all(item.isVisible() for item in dialog.canvas._items.values())
+    assert all(item.isVisible() for key, item in dialog.canvas._items.items() if key[0] != "approach")
+    assert dialog.canvas._approach_item.isVisible()
     dialog.invert_check.setChecked(True)
     assert all(item.pen().color().name() == "#f4f5f2"
                for key, item in dialog.canvas._items.items() if key[0] == "powered")
@@ -747,7 +748,8 @@ def test_unpowered_raster_preview_keeps_geometry_visible(
     dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "unpowered.gcode")
     assert dialog.travel_check.isChecked()
     assert not dialog.detail_check.isChecked()
-    assert all(item.isVisible() for item in dialog.canvas._items.values())
+    assert all(item.isVisible() for key, item in dialog.canvas._items.items() if key[0] != "approach")
+    assert dialog.canvas._approach_item.isVisible()
     dialog.close()
     dialog.deleteLater()
     qt_application.processEvents()

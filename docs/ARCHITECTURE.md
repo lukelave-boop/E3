@@ -1,5 +1,10 @@
 # Architecture
 
+Raster preview draws the initial laser-off approach as a separate red dashed line.
+The orange boundary encloses job movement after that approach, including raster
+run-up/run-out and row transfers. Full travel extents still drive fitting and
+safety validation; generated motion, power, calibration and settings are unchanged.
+
 ## Raster engraving and carriage domains
 
 `raster_safety.py` owns Qt/HTTP-independent typed travel evidence and the strict

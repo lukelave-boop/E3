@@ -16,9 +16,10 @@ from laser_aligner.gcode.job_plan import build_job_plan
 from laser_aligner.raster_safety import RasterBoundary
 
 
+@pytest.mark.parametrize("approach", [False, True])
 @pytest.mark.parametrize("angle", [0.0, 37.0])
 @pytest.mark.parametrize("deferred", [False, True])
-def test_full_raster_footprint_is_exact_local_and_persistent(angle: float, deferred: bool) -> None:
+def test_full_raster_footprint_is_exact_local_and_persistent(angle: float, deferred: bool, approach: bool) -> None:
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     theta = math.radians(angle)
     frame = HoneycombCoordinateFrame(
@@ -37,17 +38,20 @@ def test_full_raster_footprint_is_exact_local_and_persistent(angle: float, defer
         return f"{code} X{machine_x - offset[0]:.6f} Y{machine_y - offset[1]:.6f} F1200 S{power}"
 
     start_x, start_y = frame.local_to_machine(-2.1058, 3.0)
+    park_x, park_y = frame.local_to_machine(-12.0, 205.0) if approach else (start_x, start_y)
     plan = build_job_plan("\n".join([
         "G21", "G90", "M5", boundary.directive,
         "; Laser spot offset (spot = controller + offset): X-2 Y3",
         '; @E3_LAYER {"id":"raster","mode":"raster"}',
+        *([move("G0", -2.1058, 3.0)] if approach else []),
         "M4 S0",
         move("G1", 2.413, 3.0), move("G1", 183.165, 3.0, 200),
         move("G1", 187.6838, 3.0), "M5",
         move("G0", 187.6838, 184.6), "M4 S0",
         move("G1", 183.165, 184.6), move("G1", 2.413, 184.6, 200),
         move("G1", -2.1058, 184.6), "M5",
-    ]), power_max=1000, start_position=(start_x - offset[0], start_y - offset[1]))
+    ]), power_max=1000, start_position=(park_x - offset[0], park_y - offset[1]))
+    original_moves = tuple(plan.moves)
     dialog = JobPreviewDialog(
         plan, (0.0, 191.0, 0.0, 191.0), "overscan.gcode",
         coordinate_frame=frame, defer_render=deferred,
@@ -59,14 +63,25 @@ def test_full_raster_footprint_is_exact_local_and_persistent(angle: float, defer
 
     canvas = dialog.canvas
     assert dialog.plan is plan
-    assert canvas.movement_bounds_mm == pytest.approx((-2.1058, 3.0, 187.6838, 184.6), abs=1e-6)
+    expected = (-2.1058, 3.0, 187.6838, 184.6)
+    assert canvas.raster_movement_bounds_mm == pytest.approx(expected, abs=1e-6)
+    assert canvas.movement_bounds_mm == pytest.approx(
+        (-12.0, 3.0, 187.6838, 205.0) if approach else expected, abs=1e-6)
+    assert tuple(plan.moves) == original_moves
+    approach_path = canvas._approach_item.path()
+    if approach:
+        assert approach_path.elementCount() == 2
+        assert (approach_path.elementAt(0).x, approach_path.elementAt(0).y) == pytest.approx((-12, -205), abs=1e-6)
+        assert canvas.sceneRect().contains(QtCore.QPointF(-12, -205))
+    else:
+        assert approach_path.isEmpty()
     assert canvas.powered_bounds_mm == pytest.approx((2.413, 3.0, 183.165, 184.6), abs=1e-6)
     surface = canvas._surface_item.polygon().boundingRect()
     assert (surface.left(), -surface.bottom(), surface.right(), -surface.top()) == pytest.approx((0, 0, 191, 191))
     assert canvas.sceneRect().contains(QtCore.QPointF(-2.1058, -3.0))
     assert canvas.sceneRect().contains(QtCore.QPointF(191.0, -191.0))
     assert "Powered bounds: X2.41…183." in dialog.boundary_summary.text()
-    assert "Full movement bounds: X-2.11…187.68" in dialog.boundary_summary.text()
+    assert "Movement bounds (excluding approach): X-2.11…187.68" in dialog.boundary_summary.text()
     assert "row transfers" in dialog.boundary_summary.text()
     assert not dialog.travel_check.isChecked()
     full_path = canvas._movement_footprint_item.path()
@@ -75,6 +90,10 @@ def test_full_raster_footprint_is_exact_local_and_persistent(angle: float, defer
     assert canvas._movement_footprint_item.isVisible()
     assert canvas._powered_footprint_item.isVisible()
     assert canvas._movement_footprint_item.path() == full_path
+    assert canvas._approach_item.path() == approach_path
+    assert canvas._approach_item.isVisible()
+    rect = full_path.boundingRect()
+    assert (rect.left(), -rect.bottom(), rect.right(), -rect.top()) == pytest.approx(expected, abs=1e-6)
     assert "Engraving surface" in dialog.legend.text()
     dialog.close()
     dialog.deleteLater()

@@ -247,6 +247,16 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         )
         self.movement_bounds_mm: tuple[float, float, float, float] | None = None
         self.powered_bounds_mm: tuple[float, float, float, float] | None = None
+        self.raster_movement_bounds_mm: tuple[float, float, float, float] | None = None
+        self._approach_move_count = 0
+        for move in plan.moves:
+            if not move.rapid or move.laser_on:
+                if not (plan.raster_boundary or move.layer_mode == "raster" or move.focus_mode == "RASTER"):
+                    self._approach_move_count = 0
+                break
+            self._approach_move_count += 1
+        else:
+            self._approach_move_count = 0
         self._footprints_ready = False
         self._scene = QtWidgets.QGraphicsScene(self)
         self.setScene(self._scene)
@@ -354,6 +364,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         self._scene.addItem(bed)
         self._surface_item = bed
         self._movement_footprint_item = self._boundary_item("#E7B55C", QtCore.Qt.PenStyle.DashLine)
+        self._approach_item = self._boundary_item("#E45A5A", QtCore.Qt.PenStyle.DashLine)
         self._powered_footprint_item = self._boundary_item("#1E88E5", QtCore.Qt.PenStyle.DotLine)
         self.setBackgroundBrush(QtGui.QColor("#202326"))
 
@@ -373,18 +384,22 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
     def _finalize_footprints(self) -> None:
         """Retain full-job extents from the already transformed exact paths.
 
-        This runs once after the initial render. It includes initial approaches,
+        This runs once after the initial render. Full extents include initial approaches,
         white gaps and row transfers even when travel is hidden or playback is
         rewound, without another Python pass over the plan or coordinate map.
         """
-        for powered, item in (
-            (False, self._movement_footprint_item),
-            (True, self._powered_footprint_item),
+        self._approach_item.setPath(self._paths.get(("approach", "", None), QtGui.QPainterPath()))
+        for role, item in (
+            ("full", None),
+            ("raster", self._movement_footprint_item),
+            ("powered", self._powered_footprint_item),
         ):
             rectangles = [
                 path.boundingRect()
                 for key, path in self._paths.items()
-                if not path.isEmpty() and (not powered or key[0] == "powered")
+                if not path.isEmpty()
+                and (role != "powered" or key[0] == "powered")
+                and (role != "raster" or key[0] != "approach")
             ]
             if not rectangles:
                 continue
@@ -393,10 +408,13 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             top = min(rect.top() for rect in rectangles)
             bottom = max(rect.bottom() for rect in rectangles)
             bounds = (left, -bottom, right, -top)
-            if powered:
+            if role == "powered":
                 self.powered_bounds_mm = bounds
-            else:
+            elif role == "full":
                 self.movement_bounds_mm = bounds
+                continue
+            else:
+                self.raster_movement_bounds_mm = bounds
             path = QtGui.QPainterPath(QtCore.QPointF(left, top))
             path.lineTo(right, top)
             path.lineTo(right, bottom)
@@ -424,8 +442,9 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             return float(x_mm), float(y_mm)
         return self.coordinate_frame.machine_to_local(x_mm, y_mm)
 
-    @staticmethod
-    def _key(move: PlannedMove) -> RenderKey:
+    def _key(self, move: PlannedMove) -> RenderKey:
+        if move.index < self._approach_move_count:
+            return "approach", "", None
         if move.rapid:
             return "travel", "", None
         if not move.laser_on:
@@ -434,7 +453,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
     def _pen(self, key: RenderKey, move: PlannedMove) -> QtGui.QPen:
         role, _, _ = key
-        if role == "travel":
+        if role in {"travel", "approach"}:
             pen = QtGui.QPen(QtGui.QColor("#E45A5A"))
             pen.setStyle(QtCore.Qt.PenStyle.DashLine)
             pen.setWidthF(0.55)
@@ -618,7 +637,8 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
     def _update_item_visibility(self) -> None:
         for key, item in self._items.items():
             item.setVisible(
-                (self._show_travel or key[0] == "powered")
+                key[0] != "approach"
+                and (self._show_travel or key[0] == "powered")
                 and (not key[1] or key[1] not in self._hidden_layers)
             )
 
@@ -1294,11 +1314,11 @@ class JobPreviewDialog(QtWidgets.QDialog):
         )
         return (
             prefix
-            + "<span style='color:#E45A5A'>-- Travel</span> · "
+            + "<span style='color:#E45A5A'>-- Approach / travel</span> · "
             "<span style='color:#E7B55C'>— Laser-off feed</span> · "
             "<span style='color:#39B878'>— Engraving surface</span> · "
             "<span style='color:#1E88E5'>·· Powered bounds</span> · "
-            "<span style='color:#E7B55C'>-- Full movement bounds</span> · "
+            "<span style='color:#E7B55C'>-- Movement bounds (excluding approach)</span> · "
             "<span style='color:#00D4FF'>● Head</span>"
         )
 
@@ -1319,9 +1339,11 @@ class JobPreviewDialog(QtWidgets.QDialog):
             f"{frame_name} coordinates\n"
             f"Engraving surface extents: {describe((surface.left(), -surface.bottom(), surface.right(), -surface.top()))}\n"
             f"Powered bounds: {describe(self.canvas.powered_bounds_mm)}\n"
+            f"Movement bounds (excluding approach): {describe(self.canvas.raster_movement_bounds_mm)}\n"
             f"Full movement bounds: {describe(self.canvas.movement_bounds_mm)}\n"
             "Movement includes laser-off run-up, run-out, gaps and row transfers. "
-            "These full-job bounds remain visible during playback."
+            "The red dashed approach from the job start is shown separately from the orange boundary. "
+            "Bounds and approach remain visible during playback."
         )
 
     def set_elapsed(self, seconds: float) -> None:

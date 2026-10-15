@@ -1,5 +1,15 @@
 # Current repository state
 
+## Preview approach separation (2026-10-15)
+
+Desktop-only preview change: initial laser-off rapid approach to raster work is
+shown as a persistent red dashed line, excluded from the orange movement box.
+Later row/pass/layer transfers remain included. Full travel bounds still drive
+scene fitting and the exact JobPlan remains unchanged for execution and safety.
+Rotated/nonzero-offset, deferred/immediate and playback coverage added; focused
+Windows offscreen validation and a new E3 DEV TEST build are in progress.
+No settings, calibration, Pi source or hardware operation is changed.
+
 ## Pi raster companion and verified X clearance applied (2026-10-15)
 
 The Pi is online again. The operator reports physically verifying 6 mm extra X
