@@ -24,7 +24,31 @@ No physical execution or controller access has been performed for this fix.
 regression was corrected and its five related cases rerun. The prior focused
 Pi-owned loopback and air-assist tests also passed. Tests use simulated
 controllers and offscreen widgets. Repository Ruff and compileall pass.
-Frozen packaging and installation are in progress; no full-suite run is claimed.
+Final START RPC pins the pre-preparation controller session through request
+serialization. All 69 remote-service cases pass, bringing the focused set to
+387 distinct passing cases. No full-suite run is claimed.
+
+The user needs to shut down this Windows computer. Packaging was stopped;
+the fix is saved and pushed on codex/large-job-start at
+fdfe9b22cbaa92e8c541b45cde3e558669bab4e2. Resume canonical packaging in
+C:\Users\lukel\Documents\E3\.codex-worktrees\large-job-start-build with
+E3_BUILD_VERSION=0.7.196. This detached checkout has that exact revision;
+its interrupted dist/build output must not be selected as a test build.
+The permanent E3 DEV TEST pointer still selects the old v0.7.195 build.
+The installed Pi service is unchanged by this follow-up.
+
+Full offline preparation of the recorded job measured preflight 21.91 s,
+durable chunk storage 0.67 s, finalize/verification 22.34 s, and cached file/
+policy recheck 1.06 s. Across 1,769 status samples the maximum call took
+0.0021 s. Controller creation was explicitly forbidden. This is not physical
+execution or interactive GUI verification. Evidence is in the source checkout's
+ignored build/pi-preparation-benchmark.log. The guarded companion for the final
+revision is dist/e3-pi-large-job-start-9dc978fb; the earlier staged Pi bundle
+85cf832c contains identical Pi source but references the preceding commit.
+Its read-only predecessor check passed. Nothing was installed or restarted.
+Finish the Windows build, exact-source/frozen-startup checks and permanent
+pointer update, then confirm current idle/disconnected state and closed E3
+clients before applying the Pi companion. Preserve machine configuration.
 
 ## Raster capacity and preview work (2026-10-15)
 
