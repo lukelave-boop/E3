@@ -128,6 +128,7 @@ class RasterRow:
     points: np.ndarray
     spans: list[Polyline]
     source_tag: str
+    lead_distance_mm: float | None = None
 
 
 @dataclass(slots=True)

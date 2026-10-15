@@ -60,6 +60,7 @@ EXECUTION_POLICY_FIELD_LABELS = (
     "laser.configured_guarded_output_polygon",
     "job.guarded_output_polygon",
     "air_assist.mapping",
+    "machine.raster_travel_envelope",
 )
 EXECUTION_POLICY_MISMATCH_ERROR = (
     "Execution policy does not match Pi-local safety settings"
@@ -167,7 +168,7 @@ def execution_policy_diagnostic_profile(program: ValidatedProgram) -> dict[str, 
     if (
         type(program) is not ValidatedProgram
         or type(program.safety_profile) is not tuple
-        or len(program.safety_profile) != len(EXECUTION_POLICY_FIELD_LABELS)
+        or len(program.safety_profile) not in {len(EXECUTION_POLICY_FIELD_LABELS) - 1, len(EXECUTION_POLICY_FIELD_LABELS)}
     ):
         raise SafetyError(
             "Execution-policy diagnostics require the exact versioned safety profile"
@@ -219,6 +220,8 @@ def execution_policy_mismatch_labels(
         return EXECUTION_POLICY_FIELD_LABELS
     mismatches: list[str] = []
     for index, label in enumerate(EXECUTION_POLICY_FIELD_LABELS):
+        if index >= len(left) and index >= len(right):
+            continue
         if index >= len(left) or index >= len(right):
             mismatches.append(label)
             continue
@@ -401,9 +404,9 @@ class PiJobService:
             if raw.get("schema") != EXECUTION_POLICY_DIAGNOSTIC_SCHEMA:
                 raise ValueError
             profile = raw.get("profile")
-            if type(profile) is not list or len(profile) != len(
-                EXECUTION_POLICY_FIELD_LABELS
-            ):
+            if type(profile) is not list or len(profile) not in {
+                len(EXECUTION_POLICY_FIELD_LABELS) - 1, len(EXECUTION_POLICY_FIELD_LABELS)
+            }:
                 raise ValueError
             diagnostic_bytes = json.dumps(
                 raw,

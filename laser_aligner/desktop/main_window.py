@@ -3004,6 +3004,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "coordinate_space": source_document.coordinate_space,
             "work_area": work_area,
             "machine_work_area": machine_work_area,
+            "raster_travel_envelope": machine.raster_travel_envelope,
             "air_assist_commands": air_assist_commands,
             "coordinate_frame": coordinate_frame,
             "coordinate_frame_signature": coordinate_frame_signature,
@@ -3253,6 +3254,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     start_position=start_position,
                     coordinate_frame=context["coordinate_frame"],
                     machine_work_area=context["machine_work_area"],
+                    raster_travel_envelope=context.get("raster_travel_envelope"),
+                    require_verified_raster_travel_limits=True,
                     guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
                     planning_cache=context["planning_cache"],
                     air_assist_commands=context["air_assist_commands"],
@@ -3910,6 +3913,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 != context["calibration_guidance_signature"]
             ):
                 return False
+            if self.runtime.settings.machine.raster_travel_envelope != context.get("raster_travel_envelope"):
+                return False
             if self.runtime.settings.laser != context["laser"]:
                 return False
             if self.actions["optimize_paths"].isChecked() != bool(
@@ -3976,6 +3981,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         return {
             "air_assist_commands": air_assist_commands,
             "power_mode": str(laser.power_mode),
+            "raster_travel_envelope": machine.raster_travel_envelope,
             "spot_offset_mm": spot_offset_mm,
             "start_position": tuple(self._planned_job_start_position()),
             "work_area": self._work_area_signature(machine.work_area),
@@ -3999,6 +4005,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     protocol=machine.protocol,
                 )
                 == context["air_assist_commands"]
+                and machine.raster_travel_envelope == context.get("raster_travel_envelope")
                 and str(self.runtime.settings.laser.power_mode)
                 == str(context["power_mode"])
                 and (
@@ -4134,6 +4141,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return False
         try:
             laser = self.runtime.settings.laser
+            prepared_travel = getattr(job, "raster_travel_envelope", None)
+            if prepared_travel is not None and prepared_travel != self.runtime.settings.machine.raster_travel_envelope:
+                return False
             prepared_spot_offset_mm = tuple(
                 float(value) for value in job.spot_offset_mm
             )
@@ -4506,6 +4516,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 ),
                 air_assist_commands=restarted.air_assist_commands,
                 raster_assets=source_job.raster_assets,
+                engraving_surface_mm=getattr(source_job, "engraving_surface_mm", None),
+                raster_travel_envelope=getattr(source_job, "raster_travel_envelope", None),
                 placement_capture_signature=getattr(source_job, "placement_capture_signature", None),
                 coordinate_space=getattr(
                     source_job,

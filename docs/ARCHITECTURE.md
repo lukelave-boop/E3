@@ -1,5 +1,17 @@
 # Architecture
 
+## Saved raster-travel compatibility
+
+The image-editor build includes the existing strict raster_safety contract used
+by configuration, saved profiles, MachineService and the remote/Pi policy identity.
+The planner gates image eligibility after dithering, then constructs laser-off
+clearance around the surviving spans. E3RASTER metadata binds the surface and
+verified carriage envelope to the exact program; it is never a controller command.
+Desktop preparation/restart/cache identity includes the envelope so changed
+evidence invalidates prepared output. This targeted integration leaves release
+workflows, deployment tools and preview display behavior unchanged. See
+[the compatibility boundary](RASTER_TRAVEL_COMPATIBILITY.md).
+
 ## Engraving image editor
 
 Schema 6 adds strict IMAGE geometry.image_edit (version 1, original SHA256/size,

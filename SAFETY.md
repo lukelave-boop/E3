@@ -1,5 +1,13 @@
 # Safety requirements
 
+Saved raster-travel records are parsed strictly and remain separate from the
+calibrated engraving surface. Expanded laser-off travel requires the existing
+explicit verification record; positive output remains within the surface and
+guarded authority. Exact program metadata, current envelope digest, controller
+offsets and matching companion capability are checked. Image masks still gate
+powered spans after dithering, before laser-off clearance is constructed.
+This compatibility repair does not establish new physical travel verification.
+
 Camera address aliases preserve calibration only after authenticated stable
 camera identity and optical settings match an enrolled mapping. They do not
 detect camera/mount movement or grant motion authority. Preview's measured-focus

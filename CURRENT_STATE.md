@@ -1,6 +1,37 @@
 # Current repository state
 
-## Engraving image editor frozen DEV TEST handoff (2026-10-15)
+## Saved raster-travel startup compatibility repair (2026-10-15)
+
+The operator reported that editor 0.7.209 rejected the existing active machine
+profile's machine.raster_travel_envelope field before opening. The editor's
+background-cleanup base predates the already implemented raster-travel contract.
+The exact error was reproduced through the desktop startup validation boundary.
+
+This repair ports only the strict parser and coupled configuration/profile,
+program identity, raster generation, local/remote validation and focus contract
+from the existing raster-overscan implementation. The full-branch merge was
+rejected by automatic approval review; the narrower runtime/test patch was
+approved. Release workflows, deployment tools and display-only preview changes
+are excluded. No original configuration field is dropped, ignored or enlarged.
+Image source/alpha identity checks, post-dither eligibility, editable outlines
+and inactive cutting snapshots are retained. Clearance is constructed only
+after masked spans have been generated.
+
+Read-only validation now accepts the actual saved config and all three profiles;
+the active envelope matches the main configuration. All 39 protected saved
+configuration/calibration file hashes remain unchanged. Twelve new startup
+regression cases plus existing startup recovery checks pass (21 tests), as do
+171 combined image/travel/safety checks and all 486 editor regression tests.
+All 426 configuration/profile/startup, asynchronous desktop job, plan, focus,
+remote-service and simulated Pi-server checks pass (240.61 seconds). Repository
+Ruff and compileall pass. A fresh frozen build is in progress. The replacement frozen smoke fixture
+includes a saved machine registry and synthetic unverified envelope, motion off,
+camera off, power zero and a nonexistent serial port.
+
+No machine connection, Pi contact/deployment, settings/calibration edit, motion
+or laser output has been performed. See docs/RASTER_TRAVEL_COMPATIBILITY.md.
+
+## Historical engraving image editor 0.7.209 handoff (2026-10-15)
 
 E3 DEV TEST selects Engraving image editor, version 0.7.209, branch
 codex/engraving-editor, exact frozen source revision

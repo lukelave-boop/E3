@@ -2,6 +2,9 @@
 
 ## Engraving image workspace
 
+Startup compatibility with existing raster-travel profiles now includes their
+complete validation and job-policy contract; it does not infer new travel limits.
+
 First-stage implementation adds local reversible cleanup, foreground trace
 preview, native pen/node/handle editing, mask persistence, and explicit linked
 cut-path snapshots. Inversion is included; broader tonal and retouching tools

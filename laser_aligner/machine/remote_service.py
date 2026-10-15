@@ -27,6 +27,8 @@ from ..errors import MachineError, SafetyError
 from ..operation_focus import CAPABILITY as OPERATION_FOCUS_CAPABILITY
 from ..operation_focus import mode as operation_focus_mode
 from ..operation_focus import validate_targets
+from ..raster_safety import CAPABILITY as RASTER_TRAVEL_CAPABILITY
+from ..raster_safety import program_raster_boundary
 from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
 from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
@@ -1825,6 +1827,7 @@ class RemoteMachineService:
         if material_surface_binding(result.lines) is not None:
             self._require_material_surface_capability()
         self._require_operation_focus(result)
+        self._require_raster_travel_capability(result)
         return result
 
     def _require_current_program(self, program: ValidatedProgram) -> None:
@@ -1844,6 +1847,12 @@ class RemoteMachineService:
             validate_program_binding(program.lines, self.material_surface_snapshot())
 
         self._require_operation_focus(program)
+        self._require_raster_travel_capability(program)
+
+    def _require_raster_travel_capability(self, program: ValidatedProgram) -> None:
+        if (program_raster_boundary(program.lines) is not None
+                and RASTER_TRAVEL_CAPABILITY not in (self._node_capabilities or ())):
+            raise SafetyError("Update the Pi companion and configure matching verified raster travel limits before preparing this job")
 
     def _require_operation_focus(self, program: ValidatedProgram) -> None:
         if not any(operation_focus_mode(line) is not None for line in program.lines):

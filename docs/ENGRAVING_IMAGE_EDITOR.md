@@ -88,6 +88,11 @@ E3 does not silently merge, trim or repair them.
 
 ## Persistence, output and limits
 
+Existing saved `machine.raster_travel_envelope` records are supported without
+deleting or changing their values. Their strict validation, job identity and
+travel/output enforcement remain active. See
+[configuration compatibility](RASTER_TRAVEL_COMPATIBILITY.md).
+
 Project schema **6** stores source identity, outline nodes/handles, mask regions,
 trace settings, inversion, and vector links. Schemas 1–5 migrate without edits;
 older E3 builds reject schema 6. Atomic save, backups and autosave remain in the

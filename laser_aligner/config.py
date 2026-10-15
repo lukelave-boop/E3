@@ -15,6 +15,7 @@ from .air_assist import (
     validate_air_assist_settings,
 )
 from .errors import RealMachineSetupRequired
+from .raster_safety import RasterTravelEnvelope, parse_raster_travel_envelope
 from .storage import default_user_data_dir, strict_json_loads
 
 
@@ -236,6 +237,7 @@ class MachineSettings:
     read_timeout: float = 2.0
     work_area: WorkArea = field(default_factory=WorkArea)
     honeycomb_span_mm: float | None = None
+    raster_travel_envelope: RasterTravelEnvelope | None = None
     photo_x: float = 110.0
     photo_y: float = 110.0
     photo_z: float | None = None
@@ -357,6 +359,10 @@ class Settings:
                     "y_max": self.machine.work_area.y_max,
                 },
                 "honeycomb_span_mm": self.machine.honeycomb_span_mm,
+                "raster_travel_envelope": (
+                    None if self.machine.raster_travel_envelope is None
+                    else self.machine.raster_travel_envelope.to_dict()
+                ),
                 "photo_position": {
                     "x": self.machine.photo_x,
                     "y": self.machine.photo_y,
@@ -463,6 +469,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "read_timeout": 2.0,
         "work_area": {"x_min": 0.0, "x_max": 220.0, "y_min": 0.0, "y_max": 220.0},
         "honeycomb_span_mm": None,
+        "raster_travel_envelope": None,
         "photo_position": {"x": 110.0, "y": 110.0, "z": None},
         "home_before_photo": True,
         "home_and_release_after_powered_job": True,
@@ -605,6 +612,10 @@ def _validate(raw: Mapping[str, Any]) -> None:
     maximum_z = _require_number(raw["machine"]["mainboard_max_z_mm"], "machine.mainboard_max_z_mm")
     if not 20.0 <= maximum_z <= 80.0:
         raise ConfigError("machine.mainboard_max_z_mm must be between 20 and 80 mm")
+    try:
+        parse_raster_travel_envelope(raw["machine"].get("raster_travel_envelope"))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(str(exc)) from exc
     honeycomb_span = raw["machine"]["honeycomb_span_mm"]
     if honeycomb_span is not None:
         span = _require_number(
@@ -906,6 +917,9 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             ),
         ),
         machine=MachineSettings(
+            raster_travel_envelope=parse_raster_travel_envelope(
+                raw["machine"].get("raster_travel_envelope")
+            ),
             backend=str(raw["machine"]["backend"]),
             protocol=str(raw["machine"]["protocol"]),
             port=str(raw["machine"]["port"]),
