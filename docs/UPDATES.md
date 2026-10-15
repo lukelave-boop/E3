@@ -65,6 +65,14 @@ ignored. A mixed push that also changes a product-affecting file still publishes
 Manual publication is also restricted to `main`, so the in-app updater cannot
 be repointed at a feature branch.
 
+Before either package is built, the publisher calls the complete Compatibility
+CI workflow from the exact same commit. This includes Windows Python 3.10 core,
+Windows Python 3.12 desktop, Ruff, and POSIX controller/session tests. Failed,
+cancelled or skipped compatibility jobs block packaging and publication on both
+push and manual runs. A green run on an earlier branch commit is insufficient.
+Only the publication job has repository write permission. The separate main/PR
+CI remains available for review; it is not used as a stale external status token.
+
 Each successful revision adds immutable package assets named:
 
 - `E3-Setup-<12-character-revision>.exe`

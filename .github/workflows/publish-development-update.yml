@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: e3-development-update
@@ -34,7 +34,13 @@ env:
   E3_RELEASE_TAG: e3-development
 
 jobs:
+  compatibility:
+    if: github.ref == 'refs/heads/main'
+    # A local reusable workflow tests the exact caller commit, including manual runs.
+    uses: ./.github/workflows/ci.yml
+
   windows:
+    needs: compatibility
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
@@ -70,6 +76,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    needs: compatibility
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     steps:
@@ -98,7 +105,9 @@ jobs:
 
   publish:
     if: github.ref == 'refs/heads/main'
-    needs: [windows, linux]
+    needs: [compatibility, windows, linux]
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -1,5 +1,10 @@
 # Changelog
 
+Release publication now requires the complete Compatibility CI workflow to pass
+for the exact release commit before packaging; failed or cancelled checks block
+both automatic and manual publication.
+
+
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.
 

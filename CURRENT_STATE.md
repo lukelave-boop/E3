@@ -39,7 +39,8 @@ neither is a measured physical runtime. Command volume is 180,135 commands /
 findings and limits are in `docs/RASTER_PERFORMANCE.md`. No speculative motion,
 laser-control, retry or throughput optimization was made.
 
-Compatibility CI for the exact build is run **38801385074**; final status pending.
+Compatibility CI for the exact build, run **38801385074**, passed Windows 3.10,
+Windows 3.12 desktop, Ruff and POSIX controller/session checks.
 This feature branch remains separate from main for operator acceptance. The
 selected frozen checkout must remain available while its pointer is active.
 
