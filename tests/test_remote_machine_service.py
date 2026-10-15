@@ -412,6 +412,29 @@ def test_machine_refresh_error_is_separate_from_snapshot_expiry(monkeypatch):
     assert service.status()["status_stale"] is False
 
 
+def test_start_rpc_keeps_session_pinned_when_monitor_changes_after_preparation(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    initial_session = service._controller_session_generation
+    original_progress = service._submission_progress
+
+    def change_after_checks(job_id, **fields):
+        original_progress(job_id, **fields)
+        if fields.get("phase") == "starting":
+            service._controller_session_generation += 1
+
+    monkeypatch.setattr(service, "_submission_progress", change_after_checks)
+    program = service.preflight_program(_UNPOWERED_GCODE)
+    try:
+        service.start_preflighted_program(program)
+    except MachineError:
+        pass  # Fake's old response may be rejected; inspect the sent authority.
+    start = next(r for r in fake.requests if r["action"] == ACTION_JOB_START)
+    assert start["expected_session_generation"] == initial_session
+
+
 @pytest.mark.parametrize("revoke", [None, "disarm", "stop", "session"])
 def test_explicit_start_arms_after_preparation_and_preserves_revocation(monkeypatch, revoke):
     fake = FakePi()

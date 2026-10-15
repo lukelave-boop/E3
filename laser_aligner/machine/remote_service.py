@@ -738,9 +738,9 @@ class RemoteMachineService:
                 if action == ACTION_MACHINE_DISCONNECT:
                     request["expected_control_owner_revision"] = owner_revision
             if boot_id is not None:
-                request["expected_boot_id"] = boot_id
+                request.setdefault("expected_boot_id", boot_id)
             if session_generation is not None:
-                request["expected_session_generation"] = session_generation
+                request.setdefault("expected_session_generation", session_generation)
         if control_supported and action == ACTION_MACHINE_STATUS and not detached:
             request["client_id"] = self._client_id
         if control_supported and action == ACTION_MACHINE_CONTROL_RELEASE:
@@ -2871,7 +2871,11 @@ class RemoteMachineService:
                 with self._state_lock:
                     self._upload_job_id = None
                 raise
-            start_payload: dict[str, Any] = {"job_id": job_id, **binding}
+            start_payload: dict[str, Any] = {
+                "job_id": job_id, **binding,
+                "expected_boot_id": preparation_session[0],
+                "expected_session_generation": preparation_session[1],
+            }
             if authorization_phrase is not None:
                 start_payload["authorization_phrase"] = authorization_phrase
             self._mark_start_uncertain(
