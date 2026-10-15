@@ -238,6 +238,10 @@ it has only observed on an older Pi. See [connection ownership](docs/NETWORK_MAC
 
 ## Windows updates
 
+Development publication requires the complete Compatibility CI tier to pass for
+the exact release commit before packages are built. See [release review](docs/RELEASE_REVIEW.md)
+and [update policy](docs/UPDATES.md).
+
 Windows updates create the verified installer before starting E3's shutdown
 deadline. Launch failure keeps the app open; launch and setup diagnostics remain
 in the update cache. See [updates](docs/UPDATES.md).

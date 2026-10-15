@@ -1,5 +1,9 @@
 # Roadmap
 
+Release preparation now gates packaging and publication on exact-commit Windows
+compatibility, Ruff and POSIX controller checks. Physical run-up, placement and
+installed-update handoff qualification remain separate; see [release review](docs/RELEASE_REVIEW.md).
+
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.
 

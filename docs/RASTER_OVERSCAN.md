@@ -106,11 +106,11 @@ absent-only predecessor guards. The matching Pi runtime was installed on 2026-10
 predecessors matched reviewed Git revisions. See `CURRENT_STATE.md` for Linux
 tests, preserved calibration and the activated operator-confirmed X travel record.
 
-## Current installation evidence inspected on 2026-10-15
+## Historical pre-activation inspection on 2026-10-15
 
 Read-only inspection of the active **Ender 3 Tailscale** saved machine found a
 191 × 191 mm honeycomb, machine work area X/Y10–210, park X15/Y195 and zero laser
-spot offset. There is no verified raster travel record. The configured fixed
+spot offset. At this inspection, no verified raster travel record was saved. The configured fixed
 output polygon extends to Y240.197779; it is not evidence of carriage reach.
 
 The current saved four-edge support and bed map have matching creation bindings.
@@ -133,6 +133,15 @@ firmware identities unrecorded. It cannot establish a verified current whole
 travel envelope. Y235 remains provisional; it is not adopted. No machine
 movement, laser output, controller connection or active configuration change was
 performed for this source implementation.
+
+## Current activation and remaining acceptance
+
+Later on 2026-10-15 the operator confirmed 6 mm extra X clearance on each
+side and unchanged controller firmware. The saved record is now active on the
+desktop and matching Pi: machine carriage X10..225.7672592962, Y10..210.
+All Y settings and calibration were preserved. This is operator-reported X
+verification; it does not establish new Y reach or speed-dependent run-up.
+The historical numbers above must not be copied into current settings.
 
 ## Physical acceptance still required
 

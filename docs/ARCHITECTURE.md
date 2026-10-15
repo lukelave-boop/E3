@@ -1,5 +1,10 @@
 # Architecture
 
+The development publisher reuses the complete Compatibility CI workflow from
+its own commit before either package build. Publication requires that gate and
+both packages; only the publication job can write repository contents. See
+[update policy](UPDATES.md).
+
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.
 

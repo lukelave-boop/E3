@@ -1,5 +1,34 @@
 # Current repository state
 
+## Release gate and integration review (2026-10-15)
+
+Release preparation is on `codex/raster-overscan`, [PR #44](https://github.com/lukelave-boop/E3/pull/44).
+The publisher now invokes the complete reusable Compatibility CI workflow from
+its exact commit before building either package. Publication requires that gate
+and both packages; failed, cancelled or skipped prerequisites block release.
+Only publication has contents-write permission. Main and the release channel
+have not been changed. The branch remains unmerged pending release authorization.
+
+The integration review covers the accumulated 60-commit, 215-file feature branch,
+including raster/local/Pi safety, setup/placement, persistence, desktop/browser
+boundaries, performance and packaging. Details, corrections and remaining physical
+and installed-update qualification are in [release review](docs/RELEASE_REVIEW.md).
+The stale pre-activation raster inspection is now explicitly historical.
+
+Gate/update tests: **71 passed in 0.91 s**; Ruff, compileall, whitespace and
+checksum-verified actionlint checks passed. Compatibility CI **38809353488** on
+`69d80c8` passed Windows 3.12 desktop (**7,376 passed, 54 skipped, 628.98 s**),
+Windows 3.10 core (**5,900 passed, 141 skipped, 498.16 s**), POSIX controller/session
+(**652 passed, 103.40 s**) and Ruff. Both firmware compilation workflows passed.
+Local Python 3.14 diagnostics and final-candidate results are documented in the
+review and PR; no shutdown timeout or safety check was weakened to make tests pass.
+
+All 35 protected settings/calibration hashes matched. No machine connection,
+movement, laser output, Pi deployment, settings/calibration change, or DEV TEST
+selection change occurred during release preparation. Runtime source still
+matches the installed companion revision. Preserve the selected frozen build
+checkout while its permanent launcher pointer remains active.
+
 ## Preview approach separation: E3 DEV TEST selected (2026-10-15)
 
 E3 DEV TEST selects **Raster boundary and park approach**, version **0.7.216**,
