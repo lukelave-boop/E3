@@ -1,5 +1,15 @@
 # Changelog
 
+## Image background cleanup (2026-10-15)
+
+- Add Objects → Image → Clean background with an opt-in checkbox, adjustable
+  tolerance (0–64), and linked before/after zoom and pan.
+- Whiten only edge-connected near-white pixels before raster resampling and
+  dithering. Keep enclosed highlights, source files and per-copy settings intact.
+- Apply as one undoable edit; persist settings in project schema 5. Schemas 1–4
+  migrate with cleanup off; older E3 versions reject schema-5 files.
+
+
 ## Camera aliases and larger raster preparation (2026-10-15)
 
 - Preserve calibration across LAN/Tailscale camera addresses after binding an

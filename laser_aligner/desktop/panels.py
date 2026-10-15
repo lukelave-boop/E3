@@ -3425,6 +3425,7 @@ class ObjectPanel(QtWidgets.QWidget):
     objectEdited = QtCore.Signal(str, dict)
     layerColorEditRequested = QtCore.Signal(str)
     rasterVectorizeRequested = QtCore.Signal(str)
+    backgroundCleanupRequested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3458,6 +3459,12 @@ class ObjectPanel(QtWidgets.QWidget):
         self.raster_vectorize_button.setToolTip(
             "Convert the selected raster image into native E3 line and cubic paths"
         )
+        self.background_cleanup_button = QtWidgets.QPushButton("Clean background\u2026")
+        self.background_cleanup_button.setToolTip(
+            "Preview adjustable background cleanup without changing the original file"
+        )
+        image_layout.addWidget(self.background_cleanup_button)
+        self.background_cleanup_button.clicked.connect(self._request_background_cleanup)
         image_layout.addWidget(self.raster_vectorize_button)
         layout.addWidget(self.image_group)
         self.raster_vectorize_button.clicked.connect(
@@ -3587,6 +3594,12 @@ class ObjectPanel(QtWidgets.QWidget):
         available = object_id is not None
         self.image_group.setVisible(available)
         self.raster_vectorize_button.setEnabled(available)
+        self.background_cleanup_button.setEnabled(available)
+
+    def _request_background_cleanup(self) -> None:
+        object_id = self._selected_image_id()
+        if object_id is not None:
+            self.backgroundCleanupRequested.emit(object_id)
 
     def _request_raster_vectorization(self) -> None:
         object_id = self._selected_image_id()

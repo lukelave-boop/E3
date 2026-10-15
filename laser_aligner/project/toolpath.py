@@ -2190,7 +2190,9 @@ def _image_raster_rows(
         image.setflags(write=False)
         source.image = image
         source.identity = identity
-    image = source.image
+    from .raster_cleanup import clean_background
+
+    image = clean_background(source.image, item.geometry)
     identity = source.identity
     image = _area_prefilter_raster(
         image,

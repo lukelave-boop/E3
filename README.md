@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Image background cleanup is available under **Objects → Image → Clean background…**
+for one selected image. Enable it, adjust tolerance (start at 5), compare
+Before/After, and Apply. Settings are undoable and saved per image; original
+files remain unchanged. Schema 5 stores these settings; existing schemas 1–4
+load with cleanup off. Older E3 builds reject schema-5 files.
+See [the desktop guide](docs/DESKTOP_V1.md#clean-an-image-background).
+
 ## Detailed raster previews
 
 Large-job preparation stays on the Pi, with optimized exact-command validation
@@ -141,7 +148,7 @@ Setup… → Setup wizard** for eight guided stages and an progress review.
 **Back** and **Next** browse setup; use each stage's explicit controls to perform
 actions or save evidence. **All setup tools** restores the seven setup tabs.
 Height-aware jobs require the matching Pi companion. New saves use project
-schema 4; existing schema 1–3 geometry is preserved on load.
+schema 5; existing schema 1–4 geometry is preserved on load.
 
 The Pi Start path now recognizes acknowledged Air Assist OFF after controller
 recovery from STOP, clearing the matching terminal job's stale recovery block.
@@ -642,13 +649,14 @@ Native desktop workflow:
   overlapping frame work
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
-- Schema-4 projects retain native PATH/POLYGON geometry with versioned line and cubic Bézier
+- Schema-5 projects retain native PATH/POLYGON geometry with versioned line and cubic Bézier
   segments, multiple open or closed subpaths, and explicit even-odd or nonzero
   fill rules. Curves remain native through project editing, transforms,
   duplication, grouping, save/reopen, autosave, recovery, and workspace
   rendering; planning flattens them deterministically in physical millimetres
   at one controlled boundary. Schema 4 adds validated optional material-surface
-  provenance. Older E3 builds reject newer project files; schema 1–3 projects
+  provenance; schema 5 adds optional image background cleanup. Older E3 builds
+  reject newer project files; schema 1–4 projects
   migrate without changing geometry
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
   imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into

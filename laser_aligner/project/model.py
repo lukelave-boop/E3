@@ -16,7 +16,7 @@ from .path_geometry import (
     NativePathGeometry,
 )
 
-PROJECT_SCHEMA_VERSION = 4
+PROJECT_SCHEMA_VERSION = 5
 OBJECT_ROLE_KEY = "e3_role"
 STOCK_BOUNDARY_ROLE = "stock_boundary"
 
@@ -457,6 +457,12 @@ class SceneObject:
                 "text.font_family",
             )
         elif self.kind == ObjectKind.IMAGE:
+            from .raster_cleanup import cleanup_settings
+
+            try:
+                cleanup_settings(self.geometry)
+            except ValueError as exc:
+                raise ProjectFormatError(str(exc)) from exc
             self.geometry["asset"] = _string(
                 self.geometry.get("asset", ""),
                 "image.asset",
@@ -1309,10 +1315,10 @@ class ProjectDocument:
         schema = raw.get("schema_version", 0)
         if type(schema) is not int:
             raise ProjectFormatError("Project schema_version must be an integer")
-        if schema not in (1, 2, 3, PROJECT_SCHEMA_VERSION):
+        if schema not in (1, 2, 3, 4, PROJECT_SCHEMA_VERSION):
             raise ProjectFormatError(
                 "Unsupported project schema "
-                f"{schema}; expected 1, 2, 3, or {PROJECT_SCHEMA_VERSION}"
+                f"{schema}; expected 1, 2, 3, 4, or {PROJECT_SCHEMA_VERSION}"
             )
         try:
             work_area = _object(raw["work_area"], "project.work_area")
@@ -1361,6 +1367,10 @@ class ProjectDocument:
     def _object_from_schema(raw: Any, schema: int) -> SceneObject:
         value = _object(raw, "project object")
         kind = value.get("kind")
+        if kind == ObjectKind.IMAGE.value and schema < 5:
+            geometry = _object(value.get("geometry", {}), "object.geometry")
+            if "background_cleanup" in geometry:
+                raise ProjectFormatError("Image background cleanup requires project schema 5")
         if kind in {ObjectKind.PATH.value, ObjectKind.POLYGON.value}:
             geometry = _object(value.get("geometry", {}), "object.geometry")
             has_legacy = "polylines" in geometry

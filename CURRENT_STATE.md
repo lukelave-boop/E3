@@ -1,5 +1,57 @@
 # Current repository state
 
+## Background cleanup feature build preparation (2026-10-15)
+
+The operator was still running Camera aliases and raster readiness v0.7.198.
+The cleanup changes are now ported onto that exact frozen revision
+8ce10c123114412dcb6c5be7ca53f6cca0b58bcc in codex/background-cleanup, preserving
+its newer camera, raster-streaming, capacity, readiness and axis-readout fixes.
+The isolated branch passed all 450 focused Windows Python 3.14 tests covering
+cleanup, persistence, source verification, raster continuity, workspace, import,
+controller-state projection and job-preview widgets. Repository Ruff and
+application compileall passed. An initial test invocation lacked the temporary
+parent directory; after creating it all tests passed without code changes.
+Canonical frozen packaging and isolated startup verification are next. No
+interactive GUI or physical hardware verification, Pi update, remote CI or main
+merge is claimed. The running operator process is left under operator control.
+
+## Image background cleanup (2026-10-15)
+
+Implemented in the desktop project pipeline: select one unlocked image and use
+Objects → Image → Clean background. Cleanup defaults off; tolerance 0–64 means
+brightness >= 255 minus tolerance, with a starting tolerance of 5 (250–255).
+Four-neighbour flood fill starts from all image edges at full resolution after
+alpha-to-white compositing. Only connected light pixels become pure white;
+enclosed highlights remain unchanged. Settings apply before physical resampling
+and dithering. The canvas, before/after dialog and generated raster use the same
+mask. Cache entries and recovery distinguish copies with different settings.
+Apply is one undoable edit and uses normal project/job invalidation. The original
+asset and its SHA identity remain unchanged. Replaced sources and stale review
+are rejected. Trace-to-vector continues to review the original source independently.
+
+Schema 5 persists optional image.geometry.background_cleanup with exact boolean
+"enabled" and integer "tolerance" fields. Schemas 1–4 migrate with cleanup off;
+cleanup fields in older schemas and malformed settings are rejected. Older E3
+builds reject schema 5 rather than silently engraving without cleanup. Atomic
+save, backup, autosave, controller gates and browser single-SVG behavior remain
+unchanged.
+
+Verification: 356 distinct focused Windows tests passed across the broader
+raster run (354) and final cleanup run (28), including cleanup acceptance/
+rejection, raster generation and guards, project persistence, source identity,
+workspace caching and offscreen widgets. The supplied barrel source was inspected
+in the actual offscreen dialog: tolerance 5 whitened 578,173 of 1,573,869 pixels
+without changing source bytes. The rendered offscreen dialog was visually
+inspected. Final checks also verified rotated/mirrored minification equivalence,
+alpha compositing, decode bounds and variant-specific preview quality recovery.
+Repository Ruff and application compileall passed; scoped Ruff passed after
+the final tests. Ruff reported existing inaccessible temporary directories.
+No interactive operator, camera, controller or physical engraving test was run.
+No frozen EXE rebuild, DEV TEST selection, remote CI or main merge is claimed.
+Pre-existing shared-tree changes and unmerged branches remain intact; no branch
+tips other than main were already merged into main at the initial hygiene check.
+
+
 ## Camera aliases, raster capacity and start readiness (2026-10-15)
 
 Active branch codex/camera-alias-raster-capacity preserves unchanged camera

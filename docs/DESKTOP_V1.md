@@ -1,5 +1,24 @@
 # E3 native desktop v1 foundation
 
+## Clean an image background
+
+Select one unlocked image, then choose **Objects → Image → Clean background…**.
+Enable **Clean background**, adjust **Tolerance**, and inspect Before/After.
+Tolerance is distance from white: 5 includes grayscale brightness 250–255;
+0 includes only pure white. Range is 0–64. Higher values can whiten light artwork
+that connects to an outside edge. Enclosed highlights are preserved.
+Scroll to zoom, drag to pan both views, or use Fit / 100%. Apply commits one
+undoable edit; Cancel discards the draft. Disable the checkbox and Apply to
+restore the original appearance. The source file is never rewritten.
+
+Cleanup is calculated at full source resolution before raster resampling and
+dithering. Settings are per image, so copies can differ. Saving uses project
+schema 5; older builds cannot open these saves. Existing schema 1–4 projects
+load with cleanup off. Generate and review a fresh job after changing settings.
+This is image preprocessing, not a prediction of engraving appearance. The
+separate Trace image to vectors dialog still reviews the original source.
+
+
 ## Raster preview detail and capacity
 
 Raster jobs open in high-contrast engraving detail with laser-off travel and

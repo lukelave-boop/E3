@@ -1,5 +1,13 @@
 # Roadmap
 
+## Image background cleanup
+
+Implemented in source: per-image, edge-connected near-white cleanup, adjustable
+0–64 tolerance, linked before/after preview, and undoable schema-5 persistence.
+Windows offscreen and raster-generation verification is recorded in CURRENT_STATE.md.
+Frozen EXE, interactive operator and physical engraving validation remain pending.
+
+
 ## Same-machine connection profiles (2026-10-15)
 
 Implemented: Duplicate distinguishes another connection to the same physical

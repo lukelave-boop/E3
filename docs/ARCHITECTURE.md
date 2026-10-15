@@ -1,5 +1,25 @@
 # Architecture
 
+## Raster background cleanup
+
+Project schema 5 adds optional IMAGE geometry.background_cleanup:
+`{"enabled": true, "tolerance": 5}`. Both fields are strictly validated; absence
+means disabled, tolerance defaults to 5, and supported tolerance is integer 0–64.
+Legacy schemas 1–4 migrate without adding cleanup, and reject cleanup fields
+that would otherwise bypass the version boundary. Material and path provenance
+remain unchanged.
+
+`project/raster_cleanup.py` is Qt/HTTP-independent. A bounded full-resolution
+four-connected flood fill of grayscale >= 255 - tolerance is seeded from all
+edges using one padded border. Source pixels are never mutated. The mask runs
+after alpha compositing but before area prefiltering and physical row sampling.
+`desktop/background_cleanup.py` reviews the same immutable verified payload and
+mask, preserving color in the canvas. Settings use UpdateObjectShapeCommand,
+normal history/job invalidation and strict revalidation on Apply. Workspace
+cache and quality-recovery groups distinguish processing variants while source
+SHA identities still identify the original bytes. Browser SVG behavior is unchanged.
+
+
 ## Camera endpoint identity and preview readiness
 
 Remote camera status provides the stable by-id device path over authenticated

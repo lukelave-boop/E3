@@ -1211,6 +1211,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel.layerColorEditRequested.connect(
             self.layer_panel.choose_color
         )
+        self.object_panel.backgroundCleanupRequested.connect(self.clean_image_background)
         self.object_panel.rasterVectorizeRequested.connect(
             self.vectorize_raster_image
         )
@@ -2435,6 +2436,40 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.show_notice(
             "Imported grayscale raster image with deterministic ordered dithering"
         )
+
+    def clean_image_background(self, object_id: str) -> None:
+        from .background_cleanup import BackgroundCleanupDialog
+
+        try:
+            source = self.document.get_object(object_id)
+            if (self.workspace.selected_object_ids() != [object_id]
+                    or source.kind is not ObjectKind.IMAGE or source.locked):
+                raise ValueError("Select one unlocked image to clean its background")
+            identity = self.workspace.raster_preview_identity_for_object(object_id)
+            if identity is None:
+                raise ValueError("The image needs a readable, verified canvas preview")
+            asset = source.geometry["asset"]
+            payload = read_raster_asset_payload(asset, expected_source_sha256=identity[1])
+            if payload.identity.path != identity[0]:
+                raise ValueError("The image source differs from its canvas preview")
+            before = source.to_dict()
+            dialog = BackgroundCleanupDialog(payload, source.geometry, self)
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            read_raster_asset_payload(asset, expected_source_sha256=payload.identity.sha256)
+            if self.document.get_object(object_id).to_dict() != before:
+                raise ValueError("The image changed during review; reopen background cleanup")
+            geometry = dict(source.geometry)
+            geometry["background_cleanup"] = dialog.settings
+            if geometry == source.geometry:
+                return
+            self.history.execute(UpdateObjectShapeCommand(
+                self.document, object_id, source.transform, geometry,
+                description="Clean image background",
+            ))
+            self.workspace.select_objects([object_id])
+        except Exception as exc:
+            self.show_error(f"Could not apply background cleanup: {exc}")
 
     def vectorize_raster_image(self, object_id: str) -> None:
         """Open the offline raster-to-vector review for one selected image."""

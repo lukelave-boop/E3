@@ -819,9 +819,14 @@ def decode_raster_grayscale(
 ) -> tuple[np.ndarray, RasterAssetIdentity]:
     """Decode one bounded 8-bit source and return pixels plus exact content identity."""
 
+    payload = read_raster_asset_payload(path, metadata=metadata)
+    return decode_raster_payload_grayscale(payload), payload.identity
+
+
+def decode_raster_payload_grayscale(payload: RasterAssetPayload) -> np.ndarray:
+    """Decode the exact bounded payload without reopening the source file."""
     import cv2
 
-    payload = read_raster_asset_payload(path, metadata=metadata)
     inspected = payload.metadata
     source = Path(inspected.path)
     flags = cv2.IMREAD_COLOR if inspected.format == "jpeg" else cv2.IMREAD_UNCHANGED
@@ -858,7 +863,7 @@ def decode_raster_grayscale(
     transparent_gray = _png_transparent_gray(payload.encoded, source)
     if transparent_gray is not None:
         output[gray == transparent_gray] = 255
-    return output, payload.identity
+    return output
 
 
 def verify_raster_asset_identity(identity: RasterAssetIdentity) -> None:

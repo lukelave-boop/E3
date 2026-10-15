@@ -336,7 +336,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
     _IMAGE_PREVIEW_MAX_PIXELS = 4_000_000
     _project_raster_source_count = 1
     _image_cache: OrderedDict[
-        tuple[str, str], QtGui.QImage
+        tuple, QtGui.QImage
     ] = OrderedDict()
 
     def __init__(
@@ -356,6 +356,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         self._raster_identity_sha: str | None = None
         self._raster_source_size: tuple[int, int] | None = None
         self._raster_asset_reference: str | None = None
+        self._cleanup_tolerance: int | None = None
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -393,9 +394,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         cls,
         items: list[ObjectGraphicsItem],
     ) -> None:
-        groups: dict[tuple[str, str], list[ObjectGraphicsItem]] = {}
+        groups: dict[tuple, list[ObjectGraphicsItem]] = {}
         for item in items:
-            identity = item.raster_preview_identity
+            identity = item.raster_cache_key
             if identity is not None and item._raster_image is not None:
                 groups.setdefault(identity, []).append(item)
         pixel_budget = cls._preview_pixel_budget()
@@ -422,9 +423,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         cls,
         items: list[ObjectGraphicsItem],
     ) -> None:
-        retained: OrderedDict[tuple[str, str], QtGui.QImage] = OrderedDict()
+        retained: OrderedDict[tuple, QtGui.QImage] = OrderedDict()
         for item in items:
-            identity = item.raster_preview_identity
+            identity = item.raster_cache_key
             if identity is not None and item._raster_image is not None:
                 retained[identity] = item._raster_image
         cls._image_cache = retained
@@ -436,6 +437,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         asset: Any,
         *,
         use_cache: bool = True,
+        cleanup_tolerance: int | None = None,
     ) -> tuple[
         str,
         QtGui.QImage | None,
@@ -454,10 +456,28 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         resolved = identity.path
         source_size_px = (identity.width, identity.height)
         key = (resolved, identity.sha256)
+        if cleanup_tolerance is not None:
+            key = (*key, cleanup_tolerance)
         cached = cls._image_cache.get(key) if use_cache else None
         if cached is not None:
             cls._image_cache.move_to_end(key)
             return resolved, cached, identity.sha256, source_size_px
+
+        if cleanup_tolerance is not None:
+            from .background_cleanup import cleanup_preview_image
+
+            image = cleanup_preview_image(payload, cleanup_tolerance)
+            budget = cls._preview_pixel_budget()
+            if image.width() * image.height() > budget:
+                scale = math.sqrt(budget / (image.width() * image.height()))
+                image = image.scaled(
+                    max(1, int(image.width() * scale)), max(1, int(image.height() * scale)),
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+            cls._image_cache[key] = image
+            cls._prune_image_cache()
+            return resolved, image, identity.sha256, source_size_px
 
         encoded = QtCore.QByteArray(payload.encoded)
         buffer = QtCore.QBuffer()
@@ -501,6 +521,13 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             return None
         return self._raster_source, self._raster_identity_sha
 
+    @property
+    def raster_cache_key(self) -> tuple | None:
+        identity = self.raster_preview_identity
+        if identity is None or self._cleanup_tolerance is None:
+            return identity
+        return (*identity, self._cleanup_tolerance)
+
     def refresh_raster_snapshot(self) -> bool:
         reference = self._raster_asset_reference
         if reference is None:
@@ -510,7 +537,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             self._raster_image,
             self._raster_identity_sha,
             self._raster_source_size,
-        ) = self._load_raster_snapshot(reference)
+        ) = self._load_raster_snapshot(reference, cleanup_tolerance=self._cleanup_tolerance)
         self.update()
         return self._raster_image is not None
 
@@ -627,22 +654,31 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 asset_reference = str(
                     scene_object.geometry.get("asset") or ""
                 ).strip()
-                if asset_reference != self._raster_asset_reference:
+                from ..project.raster_cleanup import cleanup_settings
+
+                enabled, tolerance = cleanup_settings(scene_object.geometry)
+                cleanup_tolerance = tolerance if enabled else None
+                if (asset_reference != self._raster_asset_reference
+                        or cleanup_tolerance != self._cleanup_tolerance):
                     (
                         self._raster_source,
                         self._raster_image,
                         self._raster_identity_sha,
                         self._raster_source_size,
                     ) = (
-                        self._load_raster_snapshot(asset_reference)
+                        self._load_raster_snapshot(
+                            asset_reference, cleanup_tolerance=cleanup_tolerance
+                        )
                     )
                     self._raster_asset_reference = asset_reference
+                    self._cleanup_tolerance = cleanup_tolerance
             else:
                 self._raster_source = ""
                 self._raster_image = None
                 self._raster_identity_sha = None
                 self._raster_source_size = None
                 self._raster_asset_reference = None
+                self._cleanup_tolerance = None
             self.setPath(self._path_for_object(scene_object, transform))
             stock_boundary = is_stock_boundary(scene_object)
             color = (
@@ -1651,7 +1687,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._raster_restore_slice
         )
         self._raster_restore_queue: list[
-            tuple[str, tuple[str, ...], int]
+            tuple[tuple[str, int | None], tuple[str, ...], int]
         ] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
         self._trace_candidates_by_id: dict[str, _TraceCandidateGraphicsItem] = {}
@@ -2835,7 +2871,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._syncing_document = True
         try:
             raster_sources = {
-                str(item.geometry.get("asset", "")).strip()
+                (str(item.geometry.get("asset", "")).strip(),
+                 repr(item.geometry.get("background_cleanup")))
                 for item in document.objects
                 if item.kind == ObjectKind.IMAGE
                 and str(item.geometry.get("asset", "")).strip()
@@ -2924,7 +2961,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         pixel_budget: int,
     ) -> None:
         self._cancel_raster_preview_quality_restore()
-        groups: dict[str, list[str]] = {}
+        groups: dict[tuple[str, int | None], list[str]] = {}
         for item in items:
             source_size = item._raster_source_size
             image = item._raster_image
@@ -2937,7 +2974,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             )
             if image.width() * image.height() >= desired_pixels:
                 continue
-            groups.setdefault(reference, []).append(item.object_id)
+            groups.setdefault((reference, item._cleanup_tolerance), []).append(item.object_id)
         self._raster_restore_queue = [
             (reference, tuple(object_ids), pixel_budget)
             for reference, object_ids in groups.items()
@@ -2949,7 +2986,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         if not self._raster_restore_queue:
             self._raster_restore_timer.stop()
             return
-        reference, object_ids, expected_budget = self._raster_restore_queue.pop(0)
+        variant, object_ids, expected_budget = self._raster_restore_queue.pop(0)
+        reference, cleanup_tolerance = variant
         if (
             expected_budget != self._raster_preview_pixel_budget
             or expected_budget != ObjectGraphicsItem._preview_pixel_budget()
@@ -2961,6 +2999,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             for object_id in object_ids
             if (item := self._items_by_id.get(object_id)) is not None
             and item._raster_asset_reference == reference
+            and item._cleanup_tolerance == cleanup_tolerance
         ]
         if group:
             (
@@ -2971,6 +3010,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             ) = ObjectGraphicsItem._load_raster_snapshot(
                 reference,
                 use_cache=False,
+                cleanup_tolerance=cleanup_tolerance,
             )
             if (
                 image is not None
@@ -3049,7 +3089,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def refresh_raster_previews(self, paths: tuple[str, ...]) -> bool:
         pending = set(paths)
-        by_path: dict[str, list[ObjectGraphicsItem]] = {}
+        by_path: dict[tuple[str, int | None], list[ObjectGraphicsItem]] = {}
         for item in self._items_by_id.values():
             identity = item.raster_preview_identity
             candidate = (
@@ -3062,9 +3102,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 )
             )
             if candidate in pending:
-                by_path.setdefault(candidate, []).append(item)
+                by_path.setdefault((candidate, item._cleanup_tolerance), []).append(item)
         refreshed = set()
-        for path, items in by_path.items():
+        for (path, _tolerance), items in by_path.items():
             primary = items[0]
             if not primary.refresh_raster_snapshot():
                 continue
