@@ -1,6 +1,25 @@
 # Current repository state
 
-## Engraving image editor development (2026-10-15)
+## Engraving image editor frozen DEV TEST handoff (2026-10-15)
+
+E3 DEV TEST selects Engraving image editor, version 0.7.209, branch
+codex/engraving-editor, exact frozen source revision
+`d21145c6633d7a30f475d770d87d6238960d640e`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\engraving-editor-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with packaging/set_dev_test_feature.py
+and read back through the launcher validator. Save work, close the old E3 window,
+reopen the permanent E3 DEV TEST launcher, select one image, and choose
+Objects -> Image -> Edit image for engraving. The normal launcher, shortcut,
+installed application and existing running operator process were left intact.
+
+The canonical Windows packager produced the EXE and passed the native DLL guard.
+All 188 bundled application modules and three resources match the exact commit.
+Frozen offscreen startup loaded native Qt using isolated test configuration/data,
+camera autostart off, motion disabled and a nonexistent serial port. EXE SHA256:
+`ba64f9d81e73569eb094ae65a8a8cf7f94bb1dddaa862d0c7f14ce2c47f74e80`.
+The canonical packager also completed installer-dist/E3-EngravingEditor-Setup.exe.
+The installer was not installed. No interactive operator or physical
+camera/controller/laser verification is claimed.
 
 Active branch codex/engraving-editor was created from committed background-cleanup
 52f25b4 in .codex-worktrees/engraving-editor-dev. The shared codex/setup-wizard
@@ -30,8 +49,13 @@ baseline aggregate-budget cases deselected.
 Final UI hardening releases closed dialogs and their decoded image planes,
 owns the initial fit timer, and clears or rejects stale node selections after
 reset, undo/redo and outline replacement. All 486 focused tests pass after this
-hardening, along with repository Ruff and compileall. A fresh frozen build
-and compatibility run follow these changes. Source
+hardening, along with repository Ruff and compileall. Final-commit compatibility
+run 38814874623 completed: Windows Python 3.10 had 5882 passed, 144 skipped and
+the same three baseline failures; Windows Python 3.12 desktop had 7374 passed,
+54 skipped and the same four baseline failures. Lint and the POSIX controller
+tier passed. No new compatibility failures were introduced; full CI remains red.
+The branch is pushed and retained for operator verification and separate baseline
+repairs before integration. Source
 fixtures are synthetic barrel-like grayscale with lettering and separate shadow;
 no original barrel asset is claimed. Core 0.8MP benchmark median: committed mask
 render 1.075 ms; unique node change plus render 2.081 ms; automatic rectangular
@@ -40,6 +64,22 @@ inside edit rendering. Offscreen Qt event measurements on a 1.57MP synthetic ima
 p95 1.343 ms / commit 7.877 ms; 192-node editing p95 4.284 ms / commit
 40.398 ms. Movement caused zero full-image processing and zero job generation.
 Interactive operator latency is not yet verified.
+
+Ignored demonstration project: build/editor-demo/engraving-editor-demo.e3laser,
+with its original PNG under build/editor-demo/assets and a local README.txt.
+It has original and edited synthetic images side by side at 100 x 75 mm, all
+layers output off and power zero, and no cutting paths or prepared jobs. Two
+save/reopen roundtrips preserve source bytes, asset references and retained
+grain/lettering pixels exactly. Keep this local demo folder in place because
+the existing importer stores absolute asset references.
+
+Records in the feature checkout include build/final-hardened-validation.log,
+build/frozen-verification.json, build/engraving-editor-frozen-smoke.json,
+build/windows-build.log, build/editor-responsiveness.json,
+build/image-editor-performance.json and build/engraving-editor-dialog.png.
+Final CI logs are build/ci-final-windows310.log and build/ci-final-windows312.log;
+the retained-Z baseline reproduction is build/baseline-machine-layout.log.
+The usage guide and deferred tools are in docs/ENGRAVING_IMAGE_EDITOR.md.
 
 No camera/controller/laser test, machine setting or calibration change, Pi
 installation, motion or laser output was performed. This feature remains under
