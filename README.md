@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Engraving image editor
+
+Select an image and open **Objects → Image → Edit image for engraving…** for
+local shadow removal, reversible grayscale masks, automatic or manual Bézier
+outlines, node editing, and aligned vector snapshots with physical offsets.
+New vectors start with output disabled and power zero. Project schema 6 retains
+edits and explicit transform links. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
+
 Image background cleanup is available under **Objects → Image → Clean background…**
 for one selected image. Enable it, adjust tolerance (start at 5), compare
 Before/After, and Apply. Settings are undoable and saved per image; original

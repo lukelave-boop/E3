@@ -16,7 +16,7 @@ from .path_geometry import (
     NativePathGeometry,
 )
 
-PROJECT_SCHEMA_VERSION = 5
+PROJECT_SCHEMA_VERSION = 6
 OBJECT_ROLE_KEY = "e3_role"
 STOCK_BOUNDARY_ROLE = "stock_boundary"
 
@@ -416,6 +416,9 @@ class SceneObject:
         return not self.is_stock_boundary
 
     def validate_geometry(self) -> None:
+        from .image_outline import validate_outline_metadata
+
+        validate_outline_metadata(self)
         if self.kind == ObjectKind.RECTANGLE:
             radius = _finite(
                 self.geometry.get("corner_radius_mm", 0.0),
@@ -457,10 +460,13 @@ class SceneObject:
                 "text.font_family",
             )
         elif self.kind == ObjectKind.IMAGE:
+            from .image_edit import validate_image_edit
             from .raster_cleanup import cleanup_settings
 
             try:
                 cleanup_settings(self.geometry)
+                if "image_edit" in self.geometry:
+                    validate_image_edit(self.geometry["image_edit"])
             except ValueError as exc:
                 raise ProjectFormatError(str(exc)) from exc
             self.geometry["asset"] = _string(
@@ -1089,6 +1095,9 @@ class ProjectDocument:
         self.revision += 1
 
     def validate(self) -> None:
+        from .image_outline import validate_outline_links
+
+        validate_outline_links(self.objects)
         for metadata in (self.metadata, *(item.metadata for item in self.objects)):
             if "material_surface" in metadata and metadata["material_surface"] is not None:
                 try:
@@ -1203,6 +1212,15 @@ class ProjectDocument:
         layer = self.get_layer(layer_id)
         fallback = reassign_to or next(item.id for item in self.layers if item.id != layer_id)
         self.get_layer(fallback)
+        from .image_outline import validate_outline_metadata
+
+        if reassign_to is None and self.get_layer(fallback).output_enabled and any(
+            item.layer_id == layer_id and validate_outline_metadata(item) is not None
+            for item in self.objects
+        ):
+            raise ValueError(
+                "Assign the image outline to a reviewed operation explicitly before removing its layer"
+            )
         for item in self.objects:
             if item.layer_id == layer_id:
                 item.layer_id = fallback
@@ -1245,6 +1263,9 @@ class ProjectDocument:
                 group_id=group_map.get(item.group_id),
             )
             duplicates.append(duplicate)
+        from .image_outline import remap_duplicated_outline_links
+
+        remap_duplicated_outline_links(originals, duplicates)
         self.validate_object_additions(duplicates)
         self.objects.extend(duplicates)
         if duplicates:
@@ -1268,9 +1289,13 @@ class ProjectDocument:
             self.touch()
 
     def update_transform(self, object_id: str, transform: Transform) -> Transform:
+        from .image_outline import linked_transform_updates
+
         item = self.get_object(object_id)
         previous = item.transform
-        item.transform = transform
+        updates = linked_transform_updates(self, {object_id: transform})
+        for target_id, updated in updates.items():
+            self.get_object(target_id).transform = updated
         self.touch()
         return previous
 
@@ -1315,10 +1340,10 @@ class ProjectDocument:
         schema = raw.get("schema_version", 0)
         if type(schema) is not int:
             raise ProjectFormatError("Project schema_version must be an integer")
-        if schema not in (1, 2, 3, 4, PROJECT_SCHEMA_VERSION):
+        if schema not in (1, 2, 3, 4, 5, PROJECT_SCHEMA_VERSION):
             raise ProjectFormatError(
                 "Unsupported project schema "
-                f"{schema}; expected 1, 2, 3, 4, or {PROJECT_SCHEMA_VERSION}"
+                f"{schema}; expected 1, 2, 3, 4, 5, or {PROJECT_SCHEMA_VERSION}"
             )
         try:
             work_area = _object(raw["work_area"], "project.work_area")
@@ -1367,6 +1392,11 @@ class ProjectDocument:
     def _object_from_schema(raw: Any, schema: int) -> SceneObject:
         value = _object(raw, "project object")
         kind = value.get("kind")
+        if schema < 6:
+            if "image_edit" in _object(value.get("geometry", {}), "object.geometry"):
+                raise ProjectFormatError("Image edits require project schema 6")
+            if "image_outline" in _object(value.get("metadata", {}), "object.metadata"):
+                raise ProjectFormatError("Linked image outlines require project schema 6")
         if kind == ObjectKind.IMAGE.value and schema < 5:
             geometry = _object(value.get("geometry", {}), "object.geometry")
             if "background_cleanup" in geometry:

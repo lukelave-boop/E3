@@ -825,6 +825,16 @@ def decode_raster_grayscale(
 
 def decode_raster_payload_grayscale(payload: RasterAssetPayload) -> np.ndarray:
     """Decode the exact bounded payload without reopening the source file."""
+    return decode_raster_payload_planes(payload)[0]
+
+
+def decode_raster_payload_planes(payload: RasterAssetPayload) -> tuple[np.ndarray, np.ndarray]:
+    """Decode once into white-composited gray and original pixel eligibility.
+
+    Fully transparent source pixels are ineligible independently of their
+    white display value. Partial opacity retains the existing grayscale
+    compositing exactly. Both planes have the verified oriented dimensions.
+    """
     import cv2
 
     inspected = payload.metadata
@@ -856,14 +866,18 @@ def decode_raster_payload_grayscale(payload: RasterAssetPayload) -> np.ndarray:
         raise ValueError(f"Raster image has an unsupported channel layout: {source}")
     if alpha is None:
         output = gray.copy()
+        allowed = np.ones(gray.shape, dtype=bool)
     else:
         opacity = alpha.astype(np.float32) / 255.0
         output = np.rint(gray.astype(np.float32) * opacity + 255.0 * (1.0 - opacity))
         output = output.astype(np.uint8)
+        allowed = alpha > 0
     transparent_gray = _png_transparent_gray(payload.encoded, source)
     if transparent_gray is not None:
-        output[gray == transparent_gray] = 255
-    return output
+        transparent = gray == transparent_gray
+        output[transparent] = 255
+        allowed[transparent] = False
+    return output, allowed
 
 
 def verify_raster_asset_identity(identity: RasterAssetIdentity) -> None:

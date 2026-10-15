@@ -1,5 +1,14 @@
 # E3 native desktop v1 foundation
 
+## Engraving image workspace
+
+**Objects → Image → Edit image for engraving…** opens local exclusion/restore,
+automatic trace preview, manual polygon/curved pens, editable nodes/handles,
+before/after comparison and optional aligned vector snapshots. Follow the
+[engraving editor usage guide](ENGRAVING_IMAGE_EDITOR.md). Projects now save schema
+6; older E3 versions cannot load these files. New outlines use disabled zero-power
+layers and require explicit cutting-operation assignment.
+
 ## Clean an image background
 
 Select one unlocked image, then choose **Objects → Image → Clean background…**.

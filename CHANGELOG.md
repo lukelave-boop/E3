@@ -1,5 +1,19 @@
 # Changelog
 
+## Engraving image editor — development
+
+- Added reversible local rectangle/ellipse/lasso/brush exclusion and restore,
+  original comparison, undo/redo, automatic candidate tracing and manual Bézier
+  outline editing in the desktop project workspace.
+- Added schema-6 edit persistence and explicit transform-linked vector snapshots;
+  derived cutting layers start at zero power with output off. Source image edits
+  never rewrite existing vector geometry. Invalid offsets and contours reject.
+- Shared the portable image pipeline with canvas and raster output; conservative
+  eligibility gating prevents excluded pixels from producing power after
+  inversion, resampling and dithering. Commits invalidate prepared jobs.
+- See [usage and limitations](docs/ENGRAVING_IMAGE_EDITOR.md). No hardware behavior
+  or configuration was physically verified by these software changes.
+
 ## Image background cleanup (2026-10-15)
 
 - Add Objects → Image → Clean background with an opt-in checkbox, adjustable

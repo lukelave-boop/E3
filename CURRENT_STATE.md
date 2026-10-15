@@ -1,5 +1,38 @@
 # Current repository state
 
+## Engraving image editor development (2026-10-15)
+
+Active branch codex/engraving-editor was created from committed background-cleanup
+52f25b4 in .codex-worktrees/engraving-editor-dev. The shared codex/setup-wizard
+working tree and all unrelated pre-existing changes are preserved. No existing
+feature branch tip was already merged into main at the initial hygiene check.
+
+Implemented desktop first-stage reversible image editing, automatic/manual native
+outlines, region/brush cleanup, editable nodes/handles, schema-6 persistence,
+transform-linked frozen vectors and reviewed physical offsets. New vectors have
+power zero/output off; image edits never modify an existing cut snapshot. Shared
+image processing preserves retained grayscale and propagates separate eligibility
+through post-dither output gating. See docs/ENGRAVING_IMAGE_EDITOR.md for operation,
+accuracy boundaries and deferred tools. Browser single-SVG behavior is unchanged.
+
+Initial Windows Python 3.14 verification: 285 existing integration tests passed,
+then 98 focused checks passed after linking/output admission review; 16 new
+end-to-end image-edit integration tests pass. The final broad focused run passed 467 tests with repository Ruff and
+compileall. Subsequent alpha/serialization-margin verification passed 36 tests.
+Full Windows local suite, frozen build and compatibility CI are in progress. Source
+fixtures are synthetic barrel-like grayscale with lettering and separate shadow;
+no original barrel asset is claimed. Core 0.8MP benchmark median: committed mask
+render 1.075 ms; unique node change plus render 2.081 ms; automatic rectangular
+trace 32.977 ms. Instrumentation observed zero source decodes or toolpath builds
+inside edit rendering. Offscreen Qt event measurements on a 1.57MP synthetic image: brush movement
+p95 1.343 ms / commit 7.877 ms; 192-node editing p95 4.284 ms / commit
+40.398 ms. Movement caused zero full-image processing and zero job generation.
+Interactive operator latency is not yet verified.
+
+No camera/controller/laser test, machine setting or calibration change, Pi
+installation, motion or laser output was performed. This feature remains under
+software/operator verification and is not merged into main.
+
 ## Background cleanup frozen DEV TEST handoff (2026-10-15)
 
 E3 DEV TEST selects Image background cleanup, version 0.7.206, branch
