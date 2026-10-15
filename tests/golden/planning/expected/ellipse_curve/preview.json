@@ -1988,6 +1988,13 @@
   "planner_mode": "nearest path",
   "planner_savings_mm": 0.0,
   "power_max": 1000,
+  "powered_bounds_mm": [
+    32.0,
+    33.0,
+    68.0,
+    57.0
+  ],
+  "raster_boundary": null,
   "source_order_travel_mm": 81.541400527585,
   "spot_offset_x": 0.0,
   "spot_offset_y": 0.0,

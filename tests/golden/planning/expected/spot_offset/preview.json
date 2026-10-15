@@ -71,6 +71,13 @@
   "planner_mode": "source order",
   "planner_savings_mm": 0.0,
   "power_max": 1000,
+  "powered_bounds_mm": [
+    36.405,
+    33.661,
+    63.595,
+    46.339
+  ],
+  "raster_boundary": null,
   "source_order_travel_mm": 50.276627064887,
   "spot_offset_x": 2.0,
   "spot_offset_y": -3.0,
