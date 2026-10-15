@@ -28,14 +28,17 @@ Final START RPC pins the pre-preparation controller session through request
 serialization. All 69 remote-service cases pass, bringing the focused set to
 387 distinct passing cases. No full-suite run is claimed.
 
-The user needs to shut down this Windows computer. Packaging was stopped;
-the fix is saved and pushed on codex/large-job-start at
-fdfe9b22cbaa92e8c541b45cde3e558669bab4e2. Resume canonical packaging in
-C:\Users\lukel\Documents\E3\.codex-worktrees\large-job-start-build with
-E3_BUILD_VERSION=0.7.196. This detached checkout has that exact revision;
-its interrupted dist/build output must not be selected as a test build.
-The permanent E3 DEV TEST pointer still selects the old v0.7.195 build.
-The installed Pi service is unchanged by this follow-up.
+Packaging resumed after the Windows shutdown handoff. The permanent E3 DEV TEST
+pointer now selects Responsive large-job preparation v0.7.196, branch
+codex/large-job-start, exact application revision
+fdfe9b22cbaa92e8c541b45cde3e558669bab4e2. Target:
+C:\Users\lukel\Documents\E3\.codex-worktrees\large-job-start-build\dist\E3\E3.exe.
+Canonical Windows packaging and installer creation passed, including the native
+DLL guard. All 181 packaged application modules and three resources match that
+revision. Frozen offscreen startup passed with isolated configuration/data,
+camera autostart disabled, motion disabled, and no controller access. The
+launcher pointer was updated atomically using set_dev_test_feature.py and read
+back. Interactive GUI and physical engraving verification remain pending.
 
 Full offline preparation of the recorded job measured preflight 21.91 s,
 durable chunk storage 0.67 s, finalize/verification 22.34 s, and cached file/
@@ -45,10 +48,15 @@ execution or interactive GUI verification. Evidence is in the source checkout's
 ignored build/pi-preparation-benchmark.log. The guarded companion for the final
 revision is dist/e3-pi-large-job-start-9dc978fb; the earlier staged Pi bundle
 85cf832c contains identical Pi source but references the preceding commit.
-Its read-only predecessor check passed. Nothing was installed or restarted.
-Finish the Windows build, exact-source/frozen-startup checks and permanent
-pointer update, then confirm current idle/disconnected state and closed E3
-clients before applying the Pi companion. Preserve machine configuration.
+After fresh disconnected/disarmed/idle checks and confirming no connected E3
+clients, the final companion was installed over Tailscale at
+greenhouse-climate@100.84.214.111. Its three manifested source hashes matched;
+machine configuration, calibration and retained settings hashes were preserved.
+The hardware-node service restarted active/running and remained disconnected,
+disarmed, with no running job. No controller connection, motion or laser output
+was requested. Installation evidence is in ignored build/pi-large-job-installed.log
+and build/pi-large-job-verified.log. Full Windows compatibility CI and integration
+into main remain pending; the feature branch is retained for operator testing.
 
 ## Raster capacity and preview work (2026-10-15)
 
