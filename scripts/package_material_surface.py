@@ -9,8 +9,10 @@ from pathlib import Path
 
 if __package__:
     from . import package_thickness_focus as previous
+    from .package_source_dependencies import runtime_dependencies
 else:
     import package_thickness_focus as previous
+    from package_source_dependencies import runtime_dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY = "pi-material-surface-v1"
@@ -58,6 +60,7 @@ def package(destination: Path, revision: str, version: str) -> Path:
     if any(set(files) != set(SOURCE_FILES) for files in PREDECESSORS.values()):
         raise ValueError("Every predecessor must describe the complete material-plane companion")
     sources = {name: source(revision, name) for name in SOURCE_FILES}
+    dependencies = runtime_dependencies(sources, lambda name: source(revision, name))
     if CAPABILITY.encode() not in sources[SURFACE_MODULE]:
         raise ValueError("Selected revision does not contain material-plane capability support")
     installer_source = source(revision, "scripts/install_workpiece_focus.py").decode("utf-8")
@@ -65,7 +68,7 @@ def package(destination: Path, revision: str, version: str) -> Path:
     precision_guide_source = source(revision, "docs/PRECISION_PLACEMENT.md")
     manifest = json.dumps({
         "revision": revision, "compatible_windows_version": version, "required_capability": CAPABILITY,
-        "predecessors": [{"revision": baseline, "files": files} for baseline, files in PREDECESSORS.items()],
+        "predecessors": [{"revision": baseline, "files": {**files, **dependencies}} for baseline, files in PREDECESSORS.items()],
         "files": [{"path": name, "sha256_lf": hashlib.sha256(content).hexdigest()} for name, content in sources.items()],
     }, indent=2).encode("utf-8")
     digest = hashlib.sha256(manifest).hexdigest()

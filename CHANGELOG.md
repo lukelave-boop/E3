@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — raster overscan and boundary separation
+
+- Keep powered raster output inside the calibrated surface while checking all
+  carriage travel against a separately verified machine envelope, including
+  spot offsets, serialization, initial approach and row/pass/layer transfers.
+- Bind that envelope and the exact engraving boundary into immutable application
+  program bytes; repeat checks locally and on the Pi, reject missing/stale evidence,
+  and preserve homing, arming, motion, output-authority and M5 protections.
+- Credit white margins after dithering and retain the larger of requested overscan
+  and modeled acceleration distance without changing powered sample placement.
+- Show calibrated surface, powered bounds and full movement footprint separately
+  in exact Preview, including Start Here. Boundary failures identify needed clearance.
+- Add a call-count regression for the earlier large-job parser duplication fix and
+  an offline, reproducible pipeline benchmark with ranked findings.
+
 ## Image background cleanup (2026-10-15)
 
 - Add Objects → Image → Clean background with an opt-in checkbox, adjustable

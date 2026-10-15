@@ -1,5 +1,109 @@
 # Current repository state
 
+## Raster overscan surface/travel separation (2026-10-15)
+
+Work is isolated on `codex/raster-overscan`, based on completed background-cleanup
+commit `52f25b4f7dec67f8ecfb6b69d7b39e627edc8573`. The original shared checkout
+remains on `codex/setup-wizard` at `8e58ae5` with its pre-existing uncommitted work.
+The selected E3 DEV TEST remains Background cleanup 0.7.206 at `dcaa217`; this
+source change has not rebuilt, installed or selected another executable.
+
+Desktop raster preparation now requires `machine.raster_travel_envelope`, an
+explicit verified machine-carriage rectangle with controller, firmware,
+configuration, coordinate-reference and physical-test-date evidence. It defaults
+to unavailable and machine duplication clears it. No active settings were changed.
+The current calibrated local surface is rigidly placed to machine beam coordinates;
+controller targets subtract the configured beam offset. Positive output remains
+inside that surface and the existing configured beam/head output authority.
+All serialized carriage motion, including park/start approach and row/pass/layer
+transfers, must stay within the independently verified travel envelope. Failures
+identify the boundary and extra clearance; there is no path clamping.
+
+One strict canonical `E3RASTER` directive binds the surface, travel rectangle and
+complete evidence digest into immutable program bytes. MachineService and the Pi
+revalidate it; it never reaches GRBL. Positive M3/M4 checks the current point and
+positive G1 checks both ends, including inline S enable. New jobs require the Pi's
+`pi-raster-travel-envelope-v1` capability and matching settings. Legacy unconfigured
+programs retain their original restrictive bounds and wire policy; new travel is
+GRBL-only with existing homing/zero-work-offset checks. Arming, feed/power ceilings,
+rapid restrictions, STOP/disconnect/failure M5 and process/motion gates remain.
+
+Sampling, Bayer indices, edge coverage and serpentine parity precede blank-margin
+trimming and remain unchanged. The retained run-up/out is at least the greater
+of the requested percentage of original row width and configured v²/(2a) distance.
+The model is not physical acceleration qualification. Measured raster focus now
+finishes before M4 S0/run-up instead of pausing at the first powered pixel.
+New-mode Start Here rejects mid-row selection that would omit the complete lead-in.
+Exact Preview separately displays engraving surface, powered bounds and the full
+movement footprint, with frame/offset conversion and no independent regeneration.
+
+Read-only saved-state inspection: active Ender 3 Tailscale has 191 mm support,
+work area X/Y10..210, park X15/Y195, zero spot offset and no verified carriage
+record. The saved frame maps the reported footprint to approximately machine
+X25.4432..216.4313/Y40.4895..223.3424: Y exceeds historical selected Y215 by
+8.3424 mm. Historical X5..245 evidence and provisional Y235 do not qualify a
+current whole envelope. Current calibration bindings match in saved files;
+physical accuracy and current hardware/configuration have not been verified.
+
+Focused source, simulated-service and offscreen-widget verification is passing.
+The complete Windows Python 3.14.4 four-worker run reported 7,348 passed,
+29 skipped and 13 failed in 476.31 seconds. Follow-up verification is recorded
+below. The actual offscreen Preview was rendered and visually inspected.
+The prior aggregate-command golden and browser command-budget fixtures were
+below today's two-million-command ceiling; fixture inputs and expected rejection
+alone were corrected after reproducing both baseline failures. Legacy generated
+program/preview goldens remain unchanged.
+
+Known baseline failure: the saved-Z visibility assertion in
+`test_machine_embeds_reference_and_retention_without_focus_dialog` fails on
+both this feature and clean `52f25b4` after Qt events. The baseline two-test
+check was one failed/one passed in 3.46 s; Start Here authority passed there.
+The Start Here fixture now explicitly includes the new optional travel field
+and asserts it survives context capture; all 83 asynchronous desktop tests
+pass in 138.21 s. All 49 browser G-code tests pass, and three Pi diagnostic
+policy tests prove legacy 25-field and configured 26-field compatibility.
+No retention UI or application safeguard was altered to address the baseline
+visibility failure. No complete green-suite claim is made.
+
+All 149 tests across five affected Pi companion installer suites pass, including
+eight imports from exact archived predecessors, plus four dependency-selection
+tests. Those eight import cases also failed on clean `52f25b4` because sparse
+packages omitted `gcode.limits`; this feature additionally needs `raster_safety`.
+The required shared modules are now selected from the exact payload revision,
+with absent-only guards for new modules and unchanged predecessor hashes.
+Seven historical partial builders reject coupled raster-travel source before
+writing an incomplete bundle. Their 34 affected tests pass; five revision-based
+builders also packaged their exact historical source revisions successfully.
+All 14 actual-builder acceptance/rejection matrix cases pass; rejected source
+creates no output bundle and accepted historical payload hashes remain exact.
+No new deployment bundle was installed and no Pi connection was made.
+Repository Ruff, application compileall and diff checks pass. The existing
+Compatibility CI workflow is retained: GitHub rejected the proposed Linux
+test-list edit because the publishing OAuth login lacks workflow scope.
+The new raster-specific Linux cases remain unexecuted; run
+`pytest -q tests/test_raster_safety.py tests/test_raster_safety_focus.py`
+on Linux/Pi before deployment. Existing CI still covers Pi service/protocol
+integration, including the extended policy diagnostic tests.
+
+The offline performance audit and reproducible script are in
+[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md). The earlier parser duplication
+fix has a call-count regression; ranked remaining findings are repeated raster
+regeneration, duplicate unchanged-text remote preflight, and durable preparation
+I/O. No unrelated optimization was added. Complete powered endpoint/power/feed
+hashes match baseline for white-border, near-white-border and dense dither jobs.
+Final three-run medians: dense generation 3.305 -> 3.840 s, one static
+preflight 0.589 -> 1.021 s; the added safety checks cost CPU time. White-border
+laser-off travel fell 87.0%, near-white travel 49.3%. The earlier parser fix
+retains its measured 406 -> 9 generic parse calls for a 134-command sample.
+
+No controller connection, machine movement, laser output, live camera test,
+interactive GUI acceptance or Pi deployment was performed. Record current whole
+XY travel and cable/fixture clearance with identified controller/firmware/config,
+verify offsets/calibration and run-up at intended speeds, deploy the matching Pi
+companion, then perform supervised physical acceptance. See
+[RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). Physical validation and compatibility
+CI/main integration remain pending; this branch is retained for that verification.
+
 ## Background cleanup frozen DEV TEST handoff (2026-10-15)
 
 E3 DEV TEST selects Image background cleanup, version 0.7.206, branch

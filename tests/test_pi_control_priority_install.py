@@ -12,10 +12,12 @@ from pathlib import Path
 import pytest
 
 from scripts.package_pi_control_priority import PREVIOUS, PREVIOUS_PACKAGE, PREVIOUS_REVISION, ROOT, package
-from scripts.package_source_dependencies import MATERIAL_PREDECESSORS
+from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 from scripts.package_z_setup_speed import PREVIOUS as COMPLETE_PREVIOUS
 
-CURRENT_FILES = {**COMPLETE_PREVIOUS, **MATERIAL_PREDECESSORS}
+CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
+
+CURRENT_FILES = {**COMPLETE_PREVIOUS, **CURRENT_DEPENDENCIES}
 
 
 def load_installer(bundle):
@@ -66,7 +68,7 @@ def test_current_upgrade_includes_capability_implementation_and_preserves_operat
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["compatible_predecessors"] == [PREVIOUS_PACKAGE]
     assert result["applied"] and not result["service_started"]
-    assert len(result["files"]) == 19
+    assert len(result["files"]) == 22
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
@@ -200,10 +202,10 @@ def test_current_package_needs_no_git_history(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "check_output", reject_history)
     bundle = package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
-    assert len(manifest["files"]) == 19
+    assert len(manifest["files"]) == 22
 
 
-@pytest.mark.parametrize("name", [*MATERIAL_PREDECESSORS, "laser_aligner/machine/service.py"])
+@pytest.mark.parametrize("name", [*CURRENT_DEPENDENCIES, "laser_aligner/machine/service.py"])
 def test_current_capability_dependencies_reject_unknown_edits_before_replacement(kit, name):
     installer, project, bundle, _ = kit
     path = project / name

@@ -220,6 +220,7 @@ class _ElidedLabel(QtWidgets.QLabel):
 
 
 class JobPreviewCanvas(QtWidgets.QGraphicsView):
+    footprintReady = QtCore.Signal()
     buildProgress = QtCore.Signal(int, int)
     buildFinished = QtCore.Signal()
     buildFailed = QtCore.Signal(str)
@@ -233,11 +234,20 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         move_ends: tuple[float, ...] | None = None,
         defer_render: bool = False,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
+        engraving_surface_mm: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.work_area = tuple(float(value) for value in work_area)
         self.coordinate_frame = coordinate_frame
+        self.engraving_surface_mm = (
+            plan.raster_boundary.engraving_polygon_mm
+            if plan.raster_boundary is not None
+            else engraving_surface_mm
+        )
+        self.movement_bounds_mm: tuple[float, float, float, float] | None = None
+        self.powered_bounds_mm: tuple[float, float, float, float] | None = None
+        self._footprints_ready = False
         self._scene = QtWidgets.QGraphicsScene(self)
         self.setScene(self._scene)
         self.setRenderHints(
@@ -297,6 +307,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             self._head_item.hide()
         else:
             self.set_elapsed(plan.total_seconds)
+            self._finalize_footprints()
         self._timeline_async_ready = True
 
     def _draw_bed(self) -> None:
@@ -326,8 +337,13 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             content_y_max - content_y_min + 2 * margin,
         )
         self._scene.setSceneRect(scene_rect)
-        bed = QtWidgets.QGraphicsRectItem(
-            QtCore.QRectF(x_min, -y_max, x_max - x_min, y_max - y_min)
+        surface_points = (
+            tuple(self._display_point(x, y) for x, y in self.engraving_surface_mm)
+            if self.engraving_surface_mm is not None
+            else ((x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max))
+        )
+        bed = QtWidgets.QGraphicsPolygonItem(
+            QtGui.QPolygonF([QtCore.QPointF(x, -y) for x, y in surface_points])
         )
         pen = QtGui.QPen(QtGui.QColor("#39B878"))
         pen.setWidthF(1.2)
@@ -336,7 +352,72 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         bed.setBrush(QtGui.QColor("#F4F5F2"))
         bed.setZValue(-20.0)
         self._scene.addItem(bed)
+        self._surface_item = bed
+        self._movement_footprint_item = self._boundary_item("#E7B55C", QtCore.Qt.PenStyle.DashLine)
+        self._powered_footprint_item = self._boundary_item("#1E88E5", QtCore.Qt.PenStyle.DotLine)
         self.setBackgroundBrush(QtGui.QColor("#202326"))
+
+    def _boundary_item(
+        self, color: str, style: QtCore.Qt.PenStyle,
+    ) -> QtWidgets.QGraphicsPathItem:
+        item = QtWidgets.QGraphicsPathItem()
+        pen = QtGui.QPen(QtGui.QColor(color))
+        pen.setStyle(style)
+        pen.setWidthF(1.3)
+        pen.setCosmetic(True)
+        item.setPen(pen)
+        item.setZValue(15.0)
+        self._scene.addItem(item)
+        return item
+
+    def _finalize_footprints(self) -> None:
+        """Retain full-job extents from the already transformed exact paths.
+
+        This runs once after the initial render. It includes initial approaches,
+        white gaps and row transfers even when travel is hidden or playback is
+        rewound, without another Python pass over the plan or coordinate map.
+        """
+        for powered, item in (
+            (False, self._movement_footprint_item),
+            (True, self._powered_footprint_item),
+        ):
+            rectangles = [
+                path.boundingRect()
+                for key, path in self._paths.items()
+                if not path.isEmpty() and (not powered or key[0] == "powered")
+            ]
+            if not rectangles:
+                continue
+            left = min(rect.left() for rect in rectangles)
+            right = max(rect.right() for rect in rectangles)
+            top = min(rect.top() for rect in rectangles)
+            bottom = max(rect.bottom() for rect in rectangles)
+            bounds = (left, -bottom, right, -top)
+            if powered:
+                self.powered_bounds_mm = bounds
+            else:
+                self.movement_bounds_mm = bounds
+            path = QtGui.QPainterPath(QtCore.QPointF(left, top))
+            path.lineTo(right, top)
+            path.lineTo(right, bottom)
+            path.lineTo(left, bottom)
+            path.closeSubpath()
+            item.setPath(path)
+        surface_rect = self._surface_item.polygon().boundingRect()
+        if self.movement_bounds_mm is not None:
+            left, bottom, right, top = self.movement_bounds_mm
+            # QRectF.united treats a single horizontal/vertical row as empty.
+            left = min(left, surface_rect.left())
+            right = max(right, surface_rect.right())
+            top = max(top, -surface_rect.top())
+            bottom = min(bottom, -surface_rect.bottom())
+            content_rect = QtCore.QRectF(left, -top, right - left, top - bottom)
+        else:
+            content_rect = surface_rect
+        margin = max(1.0, content_rect.width(), content_rect.height()) * 0.06
+        self._scene.setSceneRect(content_rect.adjusted(-margin, -margin, margin, margin))
+        self._footprints_ready = True
+        self.footprintReady.emit()
 
     def _display_point(self, x_mm: float, y_mm: float) -> tuple[float, float]:
         if self.coordinate_frame is None:
@@ -483,6 +564,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
                     key: QtGui.QPainterPath(path)
                     for key, path in self._paths.items()
                 }
+                self._finalize_footprints()
             self._building = False
             self._initial_build = False
             self._update_item_visibility()
@@ -603,9 +685,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
     def set_inverted(self, enabled: bool) -> None:
         self._inverted = bool(enabled)
         self.setBackgroundBrush(QtGui.QColor("#F0F0F0" if enabled else "#202326"))
-        for item in self._scene.items():
-            if isinstance(item, QtWidgets.QGraphicsRectItem) and item.zValue() < 0:
-                item.setBrush(QtGui.QColor("#17191B" if enabled else "#F4F5F2"))
+        self._surface_item.setBrush(QtGui.QColor("#17191B" if enabled else "#F4F5F2"))
         self.set_power_shading(self._shade_power)
 
     def fit_job(self) -> None:
@@ -653,6 +733,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         max_travel_feed_mm_min: float | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
         preflight_report: JobPreflightReport | None = None,
+        engraving_surface_mm: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
@@ -729,6 +810,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
             move_ends=self.prepared.move_ends,
             defer_render=self._deferred_render,
             coordinate_frame=coordinate_frame,
+            engraving_surface_mm=engraving_surface_mm,
         )
         self.canvas.setObjectName("jobPreviewCanvas")
         self.canvas.setMinimumSize(_MIN_CANVAS_WIDTH, _MIN_CANVAS_HEIGHT)
@@ -828,7 +910,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.invert_check = QtWidgets.QCheckBox("Invert dark material")
         self.legend_check = QtWidgets.QCheckBox("Show legend")
         self.legend_check.setChecked(True)
-        self.fit_button = QtWidgets.QPushButton("Fit bed")
+        self.fit_button = QtWidgets.QPushButton("Fit surface and movement")
         display_layout.addWidget(self.travel_check, 0, 0)
         display_layout.addWidget(self.detail_check, 1, 0)
         display_layout.addWidget(self.power_check, 2, 0)
@@ -858,6 +940,19 @@ class JobPreviewDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
         side_layout.addWidget(self.statistics)
+
+        self.boundary_summary = QtWidgets.QLabel()
+        self.boundary_summary.setObjectName("jobPreviewBoundaries")
+        self.boundary_summary.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.boundary_summary.setWordWrap(True)
+        self.boundary_summary.setMinimumWidth(0)
+        self.boundary_summary.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        self.canvas.footprintReady.connect(self._update_boundary_summary)
+        self._update_boundary_summary()
+        side_layout.addWidget(self.boundary_summary)
 
         self.legend = QtWidgets.QLabel(self._legend_html())
         self.legend.setObjectName("jobPreviewLegend")
@@ -1201,7 +1296,32 @@ class JobPreviewDialog(QtWidgets.QDialog):
             prefix
             + "<span style='color:#E45A5A'>-- Travel</span> · "
             "<span style='color:#E7B55C'>— Laser-off feed</span> · "
+            "<span style='color:#39B878'>— Engraving surface</span> · "
+            "<span style='color:#1E88E5'>·· Powered bounds</span> · "
+            "<span style='color:#E7B55C'>-- Full movement bounds</span> · "
             "<span style='color:#00D4FF'>● Head</span>"
+        )
+
+    def _update_boundary_summary(self) -> None:
+        def describe(bounds: tuple[float, float, float, float] | None) -> str:
+            if bounds is None:
+                return "none" if self.canvas._footprints_ready else "building"
+            left, bottom, right, top = bounds
+            left, bottom, right, top = (
+                0.0 if abs(value) < 0.0005 else value
+                for value in (left, bottom, right, top)
+            )
+            return f"X{left:.2f}…{right:.2f}, Y{bottom:.2f}…{top:.2f} mm"
+
+        frame_name = "Honeycomb" if self.coordinate_frame is not None else "Machine beam"
+        surface = self.canvas._surface_item.polygon().boundingRect()
+        self.boundary_summary.setText(
+            f"{frame_name} coordinates\n"
+            f"Engraving surface extents: {describe((surface.left(), -surface.bottom(), surface.right(), -surface.top()))}\n"
+            f"Powered bounds: {describe(self.canvas.powered_bounds_mm)}\n"
+            f"Full movement bounds: {describe(self.canvas.movement_bounds_mm)}\n"
+            "Movement includes laser-off run-up, run-out, gaps and row transfers. "
+            "These full-job bounds remain visible during playback."
         )
 
     def set_elapsed(self, seconds: float) -> None:

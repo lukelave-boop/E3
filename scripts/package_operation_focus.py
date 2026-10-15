@@ -7,6 +7,11 @@ import json
 import subprocess
 from pathlib import Path
 
+if __package__:
+    from .package_source_dependencies import reject_partial_raster_sources
+else:
+    from package_source_dependencies import reject_partial_raster_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY = "pi-operation-focus-v1"
 BASELINE_REVISION = "d8766fbc393dbd302718a9e431227fcfc2ed18a0"
@@ -41,6 +46,7 @@ def package(destination: Path, revision: str, version: str) -> Path:
         ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=ROOT, text=True,
     ).strip()
     sources = {name: source(revision, name) for name in PREDECESSOR}
+    reject_partial_raster_sources(sources)
     if any(CAPABILITY.encode() not in sources[name] for name in (
         "laser_aligner/operation_focus.py", "laser_aligner/machine/pi_machine_server.py",
     )):

@@ -1,5 +1,31 @@
 # Architecture
 
+## Raster engraving and carriage domains
+
+`raster_safety.py` owns Qt/HTTP-independent typed travel evidence and the strict
+`E3RASTER` program directive. Its convex polygon is the current calibrated
+machine-beam engraving surface, while its travel rectangle is the separately
+verified homed machine-carriage envelope. The directive binds the exact envelope
+evidence digest and is never forwarded to GRBL. MachineService checks positive
+laser enable at the current point and powered segments at both ends; every G0/G1
+segment must remain inside carriage travel. Existing configured output authority
+also constrains powered beam and head positions. Cached preflight proof and Pi
+policy matching include the new authority. Old nodes cannot accept expanded jobs.
+
+In `project/toolpath.py`, image sampling, Bayer indices, edge coverage and
+serpentine row parity are unchanged. Only after spans exist are unused white
+margins trimmed. `RasterRow.lead_distance_mm` retains the original-width percentage
+or configured modeled braking distance, whichever is larger, through rigid
+placement, spot correction and pass reversal. Finalized serialized JobPlan motion
+is rechecked in bounded batches, including transfers and the planned start.
+No path is clamped and no measured limits are inferred from image or surface bounds.
+
+The desktop requires explicit verified travel for raster generation. The public
+low-level generator's absent-envelope compatibility path retains its former
+restrictive surface/output checks and never grants expanded travel. The browser
+single-SVG pipeline remains separate and unchanged. See
+[RASTER_OVERSCAN.md](RASTER_OVERSCAN.md) for configuration and verification limits.
+
 ## Raster background cleanup
 
 Project schema 5 adds optional IMAGE geometry.background_cleanup:

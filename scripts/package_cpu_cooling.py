@@ -5,6 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 
+if __package__:
+    from .package_source_dependencies import reject_partial_raster_sources
+else:
+    from package_source_dependencies import reject_partial_raster_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 PREVIOUS = {
     "laser_aligner/machine/setup_motion.py": None,
@@ -17,6 +22,7 @@ PREVIOUS = {
 
 def package(destination):
     sources = {name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in PREVIOUS}
+    reject_partial_raster_sources(sources)
     manifest = json.dumps({"files": [
         {"path": name, "previous_sha256_lf": old,
          "sha256_lf": hashlib.sha256(sources[name]).hexdigest()}

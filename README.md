@@ -1,5 +1,21 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Raster surface and verified travel
+
+Desktop raster generation now requires a separately recorded, verified carriage
+travel envelope. The calibrated engraving surface remains the powered-output
+boundary; laser-off lead-in, blank gaps and transfers are checked in machine
+carriage coordinates after placement and spot-offset correction. Preview shows
+the engraving surface, powered bounds and complete movement footprint separately.
+Missing or unverified travel blocks preparation with a useful error. Existing
+legacy bounded programs and the browser SVG path retain their stricter bounds.
+
+White margins contribute to run-up/run-out after the unchanged sampling and
+ordered-dither stage. The planner keeps at least the requested percent of the
+original row width and the configured acceleration-model distance. The model is
+not physical qualification at every feed. See [raster overscan](docs/RASTER_OVERSCAN.md)
+for settings and operator validation, and [measured performance](docs/RASTER_PERFORMANCE.md).
+
 Image background cleanup is available under **Objects → Image → Clean background…**
 for one selected image. Enable it, adjust tolerance (start at 5), compare
 Before/After, and Apply. Settings are undoable and saved per image; original

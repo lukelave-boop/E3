@@ -18,6 +18,7 @@ def kit(tmp_path, monkeypatch):
             baseline if revision == packager.BASELINE
             else (
                 b"MAX_STREAM_COMMANDS = 1_000_000\n" if name == packager.FILES[0]
+                else b"# historical capacity service fixture\n" if name == packager.FILES[1]
                 else (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
             )
         ),

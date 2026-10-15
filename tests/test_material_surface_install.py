@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from scripts import package_material_surface as packager
+from scripts.package_source_dependencies import RUNTIME_PREDECESSORS
 
 
 def snapshot(root):
@@ -23,7 +24,7 @@ def snapshot(root):
 def bundle(tmp_path, monkeypatch):
     # Unit-test payload comes from an explicit snapshot. Production package()
     # always calls git show on one resolved commit; no working-tree fallback.
-    names = (*packager.SOURCE_FILES, "scripts/install_workpiece_focus.py", "docs/MATERIAL_HEIGHT.md",
+    names = (*packager.SOURCE_FILES, *RUNTIME_PREDECESSORS, "scripts/install_workpiece_focus.py", "docs/MATERIAL_HEIGHT.md",
              "docs/PRECISION_PLACEMENT.md")
     source_snapshot = {name: (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in names}
     calls = []
@@ -72,10 +73,13 @@ def test_complete_pinned_manifest_and_exact_committed_source_contract(bundle):
     assert manifest["compatible_windows_version"] == "0.7.999-test"
     assert len(manifest["revision"]) == 40
     assert {revision for revision, _ in calls} == {manifest["revision"]}
-    assert {entry["path"] for entry in manifest["files"]} == set(packager.SOURCE_FILES)
+    assert {entry["path"] for entry in manifest["files"]} == set(packager.SOURCE_FILES) | RUNTIME_PREDECESSORS.keys()
     assert len(packager.SOURCE_FILES) == 19
-    assert all(set(previous["files"]) == set(packager.SOURCE_FILES) for previous in manifest["predecessors"])
-    assert {previous["revision"]: previous["files"] for previous in manifest["predecessors"]} == packager.PREDECESSORS
+    assert all(set(previous["files"]) == set(packager.SOURCE_FILES) | RUNTIME_PREDECESSORS.keys()
+               for previous in manifest["predecessors"])
+    assert {previous["revision"]: previous["files"] for previous in manifest["predecessors"]} == {
+        name: {**files, **RUNTIME_PREDECESSORS} for name, files in packager.PREDECESSORS.items()
+    }
     assert all(previous["files"][packager.SURFACE_MODULE] is None for previous in manifest["predecessors"])
     for entry in manifest["files"]:
         assert hashlib.sha256((folder / entry["path"]).read_bytes()).hexdigest() == entry["sha256_lf"]

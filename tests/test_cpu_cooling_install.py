@@ -5,11 +5,24 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_cpu_cooling as packager
 from scripts.package_cpu_cooling import package
 
 
 @pytest.fixture
 def kit(tmp_path, monkeypatch):
+    # These installer checks use representative historical payload bytes;
+    # current raster sources require a complete matching companion.
+    historical = tmp_path / "historical-source"
+    for name in packager.PREVIOUS:
+        path = historical / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"# historical payload fixture: {name}\n".encode())
+    for name in ("scripts/install_cpu_cooling.py",):
+        path = historical / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((packager.ROOT / name).read_bytes())
+    monkeypatch.setattr(packager, "ROOT", historical)
     bundle = package(tmp_path / "dist")
     spec = importlib.util.spec_from_file_location("cooling_installer", bundle / "install_cpu_cooling.py")
     installer = importlib.util.module_from_spec(spec)

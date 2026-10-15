@@ -7,7 +7,12 @@ import json
 import subprocess
 from pathlib import Path
 
-from package_raster_capacity import ROOT, source
+if __package__:
+    from .package_raster_capacity import ROOT, source
+    from .package_source_dependencies import reject_partial_raster_sources
+else:
+    from package_raster_capacity import ROOT, source
+    from package_source_dependencies import reject_partial_raster_sources
 
 BASELINE = "f8c4bd3a2c311682fcab52193df1068a7867a9f6"
 FILES = ("laser_aligner/gcode/limits.py", "laser_aligner/machine/service.py",
@@ -19,6 +24,7 @@ def package(destination: Path, revision: str) -> Path:
         ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=ROOT, text=True,
     ).strip()
     sources = {name: source(revision, name) for name in FILES}
+    reject_partial_raster_sources(sources)
     manifest = json.dumps({
         "revision": revision,
         "predecessors": [{"revision": BASELINE, "files": {

@@ -12,9 +12,11 @@ from pathlib import Path
 import pytest
 
 from scripts.package_laser_focus import PREVIOUS, PREVIOUS_REVISION, ROOT, package
-from scripts.package_source_dependencies import MATERIAL_PREDECESSORS
+from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 
-CURRENT_FILES = {**PREVIOUS, **MATERIAL_PREDECESSORS}
+CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
+
+CURRENT_FILES = {**PREVIOUS, **CURRENT_DEPENDENCIES}
 
 
 def test_packaged_guide_uses_its_own_installer_baseline_and_existing_install_link(tmp_path):

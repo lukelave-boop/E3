@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
+from ..raster_safety import parse_raster_boundary
 
 # G-code words may be separated by spaces ("G1 X10") or packed together
 # ("G1X10"). The parser intentionally handles both forms because many
@@ -166,7 +167,14 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
     power = 0.0
     spot_offset_x = spot_offset_y = 0.0
     segments: list[GcodeSegment] = []
+    raster_boundary_seen = False
     for raw_line in text.splitlines():
+        boundary = parse_raster_boundary(raw_line.strip())
+        if boundary is not None:
+            if raster_boundary_seen or segments:
+                raise ValueError("Raster boundary must occur once before motion")
+            raster_boundary_seen = True
+            continue
         if raw_line.strip().startswith((AIR_ASSIST_DIRECTIVE_PREFIX, "E3FOCUS", "E3SURFACE", "E3OPFOCUS")):
             continue
         metadata = parse_e3_metadata_comment(raw_line)

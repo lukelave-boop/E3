@@ -18,8 +18,13 @@ def kit(tmp_path, monkeypatch):
     )
     if available.returncode:
         pytest.skip("Pinned operation-focus predecessor is unavailable in this shallow checkout")
-    # Package current source before its feature commit; baseline hashes stay pinned.
-    monkeypatch.setattr(packager, "source", lambda revision, name: (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n"))
+    # Installer behavior uses historical-feature payload fixtures while the
+    # actual predecessor bytes and hashes remain pinned below.
+    monkeypatch.setattr(packager, "source", lambda revision, name: (
+        f"# historical payload fixture: {name}\nCAPABILITY = {packager.CAPABILITY!r}\n".encode()
+        if name in packager.PREDECESSOR
+        else (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
+    ))
     bundle = packager.package(tmp_path / "dist", "HEAD", "0.7.181")
     spec = importlib.util.spec_from_file_location("operation_installer", bundle / "install_operation_focus.py")
     installer = importlib.util.module_from_spec(spec)

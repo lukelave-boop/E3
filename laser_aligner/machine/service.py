@@ -34,6 +34,13 @@ from ..geometry.polygon import (
 )
 from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
 from ..operation_focus import mode as operation_focus_mode
+from ..raster_safety import PREFIX as RASTER_BOUNDARY_PREFIX
+from ..raster_safety import (
+    parse_raster_boundary,
+    parse_raster_travel_envelope,
+    program_raster_boundary,
+    require_verified_raster_travel,
+)
 from .controller_dialects import (
     CONTROLLER_DIALECT_REGISTRY,
     GRBL_DIALECT,
@@ -280,7 +287,7 @@ def _program_line_contains_motion(line: str) -> bool:
     """Exclude strict E3-owned auxiliary instructions from G-code parsing."""
 
     return (focus_binding_id(line) is None
-            and not line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX, OPERATION_FOCUS_PREFIX))
+            and not line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX, OPERATION_FOCUS_PREFIX, RASTER_BOUNDARY_PREFIX))
             and contains_motion(line))
 
 
@@ -5337,6 +5344,10 @@ class MachineService:
         lines: list[str] = []
         for raw_line_number, raw_line in enumerate(text.splitlines(), start=1):
             instruction = raw_line.strip()
+            raster_directive = parse_raster_boundary(instruction)
+            if raster_directive is not None:
+                lines.append(raster_directive.directive)
+                continue
             if instruction.startswith(MATERIAL_SURFACE_PREFIX):
                 parse_material_surface(instruction)
                 lines.append(instruction)
@@ -5368,6 +5379,41 @@ class MachineService:
                 f"G-code program exceeds the {MAX_STREAM_COMMANDS:,}-line limit"
             )
 
+        raster_boundary = program_raster_boundary(lines)
+        if raster_boundary is not None:
+            if self.settings.protocol == "marlin":
+                raise SafetyError("Raster travel envelopes require GRBL with verified zero XY work offsets; Marlin is not supported")
+            envelope = require_verified_raster_travel(self.settings.raster_travel_envelope)
+            if (raster_boundary.travel_envelope_digest != envelope.digest
+                    or raster_boundary.travel_bounds_mm != envelope.bounds_mm):
+                raise SafetyError("Raster travel configuration or physical verification changed after preparation; generate the job again")
+            for point in raster_boundary.engraving_polygon_mm:
+                allowed = (
+                    convex_polygon_contains_normalized(point, guarded_polygon)
+                    if guarded_polygon is not None
+                    else self.settings.work_area.contains(*point, self.laser_settings.boundary_margin_mm)
+                )
+                if not allowed:
+                    raise SafetyError("Raster engraving surface extends outside the configured guarded output authority")
+            raster_boundary.require_travel_point(
+                (float(self.settings.photo_x), float(self.settings.photo_y)),
+                label="Initial Home / park transfer",
+            )
+
+        def require_powered_point(px: float, py: float, line_number: int) -> None:
+            assert raster_boundary is not None
+            spot = (px + float(self.laser_settings.spot_offset_x_mm),
+                    py + float(self.laser_settings.spot_offset_y_mm))
+            raster_boundary.require_powered_point(spot, label=f"Line {line_number}")
+            for point, kind in (((px, py), "controller"), (spot, "physical beam")):
+                allowed = (
+                    convex_polygon_contains_normalized(point, guarded_polygon)
+                    if guarded_polygon is not None
+                    else self.settings.work_area.contains(*point, self.laser_settings.boundary_margin_mm)
+                )
+                if not allowed:
+                    raise SafetyError(f"Line {line_number}: powered {kind} point lies outside the configured guarded output authority")
+
         has_operation_focus = any(operation_focus_mode(line) is not None for line in lines)
         selected_focus_mode = None
         job_focus_id = program_binding(lines)
@@ -5388,6 +5434,11 @@ class MachineService:
         last_line_is_m5 = False
 
         for index, line in enumerate(lines, start=1):
+            if parse_raster_boundary(line) is not None:
+                if position_established or requires_laser_authorization:
+                    raise SafetyError("E3RASTER boundary must occur before any motion or laser enable")
+                last_line_is_m5 = False
+                continue
             if index % 1024 == 0:
                 # Give status/STOP workers a turn during CPU-heavy validation.
                 time.sleep(0)
@@ -5463,7 +5514,18 @@ class MachineService:
                         self.laser_settings.boundary_margin_mm,
                     )
                 )
-                if not controller_allowed:
+                if raster_boundary is not None:
+                    raster_boundary.require_travel_point((new_x, new_y), label=f"Line {index}")
+                    # The envelope is convex: endpoints prove the complete G0/G1
+                    # segment, including white gaps and transfers between rows.
+                    if x is not None and y is not None:
+                        raster_boundary.require_travel_point((x, y), label=f"Line {index} start")
+                    if laser_on:
+                        if x is None or y is None:
+                            raise SafetyError("Powered raster movement requires an established start position")
+                        require_powered_point(x, y, index)
+                        require_powered_point(new_x, new_y, index)
+                if raster_boundary is None and not controller_allowed:
                     raise SafetyError(
                         f"Line {index}: G-code point X{new_x:.3f} Y{new_y:.3f} "
                         "lies outside the configured guarded output authority"
@@ -5481,7 +5543,7 @@ class MachineService:
                         self.laser_settings.boundary_margin_mm,
                     )
                 )
-                if not spot_allowed:
+                if raster_boundary is None and not spot_allowed:
                     raise SafetyError(
                         f"Line {index}: physical laser spot X{spot_x:.3f} "
                         f"Y{spot_y:.3f} lies outside the configured guarded output authority"
@@ -5510,6 +5572,9 @@ class MachineService:
                     )
                 requires_laser_authorization = True
                 laser_on = values["S"] > 0
+                if raster_boundary is not None and laser_on:
+                    assert x is not None and y is not None
+                    require_powered_point(x, y, index)
                 last_m_code = next(iter(m_codes))
             elif m_codes == {5}:
                 laser_on = False
@@ -5567,6 +5632,10 @@ class MachineService:
         return lines, requires_laser_authorization
 
     def _require_safety_configuration(self) -> None:
+        try:
+            parse_raster_travel_envelope(self.settings.raster_travel_envelope)
+        except (TypeError, ValueError) as exc:
+            raise SafetyError(str(exc)) from exc
         if type(self.settings.backend) is not str or self.settings.backend != "serial":
             raise SafetyError("Machine backend must be exactly 'serial'")
         if type(self.settings.protocol) is not str or self.settings.protocol not in {
@@ -5697,7 +5766,7 @@ class MachineService:
                 air_assist.mapping_digest,
             )
         )
-        return (
+        profile = (
             self.settings.backend,
             self.settings.protocol,
             self.settings.allow_motion,
@@ -5724,6 +5793,11 @@ class MachineService:
             guarded_output_polygon_mm,
             air_assist_profile,
         )
+        # Preserve the established wire policy when this feature is unconfigured.
+        # A configured envelope always participates, even for a non-raster job.
+        if self.settings.raster_travel_envelope is not None:
+            profile += (parse_raster_travel_envelope(self.settings.raster_travel_envelope).digest,)
+        return profile
 
     def preflight_program(
         self,
@@ -6026,6 +6100,7 @@ class MachineService:
             self._prepare_secondary_air_assist_for_start(program)
             controller_session = self._require_session()
             lines = list(program.lines)
+            raster_boundary = program_raster_boundary(lines)
             if (
                 requires_motion
                 and self.settings.backend == "serial"
@@ -6044,7 +6119,21 @@ class MachineService:
                 requires_motion
                 and self._uses_grbl_coordinate_state()
             ):
-                self._verify_grbl_coordinate_state()
+                coordinate_state = self._verify_grbl_coordinate_state()
+                if raster_boundary is not None:
+                    self._require_zero_xy_coordinate_offsets(coordinate_state)
+                    # Home-only preparation deliberately has no cached endpoint.
+                    # A fresh read-only status establishes the actual approach;
+                    # it never substitutes for the existing homing authority.
+                    current_xy = self._jog_position_mm
+                    if current_xy is None:
+                        snapshot = self.sample_realtime_position(coordinate_state=coordinate_state)
+                        if snapshot["state"] != "Idle":
+                            raise SafetyError("Raster Start requires an idle current carriage position")
+                        current_xy = tuple(snapshot["mpos_mm"][:2])
+                    raster_boundary.require_travel_point(current_xy, label="Actual initial carriage transfer")
+            if raster_boundary is not None and not self._uses_grbl_coordinate_state():
+                raise SafetyError("Raster travel envelopes require a GRBL controller with verified zero XY work offsets")
             if (
                 requires_laser_authorization
                 and self.settings.backend == "serial"
@@ -6425,6 +6514,8 @@ class MachineService:
             if context.focus_plan is not None:
                 self._move_job_focus(context, clearance=True)
             for index, line in enumerate(lines, start=1):
+                if parse_raster_boundary(line) is not None:
+                    continue
                 if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
                     continue
                 requested_focus_mode = operation_focus_mode(line)
@@ -6440,9 +6531,19 @@ class MachineService:
                 focus_words = ({word.letter: word.value for word in parse_words(line)}
                                if context.focus_plan is not None and not focused
                                and not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) else {})
+                raster_lead_mode = (
+                    active_focus_mode == "RASTER"
+                    and focus_words.get("M") in (3, 4)
+                    and focus_words.get("S") == 0
+                )
                 if (context.focus_plan is not None and not focused
-                        and focus_words.get("S", 0) > 0
-                        and (focus_words.get("M") in (3, 4) or focus_words.get("G") == 1)):
+                        and (raster_lead_mode or (
+                            focus_words.get("S", 0) > 0
+                            and (focus_words.get("M") in (3, 4) or focus_words.get("G") == 1)
+                        ))):
+                    # Lower at the completed row approach, before zero-power
+                    # acceleration. A barrier at the first powered sample would
+                    # discard the already-planned run-up and start it at rest.
                     self._execute_running_job_command(context.session.dialect.motion_barrier_command,
                                                       timeout=job_ack_timeout)
                     self._move_job_focus(context, clearance=False, focus_mode=active_focus_mode)
@@ -6510,7 +6611,7 @@ class MachineService:
                     for line in lines:
                         if (focus_binding_id(line) is not None
                                 or line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX,
-                                                    OPERATION_FOCUS_PREFIX))):
+                                                    OPERATION_FOCUS_PREFIX, RASTER_BOUNDARY_PREFIX))):
                             continue
                         words = {word.letter: word.value for word in parse_words(line)}
                         if words.get("G") in (0, 1):

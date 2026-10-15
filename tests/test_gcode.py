@@ -345,7 +345,7 @@ def test_browser_vector_command_budget_rejects_before_geometry_expansion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     geometry = SvgGeometry(
-        [Polyline(np.zeros((999_999, 2), dtype=np.float64))],
+        [Polyline(np.zeros((1_999_999, 2), dtype=np.float64))],
         (0.0, 0.0, 1.0, 1.0),
     )
 
@@ -356,7 +356,7 @@ def test_browser_vector_command_budget_rejects_before_geometry_expansion(
         "laser_aligner.gcode.generator.place_geometry",
         fail_if_called,
     )
-    with pytest.raises(ValueError, match="1,000,005 streamed commands"):
+    with pytest.raises(ValueError, match="2,000,005 streamed commands"):
         generate_vector_gcode(
             geometry,
             DesignPlacement(110.0, 110.0, 1.0, 1.0),

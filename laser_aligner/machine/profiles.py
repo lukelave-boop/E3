@@ -24,6 +24,7 @@ from ..config import (
     _validate_override_keys,
 )
 from ..errors import RealMachineSetupRequired
+from ..raster_safety import parse_raster_travel_envelope
 from ..storage import (
     atomic_write_bytes_if_absent,
     atomic_write_json,
@@ -152,6 +153,9 @@ def _validated_pair(
         photo = machine_raw["photo_position"]
         air_assist = machine_raw["air_assist"]
         machine = MachineSettings(
+            raster_travel_envelope=parse_raster_travel_envelope(
+                machine_raw.get("raster_travel_envelope")
+            ),
             backend=str(machine_raw["backend"]),
             protocol=str(machine_raw["protocol"]),
             port=str(machine_raw["port"]),
@@ -968,6 +972,8 @@ class MachineRegistry:
             candidate.id = candidate_id
             candidate.name = duplicated_name
             candidate.created_from = f"duplicate:{source.id}"
+            # A copied machine identity cannot inherit physical travel proof.
+            candidate.machine.raster_travel_envelope = None
             previous_active = self._active_machine_id
             self._machines[candidate.id] = candidate
             if self._active_machine_id is None:

@@ -7,7 +7,12 @@ import json
 import subprocess
 from pathlib import Path
 
-from package_raster_capacity import ROOT, source
+if __package__:
+    from .package_raster_capacity import ROOT, source
+    from .package_source_dependencies import reject_partial_raster_sources
+else:
+    from package_raster_capacity import ROOT, source
+    from package_source_dependencies import reject_partial_raster_sources
 
 BASELINE = "fdfe9b22cbaa92e8c541b45cde3e558669bab4e2"
 FILES = ("laser_aligner/gcode/limits.py", "laser_aligner/machine/service.py",
@@ -19,6 +24,7 @@ def package(destination: Path, revision: str) -> Path:
         ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=ROOT, text=True,
     ).strip()
     sources = {name: source(revision, name) for name in FILES}
+    reject_partial_raster_sources(sources)
     if b"MAX_STREAM_COMMANDS = 2_000_000" not in sources[FILES[0]]:
         raise ValueError("Revision lacks the two-million-command limit")
     manifest = json.dumps({

@@ -91,7 +91,12 @@ distance with the same braking-distance estimate:
   because inline `S0` changes optical output while motion continues.
 
 Increasing safe, bounds-checked overscan is preferable to correcting image-area
-power. Overscan remains included in design and controller bounds validation.
+power. For verified-envelope raster jobs, powered spans remain surface-bounded and
+all overscan/transfer motion is checked against the separate verified carriage
+envelope. Run-up/run-out uses the larger of original-width overscan and modeled
+braking distance, crediting existing white margins. Adequate modeled lead can
+therefore remove a previous insufficient-lead Power Correction ramp; review this
+as a changed process setting. Legacy programs retain their stricter bounds.
 
 ## UI, projects, and materials
 

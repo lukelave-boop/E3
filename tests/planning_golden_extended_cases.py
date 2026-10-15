@@ -509,9 +509,11 @@ def _aggregate_command_budget_rejected() -> RejectionResult:
         layer_id=layer.id,
         transform=Transform(50.0, 50.0, 20.0, 20.0),
         geometry={"polylines": [
-            {"points": [[x, -0.5], [x + 0.2, -0.5], [x + 0.2, 0.5], [x, 0.5]],
+            # Six contours exceed the current two-million-command ceiling
+            # while the 40,001 rows stay below the independent 60,000-row cap.
+            {"points": [[x, -0.5], [x + 0.1, -0.5], [x + 0.1, 0.5], [x, 0.5]],
              "closed": True}
-            for x in (-0.5, -0.1, 0.3)
+            for x in (-0.5, -0.3, -0.1, 0.1, 0.3, 0.5)
         ]},
     )
     document = _document(

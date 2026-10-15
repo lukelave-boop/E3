@@ -51,6 +51,11 @@ from ..planning.model import (
     RasterSource,
     SceneRevision,
 )
+from ..raster_safety import (
+    RasterTravelEnvelope,
+    raster_boundary_directive,
+    require_verified_raster_travel,
+)
 from .model import (
     CoordinateSpace,
     LayerMode,
@@ -87,6 +92,7 @@ from .planner_limits import (
 from .planner_limits import STREAM_COMMAND_RESERVE as _STREAM_COMMAND_RESERVE
 from .power_correction import (
     DEFAULT_RAMP_STEPS,
+    braking_distance_mm,
     corrected_raster_span_motions,
     corrected_vector_motions,
 )
@@ -180,6 +186,8 @@ class ProjectJob:
     execution_signature: tuple[Any, ...] | None = None
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
     placement_capture_signature: tuple[Any, ...] | None = None
+    engraving_surface_mm: tuple[tuple[float, float], ...] | None = None
+    raster_travel_envelope: RasterTravelEnvelope | None = None
 
 
 # An 8x8 Bayer matrix preserves deterministic grayscale detail without requiring
@@ -1047,6 +1055,7 @@ def _place_raster_rows(
     return [
         RasterRow(
             points=_place_points(row.points, coordinate_frame),
+            lead_distance_mm=row.lead_distance_mm,
             spans=_place_paths(row.spans, coordinate_frame),
             source_tag=row.source_tag,
         )
@@ -1080,21 +1089,108 @@ def _controller_paths(
     ]
 
 
-def _raster_motion_points(points: np.ndarray, overscan_percent: float) -> np.ndarray:
+def _raster_motion_points(
+    points: np.ndarray, overscan_percent: float, lead_distance_mm: float | None = None,
+) -> np.ndarray:
     points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
-    if len(points) != 2 or overscan_percent <= 0:
+    if len(points) != 2 or (overscan_percent <= 0 and lead_distance_mm is None):
         return points.copy()
     vector = points[1] - points[0]
     length = float(np.linalg.norm(vector))
     if length <= 1e-12:
         return points.copy()
-    extension = vector / length * (length * overscan_percent / 100.0)
+    lead = length * overscan_percent / 100.0 if lead_distance_mm is None else lead_distance_mm
+    extension = vector / length * lead
     return np.vstack([points[0] - extension, points[0], points[1], points[1] + extension])
+
+
+def _prepare_raster_clearance(
+    rows: list[RasterRow], layer: OperationLayer, laser: LaserSettings,
+) -> None:
+    """Trim only blank motion after sampling; keep the original dither lattice.
+
+    Percent is still based on the complete original row width. Blank margins
+    provide this distance before travel extends beyond the image. The configured
+    acceleration model supplies a floor, not evidence of physical acceleration.
+    """
+    acceleration = laser.preview_acceleration_mm_s2
+    if type(acceleration) not in {int, float} or not math.isfinite(acceleration) or acceleration <= 0:
+        raise SafetyError("Raster run-up requires a finite positive configured acceleration model")
+    modeled_lead = braking_distance_mm(layer.speed_mm_min, acceleration)
+    for row in rows:
+        _raise_if_toolpath_cancelled()
+        original_width = _length(row.points)
+        row.lead_distance_mm = max(original_width * layer.overscan_percent / 100.0, modeled_lead)
+        if row.spans:
+            row.points = np.vstack((row.spans[0].points[0], row.spans[-1].points[-1]))
+
+
+def _validate_raster_travel_points(points: np.ndarray, envelope: RasterTravelEnvelope) -> None:
+    if not np.isfinite(points).all():
+        raise SafetyError("Machine carriage travel contains non-finite coordinates")
+    minimum, maximum = points.min(axis=0), points.max(axis=0)
+    clearances = (
+        ("X minimum", envelope.x_min - minimum[0]),
+        ("X maximum", maximum[0] - envelope.x_max),
+        ("Y minimum", envelope.y_min - minimum[1]),
+        ("Y maximum", maximum[1] - envelope.y_max),
+    )
+    failures = [f"{name}: {value:.4f} mm" for name, value in clearances if value > 1e-6]
+    if failures:
+        raise SafetyError(
+            "Machine carriage travel boundary failed (laser-off overscan or transfer included): "
+            f"X{minimum[0]:.4f}..{maximum[0]:.4f}, Y{minimum[1]:.4f}..{maximum[1]:.4f}; "
+            f"verified X{envelope.x_min:g}..{envelope.x_max:g}, "
+            f"Y{envelope.y_min:g}..{envelope.y_max:g}. "
+            "Additional clearance required: " + ", ".join(failures)
+            + ". Reposition/reduce the job or physically verify different travel limits; the path was not clamped."
+        )
+
+
+def _validate_raster_travel_paths(paths: list[Polyline], envelope: RasterTravelEnvelope) -> None:
+    for offset in range(0, len(paths), 4096):
+        _raise_if_toolpath_cancelled()
+        _validate_raster_travel_points(np.vstack([path.points for path in paths[offset:offset + 4096]]), envelope)
+
+
+def _validate_exact_raster_plan(
+    plan: JobPlan, envelope: RasterTravelEnvelope,
+    surface: tuple[tuple[float, float], ...], laser: LaserSettings,
+    output_polygon: tuple[tuple[float, float], ...] | None, work_area: WorkArea,
+) -> None:
+    # Every serialized segment, including the initial approach, row/layer/pass
+    # transfers, is tested at both ends. Rectangular/convex domains then contain
+    # the entire straight segment. Use configured physical offset, not rounded
+    # display metadata, to reconstruct the actual beam.
+    display_offset = np.array([plan.spot_offset_x, plan.spot_offset_y])
+    physical_offset = np.array([laser.spot_offset_x_mm, laser.spot_offset_y_mm])
+    for offset in range(0, len(plan.moves), 4096):
+        _raise_if_toolpath_cancelled()
+        batch = plan.moves[offset:offset + 4096]
+        controller = np.array([
+            point for move in batch for point in ((move.start_x, move.start_y), (move.end_x, move.end_y))
+        ]) - display_offset
+        _validate_raster_travel_points(controller, envelope)
+        mask = np.repeat([move.laser_on and move.power > 0 for move in batch], 2)
+        powered = controller[mask] + physical_offset
+        if len(powered):
+            _validate_paths_in_guarded_polygon(
+                [Polyline(powered, closed=False, source_tag="exact powered raster")], surface,
+                coordinate_label="powered output outside calibrated engraving surface after serialization",
+            )
+            for points, domain in ((powered, "beam"), (controller[mask], "controller")):
+                paths = [Polyline(points, closed=False, source_tag="exact powered raster")]
+                label = f"powered {domain} output authority after serialization"
+                if output_polygon is None:
+                    validate_paths(paths, work_area, laser.boundary_margin_mm, coordinate_label=label)
+                else:
+                    _validate_paths_in_guarded_polygon(paths, output_polygon, coordinate_label=label)
 
 
 def _reverse_raster_row(row: RasterRow) -> RasterRow:
     return RasterRow(
         points=row.points[::-1].copy(),
+        lead_distance_mm=row.lead_distance_mm,
         spans=[
             Polyline(span.points[::-1].copy(), closed=False, source_tag=span.source_tag)
             for span in reversed(row.spans)
@@ -1116,6 +1212,7 @@ def _controller_raster_rows(
     return [
         RasterRow(
             points=row.points.astype(np.float64, copy=True) - offset,
+            lead_distance_mm=row.lead_distance_mm,
             spans=[
                 Polyline(
                     span.points.astype(np.float64, copy=True) - offset,
@@ -1136,7 +1233,7 @@ def _raster_motion_paths(
 ) -> list[Polyline]:
     return [
         Polyline(
-            _raster_motion_points(row.points, overscan_percent),
+            _raster_motion_points(row.points, overscan_percent, row.lead_distance_mm),
             closed=False,
             source_tag=row.source_tag,
         )
@@ -1151,7 +1248,7 @@ def _raster_row_command_count(
     powered: bool,
     power_correction: float = 0.0,
 ) -> int:
-    motion = _raster_motion_points(row.points, overscan_percent)
+    motion = _raster_motion_points(row.points, overscan_percent, row.lead_distance_mm)
     count = 1  # G0 to the row's laser-off lead-in.
     if len(motion) == 4:
         count += 2  # G1 to the image edge and G1 through lead-out.
@@ -2465,7 +2562,7 @@ def _emit_raster_row(
 ) -> tuple[np.ndarray, float, float, int, int]:
     """Emit one scan row and return position, cut/travel, points, and paths."""
 
-    motion = _raster_motion_points(row.points, layer.overscan_percent)
+    motion = _raster_motion_points(row.points, layer.overscan_percent, row.lead_distance_mm)
     lead_start = motion[0]
     row_start = row.points[0]
     row_end = row.points[-1]
@@ -2585,6 +2682,8 @@ def _generate_project_gcode(
     start_position: tuple[float, float] | None = None,
     coordinate_frame: HoneycombCoordinateFrame | None = None,
     machine_work_area: WorkArea | None = None,
+    raster_travel_envelope: RasterTravelEnvelope | None = None,
+    require_verified_raster_travel_limits: bool = False,
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     planning_cache: PlanningCache | None = None,
     air_assist_commands: AirAssistCommands | None = None,
@@ -2597,6 +2696,17 @@ def _generate_project_gcode(
     ):
         raise TypeError("air_assist_commands must be AirAssistCommands or None")
     document.validate()
+    raster_requested = any(
+        layer.mode == LayerMode.RASTER and layer.visible and layer.output_enabled
+        and any(item.layer_id == layer.id and item.visible and item.is_output_geometry
+                for item in document.objects)
+        for layer in document.layers
+    )
+    if type(require_verified_raster_travel_limits) is not bool:
+        raise ValueError("require_verified_raster_travel_limits must be a boolean")
+    if raster_requested and (raster_travel_envelope is not None or require_verified_raster_travel_limits):
+        raster_travel_envelope = require_verified_raster_travel(raster_travel_envelope)
+    expanded_raster_travel = raster_requested and raster_travel_envelope is not None
     scene_revision = project_scene_revision(document)
     controller_power_max = int(power_max or laser.power_max)
     prepared_object_paths: dict[str, tuple[Polyline, ...]] = {}
@@ -2648,6 +2758,15 @@ def _generate_project_gcode(
         dtype=np.float64,
     )
     current = start.copy()
+    surface_corners = np.array([
+        [local_work_area.x_min + local_margin, local_work_area.y_min + local_margin],
+        [local_work_area.x_max - local_margin, local_work_area.y_min + local_margin],
+        [local_work_area.x_max - local_margin, local_work_area.y_max - local_margin],
+        [local_work_area.x_min + local_margin, local_work_area.y_max - local_margin],
+    ])
+    engraving_surface = normalize_convex_polygon(
+        _place_points(surface_corners, coordinate_frame).tolist(), label="calibrated engraving surface",
+    ) if expanded_raster_travel else None
 
     all_paths: list[Polyline] = []
     all_controller_paths: list[Polyline] = []
@@ -2750,53 +2869,59 @@ def _generate_project_gcode(
                 prepared_object_paths=prepared_object_paths,
             )
             raster_command_estimate += layer_raster_commands
-            local_design_motion_paths = _raster_motion_paths(
-                design_rows,
-                layer.overscan_percent,
-            )
-            validate_paths(
-                local_design_motion_paths,
-                local_work_area,
-                local_margin,
-                coordinate_label="local raster overscan path",
-            )
+            if expanded_raster_travel:
+                _prepare_raster_clearance(design_rows, layer, laser)
+                local_powered_paths = [span for row in design_rows for span in row.spans]
+                try:
+                    validate_paths(local_powered_paths, local_work_area, local_margin,
+                                   coordinate_label="powered raster engraving surface")
+                except SafetyError as exc:
+                    xmin, ymin, xmax, ymax = _bounds(local_powered_paths)
+                    excess = (
+                        ("X minimum", local_work_area.x_min + local_margin - xmin),
+                        ("X maximum", xmax - local_work_area.x_max + local_margin),
+                        ("Y minimum", local_work_area.y_min + local_margin - ymin),
+                        ("Y maximum", ymax - local_work_area.y_max + local_margin),
+                    )
+                    clearance = ", ".join(f"{side}: {value:.4f} mm" for side, value in excess if value > 1e-6)
+                    raise SafetyError(f"{exc}. Powered engraving exceeds surface clearance: {clearance}; "
+                                      "move or resize the image inside the calibrated surface.") from exc
+            local_design_motion_paths = _raster_motion_paths(design_rows, layer.overscan_percent)
+            if not expanded_raster_travel:
+                try:
+                    validate_paths(
+                        local_design_motion_paths, local_work_area, local_margin,
+                        coordinate_label="local raster overscan path",
+                    )
+                except SafetyError as exc:
+                    raise SafetyError(
+                        f"{exc}. Laser-off travel beyond the engraving surface requires "
+                        "a separately configured verified machine.raster_travel_envelope; "
+                        "no travel limit is inferred from the surface or historical coordinates."
+                    ) from exc
             placed_rows = _place_raster_rows(design_rows, coordinate_frame)
             design_paths = [span for row in placed_rows for span in row.spans]
-            design_motion_paths = _raster_motion_paths(
-                placed_rows,
-                layer.overscan_percent,
-            )
+            design_motion_paths = _raster_motion_paths(placed_rows, layer.overscan_percent)
+            checked_design = design_paths if expanded_raster_travel else design_motion_paths
+            label = "powered raster engraving surface" if expanded_raster_travel else "placed raster overscan path"
             if guarded_polygon is None:
-                validate_paths(
-                    design_motion_paths,
-                    execution_work_area,
-                    laser.boundary_margin_mm,
-                    coordinate_label="placed raster overscan path",
-                )
+                validate_paths(checked_design, execution_work_area, laser.boundary_margin_mm,
+                               coordinate_label=label)
             else:
-                _validate_paths_in_guarded_polygon(
-                    design_motion_paths,
-                    guarded_polygon,
-                    coordinate_label="placed raster overscan path",
-                )
+                _validate_paths_in_guarded_polygon(checked_design, guarded_polygon, coordinate_label=label)
             controller_rows = _controller_raster_rows(placed_rows, laser)
-            controller_motion_paths = _raster_motion_paths(
-                controller_rows,
-                layer.overscan_percent,
-            )
+            controller_motion_paths = _raster_motion_paths(controller_rows, layer.overscan_percent)
+            checked_controller = ([span for row in controller_rows for span in row.spans]
+                                  if expanded_raster_travel else controller_motion_paths)
+            label = ("powered raster after laser spot correction" if expanded_raster_travel
+                     else "raster overscan path after laser spot correction")
             if guarded_polygon is None:
-                validate_paths(
-                    controller_motion_paths,
-                    execution_work_area,
-                    laser.boundary_margin_mm,
-                    coordinate_label="raster overscan path after laser spot correction",
-                )
+                validate_paths(checked_controller, execution_work_area, laser.boundary_margin_mm,
+                               coordinate_label=label)
             else:
-                _validate_paths_in_guarded_polygon(
-                    controller_motion_paths,
-                    guarded_polygon,
-                    coordinate_label="raster overscan path after laser spot correction",
-                )
+                _validate_paths_in_guarded_polygon(checked_controller, guarded_polygon, coordinate_label=label)
+            if expanded_raster_travel:
+                _validate_raster_travel_paths(controller_motion_paths, raster_travel_envelope)
             layer_plans.append(
                 LayerOperation(
                     layer=layer,
@@ -2973,6 +3098,8 @@ def _generate_project_gcode(
         "G90 ; absolute positioning",
         "M5 ; laser off before any motion",
     ]
+    if expanded_raster_travel:
+        lines.append(raster_boundary_directive(engraving_surface, raster_travel_envelope))
     air_assist = _AirAssistEmitter(air_assist_commands)
     air_assist.establish_off(lines)
     lines.insert(
@@ -3093,6 +3220,7 @@ def _generate_project_gcode(
                     source_motion = _raster_motion_points(
                         row.points,
                         layer.overscan_percent,
+                        row.lead_distance_mm,
                     )
                     source_order_travel += float(
                         np.linalg.norm(source_motion[0] - comparison_position)
@@ -3103,6 +3231,7 @@ def _generate_project_gcode(
                     row_motion = _raster_motion_points(
                         row.points,
                         layer.overscan_percent,
+                        row.lead_distance_mm,
                     )
                     planned_order_travel += float(
                         np.linalg.norm(row_motion[0] - current)
@@ -3305,8 +3434,14 @@ def _generate_project_gcode(
     except JobPlanCancelled as exc:
         raise ToolpathGenerationCancelled("Toolpath generation was cancelled") from exc
     _raise_if_toolpath_cancelled()
+    if expanded_raster_travel:
+        _validate_exact_raster_plan(
+            plan, raster_travel_envelope, engraving_surface, laser, guarded_polygon, execution_work_area,
+        )
     return ProjectJob(
         text=encoded.text,
+        engraving_surface_mm=engraving_surface,
+        raster_travel_envelope=raster_travel_envelope if expanded_raster_travel else None,
         bounds_mm=bounds,
         cut_length_mm=cut_length,
         travel_length_mm=travel_length,
@@ -3340,6 +3475,8 @@ def generate_project_gcode(
     start_position: tuple[float, float] | None = None,
     coordinate_frame: HoneycombCoordinateFrame | None = None,
     machine_work_area: WorkArea | None = None,
+    raster_travel_envelope: RasterTravelEnvelope | None = None,
+    require_verified_raster_travel_limits: bool = False,
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     planning_cache: PlanningCache | None = None,
     air_assist_commands: AirAssistCommands | None = None,
@@ -3359,6 +3496,8 @@ def generate_project_gcode(
             start_position=start_position,
             coordinate_frame=coordinate_frame,
             machine_work_area=machine_work_area,
+            raster_travel_envelope=raster_travel_envelope,
+            require_verified_raster_travel_limits=require_verified_raster_travel_limits,
             guarded_output_polygon_mm=guarded_output_polygon_mm,
             planning_cache=planning_cache,
             air_assist_commands=air_assist_commands,

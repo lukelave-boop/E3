@@ -1,5 +1,19 @@
 # Roadmap
 
+## Raster overscan separation (2026-10-15)
+
+Implemented for source verification: independently configured verified carriage
+travel, exact calibrated powered boundary, post-dither blank-margin use with a
+modeled acceleration floor, complete serialized-segment checks and separate
+Preview boundaries. Operator travel-envelope confirmation, supervised zero-power
+validation at the intended speeds, physical engraving acceptance, a matching Pi
+companion deployment and Windows compatibility CI remain release gates. No
+historical X-only travel record or provisional Y235 value qualifies a whole envelope.
+
+The measured performance follow-ups are ranked in
+[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md); raster caching and removal of
+the remote wrapper's unchanged-text duplicate preflight are separate future work.
+
 ## Image background cleanup
 
 Implemented in source: per-image, edge-connected near-white cleanup, adjustable

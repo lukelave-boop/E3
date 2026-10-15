@@ -15,6 +15,7 @@ from ..air_assist import (
 from ..errors import SafetyError
 from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
 from ..operation_focus import mode as operation_focus_mode
+from ..raster_safety import RasterBoundary, parse_raster_boundary
 from .preview import parse_spot_offset_comment, scan_word_state, strip_comment
 
 
@@ -107,6 +108,8 @@ class JobPlan:
     command_delay_ms: float = 0.0
     air_assist_events: tuple[PlannedAirAssistEvent, ...] = ()
     air_assist_commands: AirAssistCommands | None = None
+    powered_bounds_mm: tuple[float, float, float, float] | None = None
+    raster_boundary: RasterBoundary | None = None
 
     @property
     def powered(self) -> bool:
@@ -172,6 +175,7 @@ def _build_job_plan(
     moves: list[PlannedMove] = []
     air_assist_events: list[PlannedAirAssistEvent] = []
     warnings: list[str] = []
+    raster_boundary = None
     for line_number, raw_line in enumerate(text.splitlines(), 1):
         _raise_if_cancelled()
         metadata = _metadata(raw_line)
@@ -202,6 +206,14 @@ def _build_job_plan(
                 source = payload
             continue
         raw_instruction = raw_line.strip()
+        boundary = parse_raster_boundary(raw_instruction)
+        if boundary is not None:
+            if raster_boundary is not None or moves:
+                raise SafetyError(
+                    f"Line {line_number}: raster boundary must occur once before motion"
+                )
+            raster_boundary = boundary
+            continue
         requested_focus_mode = operation_focus_mode(strip_comment(raw_instruction))
         if requested_focus_mode is not None:
             focus_mode = requested_focus_mode
@@ -335,14 +347,21 @@ def _build_job_plan(
         elapsed += duration
         x, y = new_x, new_y
 
-    points: list[tuple[float, float]] = []
+    x_min = y_min = powered_x_min = powered_y_min = math.inf
+    x_max = y_max = powered_x_max = powered_y_max = -math.inf
     for move in moves:
         _raise_if_cancelled()
-        points.extend(((move.start_x, move.start_y), (move.end_x, move.end_y)))
-    if points:
-        xs = [point[0] for point in points]
-        ys = [point[1] for point in points]
-        bounds = (min(xs), min(ys), max(xs), max(ys))
+        x_min = min(x_min, move.start_x, move.end_x)
+        y_min = min(y_min, move.start_y, move.end_y)
+        x_max = max(x_max, move.start_x, move.end_x)
+        y_max = max(y_max, move.start_y, move.end_y)
+        if move.laser_on:
+            powered_x_min = min(powered_x_min, move.start_x, move.end_x)
+            powered_y_min = min(powered_y_min, move.start_y, move.end_y)
+            powered_x_max = max(powered_x_max, move.start_x, move.end_x)
+            powered_y_max = max(powered_y_max, move.start_y, move.end_y)
+    if moves:
+        bounds = (x_min, y_min, x_max, y_max)
     else:
         bounds = (0.0, 0.0, 0.0, 0.0)
         warnings.append("The program contains no motion")
@@ -376,6 +395,12 @@ def _build_job_plan(
         command_delay_ms=command_delay_ms,
         air_assist_events=tuple(air_assist_events),
         air_assist_commands=air_assist_commands,
+        powered_bounds_mm=(
+            (powered_x_min, powered_y_min, powered_x_max, powered_y_max)
+            if math.isfinite(powered_x_min)
+            else None
+        ),
+        raster_boundary=raster_boundary,
     )
 
 
@@ -426,6 +451,17 @@ def _restart_program_from_move(
     if not 0 <= int(move_index) < len(plan.moves):
         raise ValueError("Start Here move is outside the generated job")
     selected = plan.moves[int(move_index)]
+    if (
+        plan.raster_boundary is not None
+        and selected.layer_mode == "raster"
+        and not selected.rapid
+        and int(move_index) > 0
+        and not plan.moves[int(move_index) - 1].rapid
+    ):
+        raise SafetyError(
+            "Raster Start Here must retain the complete run-up; select the row's "
+            "laser-off rapid approach or its first lead-in feed move"
+        )
     suffix = plan.moves[int(move_index) :]
     requested_air = False
     for move in suffix:
@@ -467,6 +503,8 @@ def _restart_program_from_move(
         "G90 ; absolute positioning",
         "M5 ; laser off before positioning",
     ]
+    if plan.raster_boundary is not None:
+        lines.append(plan.raster_boundary.directive)
     if air_commands is not None:
         lines.extend(air_commands.program_lines(False))
     if abs(plan.spot_offset_x) >= 1e-12 or abs(plan.spot_offset_y) >= 1e-12:
