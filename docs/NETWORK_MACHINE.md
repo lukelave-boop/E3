@@ -1,5 +1,21 @@
 # E3 Raspberry Pi hardware node
 
+## LAN and Tailscale camera addresses
+
+The same-machine Duplicate option retains camera/calibration profile IDs. Open
+that calibration once at its saved camera endpoint with the camera online to
+bind its authenticated stable identity. Subsequent LAN/Tailscale camera endpoint
+changes keep calibration valid only for the same identity and optical settings.
+This requires a stable `/dev/v4l/by-id/` camera path and the same shared camera
+credential. Changed camera, focus, resolution or credential requires review;
+an unknown alias cannot initialize its own calibration association. The binding
+does not prove camera mounting has stayed fixed.
+
+The Pi companion from `scripts/package_two_million.py` raises capacity to two
+million commands while retaining the optimized validator. A 1.1-million-command
+32 MB offline example takes about 90 seconds to verify on the current 1 GiB Pi;
+transfer completion is not readiness. Status remains responsive during checks.
+
 After STOP, a terminal job's pending Air Assist OFF binding is rechecked at
 the next explicit Start. A recovered exact owner must report ready and
 acknowledged OFF with matching endpoint, baudrate and mapping before that

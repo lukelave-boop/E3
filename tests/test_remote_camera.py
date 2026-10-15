@@ -1195,6 +1195,7 @@ def _fetch_supplied_remote_status(
     monkeypatch: pytest.MonkeyPatch,
     raw: dict[str, object],
 ) -> CameraStatus:
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", "camera-status-test-token-123456789")
     remote = RemoteCameraService(
         CameraSettings(device="e3camera://127.0.0.1:65534")
     )
@@ -1280,3 +1281,19 @@ def test_remote_status_probe_uses_bounded_exponential_backoff() -> None:
         30.0,
         30.0,
     ]
+
+
+def test_remote_calibration_identity_requires_authenticated_live_stable_camera(monkeypatch):
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", "camera-status-test-token-123456789")
+    remote = RemoteCameraService(CameraSettings(device="e3camera://127.0.0.1:65534"))
+    raw = {**_current_remote_status_payload(), "device": "/dev/v4l/by-id/usb-camera-serial"}
+    monkeypatch.setattr(remote, "_request", lambda *_args, **_kwargs: ({"status": raw}, ()))
+    assert remote.calibration_identity() is None
+    remote._fetch_status()
+    assert remote.calibration_identity()
+    raw["connected"] = False
+    remote._fetch_status()
+    assert remote.calibration_identity() is None
+    raw.update(connected=True, device="/dev/video0")
+    remote._fetch_status()
+    assert remote.calibration_identity() is None

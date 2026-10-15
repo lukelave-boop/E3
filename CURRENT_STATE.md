@@ -1,5 +1,36 @@
 # Current repository state
 
+## Camera aliases, raster capacity and start readiness (2026-10-15)
+
+Active branch codex/camera-alias-raster-capacity preserves unchanged camera
+calibration across authenticated LAN/Tailscale aliases. A per-mapping sidecar
+binds the stable camera by-id path and shared credential using HMAC; enrollment
+requires the endpoint already accepted by the saved mapping. Different/missing
+identity, corrupt binding, changed optics and unknown unbound aliases fail
+closed. Calibration matrices, provenance, mapping digest and visual references
+are not rewritten. Same-machine duplicated profiles may share this binding.
+
+The common bounded stream ceiling is two million commands (64 MiB file bound
+unchanged). Raster planning counts the shared M3/M4 and M5 once per row instead
+of overcounting them per span. Existing exact output validation is retained.
+Preview reports project checks separately from machine readiness, displays the
+current start-block reason, and disables START when a powered job lacks required
+measured focus. Pi submission still revalidates authoritative machine state.
+
+Offline validation on the installed 1 GiB Pi, with process-local new limit and
+controller creation forbidden, accepted 1,116,717 commands / 32,302,640 bytes.
+Preflight took 89.13 s, finalize 89.69 s, cached policy/file recheck 4.32 s;
+peak process RSS was 301,696 KiB. Maximum status latency across 7,111 samples
+was 0.0203 s. This is offline Linux/Pi evidence, not physical execution.
+All 262 distinct focused Windows cases pass across camera provenance/identity,
+remote camera, preview/preflight, controller-state projection, raster generation,
+command-cap acceptance/rejection and companion installation guards. Loopback
+camera cases were rerun outside the socket-restricted sandbox. These include
+offscreen widgets and simulated services, not interactive/physical testing.
+Affected Ruff and compilation checks pass. Frozen packaging and Pi companion
+installation are pending.
+Full compatibility CI and integration into main remain pending.
+
 ## Duplicate machine calibration choice (2026-10-15)
 
 Branch codex/duplicate-calibration adds a Duplicate dialog with a name and

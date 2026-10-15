@@ -16,7 +16,10 @@ def kit(tmp_path, monkeypatch):
         packager, "source",
         lambda revision, name: (
             baseline if revision == packager.BASELINE
-            else (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
+            else (
+                b"MAX_STREAM_COMMANDS = 1_000_000\n" if name == packager.FILES[0]
+                else (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
+            )
         ),
     )
     bundle = packager.package(tmp_path / "bundle", "HEAD")

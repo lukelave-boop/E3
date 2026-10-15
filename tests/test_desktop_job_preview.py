@@ -227,12 +227,14 @@ def test_preview_machine_gate_blocks_only_start_job(
 
     assert not dialog.run_button.isEnabled()
     assert "Reconnect" in dialog.run_button.toolTip()
+    assert "Reconnect" in dialog.start_readiness_label.text()
     assert dialog.reset_button.isEnabled()
     assert dialog.play_button.isEnabled()
     dialog.run_button.click()
     assert requests == []
 
     dialog.set_run_enabled(True)
+    assert "Machine checks passed" in dialog.start_readiness_label.text()
     dialog.run_button.click()
     assert requests == [True]
 
@@ -988,7 +990,7 @@ def test_controller_progress_does_not_overwrite_prepared_power(
 
     assert "max power 20.0% / S200" in progress.toolTip()
     assert "Controller idle · no job started" in progress.toolTip()
-    assert progress.progress.format() == "Execution 0%"
+    assert progress.progress.format() == "Idle"
     progress.set_job_status(
         {
             "running": True,
@@ -1126,3 +1128,28 @@ def test_preview_index_polls_cooperative_cancellation() -> None:
         _plan(),
         cancel_check=lambda: False,
     ) == prepare_job_preview(_plan())
+
+
+def test_main_window_preview_gate_tracks_surface_measurement(qt_application):
+    from types import SimpleNamespace
+    from laser_aligner.desktop.main_window import E3MainWindow
+    dialog = JobPreviewDialog(_plan(), (0.0, 100.0, 0.0, 100.0), "focus.gcode")
+    focus = {"job_focus_required": True, "job_focus": None,
+             "job_focus_block_reason": "Measure the material surface"}
+    host = SimpleNamespace(_machine_status={
+        "controller_state": "READY_MOTION", "allow_motion": True,
+        "armed": False, "workpiece_focus": focus,
+    }, _controller_busy=False, _job_preparation_busy=False)
+    E3MainWindow._sync_job_preview_machine_gate(host, dialog)
+    assert not dialog.run_button.isEnabled()
+    assert "Measure the material surface" in dialog.start_readiness_label.text()
+    assert dialog.play_button.isEnabled()
+    focus["job_focus"] = {"id": "current-measurement"}
+    E3MainWindow._sync_job_preview_machine_gate(host, dialog)
+    assert dialog.run_button.isEnabled()
+    focus["job_focus"] = None
+    E3MainWindow._sync_job_preview_machine_gate(host, dialog)
+    assert not dialog.run_button.isEnabled()
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()

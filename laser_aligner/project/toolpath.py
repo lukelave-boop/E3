@@ -1157,11 +1157,12 @@ def _raster_row_command_count(
         count += 2  # G1 to the image edge and G1 through lead-out.
     if not powered:
         return count + 1  # One laser-off G1 across the full row.
+    count += 2  # One M3/M4 at row entry and one M5 after row lead-out.
     position = row.points[0]
     for span in row.spans:
         if float(np.linalg.norm(span.points[0] - position)) > 1e-9:
             count += 1  # Laser-off gap.
-        count += 3  # Conservative: powered G1 plus the row's M3/M4 and final M5.
+        count += 1  # Powered G1 span; laser mode is shared by the whole row.
         if power_correction != 0.0:
             # Each image edge can add at most ``ramp_steps`` subdivisions.
             # This conservative bound keeps the final stream below its hard cap

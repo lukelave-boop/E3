@@ -30,6 +30,7 @@ from .calibration.bed import (
     BedPoint,
     _coordinate_frame_transform,
 )
+from .calibration.camera_identity import CameraEndpointBindings
 from .calibration.lens import LensCalibrator
 from .calibration.profiles import CalibrationProfileStore, signature_from_camera_settings
 from .calibration.reach import FixtureReachStore
@@ -352,6 +353,7 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
             signature_from_camera_settings(settings.camera),
         )
         calibration_dir = self.calibration_profiles.active_dir
+        self.camera_endpoint_bindings = CameraEndpointBindings(calibration_dir)
         self.lens = LensCalibrator(calibration_dir, settings.calibration.lens)
         self.bed = BedMapper(calibration_dir, settings.calibration.bed, settings.machine.work_area)
         self.surface_calibration = SurfaceCalibrationStore(calibration_dir)
@@ -449,7 +451,7 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
             current_lens_model_id = None if lens is None else lens.model_id
         else:
             current_lens_model_id = lens_model_id
-        return {
+        provenance = {
             "schema_version": 1,
             "lens_model_id": current_lens_model_id,
             "camera": {
@@ -467,6 +469,20 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
             },
             "pixels_per_mm": float(self.settings.calibration.bed.pixels_per_mm),
         }
+        calibration = self.bed.calibration
+        bindings = getattr(self, "camera_endpoint_bindings", None)
+        if calibration is not None and bindings is not None:
+            saved = calibration.provenance
+            if isinstance(saved, dict) and isinstance(saved.get("camera"), dict):
+                provenance["camera"] = bindings.canonical_camera(
+                    self.bed_mapping_digest(), saved["camera"], provenance["camera"],
+                    self._remote_calibration_identity(),
+                )
+        return provenance
+
+    def _remote_calibration_identity(self) -> str | None:
+        getter = getattr(self.camera, "calibration_identity", None)
+        return getter() if callable(getter) else None
 
     def bed_calibration_validity(
         self,
@@ -498,6 +514,11 @@ class AppContext(MaterialWorkspaceMixin, BrowserPlacementMixin):
             }
         current = self._bed_provenance(lens_model_id=lens_model_id)
         changed: list[str] = []
+        bindings = getattr(self, "camera_endpoint_bindings", None)
+        if bindings is not None and not bindings.identity_matches(
+            self.bed_mapping_digest(), self._remote_calibration_identity()
+        ):
+            changed.append("authenticated camera identity")
         for key, value in current.items():
             if key == "camera" and _camera_provenance_matches(
                 saved.get(key),

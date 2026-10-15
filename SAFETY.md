@@ -1,5 +1,12 @@
 # Safety requirements
 
+Camera address aliases preserve calibration only after authenticated stable
+camera identity and optical settings match an enrolled mapping. They do not
+detect camera/mount movement or grant motion authority. Preview's measured-focus
+gate is an early read-only indication; authoritative checks still run at START.
+The two-million-command capacity retains absolute-mm allowlist, byte, bounds,
+arming and laser-off checks. Physical enlarged-raster execution is unverified.
+
 Large-job preparation remains inert on the Pi. An explicit START request may
 wait through upload and verification before creating its temporary one-use
 authorization; STOP, disarm, boot or controller-session changes revoke the

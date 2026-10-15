@@ -8,6 +8,7 @@ from laser_aligner.desktop.machine_state import (
     CONTROLLER_STATES,
     controller_node_boot_id,
     format_running_controller_diagnostics,
+    job_start_block_reason,
     project_machine_state,
 )
 
@@ -24,6 +25,23 @@ _CAPABILITIES = (
     "recapture_without_homing",
     "stop",
 )
+
+
+@pytest.mark.parametrize("powered", [True, False])
+def test_preview_reports_missing_surface_measurement_before_submission(powered):
+    machine = {"workpiece_focus": {
+        "job_focus_required": True, "job_focus": None,
+        "job_focus_block_reason": "Measure the current workpiece again",
+    }}
+    assert bool(job_start_block_reason({"machine": machine}, powered=powered)) is powered
+    machine["workpiece_focus"]["job_focus"] = {"id": "validated-focus-plan"}
+    assert job_start_block_reason(machine, powered=powered) == ""
+
+
+def test_preview_missing_focus_status_requires_refresh_for_capable_pi():
+    assert job_start_block_reason(
+        {"node_capabilities": ["pi-workpiece-focus-v1"]}, powered=True,
+    )
 
 
 def _enabled_capabilities(controller_state: str) -> set[str]:

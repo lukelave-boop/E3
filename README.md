@@ -7,11 +7,16 @@ and reuse of its unchanged validated program at START. Sending, checking,
 starting, failure and completion have distinct progress labels; a sent file
 is not displayed as a completed job. Temporary arming follows preparation.
 
-Jobs can contain up to 1,000,000 streamed commands. Raster previews open in
+Jobs can contain up to 2,000,000 streamed commands. Raster previews open in
 high-contrast engraving detail with laser-off travel and gaps hidden. Use the
 Display controls to show them or restore layer colors/power shading. Zoom in
 to inspect the exact pattern; this view does not predict burn darkness. The
-matching Pi validator update is required for jobs above the former 250,000 cap.
+matching Pi validator update is required for jobs above its installed command cap. Preview shows project checks separately from
+machine readiness and blocks START when required surface measurement is missing.
+
+Same-machine LAN/Tailscale camera aliases retain calibration after the saved
+endpoint enrolls an authenticated stable camera identity. Keep the same camera,
+focus, resolution and credential; changed optics or identity still require review.
 
 ## Cancel a desktop tool
 

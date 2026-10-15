@@ -1,5 +1,14 @@
 # Changelog
 
+## Camera aliases and larger raster preparation (2026-10-15)
+
+- Preserve calibration across LAN/Tailscale camera addresses after binding an
+  authenticated stable camera identity; reject identity and optical changes.
+- Raise the bounded command ceiling to two million and correct raster planning
+  that overcounted per-row laser mode commands for every powered span.
+- Distinguish project checks from machine readiness in Preview. Show missing
+  surface measurement before submission and disable START until it is current.
+
 ## Duplicate machine calibration choice (2026-10-15)
 
 - Duplicate now offers a name and an explicit same-machine choice that keeps

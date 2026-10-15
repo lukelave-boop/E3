@@ -139,7 +139,7 @@ from .laser_focus import LaserFocusWorkspace
 from .layer_profiles import LayerProfilesBar
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
-from .machine_state import ControllerUiState, project_machine_state
+from .machine_state import ControllerUiState, job_start_block_reason, project_machine_state
 from .mainboard_z import MainboardZCoordinator
 from .panels import (
     CameraPanel,
@@ -6455,10 +6455,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._machine_status,
             operation_busy=self._controller_busy or self._job_preparation_busy,
         )
-        target.set_run_enabled(
-            state.can_start_job,
-            "" if state.can_start_job else state.blocked_reason("START JOB"),
+        reason = (
+            job_start_block_reason(
+                self._machine_status, powered=target.requires_laser_output,
+            ) if state.can_start_job else state.blocked_reason("START JOB")
         )
+        target.set_run_enabled(state.can_start_job and not reason, reason)
 
 
     def _refresh_machine_selector(self, selected_id: str | None = None) -> None:

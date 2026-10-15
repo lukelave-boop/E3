@@ -4,8 +4,13 @@
 
 Implemented: Duplicate distinguishes another connection to the same physical
 machine from a different machine, with explicit calibration/span retention.
-Camera endpoint changes still require calibration review; automatic verified
-camera-address aliasing is not implemented.
+Authenticated camera-address aliasing now preserves unchanged optics/mapping
+for an enrolled stable camera identity. Different or missing identities remain
+blocked. Operator LAN/Tailscale switching verification is pending.
+
+Two-million-command capacity, corrected per-row command budgeting and visible
+measured-focus start readiness are implemented; focused verification is recorded
+in CURRENT_STATE.md. Physical enlarged-raster execution remains pending.
 
 New raster image layers now default to output enabled; existing saved layer
 choices remain intact.

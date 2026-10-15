@@ -2359,13 +2359,13 @@ def test_image_raster_rejects_unbounded_sample_and_command_counts(
             generate_project_gcode(too_many_rows, LaserSettings(power_max=1000))
 
     checker_path = tmp_path / "checker.png"
-    checker = (np.indices((1024, 1024)).sum(axis=0) % 2 * 255).astype(np.uint8)
+    checker = (np.indices((1440, 1440)).sum(axis=0) % 2 * 255).astype(np.uint8)
     assert cv2.imwrite(str(checker_path), checker)
     too_many_commands = make_image_document(
         checker_path,
-        width_mm=1024,
-        height_mm=1024,
-        work_area=Bounds(0, 0, 1100, 1100),
+        width_mm=1440,
+        height_mm=1440,
+        work_area=Bounds(0, 0, 1500, 1500),
     )
     with pytest.raises(ValueError, match="command stream limit"):
         generate_project_gcode(too_many_commands, LaserSettings(power_max=1000))
@@ -2569,7 +2569,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
     document.add_object(
         SceneObject.line(layer.id, center=(15, 15), length_mm=10, name="Source")
     )
-    oversized = Polyline(np.zeros((999_999, 2), dtype=np.float64))
+    oversized = Polyline(np.zeros((toolpath_module._MAX_STREAM_COMMANDS - 1, 2), dtype=np.float64))
     monkeypatch.setattr(
         toolpath_module,
         "_operation_paths",
@@ -2583,7 +2583,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
         ),
     )
 
-    with pytest.raises(ValueError, match="more than 1,000,000 streamed commands"):
+    with pytest.raises(ValueError, match="more than 2,000,000 streamed commands"):
         generate_project_gcode(document, LaserSettings(power_max=1000))
 
 

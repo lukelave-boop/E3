@@ -1,5 +1,23 @@
 # Architecture
 
+## Camera endpoint identity and preview readiness
+
+Remote camera status provides the stable by-id device path over authenticated
+RPC. The client derives an HMAC identity from that path and the shared camera
+credential; credentials are never persisted in calibration records. AppContext
+stores a schema-1, first-writer-wins identity sidecar keyed by the unchanged bed
+mapping digest. Only the previously accepted endpoint may enroll it. Matching
+identity and optical settings normalize address aliases for provenance checks;
+bed matrices, provenance, mapping digests and visual references stay unchanged.
+Missing/mismatched identity or corrupt sidecars reject a bound mapping.
+
+Desktop preview projects the existing measured-focus status into a visible
+start-readiness label and button gate. Project preflight remains read-only and
+does not assert runtime readiness. The existing Pi START checks remain final.
+Raster planning budgets shared laser-mode commands once per row; both local
+and Pi validators retain the common two-million-command ceiling and 64 MiB
+file bound. This does not alter motion, power, arming or allowlist rules.
+
 New desktop raster-image imports create output-enabled raster layers, matching
 ordinary operation-layer defaults. Imports into an existing raster layer keep
 its saved output choice. This authoring default does not start a job or change

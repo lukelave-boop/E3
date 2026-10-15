@@ -659,6 +659,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.prepared = prepared or prepare_job_preview(plan)
         self.coordinate_frame = coordinate_frame
         self.preflight_report = preflight_report
+        self.requires_laser_output = plan.powered
         self.max_work_feed_mm_min = max_work_feed_mm_min
         self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
@@ -954,6 +955,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
         keyboard_help.setMinimumWidth(0)
         layout.addWidget(keyboard_help)
 
+        self.start_readiness_label = QtWidgets.QLabel("Start readiness: waiting for machine status")
+        self.start_readiness_label.setWordWrap(True)
+        self.start_readiness_label.setObjectName("statusWarning")
+        layout.addWidget(self.start_readiness_label)
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         buttons.setObjectName("jobPreviewButtons")
         self.close_button = buttons.button(
@@ -1336,6 +1341,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
 
         self._run_authorized = bool(enabled)
         self._run_blocked_reason = str(reason).strip()
+        self.start_readiness_label.setText(
+            "Machine checks passed — START JOB will recheck the current state."
+            if enabled else "Cannot start: " + (self._run_blocked_reason or "Waiting for machine readiness")
+        )
         available = self._render_completed and self._run_authorized
         self.run_button.setEnabled(available)
         self.run_button.setToolTip(
