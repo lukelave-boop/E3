@@ -1,5 +1,18 @@
 # Current repository state
 
+## Pi Tailscale access (2026-10-15)
+
+The installed hardware node remains bound to 192.168.5.18:8765/8766. Added
+e3-tailscale-8765.socket and e3-tailscale-8766.socket, enabled at boot, listening
+only on 100.84.214.111. Matching DynamicUser systemd-socket-proxyd services
+forward TCP to the existing LAN endpoints, preserving E3 authentication.
+The hardware service was not restarted and its machine configuration was not
+changed. Read-only authenticated Windows requests through both Tailscale ports
+passed: controller disconnected/disarmed, camera connected with fresh frames.
+No controller connection, motion or laser command was requested. This verifies
+network access, not physical operation. The proposed all-interface binding was
+rejected by automatic approval review and was not applied.
+
 ## Large-job start and honest progress follow-up (2026-10-15)
 
 The reported 279,180-command/8,075,693-byte Pi submission required 212.24 s
