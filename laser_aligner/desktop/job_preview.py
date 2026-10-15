@@ -644,6 +644,11 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
     def _update_position(self) -> None:
         active = self.move_at(self._elapsed)
+        laser_on = active is not None and active.laser_on and not active.rapid
+        pen = self._head_item.pen()
+        pen.setColor(QtGui.QColor("#FFB300" if laser_on else "#00D4FF"))
+        self._head_item.setPen(pen)
+        self._head_item.setBrush(QtGui.QColor("#FFB300" if laser_on else "#062E37"))
         if active is None:
             self._active_item.hide()
             if self.plan.moves:
@@ -1319,7 +1324,8 @@ class JobPreviewDialog(QtWidgets.QDialog):
             "<span style='color:#39B878'>— Engraving surface</span> · "
             "<span style='color:#1E88E5'>·· Powered bounds</span> · "
             "<span style='color:#E7B55C'>-- Movement bounds (excluding approach)</span> · "
-            "<span style='color:#00D4FF'>● Head</span>"
+            "<span style='color:#FFB300'>● Laser on</span> / "
+            "<span style='color:#00D4FF'>● Laser off</span>"
         )
 
     def _update_boundary_summary(self) -> None:
@@ -1367,7 +1373,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 "RAPID · laser off"
                 if move.rapid
                 else (
-                    f"POWER {power:.1f}% / S{move.power:g}"
+                    f"LASER ON · POWER {power:.1f}% / S{move.power:g}"
                     if move.laser_on
                     else "FEED · laser off"
                 )
@@ -1382,9 +1388,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     f"Honeycomb X{local_x:.3f} Y{local_y:.3f} · "
                     + coordinate_text
                 )
+            start = self.canvas._display_point(move.start_x, move.start_y)
+            end = self.canvas._display_point(move.end_x, move.end_y)
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            direction = ("→ left-to-right" if dx > 0 else "← right-to-left") if abs(dx) >= abs(dy) else ("↑ upward" if dy > 0 else "↓ downward")
             focus_text = "Raster gap 7 mm above surface · " if move.focus_mode == "RASTER" else ""
             self.move_label.set_full_text(
-                f"{move.layer_name} · {role} · {focus_text}"
+                f"{move.layer_name} · {direction} · {role} · {focus_text}"
                 f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} · "
                 f"Move {move.index + 1}/{len(self.plan.moves)} · "
                 f"pass {move.pass_index}/{move.pass_count} "

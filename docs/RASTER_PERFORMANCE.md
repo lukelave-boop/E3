@@ -1,5 +1,50 @@
 # Raster pipeline performance review — 2026-10-15
 
+## Follow-up: bidirectional output and controller cost (2026-10-15)
+
+Offline regeneration of the latest saved 80 x 75.779674 mm barrel image, cleanup
+on at tolerance 5, 0.1 mm interval, 2000 mm/min and 10% power, confirms **319
+powered left-to-right rows and 318 powered right-to-left rows**. There are no
+rows whose powered segments reverse direction within the row. Positive-output
+segments number 65,261 left-to-right and 23,530 right-to-left; unequal segment
+counts come from image/dither runs, not disabled return-row output. No machine
+was connected or operated. The source project, settings and calibration were read
+only. This is generated-program evidence, not observation of physical firing.
+
+Ranked findings before expanding control changes:
+
+1. **Confirmed preview-estimate distortion:** the existing model accelerates and
+   decelerates every individual dither segment from rest. This job displays
+   6,235.34 seconds (103.92 minutes), whereas distance/feed totals 1,141.68 seconds
+   (19.03 minutes). The latter is only an ideal lower bound, not an actual-time
+   prediction. Continuous collinear inline-S moves should not all restart from
+   rest; a proper continuity-aware timing model needs explicit treatment of row
+   boundaries, barriers, feed changes, controller throughput and corner limits.
+   This review does not silently substitute the lower bound as a new ETA.
+2. **Measured command volume; unmeasured transport bottleneck:** 180,135 controller
+   commands / 5,490,419 ASCII bytes imply at least 476.60 seconds of 115200-baud
+   8N1 wire occupancy. The current stream sends one command and waits for its
+   acknowledgement before advancing. Actual ACK latency and planner starvation
+   were not measured. Pipelining is a separate controller/session safety change,
+   not safe to infer from preview playback. No speculative throughput speedup
+   has been applied.
+3. **Row-level mode changes are bounded, not per-pixel stops:** 637 `M4 S0`
+   commands and 639 standalone `M5` commands (including outer bracketing).
+   Pixel runs/gaps use inline S100/S0. Each row runs laser-off lead-in and lead-out;
+   row changes occur only after M5. These checks were preserved. Required run-up,
+   run-out and white pixels must not become powered merely to shorten a job.
+4. **No one-direction-only raster defect found.** The generator alternates row
+   direction, preserves ordered-dither sampling, reverses spans with the row,
+   and emits positive S words in both directions. Runtime forwards validated
+   words unchanged; focus descent occurs once before the first row run-up, not
+   once per pixel or return row. Automatic retry loops are not inserted around
+   raster pixels. Preview now makes laser state and direction explicit, with an
+   amber on-marker and cyan off-marker, tested on both scan directions and gaps.
+
+The earlier input-to-send phase measurements and remaining duplication findings
+below remain applicable. No laser/motion command optimization or Pi change is
+included in this preview-only update.
+
 This review covers the desktop project pipeline through offline Pi preparation.
 It does not cover the browser SVG pipeline, network throughput, interactive
 painting latency, controller throughput, acceleration, or physical engraving.

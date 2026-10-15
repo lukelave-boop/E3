@@ -372,7 +372,7 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
     dialog.set_elapsed(plan.moves[1].start_seconds + 0.1)
 
     assert "POWER 20.0% / S200" in dialog.move_label.text()
-    assert "16.67%" in dialog.move_label.text()
+    assert "16.67%" in dialog.move_label.full_text
     assert "F1000" not in dialog.move_label.full_text
     assert "Line 01" in dialog.move_label.text()
     assert "Machine X80.000 Y20.000" in dialog.move_label.full_text
@@ -1152,6 +1152,48 @@ def test_main_window_preview_gate_tracks_surface_measurement(qt_application):
     focus["job_focus"] = None
     E3MainWindow._sync_job_preview_machine_gate(host, dialog)
     assert not dialog.run_button.isEnabled()
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_bidirectional_raster_playback_reports_power_in_both_directions(qt_application, deferred):
+    text = "\n".join([
+        "G21", "G90", "M5",
+        e3_metadata_line("layer", {"id": "raster", "mode": "raster"}),
+        "G0 X5 Y10 F2000", "M4 S0", "G1 X10 Y10 F1000 S0",
+        "G1 X20 Y10 F1000 S100", "G1 X25 Y10 F1000 S0", "M5",
+        "G0 X25 Y11 F2000", "M4 S0", "G1 X20 Y11 F1000 S0",
+        "G1 X15 Y11 F1000 S100", "G1 X14 Y11 F1000 S0",
+        "G1 X10 Y11 F1000 S100", "G1 X5 Y11 F1000 S0", "M5",
+    ])
+    plan = build_job_plan(text, power_max=1000, start_position=(-12, 157))
+    original = tuple(plan.moves)
+    dialog = JobPreviewDialog(plan, (0, 191, 0, 191), "bidirectional.gcode", defer_render=deferred)
+    if deferred:
+        dialog.canvas.start_deferred_render()
+        while dialog.canvas._building:
+            dialog.canvas._build_slice()
+    directions = set()
+    for move in plan.moves:
+        dialog.set_elapsed((move.start_seconds + move.end_seconds) / 2)
+        while dialog.canvas._building:
+            dialog.canvas._build_slice()
+        expected = "#ffb300" if move.laser_on else "#00d4ff"
+        assert dialog.canvas._head_item.pen().color().name() == expected
+        if move.laser_on:
+            direction = "left-to-right" if move.end_x > move.start_x else "right-to-left"
+            directions.add(direction)
+            assert direction in dialog.move_label.text()
+            assert "LASER ON" in dialog.move_label.text()
+            assert dialog.canvas._active_item.isVisible()
+        else:
+            assert "laser off" in dialog.move_label.text()
+    assert directions == {"left-to-right", "right-to-left"}
+    assert plan.moves == original
+    dialog.set_elapsed(plan.total_seconds)
+    assert dialog.canvas._head_item.pen().color().name() == "#00d4ff"
     dialog.close()
     dialog.deleteLater()
     qt_application.processEvents()
