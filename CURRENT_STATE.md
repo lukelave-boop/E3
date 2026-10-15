@@ -1,5 +1,42 @@
 # Current repository state
 
+## Background cleanup frozen DEV TEST handoff (2026-10-15)
+
+E3 DEV TEST selects Image background cleanup, version 0.7.206, branch
+codex/background-cleanup, exact frozen application revision
+`dcaa217a019bfab986af2bb28506264c830e7a24`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\background-cleanup-dev\dist\E3\E3.exe`.
+The permanent current-feature.json pointer was selected atomically with
+packaging/set_dev_test_feature.py and read back through the launcher validator.
+Save current work, close the old E3 window, reopen the permanent E3 DEV TEST
+launcher and select one image. In Objects → Image, Clean background appears
+immediately above Trace image to vectors. Start tolerance at 5 for the supplied
+near-white barrel background. Original source bytes remain unchanged.
+
+The build starts from the previous active 8ce10c1 revision and retains its
+camera aliases, raster continuity/capacity, readiness and axis-readout behavior.
+All 450 focused Windows Python 3.14 tests passed, plus a final seven-widget-test
+rerun for the verified label-encoding correction. Repository Ruff, application
+compileall and focused final Ruff passed. The actual Objects panel was rendered
+and visually inspected. The canonical Windows packager produced the frozen EXE
+and passed the native DLL guard; all 184 application modules and three
+resources match the exact committed revision. Isolated frozen offscreen startup
+loaded native Qt with camera autostart off, motion disabled, isolated config/data
+and a nonexistent serial port. EXE SHA256: `748f7843b8affe2d9dccaa6e5da179592710f025c52158c4ad871ee2fb0945eb`.
+
+The canonical script's later installer autodetection could not see the installed
+Inno Setup path in the sandbox; installer compression was resumed using that
+existing compiler and remained running at this handoff record. The selected EXE
+and validated pointer are complete independently of installer compression.
+No interactive operator, physical camera/controller/laser, Pi update, remote CI
+or main integration is claimed. Operator and compatibility verification remain
+pending; the feature branch is retained. Existing shared-tree edits and the
+operator's currently running application were preserved.
+
+Records in the feature checkout: build/windows-build.log,
+build/installer-build.log, build/frozen-verification.json,
+build/background-cleanup-frozen-smoke.json, build/objects-cleanup-button.png.
+
 ## Background cleanup feature build preparation (2026-10-15)
 
 The operator was still running Camera aliases and raster readiness v0.7.198.
