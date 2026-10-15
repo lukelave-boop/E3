@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import copy
+import gc
 import os
+import sys
 import threading
 import time
+import weakref
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -15,7 +19,9 @@ from PySide6 import QtTest
 
 from laser_aligner.desktop import image_editor as editor_module
 from laser_aligner.desktop.image_editor import ImageEditorDialog
+from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.qt import require_qt
+from laser_aligner.project import CommandStack, ProjectDocument, SceneObject
 from laser_aligner.project.image_edit import trace_foreground, validate_outline
 from laser_aligner.project.path_geometry import NativePathGeometry, PathLineSegment, PathSubpath
 from laser_aligner.project.raster_asset import read_raster_asset_payload
@@ -335,4 +341,142 @@ def test_transparent_source_remains_excluded_after_invert_and_restore(app, tmp_p
     assert dialog.after_gray[0, 0] == 255
     assert dialog.after_gray[12, 12] == 127
     dialog.reject()
+
+
+@pytest.mark.parametrize("action", ["reset", "undo", "redo", "replace"])
+def test_topology_replacement_clears_node_and_handle_selection(app, source, action):
+    _, payload, _ = source
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    dialog.add_subpath(_subject_path().subpaths[0])
+    if action == "redo":
+        dialog.undo()
+    view = dialog.view
+    view.selected = (0, 1, "to")
+    view.drag_target = (0, 1, "control_2")
+    if action == "replace":
+        dialog.candidate = _subject_path()
+        dialog.apply_candidate()
+    else:
+        getattr(dialog, {"reset": "reset_edits", "undo": "undo", "redo": "redo"}[action])()
+    assert view.selected is None
+    assert view.drag_target is None
+    assert view.drag_original is None
+    after = dialog.settings
+    view.add_node()
+    view.delete_node()
+    view.remove_contour()
+    assert dialog.settings == after
+    dialog.reject()
+
+
+@pytest.mark.parametrize("key", [(5, 0, "to"), (0, 300, "to"), (0, -2, "to"),
+                                 (0, 0, "control_2"), (0, -1, "control_1")])
+def test_stale_node_and_handle_references_cannot_mutate_outline(app, source, key):
+    _, payload, _ = source
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    dialog.add_subpath(_subject_path().subpaths[0])
+    before = dialog.settings
+    view = dialog.view
+    for action in (view.add_node, view.delete_node, view.remove_contour):
+        view.selected = key
+        action()
+        assert view.selected is None
+        assert dialog.settings == before
+    view.selected = key
+    view.drag_target = key
+    view.dragging = True
+    view._move_node(key, [.1, .2])
+    assert view.drag_target is None
+    assert not view.dragging
+    assert dialog.settings == before
+    dialog.reject()
+
+
+@pytest.mark.parametrize("outcome", ["apply", "cancel", "source_changed", "exec_error"])
+def test_main_window_disposes_editor_and_decoded_planes_on_every_exit(app, source, monkeypatch, outcome):
+    path, payload, gray = source
+    parent = QtWidgets.QWidget()
+    document = ProjectDocument.new()
+    item = SceneObject(kind="image", layer_id=document.active_layer_id, geometry={"asset": str(path)})
+    document.add_object(item)
+    parent.document = document
+    parent.history = CommandStack()
+    errors = []
+    parent.show_error = errors.append
+    parent.workspace = SimpleNamespace(
+        selected_object_ids=lambda: [item.id], select_objects=lambda _ids: None,
+        raster_preview_identity_for_object=lambda _id: (payload.identity.path, payload.identity.sha256),
+    )
+    refs, plane_refs, destroyed = [], [], []
+
+    class Dialog(ImageEditorDialog):
+        def __init__(self, *args):
+            super().__init__(*args)
+            refs.append(weakref.ref(self))
+            plane_refs.append(weakref.ref(self.gray))
+            self.destroyed.connect(lambda: destroyed.append(True))
+
+        def exec(self):
+            if outcome == "exec_error":
+                raise RuntimeError("review interrupted")
+            if outcome == "cancel":
+                self.reject()
+            else:
+                self.add_region(_rectangle_region())
+                self.accept()
+            if outcome == "source_changed":
+                assert cv2.imwrite(str(path), 255 - gray)
+            return self.result()
+
+    monkeypatch.setattr(editor_module, "ImageEditorDialog", Dialog)
+    E3MainWindow.edit_image_for_engraving(parent, item.id)
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    app.processEvents()
+    gc.collect()
+    assert destroyed == [True]
+    assert not parent.findChildren(ImageEditorDialog)
+    assert refs[0]() is None
+    assert plane_refs[0]() is None
+    assert parent.history.depth == (1 if outcome == "apply" else 0)
+    assert bool(errors) == (outcome in {"source_changed", "exec_error"})
+    if outcome == "apply":
+        parent.history.undo()
+        parent.history.redo()
+        assert item.geometry["image_edit"]["regions"]
+    parent.close()
+
+
+def test_closing_and_deleting_during_trace_releases_worker_source_safely(app, source, monkeypatch):
+    _, payload, _ = source
+    entered, release = threading.Event(), threading.Event()
+    callback_errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda _kind, error, _tb: callback_errors.append(error))
+
+    def delayed(_gray, _options, *, cancel_check):
+        entered.set()
+        release.wait(3)
+        assert cancel_check()
+        return _subject_path()
+
+    monkeypatch.setattr(editor_module, "trace_foreground", delayed)
+    parent = QtWidgets.QWidget()
+    dialog = ImageEditorDialog(payload, {}, 64, 48, parent)
+    dialog_ref, plane_ref = weakref.ref(dialog), weakref.ref(dialog.gray)
+    dialog.preview_trace()
+    assert entered.wait(2)
+    cancelled = dialog._worker.cancelled
+    dialog.reject()
+    assert cancelled.is_set()
+    dialog.deleteLater()
+    del dialog
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    release.set()
+    assert QtCore.QThreadPool.globalInstance().waitForDone(3000)
+    app.processEvents()
+    gc.collect()
+    assert not callback_errors
+    assert not parent.findChildren(ImageEditorDialog)
+    assert dialog_ref() is None
+    assert plane_ref() is None
+    parent.close()
 

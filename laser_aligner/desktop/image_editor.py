@@ -115,6 +115,35 @@ class ImageEditView(QtWidgets.QGraphicsView):
         self.drag_original = None
         self.viewport().update()
 
+    def clear_node_selection(self):
+        self.selected = None
+        self.drag_target = None
+        self.drag_original = None
+        self.drag_origin = None
+        self.dragging = False
+        self.viewport().update()
+
+    def _valid_handle(self, key):
+        native = self.editor._settings.get("outline")
+        if native is None or key is None:
+            return False
+        si, ii, field = key
+        if not 0 <= si < len(native["subpaths"]):
+            return False
+        subpath = native["subpaths"][si]
+        if ii == -1:
+            return field == "start"
+        if not 0 <= ii < len(subpath["segments"]):
+            return False
+        return field in {"to", "control_1", "control_2"} and field in subpath["segments"][ii]
+
+    def _current_selection(self):
+        if not self._valid_handle(self.selected):
+            self.clear_node_selection()
+            self.editor.status.setText("Select a node on the current outline first.")
+            return None
+        return self.selected
+
     def _painter_path(self, native):
         path = QtGui.QPainterPath()
         path.setFillRule(QtCore.Qt.FillRule.OddEvenFill)
@@ -287,6 +316,9 @@ class ImageEditView(QtWidgets.QGraphicsView):
         self.viewport().update()
 
     def _move_node(self, key, value):
+        if not self._valid_handle(key):
+            self.clear_node_selection()
+            return
         si, ii, field = key
         sub = self.editor._settings["outline"]["subpaths"][si]
         target = sub if ii == -1 else sub["segments"][ii]
@@ -356,9 +388,10 @@ class ImageEditView(QtWidgets.QGraphicsView):
         self.viewport().update()
 
     def delete_node(self):
-        if self.selected is None:
+        selected = self._current_selection()
+        if selected is None:
             return
-        si, ii, field = self.selected
+        si, ii, field = selected
         if field.startswith("control"):
             self.editor.status.setText("Select an anchor node to delete it; drag handles to change the curve.")
             return
@@ -381,10 +414,11 @@ class ImageEditView(QtWidgets.QGraphicsView):
         self.editor.commit(state, "Node deleted; inspect the changed contour")
 
     def add_node(self):
-        if self.selected is None:
+        selected = self._current_selection()
+        if selected is None:
             self.editor.status.setText("Select an anchor first. Add node splits its following segment without changing the curve.")
             return
-        si, ii, field = self.selected
+        si, ii, field = selected
         if field.startswith("control"):
             return
         state = self.editor.settings
@@ -405,11 +439,12 @@ class ImageEditView(QtWidgets.QGraphicsView):
         self.editor.commit(state, "Node added")
 
     def remove_contour(self):
-        if self.selected is None:
+        selected = self._current_selection()
+        if selected is None:
             self.editor.status.setText("Select a node on the contour to remove.")
             return
         state = self.editor.settings
-        state["outline"]["subpaths"].pop(self.selected[0])
+        state["outline"]["subpaths"].pop(selected[0])
         if not state["outline"]["subpaths"]:
             state["outline"] = None
         self.selected = None
@@ -460,7 +495,10 @@ class ImageEditorDialog(QtWidgets.QDialog):
         self.preview_count = 0
         self._build_ui()
         self.refresh_preview()
-        QtCore.QTimer.singleShot(0, self.fit)
+        self._initial_fit_timer = QtCore.QTimer(self)
+        self._initial_fit_timer.setSingleShot(True)
+        self._initial_fit_timer.timeout.connect(self.fit)
+        self._initial_fit_timer.start(0)
 
     @property
     def settings(self):
@@ -739,6 +777,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
         state["mask_enabled"] = True
         if self._candidate_from_mask:
             state["regions"] = []
+        self.view.clear_node_selection()
         self.commit(state, "Preview outline applied; original image pixels remain unchanged")
 
     def add_region(self, region):
@@ -758,6 +797,12 @@ class ImageEditorDialog(QtWidgets.QDialog):
     def commit(self, state, message="Edit committed"):
         if state == self._settings:
             return
+        def topology(native):
+            return tuple((sub["closed"], tuple(segment["type"] for segment in sub["segments"]))
+                         for sub in native["subpaths"]) if native else None
+
+        if topology(state.get("outline")) != topology(self._settings.get("outline")):
+            self.view.clear_node_selection()
         self._invalidate_trace()
         self._settings = copy.deepcopy(state)
         self._history = self._history[:self._history_index + 1]
@@ -768,6 +813,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
 
     def undo(self):
         self.view.cancel_gesture()
+        self.view.clear_node_selection()
         if self._history_index > 0:
             self._history_index -= 1
             self._settings = copy.deepcopy(self._history[self._history_index])
@@ -777,6 +823,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
 
     def redo(self):
         self.view.cancel_gesture()
+        self.view.clear_node_selection()
         if self._history_index + 1 < len(self._history):
             self._history_index += 1
             self._settings = copy.deepcopy(self._history[self._history_index])
@@ -786,6 +833,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
 
     def reset_edits(self):
         self.view.cancel_gesture()
+        self.view.clear_node_selection()
         self.commit(copy.deepcopy(self._default), "Editor edits reset; Undo restores them")
 
     def refresh_preview(self, message=""):
