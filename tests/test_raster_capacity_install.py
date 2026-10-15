@@ -9,11 +9,13 @@ from scripts import package_raster_capacity as packager
 
 @pytest.fixture
 def kit(tmp_path, monkeypatch):
-    git_source = packager.source
+    # Exercise hash-bound upgrade behavior even in a shallow CI checkout.
+    # The real pinned predecessor is separately checked by the Pi installer.
+    baseline = b"# recorded predecessor fixture\n"
     monkeypatch.setattr(
         packager, "source",
         lambda revision, name: (
-            git_source(revision, name) if revision == packager.BASELINE
+            baseline if revision == packager.BASELINE
             else (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
         ),
     )
@@ -25,7 +27,7 @@ def kit(tmp_path, monkeypatch):
     (project / "laser_aligner/gcode").mkdir(parents=True)
     service = project / packager.FILES[1]
     service.parent.mkdir(parents=True)
-    service.write_bytes(git_source(packager.BASELINE, packager.FILES[1]))
+    service.write_bytes(baseline)
     monkeypatch.setattr(installer, "inactive", lambda: None)
     return installer, project, bundle
 

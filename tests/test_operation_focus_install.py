@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,12 @@ from scripts import package_operation_focus as packager
 
 @pytest.fixture
 def kit(tmp_path, monkeypatch):
+    available = subprocess.run(
+        ["git", "cat-file", "-e", f"{packager.BASELINE_REVISION}^{{commit}}"],
+        cwd=packager.ROOT, capture_output=True,
+    )
+    if available.returncode:
+        pytest.skip("Pinned operation-focus predecessor is unavailable in this shallow checkout")
     # Package current source before its feature commit; baseline hashes stay pinned.
     monkeypatch.setattr(packager, "source", lambda revision, name: (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n"))
     bundle = packager.package(tmp_path / "dist", "HEAD", "0.7.181")
@@ -21,7 +28,6 @@ def kit(tmp_path, monkeypatch):
     project = tmp_path / "project"
     manifest = json.loads((bundle / "manifest.json").read_bytes())
     # Use the real pinned predecessor, including the new module being absent.
-    import subprocess
     for name, digest in packager.PREDECESSOR.items():
         if digest is None:
             continue
