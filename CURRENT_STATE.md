@@ -1,5 +1,30 @@
 # Current repository state
 
+## Saved-Z compatibility correction and DEV TEST preparation (2026-10-15)
+
+Follow-up work remains isolated on `codex/raster-overscan`; the original shared
+checkout and active machine settings are preserved. The remaining saved-Z CI
+failure was an obsolete daily-panel assertion. The daily Machine panel deliberately
+omits setup status, including Saved Z; Machine Setup -> 7 - Z / laser focus retains
+those controls. The corrected test follows that documented layout. Seven additional
+cases open the real setup dialog and verify restored/reference-required visibility
+and unavailable, missing, malformed, armed and stale rejection. Rejected requests
+emit no action. No application visibility, motion, laser or retention behavior was
+changed to make the test pass.
+
+Read-only inspection of the latest barrel-project autosave found schema 5 with
+`background_cleanup.enabled=false` and tolerance 5. The earlier enlarged-image
+reproduction was schema 4 without cleanup. On the original 1289 x 1221 barrel source,
+enabled tolerance 5 whitens 578,173 of 1,573,869 pixels; native-grid outer-20-pixel
+border dither marks fall from 320 to zero. The dialog already states that disabled
+cleanup uses the original. Cleanup behavior and the operator's project are unchanged.
+Additional actual-size offline verification and the final CI/build receipt follow.
+
+Focused Windows offscreen layout and laser-focus tests: 180 passed in 49.67 s.
+Repository Ruff, application compileall and diff checks pass. Compatibility CI and
+the requested exact frozen build/DEV TEST selection are pending this revision.
+No controller connection, machine movement or laser output was performed.
+
 ## Raster overscan surface/travel separation (2026-10-15)
 
 Work is isolated on `codex/raster-overscan`, based on completed background-cleanup
