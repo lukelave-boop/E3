@@ -33,6 +33,16 @@ historical X-only travel record or provisional Y235 value qualifies a whole enve
 The measured performance follow-ups are ranked in
 [RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md); raster caching and removal of
 the remote wrapper's unchanged-text duplicate preflight are separate future work.
+## Engraving image workspace
+
+First-stage implementation adds local reversible cleanup, foreground trace
+preview, native pen/node/handle editing, mask persistence, and explicit linked
+cut-path snapshots. Inversion is included; broader tonal and retouching tools
+remain deferred. Next candidates are magic wand/background selection,
+brightness/contrast, levels/gamma, artwork threshold, crop/straighten/flip,
+sharpening/despeckle, tonal curves, and clone/heal. These should extend the shared
+portable image-edit pipeline and ordered history rather than introduce another
+canvas/export/planner processing path. See [first-stage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
 
 ## Image background cleanup
 

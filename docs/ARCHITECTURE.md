@@ -45,6 +45,29 @@ low-level generator's absent-envelope compatibility path retains its former
 restrictive surface/output checks and never grants expanded travel. The browser
 single-SVG pipeline remains separate and unchanged. See
 [RASTER_OVERSCAN.md](RASTER_OVERSCAN.md) for configuration and verification limits.
+## Engraving image editor
+
+Schema 6 adds strict IMAGE geometry.image_edit (version 1, original SHA256/size,
+centered native outline, mask flag, ordered regions, inversion and trace options)
+and PATH metadata.image_outline (source id, explicit transform link, offset and
+interior-contour provenance). Legacy schemas reject these fields. Image edits
+are Qt/HTTP-independent in project/image_edit.py and reuse foreground extraction,
+the authoritative native curve fitter, and topology validation. Regions preserve
+source geometry and grayscale; accepted outline rasterization has a bounded cache.
+
+The desktop image editor owns transient overlays and local history, decoding once.
+Preview workers carry cancellation and generation identity. Acceptance uses the
+existing project history and invalidates prepared jobs. Canvas variants include
+all edit settings in cache/recovery identity. project/toolpath.py processes through
+the same image function and gates post-dither cells using a summed-area exclusion
+mask over each whole source footprint, conservatively bounding rotated cells.
+
+project/image_outline.py creates disabled zero-power PATH snapshots, propagates
+only transforms, and provides explicit detachment. History supports linked undo,
+source removal, and duplicate-link remapping. Native geometry is never rewritten
+by later source edits. Nonzero offsets are reviewed mitered polylines; invalid or
+topology-changing results reject instead of auto-repairing. The browser SVG
+pipeline, MachineService and hardware authority remain unchanged.
 
 ## Raster background cleanup
 

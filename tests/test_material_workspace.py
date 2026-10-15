@@ -178,7 +178,7 @@ def test_project_surface_metadata_roundtrip_retains_geometry_without_authority(a
     restored = ProjectDocument.from_dict(project.to_dict())
     assert restored.objects[0].to_dict() == geometry
     assert restored.metadata["material_surface"] == project.metadata["material_surface"]
-    assert restored.to_dict()["schema_version"] == 5
+    assert restored.to_dict()["schema_version"] == 6
 
 
 def test_schema3_migration_preserves_existing_project_geometry():
@@ -190,7 +190,7 @@ def test_schema3_migration_preserves_existing_project_geometry():
     restored = ProjectDocument.from_dict(raw).to_dict()
     assert restored["objects"] == raw["objects"]
     assert restored["metadata"] == raw["metadata"]
-    assert restored["schema_version"] == 5
+    assert restored["schema_version"] == 6
 
 
 @pytest.mark.parametrize("field,value", [("schema_version", 2), ("surface_elevation_mm", float("nan")),
