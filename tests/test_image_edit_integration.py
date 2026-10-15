@@ -160,6 +160,9 @@ def test_editor_commit_undo_invalidates_prepared_job_without_regenerating(artwor
         def exec(self):
             return QtWidgets.QDialog.DialogCode.Accepted
 
+        def deleteLater(self):
+            pass
+
     monkeypatch.setattr(image_editor, "ImageEditorDialog", Dialog)
     E3MainWindow.edit_image_for_engraving(harness, item.id)
     assert not errors

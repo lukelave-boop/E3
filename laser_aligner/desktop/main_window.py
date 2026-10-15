@@ -2464,6 +2464,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         from ..project.image_outline import AddOutlineCommand
         from .image_editor import ImageEditorDialog
 
+        dialog = None
         try:
             source = self.document.get_object(object_id)
             if (self.workspace.selected_object_ids() != [object_id]
@@ -2523,6 +2524,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.workspace.select_objects([object_id])
         except Exception as exc:
             self.show_error(f"Could not apply image edits: {exc}")
+        finally:
+            if dialog is not None:
+                # History commands retain copied model data, not this parented
+                # dialog's decoded images, draft history, and graphics scene.
+                dialog.deleteLater()
 
     def clean_image_background(self, object_id: str) -> None:
         from .background_cleanup import BackgroundCleanupDialog

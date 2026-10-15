@@ -473,11 +473,23 @@ image processing preserves retained grayscale and propagates separate eligibilit
 through post-dither output gating. See docs/ENGRAVING_IMAGE_EDITOR.md for operation,
 accuracy boundaries and deferred tools. Browser single-SVG behavior is unchanged.
 
-Initial Windows Python 3.14 verification: 285 existing integration tests passed,
-then 98 focused checks passed after linking/output admission review; 16 new
-end-to-end image-edit integration tests pass. The final broad focused run passed 467 tests with repository Ruff and
-compileall. Subsequent alpha/serialization-margin verification passed 36 tests.
-Full Windows local suite, frozen build and compatibility CI are in progress. Source
+Windows Python 3.14 verification at e768590: all 472 focused tests passed, with
+repository Ruff and compileall. Compatibility CI run 38813160637 completed:
+Windows Python 3.10 had 5882 passed, 144 skipped and three failures; Windows
+Python 3.12 desktop had 7360 passed, 54 skipped and four failures. All failures
+were reproduced on clean baseline 52f25b4: three stale command-budget checks
+and the retained-Z group visibility assertion. Ruff and the POSIX controller
+tier passed. CI is not green and this branch is not ready for main integration.
+The sandboxed local full run stalled at 91% without a final summary; it was
+interrupted and all owned pytest workers exited. It is not a passing suite.
+With workspace TEMP/TMP, planning checks passed 83 tests with the two confirmed
+baseline aggregate-budget cases deselected.
+
+Final UI hardening releases closed dialogs and their decoded image planes,
+owns the initial fit timer, and clears or rejects stale node selections after
+reset, undo/redo and outline replacement. All 486 focused tests pass after this
+hardening, along with repository Ruff and compileall. A fresh frozen build
+and compatibility run follow these changes. Source
 fixtures are synthetic barrel-like grayscale with lettering and separate shadow;
 no original barrel asset is claimed. Core 0.8MP benchmark median: committed mask
 render 1.075 ms; unique node change plus render 2.081 ms; automatic rectangular
@@ -491,9 +503,9 @@ No camera/controller/laser test, machine setting or calibration change, Pi
 installation, motion or laser output was performed. This feature remains under
 software/operator verification and is not merged into main.
 
-## Background cleanup frozen DEV TEST handoff (2026-10-15)
+## Historical background cleanup frozen DEV TEST handoff (2026-10-15)
 
-E3 DEV TEST selects Image background cleanup, version 0.7.206, branch
+At that handoff, E3 DEV TEST selected Image background cleanup, version 0.7.206, branch
 codex/background-cleanup, exact frozen application revision
 `dcaa217a019bfab986af2bb28506264c830e7a24`. Target:
 `C:\Users\lukel\Documents\E3\.codex-worktrees\background-cleanup-dev\dist\E3\E3.exe`.
