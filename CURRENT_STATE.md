@@ -1,13 +1,44 @@
 # Current repository state
 
+## Development 0.7.220 published and verified (2026-10-15)
+
+[PR #44](https://github.com/lukelave-boop/E3/pull/44) was merged into main at
+`30f23b2a652fc8c918b2fce89e731322abafc4b6`. The gated
+[publication run 38816996249](https://github.com/lukelave-boop/E3/actions/runs/38816996249)
+succeeded: exact-commit compatibility, Windows installer, Linux AppImage and
+publication all passed. Release **0.7.220** is live on the
+[development channel](https://github.com/lukelave-boop/E3/releases/tag/e3-development).
+The merge commit's gate passed Windows 3.12 desktop (7,376 passed, 54 skipped,
+594.20 s), Windows 3.10 core (5,900 passed, 141 skipped, 482.87 s), POSIX
+controller/session (652 passed, 104.70 s) and Ruff.
+
+The independent main CI run 38816996596 also passed after one failed-job rerun.
+Its first Windows 3.10 attempt timed out a Node browser-placement subprocess
+at 20 s; the same test passed in the release gate and locally in 0.47 s.
+No product code, timeout or safety test was relaxed.
+
+Both published packages were downloaded without execution. Their exact byte
+counts and SHA-256 hashes match the live manifest and GitHub asset metadata;
+the stable manifest, release metadata and development tag all identify the
+merge commit. E3's unauthenticated public manifest fetch also passed. Full
+package verification details are in [release review](docs/RELEASE_REVIEW.md).
+
+All 35 protected machine/calibration hashes remain unchanged. No controller
+connection, motion, laser output, Pi deployment, package installation or DEV TEST
+selection change occurred. Physical run-up, engraving quality and installed
+update handoff qualification remain outstanding. The merged raster feature
+branch was deleted locally and remotely; its frozen DEV TEST checkout and
+unrelated working checkouts were preserved. This documentation-only release
+record does not trigger another package publication.
+
 ## Release gate and integration review (2026-10-15)
 
 Release preparation is on `codex/raster-overscan`, [PR #44](https://github.com/lukelave-boop/E3/pull/44).
 The publisher now invokes the complete reusable Compatibility CI workflow from
 its exact commit before building either package. Publication requires that gate
 and both packages; failed, cancelled or skipped prerequisites block release.
-Only publication has contents-write permission. Main and the release channel
-have not been changed. The branch remains unmerged pending release authorization.
+Only publication has contents-write permission. At this pre-merge review, main
+and the release channel had not changed; the publication outcome is recorded above.
 
 The integration review covers the accumulated 60-commit, 215-file feature branch,
 including raster/local/Pi safety, setup/placement, persistence, desktop/browser

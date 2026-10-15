@@ -1,5 +1,13 @@
 # Changelog
 
+## Development 0.7.220 — published 2026-10-15
+
+PR #44 is merged and the accumulated changes through `30f23b2a652f` are available
+on the development channel. Exact-commit compatibility CI, both package builds,
+publication and downloaded package checksum verification passed. See
+[release review](docs/RELEASE_REVIEW.md) for evidence and remaining physical and
+installed-update qualification. No operator settings or calibration were changed.
+
 Release publication now requires the complete Compatibility CI workflow to pass
 for the exact release commit before packaging; failed or cancelled checks block
 both automatic and manual publication.

@@ -4,7 +4,7 @@ Candidate: `codex/raster-overscan`, [PR #44](https://github.com/lukelave-boop/E3
 Review baseline: `origin/main`, an ancestor of this branch. Before release
 preparation, the accumulated branch comprised 60 commits and 215 changed files.
 This is an integration review of the whole accumulated change, not only the
-latest preview fix. Main and the development release channel remain unchanged.
+latest preview fix. The review preceded the authorized merge and publication recorded below.
 
 ## Findings and corrections
 
@@ -85,3 +85,28 @@ branch when safe; preserve the active DEV TEST checkout until its pointer change
 Keep project backups: a schema-5 project is not readable by older schema-3 E3.
 Do not distribute personal calibration, credentials or travel verification as
 release defaults. No machine setting needs changing to merge this branch.
+
+## Publication outcome — 2026-10-15
+
+PR #44 merged as `30f23b2a652fc8c918b2fce89e731322abafc4b6`. Development
+**0.7.220** was published by [run 38816996249](https://github.com/lukelave-boop/E3/actions/runs/38816996249)
+with every gate, build and publish job successful. Exact-commit checks: Windows
+3.12 desktop 7,376 passed / 54 skipped (594.20 s); Windows 3.10 core 5,900 passed /
+141 skipped (482.87 s); POSIX 652 passed (104.70 s); Ruff passed.
+Independent main CI 38816996596 is also green after a single failed-job rerun
+for a 20-second Node subprocess timeout; the same browser test passed in the
+release gate and locally in 0.47 s. No timeout or safety behavior was changed.
+
+Downloaded publication verification:
+
+| Asset | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `E3-Setup-30f23b2a652f.exe` | 219,904,197 | `6be8d5eaa3de1bfac4269f7982a9fcde74eabb77acf5cad5a86d6f346967a0ce` |
+| `E3-30f23b2a652f-x86_64.AppImage` | 380,929,216 | `1cf8b5a04493193735040e8e5ae913cf656c8b830ee1fdb895d9edc862120d43` |
+
+Both files match the stable manifest and GitHub asset size/digest metadata.
+Release metadata, tag and manifest point to the merge revision. The normal
+unauthenticated updater manifest fetch passed. Packages were not executed or
+installed; physical and installed-update qualification limits remain unchanged.
+All 35 protected settings/calibration hashes match. The merged feature branch
+was deleted, preserving the selected frozen DEV TEST checkout and unrelated work.
