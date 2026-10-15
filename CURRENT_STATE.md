@@ -80,10 +80,22 @@ No new deployment bundle was installed and no Pi connection was made.
 Repository Ruff, application compileall and diff checks pass. The existing
 Compatibility CI workflow is retained: GitHub rejected the proposed Linux
 test-list edit because the publishing OAuth login lacks workflow scope.
-The new raster-specific Linux cases remain unexecuted; run
-`pytest -q tests/test_raster_safety.py tests/test_raster_safety_focus.py`
-on Linux/Pi before deployment. Existing CI still covers Pi service/protocol
-integration, including the extended policy diagnostic tests.
+The focused Linux gap was closed separately: on local Ubuntu 22.04 WSL /
+Python 3.10.12, `test_raster_safety.py` and `test_raster_safety_focus.py`
+reported 45 passed in 11.30 s. An isolated ignored build environment used
+pytest 9.1.1, NumPy 2.2.6 and OpenCV contrib headless 4.14.0.94; all controller
+interactions were simulated. This is Linux verification, not a physical Pi
+or controller test. The existing cloud Linux controller suite also passed
+652 tests in 102.43 s, including the extended policy diagnostic tests.
+Cloud [Compatibility CI run 38771495195](https://github.com/lukelave-boop/E3/actions/runs/38771495195)
+completed on implementation commit `1f633ddcadd56882829cefbec1f74a05eb37ae16`.
+Windows Python 3.10 core passed 5,895 tests with 141 skips in 432.62 s;
+Windows Python 3.12 desktop reported 7,357 passed, 54 skipped and one failed
+in 727.02 s. The only failure is the same saved-Z visibility assertion at
+`test_desktop_machine_layout.py:59`, reproduced on clean `52f25b4` locally.
+Cloud Ruff and the 652-case Linux job passed. No additional CI failure
+appeared. Local archived-predecessor package tests cover imports skipped by
+the shallow CI checkout. Final follow-up changes only record verification.
 
 The offline performance audit and reproducible script are in
 [RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md). The earlier parser duplication
@@ -101,8 +113,9 @@ interactive GUI acceptance or Pi deployment was performed. Record current whole
 XY travel and cable/fixture clearance with identified controller/firmware/config,
 verify offsets/calibration and run-up at intended speeds, deploy the matching Pi
 companion, then perform supervised physical acceptance. See
-[RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). Physical validation and compatibility
-CI/main integration remain pending; this branch is retained for that verification.
+[RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). Physical validation remains pending.
+The branch is pushed and retained without main integration while the known
+baseline desktop failure and operator acceptance remain unresolved.
 
 ## Background cleanup frozen DEV TEST handoff (2026-10-15)
 
