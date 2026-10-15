@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import cv2
 import numpy as np
 
+from ..calibration.camera_identity import remote_camera_identity
 from ..config import CameraSettings, PrecisionCaptureSettings
 from ..errors import CameraError
 from ..imaging import probe_encoded_image_dimensions
@@ -182,6 +183,7 @@ class RemoteCameraService(CameraService):
         self._mjpeg_generation = 0
         self._status_lock = threading.RLock()
         self._status_cache = self._offline_status()
+        self._calibration_identity: str | None = None
         self._status_probe_stop = threading.Event()
         self._status_probe_thread: threading.Thread | None = None
         self._network_lock = threading.RLock()
@@ -204,6 +206,10 @@ class RemoteCameraService(CameraService):
     def _set_cached_status(self, status: CameraStatus) -> None:
         with self._status_lock:
             self._status_cache = replace(status)
+
+    def calibration_identity(self) -> str | None:
+        with self._status_lock:
+            return self._calibration_identity if self._status_cache.connected else None
 
     def _fetch_status(
         self,
@@ -231,7 +237,13 @@ class RemoteCameraService(CameraService):
                 )
             status_fields.pop("synthetic")
         status = CameraStatus(**status_fields)
-        self._set_cached_status(status)
+        # This status arrived through the authenticated camera protocol.
+        with self._status_lock:
+            self._calibration_identity = (
+                remote_camera_identity(status.device, camera_token_from_environment())
+                if status.connected else None
+            )
+            self._status_cache = replace(status)
         return status
 
     def _ensure_status_probe(self) -> None:

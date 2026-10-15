@@ -1,5 +1,53 @@
 # Surface height and gauge-taught laser focus
 
+## Recognizing existing gauge calibration
+
+Use the setup wizard's **Check progress** to refresh current controller evidence.
+A compatible saved gauge calibration remains complete when the bed survey changes.
+If current status is unavailable, the wizard asks for a status refresh rather
+than gauge teaching. An explicit compatibility problem is shown separately for
+inspection. Neither message erases or rewrites the saved gauge calibration.
+
+## Raster surface focus (source update)
+
+Raster/image layers now use a fixed 7 mm gap above the measured material surface.
+Cut/vector and Fill retain the existing thickness-derived gap and calibration.
+The gap is relative to the measured surface, not absolute Z7: raising the material
+or its supports raises the raster target by the same amount. Measure again after
+changing the material or supports.
+
+Raster target Z is raw probe contact Z plus the saved 7 mm taught focus offset.
+A mixed job turns output off, drains XY, lifts to verified clearance, approaches
+the next operation and focuses before its output. Start Here preserves the mode.
+A target at or above clearance, above the configured maximum, or lacking current
+measurement authority is rejected. Limits are not raised automatically.
+
+The matching `pi-operation-focus-v1` companion is installed and verified on the
+Pi, paired with E3 DEV TEST 0.7.181. All 322 isolated Linux/Pi fake-controller
+tests passed, and all 20 installed source files match their tested bytes. Saved
+settings and calibration were preserved. Reconnect and measure again after the
+service restart. Windows offscreen and frozen-startup checks passed; interactive
+operation and physical focus verification remain pending. See CURRENT_STATE.md
+for the exact deployment record.
+
+## Precision setup additions
+
+The guided setup checklist now links to a four-corner-plus-center survey. Measure
+a known-thickness rigid target at each position, review the inferred honeycomb
+heights, then explicitly save the chosen datum. Survey evidence records distinct
+contact/reference identities and actual XY; it cannot silently authorize a new
+reference. Measure surface and Return laser to measured spot are grouped directly
+before gauge teaching. Existing guarded actions and clearance checks remain.
+
+The camera's height correction uses top elevation including supports, whereas
+automatic focus uses the separately derived material thickness. The precision
+workflow requires the matching `pi-material-surface-v1` companion. At tall surfaces
+the existing contact/clearance bounds still apply; select physically adequate
+clearance using the current setup controls. No higher Z limit is installed by
+this feature. See [precision placement](PRECISION_PLACEMENT.md) and CURRENT_STATE.md
+for the current build and pending physical qualification. Earlier handoffs below
+remain the historical focus verification record.
+
 ## Home / park timeout correction
 
 Pi-only companion **e3-pi-thickness-focus-1ccd58e0** (`de6cdc1`) is installed and

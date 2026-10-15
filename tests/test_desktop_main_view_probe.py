@@ -140,6 +140,21 @@ def test_inverse_mapping_matches_lens_registration_and_residual_mesh(harness):
     assert target["target_machine_xy_mm"] == pytest.approx((45.25, 132.5), abs=1e-5)
 
 
+def test_inverse_click_uses_the_material_mapper_that_rendered_the_view(harness, monkeypatch):
+    context = harness.context
+    material = copy.copy(context.bed)
+    material._calibration = copy.deepcopy(context.bed.calibration)
+    material.calibration.registration_x_mm = 2.25
+    material.calibration.registration_y_mm = -3.5
+    monkeypatch.setattr(context, "material_preview_mapper", lambda: material)
+    publish(harness)
+    selection = select(harness, 45.25, 132.5)
+    expected = context.lens.model.distort_points(np.asarray([material.mm_to_image(45.25, 132.5)]))[0]
+    assert (selection["image_x"], selection["image_y"]) == pytest.approx(expected)
+    assert map_selection(harness, selection)["target_machine_xy_mm"] == pytest.approx((45.25, 132.5), abs=1e-5)
+    assert context.bed.calibration.registration_x_mm == 0
+
+
 def test_honeycomb_local_selection_uses_displayed_rigid_pose(harness):
     harness.controller.coordinate_space = "honeycomb_local"
     harness.controller.frame = HoneycombCoordinateFrame(

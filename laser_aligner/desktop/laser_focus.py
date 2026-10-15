@@ -12,8 +12,9 @@ from .controls import MeasurementSpinBox
 from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
 from .main_view_probe import MainViewProbe
-from .mainboard_z import _number, _read_allowed, _session
+from .mainboard_z import MainboardZCoordinator, MainboardZPanel, _number, _read_allowed, _session
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 from .z_telemetry import EnderZTelemetry
 
 QtCore, _, QtWidgets = require_qt()
@@ -27,7 +28,8 @@ def _validate_main_view_selection(controller: Any, selection: dict[str, Any]) ->
     if selection.get("main_view") is not True:
         return
     context = controller.runtime.context
-    if (not controller.review_signature_is_current(selection.get("review_signature"))
+    validator = getattr(controller, "focus_review_signature_is_current", controller.review_signature_is_current)
+    if (not validator(selection.get("review_signature"))
             or controller._camera_review_active()
             or controller._camera_source_generation != selection.get("source_generation")
             or getattr(getattr(context.lens, "model", None), "model_id", None)
@@ -48,6 +50,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None, *, calibration_mode: bool = False) -> None:
         super().__init__(parent)
         self.calibration_mode = calibration_mode
+        self.precision_evidence_store = None
         self._camera_location = "live image" if calibration_mode else "main view on the left"
         self._camera_prompt = f"Choose Position probe, then click a solid spot in the {self._camera_location}."
         self._status: dict[str, Any] = {}
@@ -66,12 +69,18 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._camera_live = False
         self._failure_message: str | None = None
         layout = QtWidgets.QVBoxLayout(self)
+        outer_layout = layout
+        self.setup_status = QtWidgets.QWidget(self)
+        layout = QtWidgets.QVBoxLayout(self.setup_status)
+        layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(self.setup_status)
+        self.setup_status.setVisible(calibration_mode)
         intro = QtWidgets.QLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
             "This is laser-off setup; it does not change camera calibration or start a job."
             if calibration_mode else
-            "Measure the workpiece to calculate the focus for every job on it. "
-            "The job moves to that focus before laser output."
+            "Measure the workpiece to calculate cut focus and the 7 mm raster surface gap. "
+            "Jobs select the focus for each operation before laser output."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -131,6 +140,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.honeycomb_note = QtWidgets.QLabel("Enter the measured bed height relative to the border. Saving clears the workpiece measurement; measure again before running a job.")
         self.honeycomb_note.setWordWrap(True)
         honeycomb_layout.addWidget(self.honeycomb_note)
+        self.bed_survey_button = QtWidgets.QPushButton("Bed leveling measurements (5 positions)")
+        self.bed_survey_button.clicked.connect(self.open_bed_survey)
+        honeycomb_layout.addWidget(self.bed_survey_button)
         layout.addWidget(self.honeycomb_group)
         self.honeycomb_group.setVisible(calibration_mode)
         self.honeycomb_height.valueChanged.connect(self._edit_honeycomb)
@@ -156,6 +168,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.z_retention_note.setWordWrap(True)
         retention_layout.addWidget(self.z_retention_note)
         layout.addWidget(self.z_retention_group)
+        layout = outer_layout
         self.failure_detail = QtWidgets.QLabel()
         self.failure_detail.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.failure_detail.setWordWrap(True)
@@ -231,10 +244,16 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.clear_surface = QtWidgets.QPushButton("Clear measurement")
         grid.addWidget(self.measure, 12, 0, 1, 2)
         grid.addWidget(self.clear_surface, 12, 2, 1, 2)
+        if calibration_mode:
+            # Measurement and its required XY return form one step directly before teaching.
+            grid.removeWidget(self.align_laser)
+            grid.removeWidget(self.clear_surface)
+            grid.addWidget(self.align_laser, 12, 2, 1, 2)
+            grid.addWidget(self.clear_surface, 13, 0, 1, 4)
         self.position_note = QtWidgets.QLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
         if not calibration_mode:
             self.position_note.setText(
-                "Measure surface sets the focus for every job on this flat workpiece. "
+                "Measure surface sets cut focus and the 7 mm raster surface gap on this flat workpiece. "
                 "Confirm one flat surface across the job, the gauge removed, and clear Z/XY paths. "
                 "Measure again after changing the material or its supports."
             )
@@ -242,7 +261,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         grid.addWidget(self.position_note, 11, 0, 1, 4)
         if not calibration_mode:
             # Full-width actions fit the existing narrow Machine inspector.
-            self.align_laser.setText("Return laser to spot")
+            self.align_probe.hide()
+            self.align_laser.hide()
             self.path_clear.setText("Headroom and Z path clear\nto the selected clearance")
             self.xy_recovery_group.setTitle("Interrupted probe recovery")
             self.xy_recovery_clear.setText(
@@ -259,8 +279,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 (1, self.range_note), (2, self.path_clear), (3, self.reference),
                 (4, self.return_clearance), (5, self.position_probe),
                 (7, self.camera_target), (8, self.offset_readout),
-                (9, self.align_probe), (10, self.align_laser),
-                (11, self.position_note), (12, self.measure), (13, self.clear_surface),
+                (9, self.position_note), (10, self.measure), (11, self.clear_surface),
             ):
                 grid.addWidget(widget, row, 0, 1, 2)
         layout.addWidget(self.reference_group)
@@ -289,7 +308,6 @@ class LaserFocusPanel(QtWidgets.QWidget):
                 offset_layout.addWidget(editor, 1, column + 1)
             self.apply_offset = QtWidgets.QPushButton("Save measured XY offset")
             offset_layout.addWidget(self.apply_offset, 2, 0, 1, 4)
-            layout.addWidget(self.offset_editor)
 
             teach = QtWidgets.QGroupBox("Teach once with the 7 mm gauge")
             teach_layout = QtWidgets.QGridLayout(teach)
@@ -319,6 +337,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self.teaching_limits.setWordWrap(True)
             teach_layout.addWidget(self.teaching_limits, 4, 0, 1, 4)
             layout.addWidget(teach)
+            layout.addWidget(self.offset_editor)
 
         self.preview_group = QtWidgets.QGroupBox("Preview and position" if calibration_mode else "Workpiece focus", self)
         focus_layout = QtWidgets.QGridLayout(self.preview_group)
@@ -328,7 +347,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.spacers.setSuffix(" mm")
         self.spacers.setPrefix("Spacers: ")
         self.spacers.setToolTip("Total spacer thickness under the material. Clear measurement before changing this value.")
-        self.thickness_note = QtWidgets.QLabel("Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: waiting for saved height.")
+        self.thickness_note = QtWidgets.QLabel("Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: waiting for saved height.")
         self.thickness_note.setWordWrap(True)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
@@ -447,7 +466,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             f"Probe target: X {x:.2f}, Y {y:.2f} mm · Head: X {x-ox-sx:.2f}, Y {y-oy-sy:.2f} mm. "
             + ("Outside original calibration grid. "
                if target.get("within_original_calibration_grid") is False else "")
-            + "Bed-plane estimate; check probe alignment before measuring raised work."
+            + ("Approximate support-plane preview only. Choose a broad solid patch and check the probe alignment; measure before placing artwork."
+               if target.get("approximate_support_preview") else
+               "Measured material-plane target; check the physical probe path."
+               if target.get("height_corrected") else
+               "Bed-plane estimate; check probe alignment before measuring raised work.")
         )
         self._sync()
 
@@ -707,6 +730,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "recover_xy": "XY recovered at the current height. Separately confirm headroom and reference the border.",
         }.get(str(result.get("action")), "Reported position is refreshed while idle."))
         self._sync()
+        survey = getattr(self, "_bed_survey_dialog", None)
+        if survey is not None and result.get("action") == "set_honeycomb_height":
+            survey.record_saved_datum()
 
     def _preview_matches(self, preview: Any) -> bool:
         surface = self._result.get("surface")
@@ -835,7 +861,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.save_honeycomb.setEnabled(bool(self.honeycomb_height.isEnabled() and self._honeycomb_edited
                                            and self.honeycomb_height.hasAcceptableInput()))
         if honeycomb is not None:
-            self.thickness_note.setText(f"Automatic gap: 7 → 3 mm over 0 → 6 mm material thickness. Honeycomb: {honeycomb:+.3f} mm relative to border.")
+            self.thickness_note.setText(f"Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: {honeycomb:+.3f} mm relative to border.")
         self.honeycomb_note.setText(
             f"Saved: {honeycomb:+.3f} mm relative to border. Saving clears the workpiece measurement; measure again before running a job."
             if honeycomb_available else "Connect and refresh the updated Pi companion to edit the saved honeycomb height."
@@ -1040,9 +1066,9 @@ class LaserFocusPanel(QtWidgets.QWidget):
             target = _number(plan.get("target_z_mm"))
             clearance = _number(plan.get("clearance_z_mm"))
             if gap is not None and target is not None and clearance is not None:
-                self.target.setText(f"Material: {thickness:.3f} mm · automatic gap: {gap:.3f} mm\nFocus Z: {target:.3f} mm")
+                self.target.setText(f"Material: {thickness:.3f} mm · cut gap: {gap:.3f} mm\nCut Z: {target:.3f} mm · Raster gap: 7 mm above surface")
                 self.job_note.setText(
-                    f"Every job uses this focus and travels at Z{clearance:g} mm. "
+                    f"Jobs use cut focus or the 7 mm raster gap and travel at Z{clearance:g} mm. "
                     "Measure again after changing the material or its supports."
                 )
                 return True
@@ -1052,6 +1078,19 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Automatic workpiece focus requires the matching Pi companion update."
         )
         return False
+
+    def open_bed_survey(self) -> None:
+        from .precision_setup import BedSurveyDialog
+
+        if not self.calibration_mode:
+            return
+        dialog = getattr(self, "_bed_survey_dialog", None)
+        if dialog is None:
+            dialog = BedSurveyDialog(self)
+            self._bed_survey_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def request(self, action: str, value: float | None = None) -> None:
         self._sync()
@@ -1503,13 +1542,23 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.panel = LaserFocusPanel(calibration_mode=calibration_mode)
+        self.maximum_panel = None
+        self.maximum_coordinator = None
+        if calibration_mode:
+            self.maximum_panel = MainboardZPanel(self.panel, maximum_only=True)
+            self.panel.layout().insertWidget(0, self.maximum_panel)
+            self.maximum_coordinator = MainboardZCoordinator(
+                self.maximum_panel, controller, self, allow_own_modal=True,
+            )
+            self.maximum_coordinator.set_status(controller.runtime.context.machine.status())
+            self.maximum_coordinator.set_busy(bool(getattr(controller, "_active_tasks", 0)))
         context = controller.runtime.context
         self.bed_view = (MainViewProbe(controller, main_view, self) if main_view is not None
                          else FocusBedView(getattr(context, "camera", None), self))
         self.splitter = None
         if calibration_mode:
             self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-            scroll = QtWidgets.QScrollArea()
+            scroll = StableScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setMinimumWidth(620)
             scroll.setWidget(self.panel)
@@ -1627,6 +1676,8 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         active = (not self._shutdown and not self._suspended and self.isVisible()
                   and not self.coordinator._modal_blocked())
         self.coordinator.set_suspended(not active)
+        if self.maximum_coordinator is not None:
+            self.maximum_coordinator.set_suspended(not active)
         self.setEnabled(active)
         if active:
             if not self.bed_view._active:
@@ -1652,12 +1703,25 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         super().hideEvent(event)
 
     def shutdown(self, *, force: bool = False) -> bool:
-        if self.coordinator.mutation_busy and not force:
+        if self.mutation_busy and not force:
             self.panel.message.setText("Wait for the operation to finish, or use Software STOP.")
             return False
         self._shutdown = True
         self.coordinator.close()
+        if self.maximum_coordinator is not None:
+            self.maximum_coordinator.close()
         self._camera_timer.stop()
         self.panel._display_timer.stop()
         self.bed_view.end()
         return True
+
+    @property
+    def mutation_busy(self) -> bool:
+        return self.coordinator.mutation_busy or bool(
+            self.maximum_coordinator is not None and self.maximum_coordinator.mutation_busy
+        )
+
+    def set_external_busy(self, busy: bool) -> None:
+        self.coordinator.set_external_busy(busy)
+        if self.maximum_coordinator is not None:
+            self.maximum_coordinator.set_external_busy(busy)

@@ -1,5 +1,222 @@
 # Changelog
 
+Release publication now requires the complete Compatibility CI workflow to pass
+for the exact release commit before packaging; failed or cancelled checks block
+both automatic and manual publication.
+
+
+Preview playback identifies direction and laser state: amber means laser on,
+cyan means laser off. Bidirectional raster output is unchanged.
+
+Raster preview draws the initial laser-off approach as a separate red dashed line.
+The orange boundary encloses job movement after that approach, including raster
+run-up/run-out and row transfers. Full travel extents still drive fitting and
+safety validation; generated motion, power, calibration and settings are unchanged.
+
+## Unreleased — raster overscan and boundary separation
+
+- Keep powered raster output inside the calibrated surface while checking all
+  carriage travel against a separately verified machine envelope, including
+  spot offsets, serialization, initial approach and row/pass/layer transfers.
+- Bind that envelope and the exact engraving boundary into immutable application
+  program bytes; repeat checks locally and on the Pi, reject missing/stale evidence,
+  and preserve homing, arming, motion, output-authority and M5 protections.
+- Credit white margins after dithering and retain the larger of requested overscan
+  and modeled acceleration distance without changing powered sample placement.
+- Show calibrated surface, powered bounds and full movement footprint separately
+  in exact Preview, including Start Here. Boundary failures identify needed clearance.
+- Add a call-count regression for the earlier large-job parser duplication fix and
+  an offline, reproducible pipeline benchmark with ranked findings.
+
+## Image background cleanup (2026-10-15)
+
+- Add Objects → Image → Clean background with an opt-in checkbox, adjustable
+  tolerance (0–64), and linked before/after zoom and pan.
+- Whiten only edge-connected near-white pixels before raster resampling and
+  dithering. Keep enclosed highlights, source files and per-copy settings intact.
+- Apply as one undoable edit; persist settings in project schema 5. Schemas 1–4
+  migrate with cleanup off; older E3 versions reject schema-5 files.
+
+
+## Camera aliases and larger raster preparation (2026-10-15)
+
+- Preserve calibration across LAN/Tailscale camera addresses after binding an
+  authenticated stable camera identity; reject identity and optical changes.
+- Raise the bounded command ceiling to two million and correct raster planning
+  that overcounted per-row laser mode commands for every powered span.
+- Distinguish project checks from machine readiness in Preview. Show missing
+  surface measurement before submission and disable START until it is current.
+
+## Duplicate machine calibration choice (2026-10-15)
+
+- Duplicate now offers a name and an explicit same-machine choice that keeps
+  camera/calibration associations and the saved honeycomb span.
+- The different-machine default clears those associations; Cancel writes
+  nothing. Existing calibration checks and next-launch activation remain.
+- Newly created image-import raster layers default to Out on. Importing into
+  an existing raster layer preserves its output choice, including Off.
+
+## Large-job preparation (2026-10-15)
+
+- Remove repeated command parsing/configuration reconstruction and reuse one
+  process-local immutable validation proof with current-policy and file checks.
+- Yield during validation for status workers; retain short status/STOP deadlines.
+- Begin temporary explicit-START authorization after inert Pi preparation,
+  preserving STOP/disarm/session revocation and legacy pre-armed expiry.
+- Scale bounded preparation RPC deadlines with job size.
+- Keep checking progress through delayed polls; never label transfer completion
+  or failed preparation as successful execution.
+
+## Raster capacity and preview clarity (2026-10-15)
+
+- Raise the shared planner and machine-validator ceiling to 1,000,000 commands.
+- Default raster previews to high-contrast powered detail, with laser-off moves hidden.
+- Fix the travel toggle to include laser-off feed gaps and the active move overlay.
+- Provide a guarded, two-file Pi companion for the recorded operation-focus installation.
+
+## Escape cancels authoring (2026-09-18)
+
+- Escape exits the current drawing tool, discards drafts and clears selection.
+- Cancel unfinished object moves, resizes and rotations without an undo entry.
+- Remove Escape from software Stop; the dedicated Stop action stays available.
+
+## Drawing tools (2026-09-17)
+
+- New stencil text uses aligned top-and-bottom material bridges. Stacked counters
+  share an axis; excessive widths that erase a letter are rejected.
+- Polygon in the left sidebar: click its center, move to choose radius/angle,
+  then click to freeze. Type 3–12 sides for live preview; higher values and other
+  invalid input disable Create. Enter/Create adds one undoable polygon; Cancel
+  discards it. Right-click or Select exits the persistent drawing tool.
+- Hold Ctrl while rotating to snap to horizontal/vertical (90-degree) orientations.
+  Press/release Ctrl updates immediately; free rotation resumes when released.
+  Shift retains 15-degree object rotation, with Ctrl taking priority. Template
+  placement and initial polygon orientation also support Ctrl.
+
+## Saved gauge recognition (2026-09-17)
+
+Check progress refreshes machine status before evaluating saved gauge evidence.
+Unavailable status no longer asks for gauge teaching, and a compatible saved
+gauge calibration is recognized independently of bed-survey completion.
+
+## Base-map grid containment (2026-09-17)
+
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
+## Unreleased - raster surface focus
+
+- Raster/image layers use a fixed 7 mm surface gap; cut/vector and Fill keep the
+  existing thickness-derived focus.
+- Mixed jobs switch at laser-off, drained, verified-clearance boundaries.
+  Start Here preserves each operation's focus. Unreachable raster targets and
+  older Pi companions are rejected before job motion.
+
+
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
+## Unreleased - overwrite layer profiles
+
+- Add Save beside Save As, with a named overwrite confirmation defaulting to No.
+- Keep Save disabled without a selected profile and reject missing or incompatible
+  profiles. Save As still refuses duplicate names; writes remain atomic.
+- Wrap profile actions below the selector in narrow inspectors.
+- Verify with 68 focused Windows tests, Ruff, compileall and offscreen visual QA.
+
+
+## Unreleased - distribution areas
+
+- Add a chooser to horizontal and vertical Distribute: full project work area,
+  chosen rectangle, or the original selection-center span.
+- Area modes equalize edge gaps including end margins, keep the reference
+  rectangle fixed, and reject layouts that cannot fit without resizing.
+- Explain insufficient selections and already-even layouts; apply through one
+  undoable project command. Available in E3 DEV TEST 0.7.169.
+
+## Unreleased - cut/layer profiles
+
+- Add whole-layer-set profiles above the Cuts list: Load, Save As and Delete.
+- Keep profiles scoped to the running machine/tool; load through undo history
+  with used-layer matching and rejection of missing or ambiguous assignments.
+- Remove seven redundant drawing, template and trace entries from Tools.
+- 98 focused Windows tests, repository Ruff and compileall pass; operator
+  testing of the frozen build remains pending.
+
+
+## Unreleased - clearer setup wizard
+
+- Replace evidence jargon with numbered instructions, Check progress and named
+  prerequisite steps. Keep technical reasons in Troubleshooting details.
+- Reveal and highlight the actual reference, probing, measurement, gauge and
+  Save honeycomb height controls from instruction links.
+- Give the bed-leveling window an explicit measure/record/copy/save sequence.
+  Copying an average still requires a separate explicit save.
+
+
+## Unreleased - step-by-step Machine Setup wizard
+
+- Add eight guided setup stages and a final evidence review within Machine
+  Setup, using the existing controls and shared evidence status.
+- Keep Back/Next as navigation; explicit controls open surveys, height
+  calibration, precision assessment and prerequisite steps.
+- Provide All setup tools and resume the same wizard stage, plus a direct
+  Prepare holdout marks link to Accuracy Validation. Preserve the setup guide.
+- Hold navigation during operations and keep software STOP available. Evidence
+  review reports current, missing and stale evidence without declaring the
+  machine calibrated. Controller, motion and Pi behavior are unchanged.
+
+## Unreleased - precision placement and guided setup
+
+- Add native-detail precision capture, continuous rigid template placement,
+  snapping suspension and reviewed alignment against the frozen photograph.
+- Keep requested precision trace fitting tolerance and report source limitations.
+- Apply a validated two-height camera model to the measured top surface, including
+  spacers, without changing support bounds or project dimensions. Reject stale
+  captures, model bindings and height-aware jobs; require compatible Pi validation.
+- Add a reusable setup checklist, leveling survey, explicit datum saving,
+  grouped measurement/return/gauge actions and independent precision evidence.
+- Version raw surface evidence, project provenance (schema 4) and application
+  job bindings. Preserve old project geometry and diagnostic height studies.
+- Keep the 0.10 mm radial XY target fixed; physical qualification is pending.
+
 ## Unreleased - Air Assist recovery after STOP
 
 - Recheck pending terminal-job OFF bindings when Start is requested after
@@ -2224,3 +2441,7 @@ committed, verified, and included in a release.
 - Conservative streamed G-code allowlist, compact-word parsing, coordinate checks, and rapid-with-laser rejection
 - Zero-power framing with no `M3`/`M4` command
 - Software safety gates, 20 automated tests, end-to-end simulated API validation, documentation, and Linux installation scripts
+
+## Continuous raster and Machine coordinates (2026-09-16)
+
+Raster no longer switches M4/M5 at every engraved span. Inline power changes preserve a continuous scan through blank gaps and overscan, with explicit M5 before row transfers. Preview and Start Here track zero-power laser mode correctly. Fixed-size X/Y/Z coordinate boxes cannot grow or shrink with their text. X/Y show completed Home/jog positions; unavailable positions show a dash.

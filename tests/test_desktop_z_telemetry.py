@@ -138,10 +138,10 @@ def test_busy_panels_display_actual_samples_without_changing_authority(app, cloc
         received_at = panel._received_at
         old_preview = getattr(panel, "_preview_id", None)
         emit(status(ender_z_telemetry=sample(z_mm=29.375)))
-        assert panel.height.text() == "Z 29.375 mm · live"
+        assert panel.height.text() == ("Z 29.375 mm · live" if panel_kind.startswith("focus") else "Z 29.375 mm")
         assert "step counter" in note.text()
         emit(status(ender_z_telemetry=sample(sequence=13, z_mm=28.125)))
-        assert panel.height.text() == "Z 28.125 mm · live"
+        assert panel.height.text() == ("Z 28.125 mm · live" if panel_kind.startswith("focus") else "Z 28.125 mm")
         assert panel._result == old_result
         assert panel._received_at == received_at
         assert getattr(panel, "_preview_id", None) == old_preview
@@ -158,7 +158,9 @@ def test_busy_panels_display_actual_samples_without_changing_authority(app, cloc
         assert "Live Z unavailable" in note.text()
         emit(status(ender_z_telemetry=sample(sequence=14, z_mm=-.375, known=False, homing=True)))
         assert "-0.375" in panel.height.text()
-        assert "homing / unreferenced" in panel.height.text()
+        assert "homing / unreferenced" in (
+            panel.height.text() if panel_kind.startswith("focus") else note.text()
+        )
         assert "above border" not in panel.height.text() + note.text() + panel.height.toolTip()
         _assert_z_jogs_unavailable(panel)
         emit(status(ender_z_telemetry=sample(valid=False, z_mm=-.375, known=False, homing=True)))
@@ -221,10 +223,10 @@ def test_display_timer_reads_new_cached_sample_without_authority_status_event(ap
         generation = coordinator._epoch
         controller.machine.snapshot = status(ender_z_telemetry=sample(z_mm=22.125))
         panel._display_timer.timeout.emit()
-        assert panel.height.text() == "Z 22.125 mm · live"
+        assert panel.height.text() == ("Z 22.125 mm · live" if kind.startswith("focus") else "Z 22.125 mm")
         controller.machine.snapshot = status(ender_z_telemetry=sample(sequence=13, z_mm=21.75))
         panel._display_timer.timeout.emit()
-        assert panel.height.text() == "Z 21.750 mm · live"
+        assert panel.height.text() == ("Z 21.750 mm · live" if kind.startswith("focus") else "Z 21.750 mm")
         assert coordinator._status == authority
         assert coordinator._epoch == generation
         assert panel._result == result and panel._received_at == received_at

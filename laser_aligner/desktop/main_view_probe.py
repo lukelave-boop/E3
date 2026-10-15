@@ -21,6 +21,7 @@ _BINDING_FIELDS = (
     "width", "height", "source_width", "source_height", "source_mode",
     "camera_settings", "review_signature", "source_generation", "lens_model_id",
     "pixels_per_mm", "camera_image_area", "corrected_width", "corrected_height",
+    "approximate_support_preview",
 )
 
 
@@ -192,7 +193,8 @@ class MainViewProbe(QtCore.QObject):
         if (type(metadata.get("source_generation")) is not int
                 or metadata["source_generation"] != self.controller._camera_source_generation
                 or self.controller._camera_review_active()
-                or not self.controller.review_signature_is_current(metadata.get("review_signature"))):
+                or not getattr(self.controller, "focus_review_signature_is_current",
+                               self.controller.review_signature_is_current)(metadata.get("review_signature"))):
             return False
         signature = metadata["review_signature"]
         if signature[0] not in ("machine", "honeycomb_local"):
@@ -260,8 +262,10 @@ class MainViewProbe(QtCore.QObject):
                 if frame is None or tuple(frame.provenance_signature) != tuple(metadata["review_signature"][1]):
                     raise ValueError("The honeycomb reference changed; select the point again")
                 x, y = frame.local_to_machine(x, y)
-            corrected = self._context.bed.mm_to_image(x, y)
-            mapped_back = np.asarray(self._context.bed.image_to_mm(*corrected), dtype=np.float64)
+            provider = getattr(self._context, "material_preview_mapper", None)
+            mapper = provider() if callable(provider) else self._context.bed
+            corrected = mapper.mm_to_image(x, y)
+            mapped_back = np.asarray(mapper.image_to_mm(*corrected), dtype=np.float64)
             if (not np.isfinite(mapped_back).all()
                     or np.max(np.abs(mapped_back - np.asarray([x, y]))) > 0.01):
                 raise ValueError("Camera mapping did not converge at this point; select another point")

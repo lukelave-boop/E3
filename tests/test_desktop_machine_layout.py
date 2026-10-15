@@ -37,7 +37,7 @@ def window(app, tmp_path, monkeypatch):
     assert not errors
 
 
-def test_machine_embeds_reference_and_retention_without_focus_dialog(window, app):
+def test_machine_embeds_reference_without_setup_saved_z_controls(window, app):
     workspace = window.focus_workspace
     assert workspace.parentWidget() is window.machine_panel.z_control
     assert workspace.coordinator.controller is window.controller
@@ -56,9 +56,70 @@ def test_machine_embeds_reference_and_retention_without_focus_dialog(window, app
         "available": True, "restored": True, "reason": "Border datum restored.",
     }))
     app.processEvents()
-    assert workspace.panel.z_retention_group.isVisible()
+    assert not workspace.panel.z_retention_group.isVisible()
+    assert not workspace.panel.forget_z.isVisible()
     assert workspace.panel.reference.text() == "Home / park XY"
-    assert workspace.panel.forget_z.isEnabled()
+
+
+@pytest.mark.parametrize("state, visible, enabled", [
+    ("restored", True, True),
+    ("reference_required", True, True),
+    ("unavailable", True, False),
+    ("missing", False, False),
+    ("malformed", False, False),
+    ("armed", True, False),
+    ("stale", True, False),
+])
+def test_machine_setup_saved_z_visibility_and_authority(
+    window, app, monkeypatch, state, visible, enabled,
+):
+    requests = []
+
+    def setup_exec(dialog):
+        setup = dialog.focus_workspace
+        setup.coordinator._timer.stop()
+        setup.maximum_coordinator._timer.stop()
+        dialog.show()
+        app.processEvents()
+        assert dialog.tabs.currentIndex() == 6
+        assert setup.isVisible()
+        setup.panel.actionRequested.connect(lambda *args: requests.append(args))
+        setup.set_machine_status(status())
+        retention = {"available": True, "restored": True, "reason": "Border datum restored."}
+        setup.panel.set_result(result(z_retention=retention))
+        assert setup.panel.z_retention_group.isVisible()
+        assert setup.panel.forget_z.isVisible()
+        assert setup.panel.forget_z.isEnabled()
+
+        if state == "reference_required":
+            retention = {"available": True, "restored": False, "reason": "Reference the border again."}
+        elif state == "unavailable":
+            retention = {"available": False, "restored": False, "reason": "Persistence unavailable."}
+        elif state == "missing":
+            retention = None
+        elif state == "malformed":
+            retention = {"available": "true", "restored": True, "reason": "Invalid availability."}
+        setup.panel.set_result(result(z_retention=retention))
+        if state == "armed":
+            setup.set_machine_status(status(armed=True))
+        elif state == "stale":
+            setup.set_machine_status(status(status_stale=True))
+
+        assert setup.panel.z_retention_group.isVisible() is visible
+        assert setup.panel.forget_z.isVisible() is visible
+        assert setup.panel.forget_z.isEnabled() is enabled
+        if not enabled:
+            setup.panel.forget_z.click()
+            setup.panel.request("forget_z")
+        assert requests == []
+        return 0
+
+    monkeypatch.setattr(MachineSetupDialog, "exec", setup_exec)
+    window.open_machine_setup(6)
+    app.processEvents()
+    assert requests == []
+    assert window._machine_setup_dialog is None
+    assert not window.focus_workspace.panel.z_retention_group.isVisible()
 
 
 def test_daily_probe_uses_main_canvas_without_duplicate_live_view(window):

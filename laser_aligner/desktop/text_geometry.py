@@ -111,71 +111,45 @@ def _polygon_sample(
     return points[0] if points else center
 
 
-def _bridge_rectangle(
-    hole: QtGui.QPolygonF,
-    parent: QtGui.QPolygonF,
-    width: float,
-) -> QtCore.QRectF:
-    hole_bounds = hole.boundingRect()
-    parent_bounds = parent.boundingRect()
-    center = _polygon_sample(hole)
-    candidates = (
-        (
-            max(0.0, hole_bounds.left() - parent_bounds.left()),
-            QtCore.QRectF(
-                parent_bounds.left(),
-                center.y() - width / 2.0,
-                center.x() - parent_bounds.left(),
-                width,
-            ),
-        ),
-        (
-            max(0.0, parent_bounds.right() - hole_bounds.right()),
-            QtCore.QRectF(
-                center.x(),
-                center.y() - width / 2.0,
-                parent_bounds.right() - center.x(),
-                width,
-            ),
-        ),
-        (
-            max(0.0, hole_bounds.top() - parent_bounds.top()),
-            QtCore.QRectF(
-                center.x() - width / 2.0,
-                parent_bounds.top(),
-                width,
-                center.y() - parent_bounds.top(),
-            ),
-        ),
-        (
-            max(0.0, parent_bounds.bottom() - hole_bounds.bottom()),
-            QtCore.QRectF(
-                center.x() - width / 2.0,
-                center.y(),
-                width,
-                parent_bounds.bottom() - center.y(),
-            ),
-        ),
-    )
-    return min(candidates, key=lambda item: item[0])[1].normalized()
+def _closed_subpaths(path: QtGui.QPainterPath) -> list[QtGui.QPainterPath]:
+    """Separate exact font contours for per-letter bridge subtraction."""
+    result = []
+    contour = QtGui.QPainterPath()
+    index = 0
+    while index < path.elementCount():
+        element = path.elementAt(index)
+        if element.isMoveTo():
+            if not contour.isEmpty():
+                contour.closeSubpath()
+                result.append(contour)
+            contour = QtGui.QPainterPath(QtCore.QPointF(element.x, element.y))
+        elif element.isLineTo():
+            contour.lineTo(element.x, element.y)
+        elif element.isCurveTo():
+            control = path.elementAt(index + 1)
+            end = path.elementAt(index + 2)
+            contour.cubicTo(element.x, element.y, control.x, control.y, end.x, end.y)
+            index += 2
+        index += 1
+    if not contour.isEmpty():
+        contour.closeSubpath()
+        result.append(contour)
+    return result
 
 
 def _stencil_path(
     path: QtGui.QPainterPath,
     bridge_width_units: float,
 ) -> tuple[QtGui.QPainterPath, int]:
-    polygons = [
-        polygon
-        for polygon in path.toSubpathPolygons()
-        if polygon.size() >= 3
-    ]
+    contours = _closed_subpaths(path)
+    polygons = [contour.toSubpathPolygons()[0] for contour in contours]
     if not polygons:
         return path, 0
     samples = [_polygon_sample(polygon) for polygon in polygons]
     areas = [abs(_signed_polygon_area(list(polygon))) for polygon in polygons]
-    bridges = QtGui.QPainterPath()
-    bridge_count = 0
-    for index, polygon in enumerate(polygons):
+    holes_by_parent: dict[int, list[int]] = {}
+    filled_contours = []
+    for index in range(len(polygons)):
         containers = [
             parent_index
             for parent_index, parent in enumerate(polygons)
@@ -187,24 +161,55 @@ def _stencil_path(
             )
         ]
         if len(containers) % 2 == 0:
+            filled_contours.append(index)
             continue
         parent_index = min(containers, key=lambda candidate: areas[candidate])
-        parent_path = QtGui.QPainterPath()
-        parent_path.addPolygon(polygons[parent_index])
-        parent_path.closeSubpath()
-        bridge_path = QtGui.QPainterPath()
-        bridge_path.addRect(
-            _bridge_rectangle(
-                polygon,
-                polygons[parent_index],
-                bridge_width_units,
-            )
-        )
-        bridges.addPath(bridge_path.intersected(parent_path))
-        bridge_count += 1
-    if bridge_count == 0:
+        holes_by_parent.setdefault(parent_index, []).append(index)
+    if not holes_by_parent:
         return path, 0
-    output = path.subtracted(bridges)
+
+    output = QtGui.QPainterPath()
+    bridge_count = 0
+    for parent_index in filled_contours:
+        hole_indices = holes_by_parent.get(parent_index, [])
+        letter_path = QtGui.QPainterPath(contours[parent_index])
+        if not hole_indices:
+            output.addPath(letter_path)
+            continue
+        parent_bounds = letter_path.boundingRect()
+        holes = [polygons[index] for index in hole_indices]
+        for index in hole_indices:
+            letter_path.addPath(contours[index])
+        letter_path.setFillRule(QtCore.Qt.FillRule.OddEvenFill)
+        # Use a shared vertical axis for stacked counters (B, 8). If counters
+        # are side by side, each gets its own centered vertical bridge band.
+        left = max(hole.boundingRect().left() for hole in holes)
+        right = min(hole.boundingRect().right() for hole in holes)
+        centers = (
+            [(left + right) / 2.0]
+            if right > left
+            else [hole.boundingRect().center().x() for hole in holes]
+        )
+        bridges = QtGui.QPainterPath()
+        for center_x in centers:
+            band = QtGui.QPainterPath()
+            band.addRect(QtCore.QRectF(
+                center_x - bridge_width_units / 2.0,
+                parent_bounds.top(),
+                bridge_width_units,
+                parent_bounds.height(),
+            ))
+            # Union prevents overlapping bands from cancelling. Subtract the
+            # rectangles directly from this letter: clipping a band to a curved
+            # outline first causes Qt's repeated flattening to leave slivers.
+            bridges = bridges.united(band)
+        letter_output = letter_path.subtracted(bridges)
+        if letter_output.isEmpty():
+            raise ValueError(
+                "The bridge width removed a letter's usable geometry; choose a smaller width"
+            )
+        output.addPath(letter_output)
+        bridge_count += len(holes)
     output.setFillRule(QtCore.Qt.FillRule.OddEvenFill)
     return output, bridge_count
 

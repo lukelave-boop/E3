@@ -1,5 +1,285 @@
 # Architecture
 
+The development publisher reuses the complete Compatibility CI workflow from
+its own commit before either package build. Publication requires that gate and
+both packages; only the publication job can write repository contents. See
+[update policy](UPDATES.md).
+
+Preview playback identifies direction and laser state: amber means laser on,
+cyan means laser off. Bidirectional raster output is unchanged.
+
+Raster preview draws the initial laser-off approach as a separate red dashed line.
+The orange boundary encloses job movement after that approach, including raster
+run-up/run-out and row transfers. Full travel extents still drive fitting and
+safety validation; generated motion, power, calibration and settings are unchanged.
+
+## Raster engraving and carriage domains
+
+`raster_safety.py` owns Qt/HTTP-independent typed travel evidence and the strict
+`E3RASTER` program directive. Its convex polygon is the current calibrated
+machine-beam engraving surface, while its travel rectangle is the separately
+verified homed machine-carriage envelope. The directive binds the exact envelope
+evidence digest and is never forwarded to GRBL. MachineService checks positive
+laser enable at the current point and powered segments at both ends; every G0/G1
+segment must remain inside carriage travel. Existing configured output authority
+also constrains powered beam and head positions. Cached preflight proof and Pi
+policy matching include the new authority. Old nodes cannot accept expanded jobs.
+
+In `project/toolpath.py`, image sampling, Bayer indices, edge coverage and
+serpentine row parity are unchanged. Only after spans exist are unused white
+margins trimmed. `RasterRow.lead_distance_mm` retains the original-width percentage
+or configured modeled braking distance, whichever is larger, through rigid
+placement, spot correction and pass reversal. Finalized serialized JobPlan motion
+is rechecked in bounded batches, including transfers and the planned start.
+No path is clamped and no measured limits are inferred from image or surface bounds.
+
+The desktop requires explicit verified travel for raster generation. The public
+low-level generator's absent-envelope compatibility path retains its former
+restrictive surface/output checks and never grants expanded travel. The browser
+single-SVG pipeline remains separate and unchanged. See
+[RASTER_OVERSCAN.md](RASTER_OVERSCAN.md) for configuration and verification limits.
+
+## Raster background cleanup
+
+Project schema 5 adds optional IMAGE geometry.background_cleanup:
+`{"enabled": true, "tolerance": 5}`. Both fields are strictly validated; absence
+means disabled, tolerance defaults to 5, and supported tolerance is integer 0–64.
+Legacy schemas 1–4 migrate without adding cleanup, and reject cleanup fields
+that would otherwise bypass the version boundary. Material and path provenance
+remain unchanged.
+
+`project/raster_cleanup.py` is Qt/HTTP-independent. A bounded full-resolution
+four-connected flood fill of grayscale >= 255 - tolerance is seeded from all
+edges using one padded border. Source pixels are never mutated. The mask runs
+after alpha compositing but before area prefiltering and physical row sampling.
+`desktop/background_cleanup.py` reviews the same immutable verified payload and
+mask, preserving color in the canvas. Settings use UpdateObjectShapeCommand,
+normal history/job invalidation and strict revalidation on Apply. Workspace
+cache and quality-recovery groups distinguish processing variants while source
+SHA identities still identify the original bytes. Browser SVG behavior is unchanged.
+
+
+## Camera endpoint identity and preview readiness
+
+Remote camera status provides the stable by-id device path over authenticated
+RPC. The client derives an HMAC identity from that path and the shared camera
+credential; credentials are never persisted in calibration records. AppContext
+stores a schema-1, first-writer-wins identity sidecar keyed by the unchanged bed
+mapping digest. Only the previously accepted endpoint may enroll it. Matching
+identity and optical settings normalize address aliases for provenance checks;
+bed matrices, provenance, mapping digests and visual references stay unchanged.
+Missing/mismatched identity or corrupt sidecars reject a bound mapping.
+
+Desktop preview projects the existing measured-focus status into a visible
+start-readiness label and button gate. Project preflight remains read-only and
+does not assert runtime readiness. The existing Pi START checks remain final.
+Raster planning budgets shared laser-mode commands once per row; both local
+and Pi validators retain the common two-million-command ceiling and 64 MiB
+file bound. This does not alter motion, power, arming or allowlist rules.
+
+New desktop raster-image imports create output-enabled raster layers, matching
+ordinary operation-layer defaults. Imports into an existing raster layer keep
+its saved output choice. This authoring default does not start a job or change
+machine arming, motion, or preflight gates.
+
+## Shared job capacity and raster display
+
+`gcode/limits.py` owns the 1,000,000-command ceiling imported by the browser
+generator, project planner/preflight and MachineService (including the Pi).
+Raster sample, row, edge and asset limits, and the Pi 64 MiB upload cap, remain
+independent. Older Pi validators still reject jobs above 250,000 commands.
+The exact JobPlan remains authoritative. High-contrast preview changes pens
+only; hiding laser-off moves covers both rapid and feed moves and their active
+overlay. Raster jobs default to this view; vector-only jobs retain layer colors
+and visible travel. Power shading is available after disabling high contrast.
+
+## Desktop authoring cancellation
+
+The window owns an Escape action separate from the machine Stop action.
+WorkspaceView cancels drafts and point picking, releases canvas mouse grabs,
+rolls unfinished object transforms back to their original geometry, and clears
+object/trace selection. Cancellation never calls the controller or commits a
+history entry. The dedicated Stop action retains its existing controller path.
+
+## Stencil, polygon and rotation authoring
+
+Stencil text separates exact font subpaths and groups enclosed counters by
+parent. Vertical bridge bands share an axis through overlapping counter spans
+and are united/subtracted per letter to avoid clipping slivers and changing
+neighbours. Bridge count still means enclosed areas; an erased letter rejects
+creation. Existing PATH objects retain their saved geometry.
+
+Pure `project/polygon.py` validates 3–12 sides and generates regular vertices.
+WorkspaceView owns a transient center/radius/angle/side-count draft. The inline
+PolygonSidesPrompt redraws valid counts immediately and blocks invalid values.
+Create emits one history command using the existing native POLYGON schema;
+bounding-center normalization preserves the picked circumcenter for odd counts.
+
+Rotation retains the unsnapped pointer state. Ctrl selects absolute 90-degree
+orientation steps; object handles retain Shift's 15-degree steps. Ctrl has
+priority. Key changes reapply the stored pointer immediately. Templates snap
+the reported placement angle; polygon drafts preserve radius and remain fixed
+after their second click. Browser and machine execution paths are unchanged.
+
+The vertical stencil pattern follows the classic comparison in
+[David Jonathan Ross's typeface notes](https://djr.com/notes/nickel-stencils-font-of-the-month).
+
+## Wizard gauge evidence
+
+The wizard worker refreshes observational machine status before reading the
+validated setup-evidence snapshot. Failed refreshes cannot reuse old gauge
+evidence. The synchronous setup guide reads cached evidence only. Workflow
+presentation distinguishes unknown status from explicit incompatibility and
+recognizes a compatible gauge independently of the bed survey; execution
+continues to require existing MachineService authority.
+
+## Base-map grid containment (2026-09-17)
+
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
+## Per-operation measured focus
+
+The desktop project encoder emits strict `E3OPFOCUS CUT` / `E3OPFOCUS RASTER`
+instructions for jobs containing powered raster layers. These are immutable job
+bytes, not comments or controller G-code. The parser requires G21/G90 and a
+standalone preceding M5, and requires an operation mode before laser enable.
+Cut-only output and the browser single-SVG pipeline retain their existing focus.
+
+MachineService binds the original measured workpiece plan, validates every
+requested target at admission, and owns all Z execution. Raster target Z equals
+the original target plus `7 - gap_mm`, equivalent to raw contact Z plus the taught
+7 mm calibration offset. The original cut plan remains unchanged for retention.
+Transitions drain primary motion with laser off, verify a lift to clearance,
+and descend at the next powered operation only after its XY approach drains.
+Existing session/STOP, motion permission, readback and bound guards remain.
+
+The remote client requires `pi-operation-focus-v1` and a measured plan before
+preparing or starting these jobs. The Pi repeats validation and interprets the
+instructions locally; they never reach GRBL. Preview moves retain the exact
+focus mode, allowing Start Here to reconstruct it without guessing from labels.
+
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
+## Explicit layer-profile overwrite
+
+LayerProfilesBar supplies Save in addition to create-only Save As. Save captures
+the selected name, finishes pending numeric edits and requests explicit Yes/No
+confirmation. Only Yes calls LayerProfileStore.save with overwrite=True. The
+store requires an existing same-scope profile, validates the complete layer set
+and uses the existing atomic JSON publisher; it cannot silently recreate a
+missing profile or replace a different machine/tool profile. This updates the
+separate profile library, not project history or controller authority.
+The action group moves below the selector when the inspector is narrow.
+
+
+## Distribution area selection
+
+`project/alignment.py` extends `distributed_transforms` with explicit selection,
+bed and rectangle targets; its default preserves the existing center-spacing API.
+Bed uses the document work area in project coordinates. Rectangle mode validates
+an axis-aligned, square-cornered native rectangle and excludes it from movement.
+Area modes distribute bounding-box edge gaps including end margins, preserve
+sizes/rotation, and clamp only the other-axis position as needed for containment.
+Oversized layouts, empty areas, locked objects and stock objects as moving items
+reject before mutation. A stock rectangle can remain the fixed reference.
+
+`desktop/distribution_dialog.py` calculates without mutation, reports invalid or
+unchanged layouts, and revalidates on acceptance. The main window applies the
+result through `UpdateTransformsCommand`, preserving undo and revision-based job
+invalidation. No schema, browser pipeline, machine bounds or controller behavior
+changes. Choosing a rectangle does not change its output role or layer settings.
+
+## Saved cut/layer sets
+
+materials/layer_profiles.py owns schema-1 layer-profile persistence and an
+undoable replacement command without Qt or HTTP dependencies. The separate
+layer-profiles.json library uses the native user-data directory and atomic JSON
+publication. Desktop LayerProfilesBar supplies explicit save/load/delete controls
+above the layer list. Profiles bind to running machine/tool profile IDs. Loading
+matches used layers by ID then unique color, rejects missing/ambiguous/merged
+assignments, and touches the document to invalidate existing prepared jobs.
+Project schema, material recipe storage and controller paths remain unchanged.
+The focused Windows tests cover persistence failure, layer matching, undo/redo,
+prepared-job invalidation and compact desktop layout.
+
+
+## Wizard instructions and navigation
+
+`desktop/setup_instructions.py` translates shared step IDs and statuses into
+operator instructions. IDs, saved records and completion rules remain unchanged.
+Links only select and reveal allowlisted existing tools. Focus destinations
+scroll to the actual button in the nested workspace and retain its normal style
+after highlighting. Busy navigation is rejected. Machine commands still require
+their original explicit controls and guards.
+
+
+## Precision material-surface placement
+
+`AppContext` owns the shared UI-neutral `MaterialWorkspaceMixin`. It derives an
+immutable `MaterialPlaneSelection` from a currently validated focus measurement,
+schema-2 raw camera evidence and camera/datum/pose provenance. Its transient
+`BedMapper` replaces only the image-plane transform and removes plane-specific
+fine correction; the persisted support map and execution bounds remain fixed.
+Camera images, raw clicks, detection and template analysis share this mapping.
+Native sampling determines precision analysis resolution; display resizing does
+not. Captures and asynchronous results bind the exact selected surface.
+
+Schema-4 projects retain prior geometry and optional historical material
+provenance; loaded metadata never restores measurement authority. `E3SURFACE 1`
+metadata participates in immutable program digests, is validated with the current
+measurement at Arm/Start and is consumed before serial output. The Pi advertises
+support explicitly. `setup_workflow.py` stores independent checklist, survey,
+repeatability and physical qualification evidence without Qt or controller calls.
+The desktop guide and embedded Machine Setup wizard share one observational
+evidence snapshot and the same status evaluator. The wizard presents eight
+stages plus evidence review around the existing tab controls. Back/Next select
+a stage; explicit tool buttons dispatch the existing survey, height and precision
+dialogs. Navigation does not perform an action or complete evidence. Wizard
+position is separate from the seven physical tab indices, and All setup tools
+restores those tabs while retaining the selected wizard stage. Busy operations
+hold navigation; the existing STOP control remains available. This is a desktop
+presentation change with no new controller, motion or Pi path. See
+[precision placement](PRECISION_PLACEMENT.md) for qualification boundaries.
+
 ## Home/job focus and cooling lock order
 
 Every job-focus guard that checks Ender readiness acquires the Ender owner lock
@@ -588,10 +868,10 @@ The material-height calibration study in `calibration/surface.py` fits a single
 camera pose to original undistorted correspondences at two known Z planes using
 fixed lens intrinsics. A third plane is scored independently. `AppContext` owns
 its profile-scoped atomic evidence store; `desktop/surface_height.py` provides
-collection and diagnostic image review. It never replaces the active bed map or
-enters the current desktop/browser execution pipeline. The remaining explicit
-support/material-plane integration and probe physical acceptance are specified
-in [MATERIAL_HEIGHT.md](MATERIAL_HEIGHT.md).
+collection and diagnostic image review. Schema-2 acquisition does not replace
+the active bed map. Validated measured-plane selection now enters the shared
+desktop/browser pipeline described above. Schema-1 studies remain diagnostic;
+physical qualification is specified in [PRECISION_PLACEMENT.md](PRECISION_PLACEMENT.md).
 
 `machine/probe_pin.py` is a separate typed diagnostic client. The operator-run
 `probe_diagnostic.py` CLI submits one inspect/deploy/stow action to the Pi; it
@@ -643,6 +923,21 @@ promotion. Current and two recent package pairs stay available; dated GitHub
 asset labels persist a seven-day retirement grace for older packages. Incoming
 current packages have retirement cleared before promotion. Cleanup revalidates
 manifest/asset identity and remains best effort; see [UPDATES.md](UPDATES.md#package-retention).
+
+Large-job validation uses a strict fast path only for the generator's exact
+G0/G1 XY/F/S syntax; all other lines use the general guarded parser. Static
+configuration is checked around analysis, with line-specific limits and modal
+state checked throughout. MachineService retains at most one immutable locally
+validated program and a separate field snapshot. Reuse checks exact fields,
+current safety profile and output authority. PiJobService additionally reads
+and hashes the committed file and compares its bytes at START. The proof never
+crosses the wire or survives a process restart. Periodic validation yields let
+status workers run. Explicit START intent is revocable throughout inert
+preparation; temporary one-use authorization is created after READY. Legacy
+pre-armed uploads still expire. Only preparation/START RPC budgets scale with
+command count (130–900 seconds); status/STOP budgets do not change. Progress
+uses the local submission phase independently of machine polling freshness,
+without granting execution authority.
 
 PiJobStore publishes committed record observations under a separate short lock
 after durable writes. Pi machine/job status reads this bounded projection,
@@ -2226,10 +2521,14 @@ and tool defaults. Later profile selection changes identity only unless the
 operator explicitly loads that profile's defaults into the editable form and
 saves. Creating, editing, duplicating, or choosing the next-launch instance
 does not call `MachineService` and cannot connect, Home, jog, arm, move, emit, or
-execute. Instances created from profiles, and duplicates created through
-Machine Manager, start without camera, calibration, support, or coordinate
-evidence from another machine; profile-created instances are also
-motion-disabled. Machine Setup may
+execute. Machine Manager duplication asks whether the copy represents the same
+physical machine/camera setup. Explicit same-machine selection preserves the
+camera/calibration profile IDs and physical honeycomb span; different-machine
+selection (the default) clears them. Both modes deep-copy machine/laser settings
+into a new saved ID; neither copies live session authority or machine-ID-scoped
+reach evidence. Calibration validity checks still apply, including camera
+endpoint changes. Profile-created instances have no calibration associations
+and are motion-disabled. Machine Setup may
 explicitly persist the active optical/calibration profile IDs onto the running
 saved instance for a future launch, but the frozen current runtime identity is
 not rewritten and existing calibration/support validity gates still apply.
@@ -2478,3 +2777,9 @@ and requires a new acknowledged `M106 S0` before primary streaming. Failure of
 that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
 ON is never automatically replayed. Startup/restart, STOP, mapping validation,
 and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+### Continuous raster power switching
+
+The desktop project raster emitter establishes M3/M4 S0 after each laser-off rapid to a row, before lead-in. Powered G1 spans carry inline S values; white gaps and overscan carry S0 at the same operation feed. M5 follows lead-out before any subsequent rapid, reversal or operation. Zero-effective-power rows never enable laser mode. Existing bounds, arming, focus, power and command-budget validation remain authoritative.
+
+Both shared G-code preview parsers track enabled mode separately from positive power, so M4 S0 followed by inline S correctly alternates powered and unpowered motion. Start Here preserves inline raster switching, including power correction and air assist. The browser single-SVG generator is unchanged; its shared preview parser is covered by G-code tests. No Pi service/controller change is needed: the existing guarded G1 inline-S allowlist already supports these commands.

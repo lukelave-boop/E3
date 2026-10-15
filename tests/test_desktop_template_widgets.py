@@ -512,7 +512,7 @@ def test_selecting_template_keeps_manual_preview_until_camera_match_is_requested
         "rotation_deg": 0.0,
     }
     assert panel.apply_button.isEnabled()
-    assert "Align selected template" in panel.match_status.text()
+    assert "Align to workpiece" in panel.match_status.text()
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()

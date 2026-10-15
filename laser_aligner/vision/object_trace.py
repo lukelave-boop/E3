@@ -158,6 +158,7 @@ class TraceOptions:
     min_hole_area_mm2: float | None = None
     max_hole_area_mm2: float | None = None
     trace_detail: str = "full"
+    precision_placement: bool = False
 
     def __post_init__(self) -> None:
         self.detection_mode = str(self.detection_mode).lower()
@@ -248,6 +249,7 @@ class TraceOptions:
             "normalize_grid",
             "snap_grid_cells",
             "repair_grid_edges",
+            "precision_placement",
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise ValueError(f"{field_name} must be a JSON boolean")
@@ -3376,22 +3378,35 @@ def _fit_trace_candidate_native(
 
     combined = np.concatenate(physical, axis=0)
     padding = max(pitch, options.native_fitting_tolerance_mm)
-    fit_tolerance = max(options.native_fitting_tolerance_mm, pitch)
-    fit = fit_physical_contours_to_native_path(
-        physical,
-        list(contour_parents),
-        source_pixel_spacing_mm=(pitch, pitch),
-        fitting_tolerance_mm=fit_tolerance,
-        smoothing_mm=0.0,
-        classification_contours_mm=classification_physical,
-        frame_bounds_mm=(
-            float(np.min(combined[:, 0]) - padding),
-            float(np.min(combined[:, 1]) - padding),
-            float(np.max(combined[:, 0]) + padding),
-            float(np.max(combined[:, 1]) + padding),
-        ),
-        **_trace_cancel_kwargs(),
-    )
+    # Precision mode honors the operator's requested fit bound. Pixel pitch is
+    # evidence resolution, not permission to silently relax that bound.
+    fit_tolerance = options.native_fitting_tolerance_mm
+    if not options.precision_placement:
+        fit_tolerance = max(fit_tolerance, pitch)
+    try:
+        fit = fit_physical_contours_to_native_path(
+            physical,
+            list(contour_parents),
+            source_pixel_spacing_mm=(pitch, pitch),
+            fitting_tolerance_mm=fit_tolerance,
+            smoothing_mm=0.0,
+            classification_contours_mm=classification_physical,
+            frame_bounds_mm=(
+                float(np.min(combined[:, 0]) - padding),
+                float(np.min(combined[:, 1]) - padding),
+                float(np.max(combined[:, 0]) + padding),
+                float(np.max(combined[:, 1]) + padding),
+            ),
+            **_trace_cancel_kwargs(),
+        )
+    except RasterVectorizationError as exc:
+        if not options.precision_placement:
+            raise
+        raise RasterVectorizationError(
+            f"Insufficient camera evidence for the requested {fit_tolerance:g} mm fit "
+            f"(source spacing {pitch:g} mm/pixel); improve the capture or review a "
+            f"larger tolerance. {exc}"
+        ) from exc
     fitted_contours = [
         [list(point) for point in contour.preview_points_mm]
         for contour in fit.contours
@@ -3428,6 +3443,9 @@ def _fit_trace_candidate_native(
                 for contour in fit.contours
             ],
             "native_fitting_tolerance_mm": fit.fitting_tolerance_mm,
+            "requested_fitting_tolerance_mm": options.native_fitting_tolerance_mm,
+            "source_pixel_spacing_mm": pitch,
+            "precision_placement": options.precision_placement,
             "maximum_fitting_error_mm": max(
                 contour.max_fitting_error_mm for contour in fit.contours
             ),

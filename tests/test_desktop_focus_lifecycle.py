@@ -85,6 +85,24 @@ def resume(workspace, method):
     assert workspace.bed_view._active
 
 
+def test_maximum_editor_lives_only_in_setup_and_suspends_with_workspace(workspace_factory):
+    daily, _ = workspace_factory()
+    setup, _ = workspace_factory(calibration_mode=True)
+    assert daily.maximum_panel is None
+    assert not daily.panel.setup_status.isVisible()
+    assert setup.maximum_panel.isVisible()
+    assert setup.panel.setup_status.isVisible()
+    assert not setup.maximum_panel.up.isVisible()
+    setup.set_suspended(True)
+    assert setup.maximum_coordinator._suspended
+    setup.set_suspended(False)
+    assert not setup.maximum_coordinator._suspended
+    setup.maximum_coordinator._mutation = True
+    assert not setup.shutdown()
+    assert setup.shutdown(force=True)
+    assert setup.maximum_coordinator._closed
+
+
 @pytest.mark.parametrize("calibration_mode", [False, True])
 @pytest.mark.parametrize("method", ["hide", "suspend"])
 def test_late_read_after_pause_cannot_restore_local_authority(workspace_factory, calibration_mode, method):

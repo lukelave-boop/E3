@@ -54,6 +54,28 @@ def machine_payload(status: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return status
 
 
+def job_start_block_reason(status: Mapping[str, Any] | None, *, powered: bool) -> str:
+    """Read-only projection of the measured-focus gate used at submission."""
+    if not powered:
+        return ""
+    machine = machine_payload(status)
+    focus = machine.get("workpiece_focus")
+    capabilities = machine.get("node_capabilities") or ()
+    if not isinstance(capabilities, (Mapping, list, tuple, set, frozenset)):
+        capabilities = ()
+    if not isinstance(focus, Mapping) or type(focus.get("job_focus_required")) is not bool:
+        if "pi-workpiece-focus-v1" in capabilities:
+            return "Refresh the material surface measurement before starting this job."
+        return ""
+    plan = focus.get("job_focus")
+    if focus.get("job_focus_required") is True and (
+        not isinstance(plan, Mapping) or not isinstance(plan.get("id"), str) or not plan["id"]
+    ):
+        reason = focus.get("job_focus_block_reason")
+        return str(reason).strip() if reason else "Measure the material surface before starting this job."
+    return ""
+
+
 def _nonnegative_int(value: object) -> int | None:
     if type(value) is not int or int(value) < 0:
         return None

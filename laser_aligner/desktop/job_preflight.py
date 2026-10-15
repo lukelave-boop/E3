@@ -148,7 +148,7 @@ class JobPreflightView(QtWidgets.QWidget):
         else:
             self.status_label.setObjectName("statusGood")
             self.status_label.setText(
-                "Preflight ready — no blocking findings were reported."
+                "Project checks passed — no project blockers. Machine readiness is checked separately."
             )
         layout.addWidget(self.status_label)
 

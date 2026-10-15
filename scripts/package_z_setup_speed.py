@@ -5,6 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 
+if __package__:
+    from .package_source_dependencies import material_dependencies
+else:
+    from package_source_dependencies import material_dependencies
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLED_NAME = "installed-workpiece-focus-568b1cc9"
 INSTALLED_REVISION = "671b235f272b8a0e910ff5039006c0d431bb9cd8"
@@ -99,8 +104,9 @@ def installation_guide(folder: Path) -> str:
 
 def package(destination: Path) -> Path:
     sources = {name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in PREVIOUS}
+    dependencies = material_dependencies(sources, lambda name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n"))
     manifest = json.dumps({
-        "predecessors": [{"revision": INSTALLED_NAME, "files": PREVIOUS}],
+        "predecessors": [{"revision": INSTALLED_NAME, "files": {**PREVIOUS, **dependencies}}],
         "predecessor_application_revision": INSTALLED_REVISION,
         "compatible_windows_version": DESKTOP_VERSION,
         "compatible_windows_revision": DESKTOP_REVISION,

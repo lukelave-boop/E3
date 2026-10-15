@@ -1,5 +1,101 @@
 # E3 native desktop v1 foundation
 
+## Clean an image background
+
+Select one unlocked image, then choose **Objects → Image → Clean background…**.
+Enable **Clean background**, adjust **Tolerance**, and inspect Before/After.
+Tolerance is distance from white: 5 includes grayscale brightness 250–255;
+0 includes only pure white. Range is 0–64. Higher values can whiten light artwork
+that connects to an outside edge. Enclosed highlights are preserved.
+Scroll to zoom, drag to pan both views, or use Fit / 100%. Apply commits one
+undoable edit; Cancel discards the draft. Disable the checkbox and Apply to
+restore the original appearance. The source file is never rewritten.
+
+Cleanup is calculated at full source resolution before raster resampling and
+dithering. Settings are per image, so copies can differ. Saving uses project
+schema 5; older builds cannot open these saves. Existing schema 1–4 projects
+load with cleanup off. Generate and review a fresh job after changing settings.
+This is image preprocessing, not a prediction of engraving appearance. The
+separate Trace image to vectors dialog still reviews the original source.
+
+
+## Raster preview detail and capacity
+
+Raster jobs open in high-contrast engraving detail with laser-off travel and
+gaps hidden. Show laser-off moves restores both rapid travel and feed gaps.
+Disable high contrast to see layer colors or enable power shading. Zoom in to
+inspect the exact generated pattern; no preview style predicts material burn.
+The generated/validated command ceiling is 1,000,000. Larger jobs may need
+more preparation time and memory. Remote execution above 250,000 requires
+the matching Pi companion; Windows preview alone does not upgrade the Pi.
+
+## Drawing tools (2026-09-17)
+
+- New stencil text uses aligned top-and-bottom material bridges. Stacked counters
+  share an axis; excessive widths that erase a letter are rejected.
+- Polygon in the left sidebar: click its center, move to choose radius/angle,
+  then click to freeze. Type 3–12 sides for live preview; higher values and other
+  invalid input disable Create. Enter/Create adds one undoable polygon; Cancel
+  discards it. Right-click or Select exits the persistent drawing tool.
+- Hold Ctrl while rotating to snap to horizontal/vertical (90-degree) orientations.
+  Press/release Ctrl updates immediately; free rotation resumes when released.
+  Shift retains 15-degree object rotation, with Ctrl taking priority. Template
+  placement and initial polygon orientation also support Ctrl.
+
+Polygon center/sizing points obey snapping. The side-count prompt preserves
+center, radius and orientation, and disables Create outside the work area.
+Existing objects and saved text geometry remain unchanged. Escape still reaches
+the main Stop shortcut while the inline side-count prompt has focus.
+
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
+## Updating saved cut/layer profiles
+
+Above the Cuts table, select the saved profile and use **Save** to replace its
+entire layer set after the named overwrite confirmation. **No** cancels;
+**Yes** writes the current settings. Save is unavailable without a selection.
+**Save As…** creates a new name and never overwrites. Profiles do not autosave.
+Actions wrap below the selector when the inspector is narrow.
+
+
 The `desktop-v1` foundation adds a native PySide6 workspace without removing the
 existing browser application. Both interfaces use the same calibrated camera,
 geometry, G-code, safety and controller services.
@@ -69,7 +165,8 @@ without copying LightBurn branding or changing the E3 machine-control model:
   switches remain visibly unavailable rather than appearing active.
 
 1. Traditional File, Edit, Tools, Arrange, Laser Tools, Window, and Help menus
-   retain every existing command. File groups SVG, G-code, LightBurn-project,
+   retain application commands; drawing, template and trace commands live on
+   the left rail with their shortcuts instead of also appearing in Tools. File groups SVG, G-code, LightBurn-project,
    and raster-image actions under one **Import** submenu; the child labels omit
    the repeated word "Import" while retaining the existing shortcuts and
    implementations.
@@ -167,8 +264,8 @@ reports live width/height; release creates and selects exactly one object throug
 the command stack. Both endpoints obey the current snap setting, every drag
 direction is normalized, and zero-size drags are ignored. The tool remains
 active for repeated rectangles. Select or a canvas right-click exits drawing;
-middle-button and Space-drag still pan. Escape remains reserved for software
-stop / laser off.
+middle-button and Space-drag still pan. Escape cancels the active tool and clears selection; software stop / laser off
+remains available through the dedicated Stop control.
 
 The Operations/Layers table summarizes layer color/name, mode, speed/power,
 Output, and Show state. Inline toggles, ordering controls, the quick editor,
@@ -534,3 +631,38 @@ parts of the authoring backlog—have since been implemented. Use the current
    calibrated grayscale power curves.
 7. Job history and calibration profiles by material height.
 8. Stable release packaging, update checks and rollback.
+
+## Distribute within an area
+
+Select the objects to arrange and choose **Distribute horizontally…** or
+**Distribute vertically…** from the Distribute toolbar menu or Arrange menu.
+The dialog defaults to **Full bed (project work area)** and displays that area's
+size and coordinates. It offers three references:
+
+- **Full bed (project work area):** equal empty gaps between object bounding-box
+  edges, including the two end margins, across the project's width or height.
+- **Chosen rectangle:** the same spacing inside a native rectangle chosen from
+  the list. First use **Draw rectangle** to create a custom boundary, return to
+  selection, select the artwork, and choose the rectangle in the dialog. It may
+  be included in the selection; it stays fixed and is excluded from movement.
+  Use square corners and horizontal/vertical sides (90-degree rotations work).
+  The rectangle keeps its output settings; put a guide-only rectangle on a layer
+  with output disabled. A rectangular stock boundary can also be the reference.
+- **Current selection span:** original behavior, requiring three or more
+  objects. Keeps the two outermost centers fixed and spaces the others equally
+  between them. It does not use the bed or any surrounding rectangle.
+
+Area modes work with one or more movable objects. Objects retain their size,
+rotation and order along the chosen axis. The other-axis positions stay as they
+are when inside the area, or move only enough to fit. An area that is too small
+rejects the operation instead of shrinking or overlapping objects. This arranges
+individual selected objects, not a multi-row packing layout. Use Align first if
+you want a straight row or column.
+
+The dialog reports how many objects will move, or why nothing would change.
+**Distribute** applies one undoable project edit; **Cancel** changes nothing.
+Layout areas do not replace the existing execution bounds and job validation.
+
+### Fixed Machine coordinate boxes
+
+X and Y appear immediately above the XY jog controls; Z appears above its controls. Each coordinate box is fixed at 154 by 38 logical pixels regardless of text, including unknown/unavailable values. X/Y use the existing completed Home/jog position in controller work coordinates, not a live encoder feed; they clear during actions/jobs, disconnect, stale/error status or absent reference. Z retains its existing live telemetry/readback freshness rules; homing/unreferenced qualifications appear below the box and in its tooltip.

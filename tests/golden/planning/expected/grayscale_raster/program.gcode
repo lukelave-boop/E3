@@ -6,6 +6,8 @@
 G21 ; millimetres
 G90 ; absolute positioning
 M5 ; laser off before any motion
+M5
+E3OPFOCUS RASTER
 ; Layer Golden Grayscale · 900 mm/min · 25% · 1 pass(es) · vector correction +0 · raster correction +0
 ; Raster tone: deterministic 8x8 ordered grayscale dither
 ; Raster rows remain serpentine; overscan and white gaps are laser-off
@@ -14,30 +16,28 @@ M5 ; laser off before any motion
 ; @E3_PASS {"index":1,"count":1}
 ; @E3_PATH {"name":"Golden grayscale image"}
 G0 X40 Y42.5 F3000
-G1 X50 Y42.5 F900
-M4 S250
-G1 X60 Y42.5 F900
+M4 S0
+G1 X50 Y42.5 F900 S0
+G1 X60 Y42.5 F900 S250
 M5
 ; @E3_PATH {"name":"Golden grayscale image"}
 G0 X60 Y47.5 F3000
-M4 S250
-G1 X55 Y47.5 F900
-M5
-G1 X45 Y47.5 F900
-M4 S250
-G1 X40 Y47.5 F900
+M4 S0
+G1 X55 Y47.5 F900 S250
+G1 X45 Y47.5 F900 S0
+G1 X40 Y47.5 F900 S250
 M5
 ; @E3_PATH {"name":"Golden grayscale image"}
 G0 X40 Y52.5 F3000
-G1 X50 Y52.5 F900
-M4 S250
-G1 X60 Y52.5 F900
+M4 S0
+G1 X50 Y52.5 F900 S0
+G1 X60 Y52.5 F900 S250
 M5
 ; @E3_PATH {"name":"Golden grayscale image"}
 G0 X60 Y57.5 F3000
-G1 X50 Y57.5 F900
-M4 S250
-G1 X40 Y57.5 F900
+M4 S0
+G1 X50 Y57.5 F900 S0
+G1 X40 Y57.5 F900 S250
 M5
 ; @E3_PLANNER {"source_order_travel_mm":73.36308764964376,"planned_order_travel_mm":73.36308764964376,"savings_mm":0.0}
 M5

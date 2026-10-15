@@ -15,7 +15,7 @@ from ..project import (
 )
 from ..units import parse_to_mm
 from .columns import configure_resizable_columns
-from .controls import MeasurementSpinBox, NumericDoubleSpinBox, NumericSpinBox
+from .controls import AxisPositionReadout, MeasurementSpinBox, NumericDoubleSpinBox, NumericSpinBox
 from .machine_state import ControllerUiState, project_machine_state
 from .mainboard_z import MainboardZPanel
 from .qt import require_qt
@@ -954,6 +954,7 @@ class CameraPanel(QtWidgets.QWidget):
     monitorRequested = QtCore.Signal()
     refreshRequested = QtCore.Signal()
     captureRequested = QtCore.Signal()
+    placementCaptureRequested = QtCore.Signal()
     lensCalibrationRequested = QtCore.Signal()
     bedCalibrationRequested = QtCore.Signal()
     opacityChanged = QtCore.Signal(float)
@@ -1041,7 +1042,12 @@ class CameraPanel(QtWidgets.QWidget):
 
         self.refresh_button = QtWidgets.QPushButton("Refresh now")
         self.capture_button = QtWidgets.QPushButton("Save still image")
+        self.placement_capture_button = QtWidgets.QPushButton("Capture for placement")
+        self.placement_capture_button.setToolTip(
+            "Home and park with laser off, then capture the measured material surface. Keep the travel path clear."
+        )
         overlay_layout.addWidget(self.refresh_button)
+        overlay_layout.addWidget(self.placement_capture_button)
         overlay_layout.addWidget(self.capture_button)
         layout.addWidget(overlay_group)
 
@@ -1127,6 +1133,7 @@ class CameraPanel(QtWidgets.QWidget):
         self.refresh_button.clicked.connect(self.refreshRequested)
         self.monitor_button.clicked.connect(self.monitorRequested)
         self.capture_button.clicked.connect(self.captureRequested)
+        self.placement_capture_button.clicked.connect(self.placementCaptureRequested)
         self.lens_button.clicked.connect(self.lensCalibrationRequested)
         self.bed_button.clicked.connect(self.bedCalibrationRequested)
         self.opacity_slider.valueChanged.connect(
@@ -1234,6 +1241,7 @@ class CameraPanel(QtWidgets.QWidget):
         self.live_check.setEnabled(overlay_enabled)
         self.live_rate.setEnabled(overlay_enabled)
         self.refresh_button.setEnabled(overlay_enabled)
+        self.placement_capture_button.setEnabled(overlay_enabled)
         if not ready:
             self.image_state.setText(
                 "Bed mapping is required for a corrected overlay"
@@ -2947,6 +2955,16 @@ class MachinePanel(QtWidgets.QWidget):
         self.park_button.setToolTip("Home and park at the configured camera pose")
         layout.addWidget(self.park_button)
 
+        coordinates = QtWidgets.QHBoxLayout()
+        coordinates.setSpacing(4)
+        self.x_position = AxisPositionReadout("X")
+        self.y_position = AxisPositionReadout("Y")
+        for readout in (self.x_position, self.y_position):
+            readout.setToolTip("Position after completed Home / jog in mm; unavailable during motion.")
+            coordinates.addWidget(readout)
+        coordinates.addStretch(1)
+        layout.addLayout(coordinates)
+
         self.jog_group = QtWidgets.QGroupBox("Jog")
         jog_layout = QtWidgets.QGridLayout(self.jog_group)
         jog_layout.setContentsMargins(6, 10, 6, 6)
@@ -2980,7 +2998,7 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_group.setEnabled(False)
         layout.addWidget(self.jog_group)
 
-        self.z_control = MainboardZPanel(self)
+        self.z_control = MainboardZPanel(self, daily=True)
         layout.addWidget(self.z_control)
 
         self.safety_note = _muted(
@@ -3046,6 +3064,24 @@ class MachinePanel(QtWidgets.QWidget):
 
     def _sync_action_buttons(self) -> None:
         state = self._ui_state.with_busy(self._busy)
+        position = self._machine_status.get("jog_position_mm")
+        available = (
+            not self._busy
+            and self._machine_status.get("connected") is True
+            and self._machine_status.get("coordinate_reference_ready") is True
+            and self._machine_status.get("status_stale") is not True
+            and not self._machine_status.get("status_refresh_error")
+            and not (self._machine_status.get("job") or {}).get("running")
+            and isinstance(position, Mapping)
+        )
+        for axis, readout in (("X", self.x_position), ("Y", self.y_position)):
+            value = position.get(axis.lower()) if available else None
+            text = (
+                f"{axis} {value:.3f} mm"
+                if type(value) in {int, float} and math.isfinite(value)
+                else f"{axis} — mm"
+            )
+            readout.setText(text)
         self.park_button.setEnabled(state.can_home)
         self.jog_group.setEnabled(state.can_jog)
         self.jog_group.setToolTip(
@@ -3243,7 +3279,7 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         submission = self._machine_status.get("job_submission")
         if (
             isinstance(submission, Mapping)
-            and project_machine_state(self._machine_status).submission_visible
+            and submission.get("phase") in {"uploading", "verifying", "starting", "failed"}
         ):
             # Local transfer progress is independent of delayed Pi job polls.
             # It never grants execution ownership or controller authority.
@@ -3254,6 +3290,10 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         completed = int(job.get("completed_lines", 0) or 0)
         progress = 0.0 if total <= 0 else max(0.0, min(completed / total, 1.0))
         phase = str(job.get("phase", "streaming" if running else "idle"))
+        if not running and job.get("error") and phase not in {"starting", "verifying", "stopped", "interrupted"}:
+            phase = "failed"
+        if running and phase == "streaming" and progress >= 1.0:
+            phase = "draining"
         received = job.get("received_size")
         expected = job.get("expected_size")
         upload_progress = (
@@ -3263,6 +3303,9 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             else None
         )
         uploading = phase in {"receiving", "uploading"}
+        if uploading and upload_progress == 1.0:
+            phase = "verifying"
+            uploading = False
         indeterminate = phase in {"verifying", "starting"} or (
             uploading and upload_progress is None
         )
@@ -3271,9 +3314,9 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             visible_progress = upload_progress if uploading else progress
             self.progress.setValue(int(round(visible_progress * 1000)))
         finishing_labels = {
-            "receiving": "Uploading job…",
-            "uploading": "Uploading job…",
-            "verifying": "Verifying job…",
+            "receiving": "Sending file…",
+            "uploading": "Sending file…",
+            "verifying": "File sent · checking on Pi · not ready yet",
             "prepared": "Ready on Pi",
             "starting": "Starting job…",
             "stopping": "Stopping on Pi",
@@ -3281,13 +3324,23 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             "homing": "Finishing · homing",
             "parking": "Finishing · parking",
             "releasing": "Finishing · release",
+            "failed": "Job failed",
+            "interrupted": "Job interrupted",
+            "stopped": "Job stopped",
+            "cancelled": "Job cancelled",
+            "idle": "Idle",
+            "completed": "Job complete",
+            "complete": "Job complete",
         }
         self._execution_format = finishing_labels.get(
             phase,
             f"Execution {progress * 100:.0f}%",
         )
         if uploading and upload_progress is not None:
-            self._execution_format = f"Uploading job {upload_progress * 100:.0f}%"
+            self._execution_format = f"Sending file · {min(99, int(upload_progress * 100))}% transferred"
+        if phase in {"failed", "interrupted", "stopped", "cancelled", "idle"}:
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(0)
         self._sync_execution_format()
         if running:
             execution_labels = {
@@ -3372,6 +3425,7 @@ class ObjectPanel(QtWidgets.QWidget):
     objectEdited = QtCore.Signal(str, dict)
     layerColorEditRequested = QtCore.Signal(str)
     rasterVectorizeRequested = QtCore.Signal(str)
+    backgroundCleanupRequested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3405,6 +3459,12 @@ class ObjectPanel(QtWidgets.QWidget):
         self.raster_vectorize_button.setToolTip(
             "Convert the selected raster image into native E3 line and cubic paths"
         )
+        self.background_cleanup_button = QtWidgets.QPushButton("Clean background\u2026")
+        self.background_cleanup_button.setToolTip(
+            "Preview adjustable background cleanup without changing the original file"
+        )
+        image_layout.addWidget(self.background_cleanup_button)
+        self.background_cleanup_button.clicked.connect(self._request_background_cleanup)
         image_layout.addWidget(self.raster_vectorize_button)
         layout.addWidget(self.image_group)
         self.raster_vectorize_button.clicked.connect(
@@ -3534,6 +3594,12 @@ class ObjectPanel(QtWidgets.QWidget):
         available = object_id is not None
         self.image_group.setVisible(available)
         self.raster_vectorize_button.setEnabled(available)
+        self.background_cleanup_button.setEnabled(available)
+
+    def _request_background_cleanup(self) -> None:
+        object_id = self._selected_image_id()
+        if object_id is not None:
+            self.backgroundCleanupRequested.emit(object_id)
 
     def _request_raster_vectorization(self) -> None:
         object_id = self._selected_image_id()

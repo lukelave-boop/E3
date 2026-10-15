@@ -17,6 +17,9 @@ const state = {
   refreshBusy: false,
   dragging: null,
   rotating: null,
+  placementCapture: null,
+  surfaceKey: null,
+  placementEpoch: 0,
 };
 
 const TEMPORARY_BED_MAPPING_KEY = 'laser-aligner-temporary-bed-mapping';
@@ -106,8 +109,27 @@ function setInitialValue(element, value) {
   }
 }
 
+function invalidatePlacementReview() {
+  state.placementEpoch += 1;
+  state.placementCapture = null;
+  state.lastGcode = '';
+  $('gcodeOutput').value = '';
+  $('downloadGcodeLink').classList.add('hidden');
+  $('workspaceImage').removeAttribute('src');
+  renderWorkpiecePolygon(null);
+}
+
 function updateStatusView(data) {
   state.status = data;
+  const surface = data.material_placement;
+  const surfaceKey = JSON.stringify(surface || null);
+  if (state.surfaceKey !== null && surfaceKey !== state.surfaceKey) {
+    invalidatePlacementReview();
+  }
+  state.surfaceKey = surfaceKey;
+  $('materialPlacementStatus').textContent = surface?.enabled
+    ? (surface.ready ? `Measured top: ${fmt(surface.surface.surface_elevation_mm, 3)} mm relative to datum. Capture and review placement; physical qualification is required.` : surface.reason)
+    : 'Placement uses the calibrated plane. Physical XY qualification is required.';
   const settings = data.settings;
   const camera = data.camera;
   const lens = data.lens;
@@ -489,6 +511,11 @@ function renderWorkpiecePolygon(polygonMm) {
 
 async function refreshWorkspaceImage(refresh) {
   const image = $('workspaceImage');
+  if (state.placementCapture) {
+    image.src = `/api/workspace/frame.jpg?capture_id=${encodeURIComponent(state.placementCapture.capture_id)}`;
+    return;
+  }
+  if (state.status?.material_placement?.enabled) { image.removeAttribute('src'); return; }
   const suffix = refresh ? `?refresh=1&t=${Date.now()}` : `?t=${Date.now()}`;
   image.src = `/api/workspace/frame.jpg${suffix}`;
 }
@@ -518,8 +545,8 @@ $('designOverlay').addEventListener('pointermove', (event) => {
   const area = workArea();
   const dx = (event.clientX - state.dragging.startClientX) / stageRect.width * (area.x_max - area.x_min);
   const dy = -(event.clientY - state.dragging.startClientY) / stageRect.height * (area.y_max - area.y_min);
-  $('designX').value = (state.dragging.startX + dx).toFixed(2);
-  $('designY').value = (state.dragging.startY + dy).toFixed(2);
+  $('designX').value = String(state.dragging.startX + dx);
+  $('designY').value = String(state.dragging.startY + dy);
   renderDesignOverlay();
 });
 
@@ -556,8 +583,8 @@ $('designRotationHandle').addEventListener('pointermove', (event) => {
                                   event.clientX - state.rotating.centerClientX);
   let rotation = (state.rotating.baseAngle - pointerAngle) * 180 / Math.PI;
   rotation = ((rotation + 180) % 360 + 360) % 360 - 180;
-  if (event.shiftKey) rotation = Math.round(rotation / 15) * 15;
-  $('designRotation').value = rotation.toFixed(event.shiftKey ? 0 : 1);
+  if (event.shiftKey && !state.status?.material_placement?.enabled) rotation = Math.round(rotation / 15) * 15;
+  $('designRotation').value = String(rotation);
   renderDesignOverlay();
 });
 
@@ -575,7 +602,7 @@ $('designWidth').addEventListener('input', () => {
   if ($('lockAspect').checked && !aspectUpdate && state.svgAspect > 0) {
     try {
       aspectUpdate = true;
-      $('designHeight').value = (measurementMm('designWidth') / state.svgAspect).toFixed(2);
+      $('designHeight').value = String(measurementMm('designWidth') / state.svgAspect);
     } catch {
       // Partial input such as "1 i" is allowed while the user is typing.
     } finally {
@@ -588,7 +615,7 @@ $('designHeight').addEventListener('input', () => {
   if ($('lockAspect').checked && !aspectUpdate && state.svgAspect > 0) {
     try {
       aspectUpdate = true;
-      $('designWidth').value = (measurementMm('designHeight') * state.svgAspect).toFixed(2);
+      $('designWidth').value = String(measurementMm('designHeight') * state.svgAspect);
     } catch {
       // Partial input such as "1 i" is allowed while the user is typing.
     } finally {
@@ -610,8 +637,8 @@ $('svgFileInput').addEventListener('change', async (event) => {
     const width = Number(analysis.intrinsic_width_mm) || 50;
     const height = Number(analysis.intrinsic_height_mm) || 50;
     state.svgAspect = width / height;
-    $('designWidth').value = width.toFixed(2);
-    $('designHeight').value = height.toFixed(2);
+    $('designWidth').value = String(width);
+    $('designHeight').value = String(height);
     if (state.overlayUrl) URL.revokeObjectURL(state.overlayUrl);
     state.overlayUrl = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
     $('designOverlay').src = state.overlayUrl;
@@ -644,6 +671,9 @@ function toolpathPayload() {
 }
 
 function showGenerated(result) {
+  if (JSON.stringify(result.metadata.material_surface ?? null) !== JSON.stringify(state.status?.material_placement?.surface ?? null)) {
+    throw new Error('Surface changed while generating the job; capture and review again.');
+  }
   state.lastGcode = result.gcode;
   state.lastBounds = result.metadata.bounds_mm;
   $('gcodeOutput').value = result.gcode;
@@ -657,12 +687,15 @@ function showGenerated(result) {
 $('generateGcodeButton').addEventListener('click', async () => {
   if (!state.svgText) return toast('Load an SVG first.', true);
   try {
+    const epoch = state.placementEpoch;
     const result = await api('/api/design/gcode', 'POST', {
       svg: state.svgText,
       name: state.svgName,
       placement: placementPayload(),
       toolpath: toolpathPayload(),
+      capture_id: state.placementCapture?.capture_id,
     });
+    if (epoch !== state.placementEpoch) throw new Error('Placement photograph changed while generating; review and generate again.');
     showGenerated(result);
     toast('G-code generated and checked against the configured work area.');
   } catch (error) {
@@ -672,14 +705,19 @@ $('generateGcodeButton').addEventListener('click', async () => {
 
 $('detectWorkpieceButton').addEventListener('click', async () => {
   try {
-    const result = await api('/api/vision/workpiece', 'POST', {});
+    const epoch = state.placementEpoch;
+    const result = await api('/api/vision/workpiece', 'POST', {capture_id: state.placementCapture?.capture_id});
+    if (epoch !== state.placementEpoch) throw new Error('Placement photograph changed during detection; detect again.');
+    if (JSON.stringify(result.material_surface ?? null) !== JSON.stringify(state.status?.material_placement?.surface ?? null)) {
+      throw new Error('Surface changed during detection; capture again.');
+    }
     if (!result.detected) {
       renderWorkpiecePolygon(null);
       return toast('No strong rectangular workpiece edge was detected.', true);
     }
     renderWorkpiecePolygon(result.polygon_mm);
-    $('designX').value = result.center_mm[0].toFixed(2);
-    $('designY').value = result.center_mm[1].toFixed(2);
+    $('designX').value = String(result.center_mm[0]);
+    $('designY').value = String(result.center_mm[1]);
     renderDesignOverlay();
     toast(`Detected candidate workpiece near X${fmt(result.center_mm[0])} Y${fmt(result.center_mm[1])}.`);
   } catch (error) {
@@ -807,7 +845,20 @@ $('solveBedButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message, true); }
 });
 $('captureWorkspaceButton').addEventListener('click', async () => {
-  try { await api('/api/workspace/capture', 'POST', {}); await refreshWorkspaceImage(false); toast('Rectified workspace image refreshed.'); }
+  invalidatePlacementReview();
+  const epoch = state.placementEpoch;
+  try {
+    const result = await api('/api/workspace/capture', 'POST', {});
+    if (epoch !== state.placementEpoch) return;
+    await refreshStatus();
+    if (epoch !== state.placementEpoch) throw new Error('Surface changed during capture; capture again.');
+    if (JSON.stringify(result.material_surface) !== JSON.stringify(state.status?.material_placement?.surface ?? null)) {
+      throw new Error('Surface changed during capture; capture again.');
+    }
+    state.placementCapture = result;
+    await refreshWorkspaceImage(false);
+    toast('Parked photograph captured. Review placement before generating the job.');
+  }
   catch (error) { toast(error.message, true); }
 });
 

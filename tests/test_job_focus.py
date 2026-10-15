@@ -251,7 +251,8 @@ def test_directive_must_be_first_and_unique():
             program_binding(lines)
 
 
-def test_pi_owned_upload_retains_exact_focus_binding(focus_machine, tmp_path, monkeypatch):
+@pytest.mark.parametrize("focus_modes", [None, ("RASTER",), ("CUT", "RASTER", "CUT")])
+def test_pi_owned_upload_retains_exact_focus_binding(focus_machine, tmp_path, monkeypatch, focus_modes):
     import copy
     import time
 
@@ -277,9 +278,18 @@ def test_pi_owned_upload_retains_exact_focus_binding(focus_machine, tmp_path, mo
     try:
         remote.connect()
         remote._refresh_once()
-        plan = select(remote)
+        if focus_modes is None:
+            plan = select(remote)
+            text = PROGRAM
+        else:
+            from tests.test_thickness_focus import automatic
+            plan = automatic(remote, focus)["job_focus"]
+            text = "\n".join(
+                PROGRAM.replace("M5\nG0", f"M5\nE3OPFOCUS {mode}\nG0")
+                for mode in focus_modes
+            )
         remote.prepare_photo_position()  # Normal camera/park operation before START.
-        program = remote.preflight_program(PROGRAM)
+        program = remote.preflight_program(text)
         started = remote.start_preflighted_program(program, authorization_phrase=remote.ARM_PHRASE)
         remote.detach()
         wait(machine)

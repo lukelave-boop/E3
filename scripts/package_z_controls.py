@@ -5,6 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 
+if __package__:
+    from .package_source_dependencies import reject_partial_raster_sources
+else:
+    from package_source_dependencies import reject_partial_raster_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 # Operator Pi: 5f52e40 plus the verified startup, compact probe, and CPU cooling kits.
 PREVIOUS = {
@@ -22,6 +27,7 @@ PREVIOUS = {
 
 def package(destination: Path) -> Path:
     sources = {name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in PREVIOUS}
+    reject_partial_raster_sources(sources)
     manifest = json.dumps({"files": [
         {"path": name, "previous_sha256_lf": previous,
          "sha256_lf": hashlib.sha256(sources[name]).hexdigest()}

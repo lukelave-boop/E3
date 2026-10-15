@@ -197,7 +197,7 @@ def test_normalized_dependency_digest_survives_revision_only_change() -> None:
     assert third.metadata.dependency_digest != second.metadata.dependency_digest
 
 
-def test_normalized_stage_two_identity_and_statistics_are_explicit() -> None:
+def test_normalized_stage_three_identity_and_statistics_are_explicit() -> None:
     document = ProjectDocument.new("Native statistics", Bounds(0, 0, 100, 100))
     document.add_object(
         SceneObject.native_path(
@@ -220,8 +220,8 @@ def test_normalized_stage_two_identity_and_statistics_are_explicit() -> None:
     )
     statistics = dict(artifact.metadata.statistics)
 
-    assert artifact.metadata.stage_version == 2
-    assert artifact.metadata.artifact_id.endswith(":v2")
+    assert artifact.metadata.stage_version == 3
+    assert artifact.metadata.artifact_id.endswith(":v3")
     assert statistics["native_path_count"] == 1
     assert statistics["native_segment_count"] == 1
     assert statistics["flattened_path_count"] == 1

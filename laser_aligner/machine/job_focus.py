@@ -7,8 +7,13 @@ from contextlib import contextmanager
 
 from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
 from ..errors import MachineError, SafetyError
+from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
+from ..operation_focus import target_z, validate_targets
+from ..raster_safety import PREFIX as RASTER_BOUNDARY_PREFIX
+from ..raster_safety import program_raster_boundary
 from .focus_bounds import FocusXYBounds
 from .mainboard import parse_status, validate_max_z
+from .material_surface import PREFIX as MATERIAL_SURFACE_PREFIX
 from .setup_motion import require_z_setup_speed, z_feed_mm_min
 from .z_probe import parse_position
 
@@ -49,18 +54,26 @@ def attach(text: str, plan: dict | None) -> str:
 def selected_plan(machine, program):
     token = program_binding(program.lines)
     if token is None:
+        if program.requires_laser_authorization and machine.settings.backend == "serial":
+            validate_targets(program.lines, None)
         if program.requires_laser_authorization and machine._laser_focus.job_focus_required:
             machine._laser_focus.require_job_focus()
             raise SafetyError("Powered job is missing its measured workpiece focus binding; prepare the job again")
         return None
     plan = selection_snapshot(machine, token)
+    validate_targets(program.lines, plan)
     # A first-move endpoint check alone cannot validate travel from the measured spot.
     from ..gcode.preview import parse_words
+    raster_boundary = program_raster_boundary(program.lines)
     for line in program.lines[1:]:
-        if line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
+        if line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX, OPERATION_FOCUS_PREFIX, RASTER_BOUNDARY_PREFIX)):
             continue
         words = {w.letter: w.value for w in parse_words(line)}
         if words.get("G") in (0, 1):
+            if raster_boundary is not None:
+                raster_boundary.require_travel_point(tuple(plan["xy"]), label="Measured-focus transfer start")
+                raster_boundary.require_travel_point((words["X"], words["Y"]), label="Measured-focus transfer end")
+                break
             bounds = FocusXYBounds(machine.settings.work_area, program.guarded_output_polygon_mm)
             if not bounds.contains_segment(tuple(plan["xy"]), (words["X"], words["Y"])):
                 raise SafetyError("Travel from the measured spot to the job start leaves the positioning area")
@@ -186,7 +199,7 @@ def check_context(machine, context):
         raise MachineError("Measured job focus authority changed during execution")
 
 
-def move(machine, context, *, clearance, verify_only=False):
+def move(machine, context, *, clearance, verify_only=False, focus_mode="CUT"):
     """Move only Z under this exact Pi-owned running job and both sessions."""
     plan, probe = context.focus_plan or context.retained_workpiece_plan, machine._z_probe
     if plan is None or probe is None:
@@ -224,7 +237,7 @@ def move(machine, context, *, clearance, verify_only=False):
         if states != ["z_min: triggered"]:
             raise SafetyError("Job focus requires the confirmed stowed probe")
 
-    target = plan["clearance_z_mm"] if clearance else plan["target_z_mm"]
+    target = plan["clearance_z_mm"] if clearance else target_z(plan, focus_mode)
     if not 0 <= target <= plan["maximum"]:
         raise SafetyError("Job focus target exceeds the configured Z range")
     with owner._lock:

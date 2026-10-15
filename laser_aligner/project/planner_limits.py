@@ -1,6 +1,7 @@
 """Shared bounded-work constants for project planning and advisory preflight."""
 
-MAX_STREAM_COMMANDS = 250_000
+from ..gcode.limits import MAX_STREAM_COMMANDS
+
 MAX_RASTER_SAMPLES = 16_000_000
 MAX_RASTER_ROWS = 60_000
 MAX_SCANLINE_EDGE_TESTS = 16_000_000

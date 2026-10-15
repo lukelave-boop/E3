@@ -1,5 +1,1403 @@
 # Current repository state
 
+## Release gate and integration review (2026-10-15)
+
+Release preparation is on `codex/raster-overscan`, [PR #44](https://github.com/lukelave-boop/E3/pull/44).
+The publisher now invokes the complete reusable Compatibility CI workflow from
+its exact commit before building either package. Publication requires that gate
+and both packages; failed, cancelled or skipped prerequisites block release.
+Only publication has contents-write permission. Main and the release channel
+have not been changed. The branch remains unmerged pending release authorization.
+
+The integration review covers the accumulated 60-commit, 215-file feature branch,
+including raster/local/Pi safety, setup/placement, persistence, desktop/browser
+boundaries, performance and packaging. Details, corrections and remaining physical
+and installed-update qualification are in [release review](docs/RELEASE_REVIEW.md).
+The stale pre-activation raster inspection is now explicitly historical.
+
+Gate/update tests: **71 passed in 0.91 s**; Ruff, compileall, whitespace and
+checksum-verified actionlint checks passed. Compatibility CI **38809353488** on
+`69d80c8` passed Windows 3.12 desktop (**7,376 passed, 54 skipped, 628.98 s**),
+Windows 3.10 core (**5,900 passed, 141 skipped, 498.16 s**), POSIX controller/session
+(**652 passed, 103.40 s**) and Ruff. Both firmware compilation workflows passed.
+Local Python 3.14 diagnostics and final-candidate results are documented in the
+review and PR; no shutdown timeout or safety check was weakened to make tests pass.
+
+All 35 protected settings/calibration hashes matched. No machine connection,
+movement, laser output, Pi deployment, settings/calibration change, or DEV TEST
+selection change occurred during release preparation. Runtime source still
+matches the installed companion revision. Preserve the selected frozen build
+checkout while its permanent launcher pointer remains active.
+
+## Preview approach separation: E3 DEV TEST selected (2026-10-15)
+
+E3 DEV TEST selects **Raster boundary and park approach**, version **0.7.216**,
+branch `codex/raster-overscan`, frozen revision
+`764f85d381bc76ace98720af51c64b87aaa73601`. Exact executable:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-preview-frozen\dist\E3\E3.exe`.
+The existing bundle had a locked OpenCV DLL; a fresh detached build checkout
+was created without stopping the operator's process. The canonical Windows
+builder produced the new executable. Its SHA-256 is
+`c9b2cc6cb59275b111d641d4e858642706a6fd00cb3b9eca7859813003566437`.
+The permanent pointer was updated through `packaging/set_dev_test_feature.py`.
+No production launcher, machine settings, calibration, or Pi software was changed.
+
+Desktop preview draws the initial laser-off approach as a persistent red dashed
+line and excludes it from the orange movement box. Row/pass/layer transfers after
+that approach remain included. Full travel extents still drive scene fitting and
+safety validation; the immutable JobPlan and executable output are unchanged.
+The head marker is amber for laser-on motion and cyan for laser-off; the playback
+status names the direction and explicitly identifies LASER ON. This is preview
+state from the planned program, not live laser telemetry.
+
+Windows offscreen preview/layout checks passed **60 tests in 6.44 s**; focused
+raster continuity/focus/overscan checks passed **45 tests in 7.14 s**. Ruff and
+compileall passed. An offscreen render of the saved barrel job confirmed the
+separate approach and compact orange box. Frozen verification matched all 185
+application modules, startup entry, six resources and default configuration to
+the exact commit. Isolated hidden native-Windows startup passed in **15.121 s**,
+with a nonexistent serial port, camera disabled and motion disabled. All 35
+protected local settings/calibration hashes and shared QSettings remained
+unchanged. No live controller connection, movement or laser output occurred.
+
+The offline barrel audit confirms **319 powered forward / 318 powered reverse
+rows**: no one-way firing defect. The existing per-segment acceleration estimate
+reports 103.92 minutes versus an ideal distance/feed lower bound of 19.03 minutes;
+neither is a measured physical runtime. Command volume is 180,135 commands /
+5,490,419 bytes; stop-and-wait controller throughput remains unmeasured. Ranked
+findings and limits are in `docs/RASTER_PERFORMANCE.md`. No speculative motion,
+laser-control, retry or throughput optimization was made.
+
+Compatibility CI for the exact build, run **38801385074**, passed Windows 3.10,
+Windows 3.12 desktop, Ruff and POSIX controller/session checks.
+This feature branch remains separate from main for operator acceptance. The
+selected frozen checkout must remain available while its pointer is active.
+
+## Pi raster companion and verified X clearance applied (2026-10-15)
+
+The Pi is online again. The operator reports physically verifying 6 mm extra X
+clearance on both sides and requires all Y settings/calibration to stay unchanged.
+The matching Pi runtime from selected Windows revision
+`aac45cdb58f1e746ecfd4c08624fd74230c172f4` is now installed. All 64 runtime
+source hashes match; 12 files were updated with adjacent byte-for-byte backups.
+Every replaced predecessor matched a known Git revision. The existing guarded
+installer accepted the complete reviewed baseline before installation and
+required the service to be inactive. The original shared working tree and the
+selected E3 DEV TEST 0.7.210 executable were not changed.
+
+Actual Raspberry Pi Linux/Python 3.13 staged safety, focus, protocol, store and
+server tests passed **167 tests in 49.03 s**, using simulated transports. Staged
+compileall passed. A further **106 tests passed in 8.84 s** against the actual
+installed runtime (simulators only). Read-only authenticated status before and after installation
+shows disconnected, disarmed, no active job and no control owner. The restarted
+service advertises `pi-raster-travel-envelope-v1`. No controller connection,
+Home, motion, arming, probe operation or laser firing was requested.
+
+All 34 protected Windows settings/calibration hashes are unchanged. On the Pi,
+18 of 19 protected configuration/calibration JSON hashes are unchanged; only the
+saved-Z retention status file changed during normal service shutdown/restart.
+The main configuration, all calibration files, Y limits, offsets and park settings
+are unchanged. Saved Y remains **10..210 machine mm** on both sides. No Y clearance
+was added. Normal focus/reference/start safeguards still apply after restart.
+
+The operator confirmed the ESP32 firmware has not changed since the physical X
+clearance test and explicitly authorized activation. The identical verified
+raster travel record is now saved in Windows network-local.json, the active
+Ender 3 Tailscale profile and Pi pi-hardware.json. Record SHA-256:
+`867afc67d438fe7b06013da6ed4c6b45507c85ed57faab98fdc764a92ac2d174`.
+It records the installed ESP32 USB identity, operator-confirmed unchanged
+GRBL-compatible firmware (version not re-read), configuration/calibration hashes,
+zero beam/head offsets and the operator's physical X test dated 2026-10-15.
+
+Saved calibration maps carriage surface X to 27.5065275307..219.7672592962 mm.
+Six millimetres beyond each edge gives X21.5065275307..225.7672592962;
+retaining existing X10 travel yields **X10..225.7672592962, Y10..210**.
+Only `raster_travel_envelope` was added; structural comparison against atomic
+backups confirms every other setting, all other profiles, all Y values and all
+calibration files are unchanged. No newly verified Y extension is claimed.
+The service restart can update saved-Z retention metadata; normal reference,
+focus, homing, arming and start checks remain required.
+
+Focused Windows raster safety tests passed **43 tests in 2.93 s**. An initial
+sandbox temporary-directory failure was resolved by using a workspace basetemp.
+Offline preflight using the saved configuration and configured guarded polygon
+accepted laser-off X overscan and rejected excessive X travel, powered output
+outside the calibrated surface, and a row transition beyond unchanged Y210.
+The desktop and Pi envelope digests match. No job was uploaded or started; no
+controller connection, motion, probing, arming or laser firing occurred. The Pi
+was read back disconnected, disarmed and idle after restarting. Regenerate any
+previously prepared jobs; jobs still must fit the unchanged Y limits. Physical
+run-up performance at the selected feed remains operator validation.
+
+Ignored `build/` artifacts hold before/after source and protected-file hashes,
+installer receipts, the reviewed baseline, read-only status and the deployment
+plan. The old Pi version label remains its historical packaged metadata; installed
+source hashes and the new capability are the deployment evidence.
+
+## Raster overscan frozen DEV TEST handoff (2026-10-15)
+
+E3 DEV TEST now selects **Raster overscan and saved Z**, version **0.7.210**,
+branch `codex/raster-overscan`, exact frozen application revision
+`aac45cdb58f1e746ecfd4c08624fd74230c172f4`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-overscan-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with `packaging/set_dev_test_feature.py`
+and read back through the launcher validator. The permanent launcher EXE and
+Desktop shortcut hashes are unchanged. Save current work, close the older E3
+window, and reopen the permanent **E3 DEV TEST** launcher to use this build.
+
+[Compatibility CI run 38774940560](https://github.com/lukelave-boop/E3/actions/runs/38774940560)
+passed all jobs on that exact revision: Windows Python 3.12 desktop **7,365 passed,
+54 skipped in 764.58 s**; Windows Python 3.10 core **5,895 passed, 141 skipped in
+598.38 s**; Linux serial/controller **652 passed in 106.35 s**; Ruff passed.
+Local Windows offscreen layout/focus tests passed 180 cases in 49.67 s, and
+cleanup plus parser-duplication regression tests passed 35 in 2.22 s. Application
+compileall and diff checks passed. The saved-Z failure was a stale daily-panel
+assertion: Saved Z remains in Machine Setup -> 7 - Z / laser focus. Seven new
+setup-dialog cases verify visibility and disabled-action rejection. No production
+UI, retention behavior, cleanup default or hardware safeguard changed in this
+follow-up.
+
+The canonical Windows packager produced the EXE with Python 3.14.4/PyInstaller
+6.22.3 and passed its native-library guard. All **185 application modules**, the
+frozen entry, six resources and packaged default configuration match the exact
+commit. EXE SHA256:
+`ef5291a78a83e30307cdc57ebf18fb1f2c49ba200cd475be600025ef213acbea`.
+The 15.205-second hidden native Windows startup smoke observed the exact DEV TEST
+main-window title and loaded Qt, with no startup-error dialog/log. It used fresh
+isolated configuration/state/data, camera autostart off, motion disabled, and a
+confirmed nonexistent serial device. The desktop process hardware gate itself
+remains enabled as designed; no connection or UI action was invoked. Only the
+owned smoke process was terminated. The actual machine configuration and registry
+files, and the shared Windows QSettings registry, were byte/hash unchanged.
+Installer compilation also completed successfully in 186.578 s. The installer
+was not executed.
+
+[The cleanup diagnosis](docs/BACKGROUND_CLEANUP_DIAGNOSIS.md) records the actual
+barrel image and saved-project evidence: cleanup was saved **disabled** at
+tolerance 5. Enabling it in an in-memory comparison whitened 578,173 pixels and
+removed all 120 powered moves in the clear outer 1 mm border of the 80 mm job.
+The actual engraving previews were rendered and visually inspected. Source image,
+autosave and operator settings were unchanged; an unsaved checkbox state or an
+older open preview cannot be established from saved files. Enable the checkbox,
+review the nonzero whitening summary, Apply and regenerate the preview.
+
+No controller/Pi connection, machine movement, laser output, real camera test,
+interactive operator acceptance or Pi deployment occurred. Active settings still
+have no verified raster travel envelope. This build fails clearly until the
+current whole travel envelope and evidence are configured and the matching Pi
+companion is deployed; no historical/provisional limit was adopted. Physical
+calibration, offsets, cable clearance and speed/run-up acceptance remain as listed
+in [RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). The feature branch remains for
+operator validation; main integration is not claimed. The original shared checkout
+remains on `codex/setup-wizard` at `8e58ae5` with its 77 pre-existing modified files.
+
+Ignored receipts: `build/raster-frozen-verification.json`,
+`build/raster-frozen-smoke.json`, `build/windows-build.log`, the three
+`build/ci-38774940560-*.log` files, and `build/cleanup-diagnosis/` preview images.
+
+## Saved-Z compatibility correction and DEV TEST preparation (2026-10-15)
+
+Follow-up work remains isolated on `codex/raster-overscan`; the original shared
+checkout and active machine settings are preserved. The remaining saved-Z CI
+failure was an obsolete daily-panel assertion. The daily Machine panel deliberately
+omits setup status, including Saved Z; Machine Setup -> 7 - Z / laser focus retains
+those controls. The corrected test follows that documented layout. Seven additional
+cases open the real setup dialog and verify restored/reference-required visibility
+and unavailable, missing, malformed, armed and stale rejection. Rejected requests
+emit no action. No application visibility, motion, laser or retention behavior was
+changed to make the test pass.
+
+Read-only inspection of the latest barrel-project autosave found schema 5 with
+`background_cleanup.enabled=false` and tolerance 5. The earlier enlarged-image
+reproduction was schema 4 without cleanup. On the original 1289 x 1221 barrel source,
+enabled tolerance 5 whitens 578,173 of 1,573,869 pixels; native-grid outer-20-pixel
+border dither marks fall from 320 to zero. The dialog already states that disabled
+cleanup uses the original. Cleanup behavior and the operator's project are unchanged.
+Additional actual-size offline verification and the final CI/build receipt follow.
+
+Focused Windows offscreen layout and laser-focus tests: 180 passed in 49.67 s.
+Repository Ruff, application compileall and diff checks pass. Compatibility CI and
+the requested exact frozen build/DEV TEST selection are pending this revision.
+No controller connection, machine movement or laser output was performed.
+
+## Raster overscan surface/travel separation (2026-10-15)
+
+Work is isolated on `codex/raster-overscan`, based on completed background-cleanup
+commit `52f25b4f7dec67f8ecfb6b69d7b39e627edc8573`. The original shared checkout
+remains on `codex/setup-wizard` at `8e58ae5` with its pre-existing uncommitted work.
+The selected E3 DEV TEST remains Background cleanup 0.7.206 at `dcaa217`; this
+source change has not rebuilt, installed or selected another executable.
+
+Desktop raster preparation now requires `machine.raster_travel_envelope`, an
+explicit verified machine-carriage rectangle with controller, firmware,
+configuration, coordinate-reference and physical-test-date evidence. It defaults
+to unavailable and machine duplication clears it. No active settings were changed.
+The current calibrated local surface is rigidly placed to machine beam coordinates;
+controller targets subtract the configured beam offset. Positive output remains
+inside that surface and the existing configured beam/head output authority.
+All serialized carriage motion, including park/start approach and row/pass/layer
+transfers, must stay within the independently verified travel envelope. Failures
+identify the boundary and extra clearance; there is no path clamping.
+
+One strict canonical `E3RASTER` directive binds the surface, travel rectangle and
+complete evidence digest into immutable program bytes. MachineService and the Pi
+revalidate it; it never reaches GRBL. Positive M3/M4 checks the current point and
+positive G1 checks both ends, including inline S enable. New jobs require the Pi's
+`pi-raster-travel-envelope-v1` capability and matching settings. Legacy unconfigured
+programs retain their original restrictive bounds and wire policy; new travel is
+GRBL-only with existing homing/zero-work-offset checks. Arming, feed/power ceilings,
+rapid restrictions, STOP/disconnect/failure M5 and process/motion gates remain.
+
+Sampling, Bayer indices, edge coverage and serpentine parity precede blank-margin
+trimming and remain unchanged. The retained run-up/out is at least the greater
+of the requested percentage of original row width and configured v²/(2a) distance.
+The model is not physical acceleration qualification. Measured raster focus now
+finishes before M4 S0/run-up instead of pausing at the first powered pixel.
+New-mode Start Here rejects mid-row selection that would omit the complete lead-in.
+Exact Preview separately displays engraving surface, powered bounds and the full
+movement footprint, with frame/offset conversion and no independent regeneration.
+
+Read-only saved-state inspection: active Ender 3 Tailscale has 191 mm support,
+work area X/Y10..210, park X15/Y195, zero spot offset and no verified carriage
+record. The saved frame maps the reported footprint to approximately machine
+X25.4432..216.4313/Y40.4895..223.3424: Y exceeds historical selected Y215 by
+8.3424 mm. Historical X5..245 evidence and provisional Y235 do not qualify a
+current whole envelope. Current calibration bindings match in saved files;
+physical accuracy and current hardware/configuration have not been verified.
+
+Focused source, simulated-service and offscreen-widget verification is passing.
+The complete Windows Python 3.14.4 four-worker run reported 7,348 passed,
+29 skipped and 13 failed in 476.31 seconds. Follow-up verification is recorded
+below. The actual offscreen Preview was rendered and visually inspected.
+The prior aggregate-command golden and browser command-budget fixtures were
+below today's two-million-command ceiling; fixture inputs and expected rejection
+alone were corrected after reproducing both baseline failures. Legacy generated
+program/preview goldens remain unchanged.
+
+Known baseline failure: the saved-Z visibility assertion in
+`test_machine_embeds_reference_and_retention_without_focus_dialog` fails on
+both this feature and clean `52f25b4` after Qt events. The baseline two-test
+check was one failed/one passed in 3.46 s; Start Here authority passed there.
+The Start Here fixture now explicitly includes the new optional travel field
+and asserts it survives context capture; all 83 asynchronous desktop tests
+pass in 138.21 s. All 49 browser G-code tests pass, and three Pi diagnostic
+policy tests prove legacy 25-field and configured 26-field compatibility.
+No retention UI or application safeguard was altered to address the baseline
+visibility failure. No complete green-suite claim is made.
+
+All 149 tests across five affected Pi companion installer suites pass, including
+eight imports from exact archived predecessors, plus four dependency-selection
+tests. Those eight import cases also failed on clean `52f25b4` because sparse
+packages omitted `gcode.limits`; this feature additionally needs `raster_safety`.
+The required shared modules are now selected from the exact payload revision,
+with absent-only guards for new modules and unchanged predecessor hashes.
+Seven historical partial builders reject coupled raster-travel source before
+writing an incomplete bundle. Their 34 affected tests pass; five revision-based
+builders also packaged their exact historical source revisions successfully.
+All 14 actual-builder acceptance/rejection matrix cases pass; rejected source
+creates no output bundle and accepted historical payload hashes remain exact.
+No new deployment bundle was installed and no Pi connection was made.
+Repository Ruff, application compileall and diff checks pass. The existing
+Compatibility CI workflow is retained: GitHub rejected the proposed Linux
+test-list edit because the publishing OAuth login lacks workflow scope.
+The focused Linux gap was closed separately: on local Ubuntu 22.04 WSL /
+Python 3.10.12, `test_raster_safety.py` and `test_raster_safety_focus.py`
+reported 45 passed in 11.30 s. An isolated ignored build environment used
+pytest 9.1.1, NumPy 2.2.6 and OpenCV contrib headless 4.14.0.94; all controller
+interactions were simulated. This is Linux verification, not a physical Pi
+or controller test. The existing cloud Linux controller suite also passed
+652 tests in 102.43 s, including the extended policy diagnostic tests.
+Cloud [Compatibility CI run 38771495195](https://github.com/lukelave-boop/E3/actions/runs/38771495195)
+completed on implementation commit `1f633ddcadd56882829cefbec1f74a05eb37ae16`.
+Windows Python 3.10 core passed 5,895 tests with 141 skips in 432.62 s;
+Windows Python 3.12 desktop reported 7,357 passed, 54 skipped and one failed
+in 727.02 s. The only failure is the same saved-Z visibility assertion at
+`test_desktop_machine_layout.py:59`, reproduced on clean `52f25b4` locally.
+Cloud Ruff and the 652-case Linux job passed. No additional CI failure
+appeared. Local archived-predecessor package tests cover imports skipped by
+the shallow CI checkout. Final follow-up changes only record verification.
+
+The offline performance audit and reproducible script are in
+[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md). The earlier parser duplication
+fix has a call-count regression; ranked remaining findings are repeated raster
+regeneration, duplicate unchanged-text remote preflight, and durable preparation
+I/O. No unrelated optimization was added. Complete powered endpoint/power/feed
+hashes match baseline for white-border, near-white-border and dense dither jobs.
+Final three-run medians: dense generation 3.305 -> 3.840 s, one static
+preflight 0.589 -> 1.021 s; the added safety checks cost CPU time. White-border
+laser-off travel fell 87.0%, near-white travel 49.3%. The earlier parser fix
+retains its measured 406 -> 9 generic parse calls for a 134-command sample.
+
+No controller connection, machine movement, laser output, live camera test,
+interactive GUI acceptance or Pi deployment was performed. Record current whole
+XY travel and cable/fixture clearance with identified controller/firmware/config,
+verify offsets/calibration and run-up at intended speeds, deploy the matching Pi
+companion, then perform supervised physical acceptance. See
+[RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). Physical validation remains pending.
+The branch is pushed and retained without main integration while the known
+baseline desktop failure and operator acceptance remain unresolved.
+
+## Background cleanup frozen DEV TEST handoff (2026-10-15)
+
+E3 DEV TEST selects Image background cleanup, version 0.7.206, branch
+codex/background-cleanup, exact frozen application revision
+`dcaa217a019bfab986af2bb28506264c830e7a24`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\background-cleanup-dev\dist\E3\E3.exe`.
+The permanent current-feature.json pointer was selected atomically with
+packaging/set_dev_test_feature.py and read back through the launcher validator.
+Save current work, close the old E3 window, reopen the permanent E3 DEV TEST
+launcher and select one image. In Objects → Image, Clean background appears
+immediately above Trace image to vectors. Start tolerance at 5 for the supplied
+near-white barrel background. Original source bytes remain unchanged.
+
+The build starts from the previous active 8ce10c1 revision and retains its
+camera aliases, raster continuity/capacity, readiness and axis-readout behavior.
+All 450 focused Windows Python 3.14 tests passed, plus a final seven-widget-test
+rerun for the verified label-encoding correction. Repository Ruff, application
+compileall and focused final Ruff passed. The actual Objects panel was rendered
+and visually inspected. The canonical Windows packager produced the frozen EXE
+and passed the native DLL guard; all 184 application modules and three
+resources match the exact committed revision. Isolated frozen offscreen startup
+loaded native Qt with camera autostart off, motion disabled, isolated config/data
+and a nonexistent serial port. EXE SHA256: `748f7843b8affe2d9dccaa6e5da179592710f025c52158c4ad871ee2fb0945eb`.
+
+The canonical script's later installer autodetection could not see the installed
+Inno Setup path in the sandbox; installer compression was resumed using that
+existing compiler and remained running at this handoff record. The selected EXE
+and validated pointer are complete independently of installer compression.
+No interactive operator, physical camera/controller/laser, Pi update, remote CI
+or main integration is claimed. Operator and compatibility verification remain
+pending; the feature branch is retained. Existing shared-tree edits and the
+operator's currently running application were preserved.
+
+Records in the feature checkout: build/windows-build.log,
+build/installer-build.log, build/frozen-verification.json,
+build/background-cleanup-frozen-smoke.json, build/objects-cleanup-button.png.
+
+## Background cleanup feature build preparation (2026-10-15)
+
+The operator was still running Camera aliases and raster readiness v0.7.198.
+The cleanup changes are now ported onto that exact frozen revision
+8ce10c123114412dcb6c5be7ca53f6cca0b58bcc in codex/background-cleanup, preserving
+its newer camera, raster-streaming, capacity, readiness and axis-readout fixes.
+The isolated branch passed all 450 focused Windows Python 3.14 tests covering
+cleanup, persistence, source verification, raster continuity, workspace, import,
+controller-state projection and job-preview widgets. Repository Ruff and
+application compileall passed. An initial test invocation lacked the temporary
+parent directory; after creating it all tests passed without code changes.
+Canonical frozen packaging and isolated startup verification are next. No
+interactive GUI or physical hardware verification, Pi update, remote CI or main
+merge is claimed. The running operator process is left under operator control.
+
+## Image background cleanup (2026-10-15)
+
+Implemented in the desktop project pipeline: select one unlocked image and use
+Objects → Image → Clean background. Cleanup defaults off; tolerance 0–64 means
+brightness >= 255 minus tolerance, with a starting tolerance of 5 (250–255).
+Four-neighbour flood fill starts from all image edges at full resolution after
+alpha-to-white compositing. Only connected light pixels become pure white;
+enclosed highlights remain unchanged. Settings apply before physical resampling
+and dithering. The canvas, before/after dialog and generated raster use the same
+mask. Cache entries and recovery distinguish copies with different settings.
+Apply is one undoable edit and uses normal project/job invalidation. The original
+asset and its SHA identity remain unchanged. Replaced sources and stale review
+are rejected. Trace-to-vector continues to review the original source independently.
+
+Schema 5 persists optional image.geometry.background_cleanup with exact boolean
+"enabled" and integer "tolerance" fields. Schemas 1–4 migrate with cleanup off;
+cleanup fields in older schemas and malformed settings are rejected. Older E3
+builds reject schema 5 rather than silently engraving without cleanup. Atomic
+save, backup, autosave, controller gates and browser single-SVG behavior remain
+unchanged.
+
+Verification: 356 distinct focused Windows tests passed across the broader
+raster run (354) and final cleanup run (28), including cleanup acceptance/
+rejection, raster generation and guards, project persistence, source identity,
+workspace caching and offscreen widgets. The supplied barrel source was inspected
+in the actual offscreen dialog: tolerance 5 whitened 578,173 of 1,573,869 pixels
+without changing source bytes. The rendered offscreen dialog was visually
+inspected. Final checks also verified rotated/mirrored minification equivalence,
+alpha compositing, decode bounds and variant-specific preview quality recovery.
+Repository Ruff and application compileall passed; scoped Ruff passed after
+the final tests. Ruff reported existing inaccessible temporary directories.
+No interactive operator, camera, controller or physical engraving test was run.
+No frozen EXE rebuild, DEV TEST selection, remote CI or main merge is claimed.
+Pre-existing shared-tree changes and unmerged branches remain intact; no branch
+tips other than main were already merged into main at the initial hygiene check.
+
+
+## Camera aliases, raster capacity and start readiness (2026-10-15)
+
+Active branch codex/camera-alias-raster-capacity preserves unchanged camera
+calibration across authenticated LAN/Tailscale aliases. A per-mapping sidecar
+binds the stable camera by-id path and shared credential using HMAC; enrollment
+requires the endpoint already accepted by the saved mapping. Different/missing
+identity, corrupt binding, changed optics and unknown unbound aliases fail
+closed. Calibration matrices, provenance, mapping digest and visual references
+are not rewritten. Same-machine duplicated profiles may share this binding.
+
+The common bounded stream ceiling is two million commands (64 MiB file bound
+unchanged). Raster planning counts the shared M3/M4 and M5 once per row instead
+of overcounting them per span. Existing exact output validation is retained.
+Preview reports project checks separately from machine readiness, displays the
+current start-block reason, and disables START when a powered job lacks required
+measured focus. Pi submission still revalidates authoritative machine state.
+
+Offline validation on the installed 1 GiB Pi, with process-local new limit and
+controller creation forbidden, accepted 1,116,717 commands / 32,302,640 bytes.
+Preflight took 89.13 s, finalize 89.69 s, cached policy/file recheck 4.32 s;
+peak process RSS was 301,696 KiB. Maximum status latency across 7,111 samples
+was 0.0203 s. This is offline Linux/Pi evidence, not physical execution.
+All 262 distinct focused Windows cases pass across camera provenance/identity,
+remote camera, preview/preflight, controller-state projection, raster generation,
+command-cap acceptance/rejection and companion installation guards. Loopback
+camera cases were rerun outside the socket-restricted sandbox. These include
+offscreen widgets and simulated services, not interactive/physical testing.
+Affected Ruff and compilation checks pass. Frozen packaging and Pi companion
+installation are pending.
+Full compatibility CI and integration into main remain pending.
+
+## Duplicate machine calibration choice (2026-10-15)
+
+Branch codex/duplicate-calibration adds a Duplicate dialog with a name and
+same-machine/different-machine choice. Explicit same-machine selection retains
+camera/calibration profile IDs and honeycomb span; the different-machine default
+clears them. Machine/laser settings are deep-copied; no running session,
+machine-ID-scoped reach evidence, or hardware authority is cloned. Existing
+camera-provenance checks remain unchanged. All 72 focused Windows machine-manager
+and registry tests pass, including both choices, persistence, unchanged source
+and running identity, and cancellation. These are offscreen widget/simulator
+checks. A first attempt hit temporary-folder ACL errors; the fresh workspace
+temporary-directory run passed. Affected Ruff and compilation checks pass.
+The requested follow-up enables Out by default on newly created raster image
+layers. Existing raster-layer choices and saved-project values remain unchanged.
+All seven raster-import tests pass, including existing On/Off persistence and
+invalid-import rejection, bringing the focused set to 79. Affected Ruff and
+compilation checks pass. Canonical Windows packaging and installer creation
+passed for v0.7.197 at exact application revision
+9983442b36d9cf271f150856a6996bf1d31ced29. All 181 frozen modules and three
+resources match that revision. Isolated frozen offscreen startup passed with
+camera startup and motion disabled; the duplicate dialog was also rendered and
+visually inspected with native Windows fonts. The permanent E3 DEV TEST pointer
+selects Calibration copies and raster output defaults at
+C:\Users\lukel\Documents\E3\.codex-worktrees\raster-capacity-dev\dist\E3\E3.exe.
+No Pi update was needed. Interactive operator/hardware verification and full
+Windows compatibility CI remain pending; the feature is not merged into main.
+
+## Pi Tailscale access (2026-10-15)
+
+The installed hardware node remains bound to 192.168.5.18:8765/8766. Added
+e3-tailscale-8765.socket and e3-tailscale-8766.socket, enabled at boot, listening
+only on 100.84.214.111. Matching DynamicUser systemd-socket-proxyd services
+forward TCP to the existing LAN endpoints, preserving E3 authentication.
+The hardware service was not restarted and its machine configuration was not
+changed. Read-only authenticated Windows requests through both Tailscale ports
+passed: controller disconnected/disarmed, camera connected with fresh frames.
+No controller connection, motion or laser command was requested. This verifies
+network access, not physical operation. The proposed all-interface binding was
+rejected by automatic approval review and was not applied.
+
+## Large-job start and honest progress follow-up (2026-10-15)
+
+The reported 279,180-command/8,075,693-byte Pi submission required 212.24 s
+for verification and exceeded the 130 s client deadline. An isolated,
+unconnected validator using the exact recorded program now takes 18.59 s on
+the same Pi. Strict canonical raster parsing avoids duplicate parsing and
+per-line configuration reconstruction; other syntax retains the allowlist.
+Validation yields periodically for other Python workers. One locally validated
+immutable proof is reused only with unchanged fields and current safety policy.
+Pi START still reads/hashes the committed file and compares its exact bytes;
+restart loses the proof and requires full revalidation.
+
+Explicit START intent spans inert upload/verification, with the temporary
+one-use authorization created only after preparation. STOP/disarm/session
+changes invalidate it. Pre-armed legacy submissions retain expiry behavior.
+Preparation/START RPC budgets scale from 130 to at most 900 seconds; monitoring
+and STOP deadlines are unchanged. This is a fallback, not the speedup.
+Progress retains its local preparation stage even when machine polling fails,
+labels sent files as not ready while checking, and displays explicit failures.
+No physical execution or controller access has been performed for this fix.
+386 focused Windows Python 3.14 tests pass after the policy-drift diagnostic
+regression was corrected and its five related cases rerun. The prior focused
+Pi-owned loopback and air-assist tests also passed. Tests use simulated
+controllers and offscreen widgets. Repository Ruff and compileall pass.
+Final START RPC pins the pre-preparation controller session through request
+serialization. All 69 remote-service cases pass, bringing the focused set to
+387 distinct passing cases. No full-suite run is claimed.
+
+Packaging resumed after the Windows shutdown handoff. The permanent E3 DEV TEST
+pointer now selects Responsive large-job preparation v0.7.196, branch
+codex/large-job-start, exact application revision
+fdfe9b22cbaa92e8c541b45cde3e558669bab4e2. Target:
+C:\Users\lukel\Documents\E3\.codex-worktrees\large-job-start-build\dist\E3\E3.exe.
+Canonical Windows packaging and installer creation passed, including the native
+DLL guard. All 181 packaged application modules and three resources match that
+revision. Frozen offscreen startup passed with isolated configuration/data,
+camera autostart disabled, motion disabled, and no controller access. The
+launcher pointer was updated atomically using set_dev_test_feature.py and read
+back. Interactive GUI and physical engraving verification remain pending.
+
+Full offline preparation of the recorded job measured preflight 21.91 s,
+durable chunk storage 0.67 s, finalize/verification 22.34 s, and cached file/
+policy recheck 1.06 s. Across 1,769 status samples the maximum call took
+0.0021 s. Controller creation was explicitly forbidden. This is not physical
+execution or interactive GUI verification. Evidence is in the source checkout's
+ignored build/pi-preparation-benchmark.log. The guarded companion for the final
+revision is dist/e3-pi-large-job-start-9dc978fb; the earlier staged Pi bundle
+85cf832c contains identical Pi source but references the preceding commit.
+After fresh disconnected/disarmed/idle checks and confirming no connected E3
+clients, the final companion was installed over Tailscale at
+greenhouse-climate@100.84.214.111. Its three manifested source hashes matched;
+machine configuration, calibration and retained settings hashes were preserved.
+The hardware-node service restarted active/running and remained disconnected,
+disarmed, with no running job. No controller connection, motion or laser output
+was requested. Installation evidence is in ignored build/pi-large-job-installed.log
+and build/pi-large-job-verified.log. Full Windows compatibility CI and integration
+into main remain pending; the feature branch is retained for operator testing.
+
+## Raster capacity and preview work (2026-10-15)
+
+Isolated branch codex/raster-capacity starts from the currently selected Escape
+DEV TEST baseline. Shared-tree pending work is untouched; no prior feature tip
+was already merged into main. Command capacity is raised from 250,000 to
+1,000,000 through a shared generator/planner/MachineService constant. Existing
+row, sample, asset, byte and hardware validation gates remain in place.
+Raster previews default to high-contrast powered detail; the laser-off display
+toggle now hides feed gaps as well as rapids, including active overlays.
+Verification: 597 focused Windows Python 3.14 tests passed, covering larger
+raster generation/indexing/validation, exact-cap acceptance, above-cap and
+unsafe-tail rejection, browser generation, machine guards, Pi protocol/store,
+planning goldens, preview widgets and the guarded companion installer. Repository
+Ruff and application compileall passed. The final preview was rendered offscreen
+and visually inspected with native Windows fonts. Initial sandbox test runs
+were interrupted by local socketpair restrictions and temporary-directory ACLs;
+the complete focused run outside the sandbox passed. A dense checker stress
+check exposed an initial-render ownership regression from the new default;
+display toggles now update visibility without scheduling geometry, and the
+2,500-move deferred-ready regression test passes. Frozen version 0.7.195 at
+f8c4bd3a2c311682fcab52193df1068a7867a9f6 is selected by the permanent
+E3 DEV TEST pointer. Canonical packaging, exact packaged-source comparison,
+native DLL guard and isolated offscreen startup passed. The tests-only
+d619604 follow-up fixes shallow-checkout fixture handling without changing
+the frozen application source.
+The Pi passed 406 isolated focused tests in 861 seconds. With explicit operator
+approval and fresh disconnected/disarmed/idle checks, the two-file companion
+was installed at greenhouse-climate@192.168.5.18. Source hashes and protected
+configuration hashes matched; e3-hardware-node.service restarted active/running.
+No controller connection, motion or laser output was requested.
+Remaining tests were stopped at the user's request. Interactive GUI, camera,
+controller and physical engraving verification are pending. Very large jobs
+may still exceed the existing 130-second remote preparation request timeout
+or temporary START authorization lifetime; these were not extended in this
+change, and end-to-end large-job execution is not verified.
+The Pi companion is source-only and checks the recorded operation-focus
+predecessor before replacement. Complete compatibility CI and integration
+remain pending; the feature is not merged into main.
+
+## Escape fix frozen DEV TEST handoff (2026-09-18)
+
+E3 DEV TEST selects Escape cancels tools, version 0.7.192, branch
+codex/escape-cancel, exact frozen application revision
+`19d29ee4502925e588d919ee2aacfdb12f326dbb`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\escape-cancel-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with set_dev_test_feature.py and
+read back through the launcher validator. Reopen the permanent E3 DEV TEST
+launcher to test. The prior stencil, polygon and rotation features are included.
+
+Escape cancels drawing/polygon prompts and point picking, clears selection, and
+rolls back unfinished object movement/resize/rotation without an undo entry or
+machine stop request. The dedicated Stop action retains its controller path.
+All 239 focused Windows Python 3.14 offscreen tests, repository Ruff and
+application compileall passed. The canonical Windows packager and installer
+completed successfully. The frozen bundle's 180 application modules and
+three packaged resources match the exact committed revision; the native DLL
+guard and isolated frozen offscreen startup smoke test passed. Camera startup
+and motion were disabled in that smoke configuration. No interactive operator,
+real camera, controller or laser verification was performed. Windows
+compatibility CI remains pending the earlier private-repository push approval;
+this feature branch is not merged into main. Prior working-tree work is retained.
+
+
+## Escape cancellation fix (2026-09-18)
+
+Escape now cancels local authoring, including the polygon sides prompt, and
+clears selection instead of requesting software Stop. Unfinished object moves,
+resizes and rotations restore their original state without a history entry.
+The dedicated Stop action retains its existing controller connection.
+
+Initial focused Windows offscreen verification: 87 tests passed covering
+polygon cancellation with prompt focus, repeated Escape, all drawing stages,
+selection, point picking and transform rollback. Tests assert no stop request
+on Escape and verify explicit Stop still invokes the stop handler. Scoped
+Ruff passed. The isolated checkout subsequently passed all 239 focused Windows
+tests, repository Ruff and application compileall. Frozen-build, interactive
+and physical verification pending.
+
+## Drawing tools frozen DEV TEST handoff (2026-09-17)
+
+E3 DEV TEST now selects Stencil, polygon and rotation tools, version 0.7.190,
+branch codex/drawing-tools, exact frozen application revision
+`4f0f2270e1212eb7e559570082662253f3e0d020`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\drawing-tools-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with set_dev_test_feature.py and
+read back through the launcher validator. Reopen E3 DEV TEST to load this build.
+The normal launcher and permanent DEV launcher executable/shortcut were unchanged.
+
+Includes aligned top/bottom stencil bridges, center-first polygon creation
+with live 3–12-side preview/rejection above 12, and Ctrl-held axis rotation
+snapping across object kinds, template placement and polygon drafting. The
+baseline preserves the previous Saved gauge recognition feature build.
+
+All 231 focused Windows Python 3.14 tests, repository Ruff and application
+compileall passed in the isolated checkout. The canonical Windows packager and
+installer completed successfully with a restricted build PATH. The DLL guard
+passed; all 180 packaged application modules and three resources match the
+frozen commit. Frozen offscreen startup loaded native Qt with isolated config/
+data, camera autostart off, motion disabled and a nonexistent serial port.
+This is not interactive operator, camera, controller or laser verification.
+EXE SHA256: `456ee973ec4ef3797772d7fd60dbb04ec6b210ed901da2646e8dce54415c7361`.
+Records: build/clean-build.log, build/frozen-verification.json and
+build/frozen-smoke.json in the feature checkout. No Pi update was performed.
+
+Branch upload and GitHub compatibility CI were rejected by automatic approval
+review because they export repository contents beyond the local dev-build
+request. Explicit approval was requested and remains pending; no push, CI run
+or main integration is claimed. The feature branch is retained for operator
+and compatibility verification. Unrelated shared-tree edits were preserved.
+
+## Drawing tools feature source (2026-09-17)
+
+Isolated feature based on the current Saved gauge recognition development build.
+Adds consistent top/bottom stencil bridges, center-first regular polygon drawing
+with a live 3–12-side prompt, and Ctrl-held horizontal/vertical rotation snapping.
+Ctrl works across all object kinds, template placement and initial polygon
+orientation; Shift retains 15-degree object rotation. Invalid side counts are
+rejected, Create commits once, and Cancel discards the draft. Native POLYGON
+paths preserve the picked circumcenter; no project schema change is required.
+
+All 231 focused tests passed on Windows Python 3.14 in this isolated checkout.
+Repository Ruff and application compileall passed. Desktop checks are offscreen
+widgets. Frozen-build verification and compatibility CI remain pending. Hardware configuration, machine motion/arming/stop
+behavior, Pi deployment and the normal launcher are unchanged. No physical
+hardware or interactive operator verification is claimed by these source edits.
+The original shared-tree edits and selected build remain intact during packaging.
+
+## Saved gauge recognition frozen handoff (2026-09-17)
+
+E3 DEV TEST selects Saved gauge recognition v0.7.185, branch codex/gauge-status,
+frozen revision `a617f3af73c1f4997902f0aa7e850232d9dbb997`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\gauge-status-dev\dist\E3\E3.exe`.
+The validated permanent pointer was updated atomically and read back. Reopen
+E3 DEV TEST and click Check progress; do not repeat gauge teaching for missing
+status. The saved Pi focus file's SHA256 remains
+`3e66e7806863a340a5ae964f535875c8a68751c3631b8ddba5ab7e0b6b8dd9c8`.
+
+The canonical Windows packager produced the EXE and passed its DLL guard.
+All 178 packaged modules and three resources match the frozen commit. Isolated
+offscreen startup passed with camera autostart off, motion disabled, isolated
+settings/data and a nonexistent serial port. This is not an interactive or
+physical hardware verification. No probing, gauge teaching or laser output was
+performed. Installer compression and compatibility CI run 35222475908 were
+still running at handoff verification; lint and POSIX recovery passed.
+No merge to main is claimed while compatibility remains incomplete.
+
+The isolated source passed all 59 focused tests, repository Ruff and compileall.
+The same tests in the original working folder passed after bringing its older
+focus-workspace test double up to date (58 passed initially; the affected
+10-test wizard file then passed). Unrelated working-tree changes were preserved.
+Records: build/clean-build.log, build/frozen-verification.json,
+build/frozen-smoke.json. The first startup-check helper could not locate
+PowerShell on the restricted PATH; using its absolute path completed the check.
+
+## Saved gauge recognition fix (2026-09-17)
+
+The wizard's Check progress now requests read-only machine status in its existing
+background worker before reading setup evidence. Remote focus replies invalidate
+that evidence cache; previously the wizard could mistake the resulting gap for
+an incomplete gauge calibration. Unknown status and reported incompatibility
+now have separate messages and do not send the operator to reteach the gauge.
+A compatible saved gauge offset remains complete independently of the bed survey.
+The cached setup-guide read stays free of network I/O. No calibration data,
+controller behavior, motion gates or measurement authority is changed.
+
+Focused Windows Python 3.14 tests: 59 passed (gauge status, setup snapshots,
+precision evidence and offscreen setup wizard). Repository Ruff, compileall and
+diff checks passed. Frozen-build verification remains pending. No physical probing, gauge teaching or laser test is part of this fix.
+The saved Pi gauge file was observed read-only; it was not changed.
+
+## Base-map containment frozen handoff (2026-09-17)
+
+E3 DEV TEST now selects Base-map grid containment, version 0.7.184, branch
+codex/base-map-containment, exact frozen application revision
+`1d62304d855d6a07cf8c48de4d4ebd2353f53121`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\base-map-containment-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically and read back through the launcher
+validator. Reopen E3 DEV TEST and prepare a NEW base-map job; an already prepared
+preview retains the old coordinates. No physical setup, normal E3 launcher,
+Pi installation or firmware was changed.
+
+The canonical Windows packager/installer completed after building outside the
+sandbox with a verified restricted PATH. Two sandboxed attempts were rejected
+by the native DLL guard because sandbox child processes restored injected
+Poppler library paths. The final bundle passed that guard; all 178 application
+modules and three resources match committed source. Frozen offscreen startup
+passed with isolated settings/data, camera autostart off, motion disabled and
+a nonexistent serial port. EXE SHA256:
+`01b266b16b4862713255bdb5edd208d895e1c6a3166af2c4f230515690dd665d`.
+Records in the feature checkout: build/clean-build.log,
+build/frozen-verification.json and build/frozen-smoke.json.
+
+Focused local checks passed as recorded below. Approved compatibility CI run
+35214103484 passed lint and POSIX controller recovery. Windows Python 3.10:
+5669 passed, 133 skipped, three installer-fixture errors due to missing pinned
+Git history. Windows Python 3.12: 7004 passed, 51 skipped, the same three errors
+and one existing retained-Z visibility test failure. That visibility failure
+was reproduced unchanged on the previous raster/readout source checkout.
+Thus full compatibility CI is NOT green; these separate baseline issues and
+main integration remain pending. No interactive GUI, camera, controller or
+laser test was performed. Physical calibration accuracy remains unverified.
+
+
+## Base-map recalibration containment fix (2026-09-17)
+
+Base-map recalibration now fits its keyed grid inside the current saved
+four-corner honeycomb with boundary clearance for the largest mark. The UI
+and generated program share the target calculation. Prepared jobs bind the
+support/map and reject changed geometry at Start and capture. First-time
+mapping without current support retains its machine-bounded bootstrap path.
+No machine bounds, physical configuration, Pi service or firmware was changed.
+
+Verification: 163 focused Windows Python 3.14 tests passed (base mapping,
+registration, offscreen Machine Setup/wizard, height acquisition). Three
+containment cases additionally passed with zero/nonzero laser-spot offsets
+and nonoverlapping support. Repository Ruff and application compileall passed.
+Two stale wizard fakes were updated to expose existing focus-workspace busy
+methods. No interactive GUI, camera, controller or laser test was performed.
+Frozen build and operator validation are pending; compatibility CI and main
+integration remain pending. The isolated feature starts from the selected
+0.7.183 raster/readout source; unrelated shared-tree changes are preserved.
+
+
+## Continuous raster and fixed XYZ readouts frozen handoff (2026-09-16)
+
+E3 DEV TEST now selects Continuous raster and fixed XYZ readouts, version
+0.7.183, branch codex/raster-steady-readouts, exact application revision
+`ed516c024c2e5a66591602e14453b221db051e49`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-steady-readouts-dev\dist\E3\E3.exe`.
+
+The isolated feature source retains the selected 7 mm raster-focus behavior.
+Raster uses inline zero/nonzero power through each row and explicit M5 before
+row transfers. Start Here and both preview parsers preserve this behavior.
+Fixed 154 x 38 logical-pixel X/Y/Z boxes sit above their controls. X/Y report
+completed Home/jog positions, clearing during motion or unavailable status;
+Z retains its established live/readback freshness and reference qualifications.
+No Pi update or firmware change is needed for this command sequence.
+
+Verification: 433 focused Windows checks passed, plus the expanded 26-case
+raster continuity run, 80 browser/simulation checks, 10 hardware-authorization
+unit tests and 46 final readout/telemetry tests. These counts describe runs and
+overlap. Repository Ruff, compileall and scoped whitespace checks passed.
+Native Segoe UI offscreen rendering was visually inspected. All 178 packaged
+modules and three resources match committed source. The canonical packager's
+DLL guard and frozen offscreen startup passed with isolated configuration/data,
+camera autostart off, motion disabled and a nonexistent serial port. No
+interactive GUI, camera, controller, or physical laser test was performed.
+
+The feature pointer was atomically updated and read back through the launcher
+validator. The normal E3 application, permanent launcher EXE and shortcut were
+unchanged. EXE SHA256:
+`8cadea6770450dd84668cd5108195df1ed084927112dfeda354918be3b57bd4e`.
+Local records in the feature worktree: build/final-focused.log,
+build/frozen-verification.json, build/frozen-smoke.json,
+build/axis-readouts.png and build/raster-readouts-build.log (untracked).
+The canonical Windows packager and installer completed successfully.
+
+Push and Windows compatibility CI were rejected by automatic approval review,
+which requires explicit user approval to upload the private branch/source to
+origin. Approval is pending; no push or CI dispatch occurred. Main integration
+and physical raster validation remain pending. Existing shared-tree changes
+are preserved; this task's implementation lives in the named feature worktree.
+
+
+## Continuous raster and fixed Machine coordinate boxes (2026-09-16, source verified)
+
+Feature branch codex/raster-steady-readouts is based on the selected raster-focus
+DEV TEST source, preserving the pending ancestor features and shared-tree edits.
+Raster M3/M4 S0 is established before lead-in; inline G1 power changes retain
+one feed through engraving, gaps and overscan. Standalone M5 remains at every
+row end before rapid travel. Zero-power output never enables the laser.
+Shared preview parsers and Start Here now track modal enable separately from
+power, preserving powered spans, air assist, correction and laser-off gaps.
+The browser single-SVG generator is unchanged. Existing MachineService inline-S
+validation supports this output; no Pi service or firmware update is required.
+
+Machine X/Y readouts show existing completed Home/jog coordinates above the
+jog controls, clearing during motion, stale/error/disconnected or unreferenced
+status. Z retains its existing live telemetry/freshness and authority rules.
+All three boxes are fixed 154 x 38 logical pixels. Z qualifications are shown
+below the box and in its tooltip rather than making the box grow.
+
+Verification: 433 focused Windows Python 3.14 checks passed, plus 26 raster
+continuity cases covering M3/M4, zero/nonzero overscan, power correction,
+passes, air assist, Start Here, preview agreement and rejection guards.
+The existing MachineService test run passed all selected controller tests;
+its earlier raster failures were resolved by the preview fix and passed in the
+433-check run. Repository Ruff and application compileall passed. UI checks
+are offscreen widgets; physical motion/laser behavior remains unverified.
+Frozen build, operator testing, compatibility CI and main integration pending.
+
+
+## Raster surface focus Pi deployment complete (2026-09-16)
+
+The user explicitly confirmed greenhouse-climate@192.168.5.18 and authorized the
+update. Companion `e3-pi-operation-focus-c018c2e8`, from application revision
+`1e904823e134c49f319f9379b4bca665bac7bcae`, is now installed. E3 DEV TEST remains
+selected at version 0.7.181 with the matching desktop build recorded below.
+
+All 322 isolated Linux/Pi fake-controller tests passed in 112.45 seconds on
+Python 3.13.5 ARM64 (NumPy 2.5.3, OpenCV 4.14.0, pytest 8.4.2). The test source
+manifest is 6a79cf83c5fbb23fcc98e4c0f59e1a3c173bfa8892792d59bbc1eaa4996d4b01.
+All 20 companion files match the exact tested source bytes after LF normalization.
+
+The guarded installer freshly confirmed disconnected, disarmed, idle and no
+connected E3 clients before stopping the service. Five existing files were
+replaced with adjacent backups and one new operation-focus module was added.
+All 20 installed source hashes were then verified. Configuration, probe XY
+calibration, taught gauge offset, saved honeycomb, Z limits and cooling settings
+have identical before/after hashes. No firmware flash, Home, probe, travel,
+job or laser-output request was issued.
+
+After restart the service reports active/running, PID 6005, NRestarts 0,
+ActiveEnterTimestamp Wed 2026-09-16 18:07:15 MDT, and pi-operation-focus-v1.
+Authenticated status confirms disconnected/disarmed with no active or running
+job. Records: build/raster-pi-tests.log, build/raster-pi-install-applied.log,
+build/raster-pi-installed-verification.log. The previous upload block is resolved.
+
+Reopen E3 DEV TEST, reconnect, establish any required references, and measure
+the workpiece again. Raster/image uses a 7 mm measured surface gap; cut/vector
+and Fill retain their previous focus rule. Physical focus qualification and
+interactive operator checks remain pending, as do compatibility CI and main
+integration. The Windows build itself was not rebuilt or changed by this deploy.
+
+## Raster surface focus frozen build; Pi upload pending (2026-09-16)
+
+E3 DEV TEST now selects Raster 7 mm surface focus, version 0.7.181, branch
+codex/stable-panel-scroll, exact application revision
+`1e904823e134c49f319f9379b4bca665bac7bcae`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-surface-focus-dev\dist\E3\E3.exe`.
+
+The canonical Windows packager and installer completed. All 306 focused Windows
+checks passed in the isolated source checkout; repository Ruff and compileall
+passed. All 178 packaged application modules and three resources match committed
+source. Frozen offscreen startup loaded native Qt with isolated settings, camera
+autostart disabled, motion disabled and a nonexistent serial port. The permanent
+feature pointer was updated atomically and validated. Normal E3 and the permanent
+launcher executable/shortcut were unchanged. EXE SHA256:
+`e26512ab19d1b7e7cc68d1d9a5e95f669f40bf95f8a7fa83770c5230eefbc0ea`.
+Records: build/raster-focus-build.log, build/raster-focus-frozen-verification.json,
+build/raster-surface-focus-frozen-smoke.json, build/raster-frozen-source-tests.log.
+
+Matching companion is `dist/e3-pi-operation-focus-c018c2e8`, frozen from the
+same revision. Its 20-file manifest SHA256 is
+`c018c2e8c5b5b14b2c345afe05f9a3433e8daea08f41a9fbc86b43780a4b2fe0`.
+Three exact-predecessor/idempotence/unknown-edit installer checks passed. Read-only
+SSH verified all 19 installed precision-companion files against their recorded
+baseline. Pi service was active with zero restarts, idle and disarmed. The user
+subsequently confirmed both desktop clients were closed.
+
+Pi source upload was rejected by automatic approval review because the review
+requires explicit confirmation that greenhouse-climate@192.168.5.18 is the user's
+trusted destination for the update and tests. That confirmation is pending.
+No upload, source replacement or service restart occurred; no motion or laser
+command was requested. The prepared Linux fake-controller test archive has source
+manifest SHA256 6a79cf83c5fbb23fcc98e4c0f59e1a3c173bfa8892792d59bbc1eaa4996d4b01
+but has not been uploaded or run. Raster execution requires the matching Pi
+update and remeasurement. Physical focus qualification, interactive operator
+checks, compatibility CI and main integration remain pending.
+
+## Raster surface focus source work (2026-09-16)
+
+Active shared-tree change: raster/image operations use a fixed 7 mm gap above
+the measured surface. Cut/vector and Fill retain the existing focus rule.
+Strict immutable E3OPFOCUS instructions select targets in MachineService; mixed
+jobs lift/refocus only across laser-off, drained, verified-clearance boundaries.
+Original measurement/calibration and cut focus retention remain unchanged.
+Preview and Start Here preserve operation modes; remote jobs require the new
+`pi-operation-focus-v1` companion capability and current measured workpiece.
+
+Verification: 291 existing focus/toolpath/restart checks passed. The 403-check
+integration run passed 400 immediately; its three stale test expectations were
+corrected and passed in focused reruns. Final checks include 75 operation/UI/golden
+checks, 69 operation/UI checks after the last guard additions, and all three
+Pi-owned upload cases (cut, raster, mixed) over authenticated loopback with fake
+controllers. Repository Ruff, compileall and scoped whitespace checks passed.
+Golden executable commands, geometry, power and timing are unchanged apart from
+the new focus directive pair; preview metadata and line numbers reflect it.
+All checks used Windows Python 3.14.4. Desktop checks were offscreen widgets;
+Windows 3.10/3.12 compatibility CI has not run for this uncommitted source work.
+No new frozen build, Pi installation, real camera or physical controller/laser
+test has been performed for this change. Existing unrelated shared-tree work is
+preserved. This is not a merged/released or physically verified feature.
+
+## Simplified Machine panel frozen handoff (2026-09-16)
+
+E3 DEV TEST selects Simplified Machine panel, version 0.7.179, branch
+codex/stable-panel-scroll, exact application revision
+`92a746ff3e94af4a55a0d9f801060e136644da20`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\machine-panel-cleanup-dev\dist\E3\E3.exe`.
+
+Includes both daily panel removals and the guarded Z-maximum editor in Machine
+Setup -> 7 - Z / laser focus, retaining prior scrolling, profile and distribution
+features. 486 focused Windows offscreen desktop/backend/remote/launcher tests,
+repository Ruff and application compileall passed in the isolated source checkout.
+177 packaged modules and three resources match committed source. The canonical
+packager's native DLL guard and isolated frozen startup check passed: camera
+autostart off, motion disabled, nonexistent serial port. No interactive operator,
+camera, controller or laser test was performed for this build.
+
+The permanent feature pointer was selected atomically and read back through the
+launcher validator. Normal E3 and the permanent launcher/shortcut are unchanged.
+EXE SHA-256: 9e6ff59b18e2621006d1f2785f3ae231466104c6be96f28e1d04168d31d8dcdd.
+Local records: build/machine-panel-cleanup-frozen-verification.json and
+build/machine-panel-cleanup-frozen-smoke.json (intentionally untracked).
+Operator validation, compatibility CI and main integration remain pending.
+
+
+Build preparation: 486 focused Windows offscreen desktop/backend/remote/launcher
+tests passed in the isolated checkout; repository Ruff and compileall passed.
+
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
+## Stable button positions frozen handoff (2026-09-16)
+
+E3 DEV TEST selects Stable button positions, version 0.7.177, branch
+codex/stable-panel-scroll, exact application revision
+`dcd935e70c3c2f6693be6225c79d2136a2b2f46b`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\stable-panel-layout-dev\dist\E3\E3.exe`.
+
+The 0.7.175 recording shows remaining layout movement when status notes appear
+and the Z readout wraps. This follow-up anchors the clicked button across those
+layout changes, while deliberate navigation releases it. The previous frozen
+build is preserved. This recording supports UI diagnosis only; it does not
+qualify controller, firmware, configuration or physical motion behavior.
+
+407 focused Windows offscreen desktop/launcher tests passed; all 15 scrolling
+regressions also passed in the isolated feature checkout. Repository Ruff and
+application compileall passed. The canonical packager's native DLL guard passed;
+177 packaged modules and three resources match the committed source. Frozen
+startup passed with isolated data, camera autostart off, motion disabled and a
+nonexistent serial port. No new interactive or physical hardware test was done.
+The permanent pointer was atomically updated and validated; normal E3 and the
+permanent launcher executable/shortcut were unchanged.
+
+EXE SHA-256: e647e81d40475d3de7ffb899da9aef8151a55cb89b76699bbf17fc59c9763719.
+Local verification records: build/stable-panel-layout-frozen-verification.json
+and build/stable-panel-layout-frozen-smoke.json (intentionally untracked).
+Operator validation, compatibility CI and main integration remain pending.
+
+
+Verification: 407 focused Windows offscreen desktop/launcher tests passed;
+15 scroll tests also passed in the isolated feature checkout. Repository Ruff
+and application compileall passed. New operator validation remains pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
+## Stable panel scrolling frozen handoff (2026-09-16)
+
+E3 DEV TEST selects Stable panel scrolling, version 0.7.175, branch
+codex/stable-panel-scroll, exact frozen application revision
+`d8cd8daf7dfb09abd030774cd010007608087e81`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\stable-panel-scroll-dev\dist\E3\E3.exe`.
+
+This isolated checkout retains profile Save/highlighting, confirmation colors,
+and distribution changes. 398 focused Windows offscreen desktop/launcher tests,
+repository Ruff and application compileall passed. All 177 packaged application
+modules and three changed resources match committed source; the canonical packager's
+native DLL guard passed. Frozen offscreen startup passed with isolated data,
+camera autostart disabled, motion disabled and a nonexistent serial port.
+No interactive operator, camera, controller or laser test was performed.
+The permanent feature pointer was selected atomically and read back through the
+launcher validator. The normal application and permanent launcher are unchanged.
+
+EXE SHA-256: cf2d90042e37ec44a2a67911d0c77aef8cd3eac6318d9ad551c758673b4b32bb.
+Local records: build/stable-panel-scroll-frozen-verification.json and
+build/stable-panel-scroll-frozen-smoke.json (intentionally untracked).
+Compatibility CI/main integration remain pending. Reopen E3 DEV TEST to check
+Home/reference and other buttons retain panel position during busy transitions.
+
+
+Verification: 398 focused Windows offscreen desktop/launcher tests, repository
+Ruff and application compileall passed. No hardware or interactive GUI testing.
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
+## Confirmation/profile feedback frozen handoff (2026-09-16)
+
+E3 DEV TEST now selects Confirmation colors and profile Save highlight, version
+0.7.173, branch codex/profile-feedback, exact frozen application revision
+8f07bb97f268bb866d04e3fe2a390e741a66a21f. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\profile-feedback-dev\dist\E3\E3.exe`.
+
+The isolated checkout retains the previous saved-profile and distribution features.
+81 focused Windows tests, repository Ruff and compileall passed. The canonical
+Windows packager used a restricted PATH and passed the native DLL guard. All 176
+packaged application modules and changed resources match the committed source.
+Frozen offscreen startup passed with isolated data, native Qt, camera autostart
+disabled, motion disabled and a nonexistent serial port. No interactive operator,
+camera, controller or laser testing was performed. The permanent feature pointer
+was selected atomically and read back through the launcher validator. The normal
+E3 application and permanent launcher executable/shortcut were unchanged.
+
+EXE SHA-256: c7b00d22c1f1e7e756b20dc08e9ef0d3217b95c54fb47ba9b4ebb31349691f3d.
+Local records: build/profile-feedback-frozen-verification.json and
+build/profile-feedback-frozen-smoke.json (intentionally untracked).
+Compatibility CI/main integration remain pending. Reopen E3 DEV TEST to test
+Yes/No/Cancel colors and Save highlighting after editing a selected profile.
+
+
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
+## Save existing layer profiles (2026-09-16, source verified)
+
+The Cuts profile controls now include Save, which overwrites the selected saved
+profile only after a named Yes/No confirmation (No is the default). No selection
+disables Save. Save As remains create-only. Saving commits pending numeric edits
+before confirmation, validates the full layer set, requires the existing profile
+and matching running machine/tool scope, then atomically publishes the library.
+Cancellation, missing profiles, incompatible scope and write failures preserve
+the saved library. The controls wrap below the selector in narrow inspectors.
+No project schema, controller, browser, motion or laser-output change is involved.
+
+Verification: 68 focused Windows Python 3.14.4 profile, layer-edit, menu, dock and
+launcher tests passed. Repository Ruff and application compileall pass. The
+900 x 680 and 1080 x 780 full-window layouts and the real overwrite popup were
+rendered offscreen with native Segoe UI and visually inspected. Tests cover
+Yes/No/dismissal, committed numeric edits, other-profile preservation, same-name
+replacement, scope/missing/invalid-data rejection and atomic publication failure.
+The dock fixture now uses an isolated profile library rather than operator data.
+No interactive operator, camera, controller or laser testing was performed.
+
+The isolated codex/profile-save branch starts at e0ae0eb and retains the verified
+distribution-area, layer-profile and setup changes. Compatibility CI and main
+integration remain pending.
+
+Frozen handoff: E3 DEV TEST selects **Save layer profiles**, version **0.7.171**,
+branch `codex/profile-save`, exact application revision
+`50a09adbbdaf7f18f2c98df16228cb99e182146c`.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\profile-save-dev\dist\E3\E3.exe`.
+The canonical packaging/build_windows.ps1 completed with a restricted build PATH;
+the native DLL guard passed. All 176 packaged application Python modules and
+three changed resources match the exact committed source. EXE SHA-256:
+`0b0f7eb31ff59b4118f61f0011e70d9ef4b9515eae8b2b9fd308f46c3c4f56ac`.
+Frozen offscreen startup loaded native Qt using isolated data, camera autostart
+disabled, motion disabled and a nonexistent serial port. The pointer was selected
+atomically with set_dev_test_feature.py and read back through the launcher
+validator. The permanent launcher and regular E3 were not modified. Local records:
+build/profile-save-frozen-verification.json and build/profile-save-frozen-smoke.json
+(intentionally untracked). Reopen E3 DEV TEST, select a profile, edit its layers,
+then Save and confirm Yes; No leaves the saved profile unchanged.
+
+
+## Distribution areas (2026-09-16 UTC, frozen feature verification)
+
+Desktop Distribute horizontally/vertically opens an area chooser. Full bed uses
+project work-area bounds; Chosen rectangle uses a square-cornered, axis-aligned
+native rectangle, fixed and excluded from movement. Both use equal bounding-box
+edge gaps including end margins, retain sizes, and move on the other axis only
+as needed to fit. Current selection span preserves the previous center-spacing
+behavior. Invalid and already-even layouts are explained. Apply is one undoable
+project edit and Cancel changes nothing. Browser/controller paths are unchanged.
+
+Verification: 99 focused Windows Python 3.14.4 checks passed in the isolated
+checkout: alignment, distribution acceptance/rejection, offscreen dialog/history,
+menus, layer profiles and DEV TEST launcher. Repository Ruff and application
+compileall passed. Offscreen dark-theme dialogs were inspected at 560 x 330 with
+Windows Segoe UI. No interactive operator, camera, controller or laser testing
+was performed. Compatibility CI and main integration remain pending.
+
+Frozen handoff: E3 DEV TEST selects **Distribution areas and layer profiles**,
+version **0.7.169**, branch `codex/distribution-areas`, exact application revision
+`2f1edd70ff81377780d5f8353c10a5749831fecc`.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\distribution-areas-dev\dist\E3\E3.exe`.
+This branch starts at the verified layer-profile branch revision 9c07f2b;
+that feature and the previous setup/precision changes are retained. The canonical
+packaging/build_windows.ps1 generated the bundle using a restricted build PATH;
+its native DLL guard passed. All 176 packaged application Python modules and
+three changed resources match the exact committed source. EXE SHA-256:
+`1c6b1e9bdd6647a1b2635eb0426a4083190a79fbb4b3d6d8c96c0a0182b2b24f`.
+Frozen offscreen startup loaded native Qt with isolated user data, camera
+autostart disabled, motion disabled and a nonexistent serial port. The permanent
+pointer was selected atomically with set_dev_test_feature.py and read back
+through the launcher validator. The permanent launcher and normal E3 were not
+modified. Local records: build/distribution-areas-frozen-verification.json and
+build/distribution-areas-frozen-smoke.json (intentionally untracked).
+
+## Cut/layer profiles and Tools cleanup (2026-09-16, source verified)
+
+Desktop-only implementation adds Profiles above the Cuts layer table, with
+Load, Save As and Delete. Whole layer sets are stored atomically in the native
+user-data directory as layer-profiles.json (library schema 1), separately from
+projects, material recipes and Qt settings. Profiles are scoped to the running
+machine/tool profiles. Loading preserves matching layer IDs, otherwise matches
+unique colors; missing/ambiguous used layers and many-to-one reassignment reject.
+Loading is one undoable project command and invalidates prepared jobs through
+the existing revision/history path. Saved settings include output/show flags.
+The seven drawing/template/trace duplicates are removed from Tools; sidebar
+actions and keyboard shortcuts remain.
+
+The user authorized verification and a frozen DEV TEST build after reviewing
+the implementation. All 98 focused profile, layer editing/assignment, material
+recipe, menu, compact dock and launcher tests pass on Windows Python 3.14.4.
+Repository Ruff and application compileall pass in the isolated feature checkout.
+Offscreen full-window checks at 900 x 680 and 1080 x 780 use native Segoe UI
+13 pt text. The profile row remains usable above the table; saved settings,
+object matching, undo/redo, prepared-job invalidation and failed atomic
+publication are covered. Screenshots were visually inspected. The GUI test
+restores its temporary font registration to avoid affecting other layout tests.
+No interactive operator, real-camera or hardware test has been performed.
+
+Build branch codex/layer-profiles starts at 8e58ae5 (the current setup-wizard
+feature); it excludes concurrent Arrange/distribution edits in the shared tree.
+The earlier setup/precision compatibility CI and integration remain pending;
+no GitHub upload or main merge is part of this local operator-test handoff.
+Frozen handoff: E3 DEV TEST selects **Cut and layer profiles**, version
+**0.7.167**, branch `codex/layer-profiles`, exact application revision
+`9f8159306e2abf710f1bd0585eeb6553d796318a`.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\layer-profiles-dev\dist\E3\E3.exe`.
+The canonical packaging/build_windows.ps1 completed in the isolated checkout.
+All 175 packaged application Python modules and three changed packaged resources
+match the exact committed source. EXE SHA-256:
+`316c238836b04abba9105c7a5470a6963f3556fe934d9b725f03af60cc85c2fd`.
+The first sandboxed build was rejected by the existing DLL guard because the
+sandbox re-injected tool-runtime DLL search directories. Rebuilding outside the
+sandbox with a restricted PATH passed the same guard. No guard was weakened.
+Frozen offscreen startup loaded native Qt using isolated application data,
+camera autostart disabled, motion disabled and a nonexistent serial port.
+No interactive operator, real-camera, controller or laser test was performed.
+The permanent current-feature.json was updated atomically using
+set_dev_test_feature.py and read back through the launcher validator. Regular E3
+and the permanent launcher EXE/shortcut were not changed. Local verification
+records: build/layer-profiles-frozen-verification.json and
+build/layer-profiles-frozen-smoke.json (intentionally untracked).
+
+
+## Clearer setup wizard (2026-09-15, operator feedback)
+
+Operator testing of 0.7.163 found the wizard unclear: Step 5 requested "datum",
+but Step 4 did not visibly reveal the Honeycomb height controls or explain how
+to complete the step. This is interactive operator feedback, not a physical
+calibration result. Earlier offscreen tests did not establish usability.
+
+The wizard now uses plain-language titles, numbered instructions, Check progress
+and named prerequisite buttons. Technical status reasons move to Troubleshooting
+details. Instruction links reveal and highlight the exact nested reference,
+probe-position, surface-measurement, gauge and Save honeycomb height controls.
+Bed leveling measurements explains the five-measurement sequence and the
+separate copy-average and explicit-save actions. Existing step IDs, completion
+rules, file schemas, controller handlers and safety gates remain unchanged.
+Desktop navigation only; no browser or Pi companion changes.
+
+Verification: 270 focused Windows desktop/setup tests passed, repository Ruff
+and compileall passed. Offscreen simulator screenshots at 900 x 680 show Step 4
+instructions, navigation and the highlighted save control without overlap;
+STOP remains visible. The bed-measurement dialog was also visually inspected
+offscreen. Interactive operator acceptance and real hardware testing are pending.
+
+Frozen handoff: E3 DEV TEST selects Clearer setup wizard, version 0.7.165,
+branch codex/setup-wizard, revision 29c42e2fabcfa91176092171494eeb19e2db2032.
+Target: `C:\Users\lukel\Documents\E3\.codex-worktrees\setup-wizard-clear-dev\dist\E3\E3.exe`.
+Built using packaging/build_windows.ps1 in an isolated checkout with installed
+dependencies and a restricted build PATH. All 33 changed packaged Python modules
+and changed application resources match that revision. SHA-256:
+`b573eb33916f639420be1510a06677d347fa88982d16d1227a5066fefb1dec98`.
+Frozen offscreen startup passed with native Qt loaded, isolated simulator state,
+camera autostart disabled and motion disabled. Permanent pointer updated with
+set_dev_test_feature.py and read back through the launcher validator.
+Local verification records: build/setup-wizard-clear-frozen-verification.json
+and build/setup-wizard-clear-frozen-smoke.json (intentionally untracked).
+No hardware commands or physical calibration tests have been performed here.
+Compatibility CI/integration still await the earlier GitHub upload approval.
+
+
+## Step-by-step setup wizard (2026-09-15 UTC, feature verification)
+
+The desktop now has Machine Setup > Setup wizard: eight shared setup stages,
+Back/Next navigation, explicit secondary-tool buttons and a final evidence
+review. All setup tools returns to the full tabs; reopening resumes the same
+wizard stage. Navigation does not mark evidence complete. The original guide
+and existing calibration controls remain available. No machine protocol,
+geometry, arming, motion, project schema or Pi companion change is required.
+
+Evidence reads run under the existing background operation owner with an
+observational mode that preserves focus-panel evidence. Busy navigation is held,
+the selected tab remains stable during local work, and software STOP remains
+available. Results after either dialog or external STOP are discarded; stale
+qualification remains visibly stale. These controls are not safety-rated.
+
+Verification: 106 focused Windows offscreen wizard, setup, asynchronous setup,
+precision and evidence tests passed; all 161 focused laser-focus tests passed.
+Repository Ruff and application compileall pass. Normal 1080x780 and compact
+900x680 layouts were rendered offscreen with Windows Segoe UI and inspected.
+This is offscreen widget verification only: no interactive operator GUI trial,
+real-camera acquisition, physical probe or laser qualification was performed.
+The inherited 0.10 mm placement target remains physically unqualified.
+
+Frozen E3 DEV TEST **0.7.163**, feature **Step-by-step setup wizard**, branch
+`codex/setup-wizard`, exact application revision
+`cdaf7ce5448b3638158c0af63cf6b6cb84f97313`, is selected atomically through
+`packaging/set_dev_test_feature.py`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\setup-wizard-dev\dist\E3\E3.exe`.
+Adjacent metadata matches; EXE SHA256 is
+`af6be88f4034352d8777e45fe4cb586d3482ed739dc3ef49990b7158c52e15ef`.
+All 32 changed packaged Python modules match the exact committed source as code
+objects, and all three changed packaged resources match. Frozen offscreen
+startup loaded native Qt under an isolated simulator configuration, camera
+autostart and motion disabled. The initial canonical build's guard rejected
+foreign tool-environment DLLs; rebuilding with a restricted PATH passed that
+same guard. The installed precision Pi companion is reused. Regular E3 and its
+launcher are unchanged. Open E3 DEV TEST > Tools > Machine Setup > Setup wizard.
+
+Main is unchanged; the prior destination-specific GitHub upload approval remains
+unanswered, so compatibility CI and integration remain pending.
+
+## Precision placement and guided setup (2026-09-15 UTC, feature verification)
+
+The active feature implements the approved 0.10 mm maximum radial XY placement
+target, including measurement uncertainty, on one flat parallel surface through
+an intended interval reaching 20 mm above the honeycomb including spacers. The
+target and interval are **not physically qualified**. No motion, probing,
+camera calibration acquisition or laser placement test has been performed for
+this feature. Historical fitted-point passes do not satisfy this target.
+
+Implemented: native-detail precision captures; continuous rigid template
+placement and snapping suspension; reviewed alignment against a frozen capture;
+explicit trace-tolerance evidence; an immutable selected measured surface;
+non-destructive schema-2 lower/upper/middle observations; consistent material
+mapping for photographs, probe clicks, detection and template/trace placement;
+separate fixed support bounds; stale asynchronous/capture/job rejection; strict
+E3SURFACE v1 job metadata and Pi capability validation; schema-4 project provenance
+with schema 1–3 geometry migration; a UI-neutral checklist/evidence foundation;
+five-position leveling survey and explicit datum saving; measurement/return/gauge
+grouping; one-height repeatability and independent XY qualification records.
+
+An initial unmeasured probe-selection view is explicitly approximate and supplies
+no placement authority. Precision placement also works at a valid single-plane
+base map before height calibration. Browser placement shares the same mapping,
+frozen capture identity and stale-job validation. Old Pi services reject jobs
+requiring the new surface capability; their ordinary legacy jobs remain supported.
+
+Focused Windows simulator, geometry, migration, fake-controller, remote protocol
+and offscreen widget tests have passed during development. The broad local
+Windows Python 3.14 run reported 6,723 passed, 29 skipped and 13 failures; these
+exposed integration fixtures, companion dependency closure and a disarm-lock
+regression that were repaired and rechecked with focused acceptance/rejection
+tests. The final material/workspace/machine guard batch passed 307 tests. A second
+complete four-worker Windows Python 3.14.4 run reported 6,840 passed, 29 skipped
+and two version-identity failures because the feature commit changed the Git
+version while tests were running. Both affected files plus the final setup
+snapshot tests passed in a fresh 35-test run with the revision held fixed.
+Ruff, compileall and JavaScript syntax checks pass. Additional verification
+includes 58 setup/evidence checks, 83 desktop async checks, 213 browser/server/
+material checks (one Windows privilege skip), browser capture/Arm concurrency,
+and 48 exact companion installation checks. Offscreen small-window layouts and
+resizable columns were inspected. No interactive operator GUI session,
+real-camera test, physical probe test or laser accuracy qualification is implied.
+
+Full compatibility CI on Windows Python 3.10 and 3.12 is pending before
+integration. Automatic approval review rejected uploading the source to the
+existing GitHub remote without explicit destination-specific consent. The user
+has been asked to approve the branch push/PR; no push or merge occurred.
+`main` and regular Windows E3 remain at the historical state below. The matching
+Pi companion was subsequently installed with explicit operator approval.
+
+Linux verification: 394 isolated fake-controller and camera-model tests passed
+on the actual Pi in 102.80 seconds, using Python 3.13.5 ARM64, NumPy 2.5.3,
+OpenCV 4.14.0 and pytest 8.4.2. Source manifest SHA256 is
+`0c877eb19897255dc5be3652c98ffa30620c4b8a73af7660c047144d5eba756c`.
+All 19 companion runtime files match the frozen feature source. The installed
+service, installed source and hardware were untouched during those tests. An earlier 371-test
+subset also passed under WSL Ubuntu 22.04 / Python 3.10.12; the final observational
+setup snapshot is covered by the additional Pi tests.
+
+Frozen Windows feature: **E3 DEV TEST 0.7.159**, exact application revision
+`d8766fbc393dbd302718a9e431227fcfc2ed18a0`, branch
+`codex/precision-surface-placement`. The canonical `packaging/build_windows.ps1`
+completed in the isolated `.codex-worktrees/precision-surface-dev` checkout.
+The permanent pointer selects
+`C:\Users\lukel\Documents\E3\.codex-worktrees\precision-surface-dev\dist\E3\E3.exe`.
+Adjacent build metadata matches. The EXE SHA256 is
+`599b9747c7855ce39eba99843c4c5d01cdc26f21ac2ad37eac155f4413550174`.
+All 31 changed packaged Python modules were compared as code objects against
+their exact committed source; three changed packaged resources also match.
+Frozen offscreen startup loaded native Qt under isolated simulator configuration,
+camera autostart disabled and motion disabled. The normal E3 executable,
+launcher, shortcuts and configuration were not changed.
+
+Matching companion: `dist/e3-pi-material-surface-a019f383`, frozen from the same
+application revision, with the packaging-only predecessor correction committed
+at `70a080b`. Manifest SHA256 is
+`a019f383069eb52b71108d3edc9f3ef23b26305a61bfd1b44df7b6b3ade27655`.
+Read-only installation preview accepts the exact installed STOP recovery source
+plus historical preview bytes from `7da9843`; unknown edits still reject. Seven
+source files required updates, twelve already matched. The final idle check reported
+disconnected, disarmed, no active job and no connected clients. The guarded
+installer helper `/tmp/apply_precision_idle_pi.py` was then applied after explicit
+operator approval. All seven replacements succeeded, all 19 source hashes were
+verified, replaced existing files received adjacent backups, and the service
+restarted. Before/after hashes confirm configuration, probe XY offset, taught
+gauge, saved honeycomb, Z limits and cooling configuration preserved. No Home,
+probe, travel, job or laser-output command was requested. Post-restart service
+checks report active/running PID 3887, restart at 2026-09-14 19:39:08 MDT,
+`pi-material-surface-v1` advertised, and disconnected/disarmed with no running
+job. All 19 installed source hashes match. A further 238 focused fake-controller
+tests passed in 77.56 seconds against the actual installed modules; all four
+workers verified their imported E3 module paths are under the installed project,
+with test data isolated under `/tmp/e3-installed-fake-tests-6h2ivoci`.
+Reconnect through E3 DEV TEST,
+establish the required reference, and measure again; workpiece authority does
+not survive the service restart.
+
+Operator qualification: establish one-height sampling and ten still/ten Home-park
+captures first; independently measure laser-center errors and uncertainty across
+corners, edges and center; repeat at lower, middle and upper heights. Every
+`hypot(X error, Y error) + uncertainty` must be <=0.10 mm for the published area
+and interval. Diagnose the limiting contribution on failure and retain the
+threshold. Arbitrary outline tracing and finished cut dimensions are separate.
+See [the implementation and test procedure](docs/PRECISION_PLACEMENT.md).
+
 ## STOP Air Assist recovery reconciliation (2026-09-14, installed and verified)
 
 Operator reports successful cuts using regular E3 0.7.153, then STOP followed

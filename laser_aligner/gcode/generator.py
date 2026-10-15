@@ -11,10 +11,10 @@ from ..config import WorkArea
 from ..errors import SafetyError, SvgError
 from ..geometry.svg import Polyline, SvgGeometry
 from .job_plan import e3_metadata_line
+from .limits import MAX_STREAM_COMMANDS as _MAX_STREAM_COMMANDS
 
 _PATH_BOUNDS_TOLERANCE_MM = 1e-6
 _MAX_NEAREST_ORDER_PATHS = 512
-_MAX_STREAM_COMMANDS = 250_000
 
 
 @dataclass(slots=True)

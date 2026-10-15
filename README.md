@@ -1,5 +1,179 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Preview playback identifies direction and laser state: amber means laser on,
+cyan means laser off. Bidirectional raster output is unchanged.
+
+Raster preview draws the initial laser-off approach as a separate red dashed line.
+The orange boundary encloses job movement after that approach, including raster
+run-up/run-out and row transfers. Full travel extents still drive fitting and
+safety validation; generated motion, power, calibration and settings are unchanged.
+
+## Raster surface and verified travel
+
+Desktop raster generation now requires a separately recorded, verified carriage
+travel envelope. The calibrated engraving surface remains the powered-output
+boundary; laser-off lead-in, blank gaps and transfers are checked in machine
+carriage coordinates after placement and spot-offset correction. Preview shows
+the engraving surface, powered bounds and complete movement footprint separately.
+Missing or unverified travel blocks preparation with a useful error. Existing
+legacy bounded programs and the browser SVG path retain their stricter bounds.
+
+White margins contribute to run-up/run-out after the unchanged sampling and
+ordered-dither stage. The planner keeps at least the requested percent of the
+original row width and the configured acceleration-model distance. The model is
+not physical qualification at every feed. See [raster overscan](docs/RASTER_OVERSCAN.md)
+for settings and operator validation, and [measured performance](docs/RASTER_PERFORMANCE.md).
+
+Image background cleanup is available under **Objects → Image → Clean background…**
+for one selected image. Enable it, adjust tolerance (start at 5), compare
+Before/After, and Apply. Settings are undoable and saved per image; original
+files remain unchanged. Schema 5 stores these settings; existing schemas 1–4
+load with cleanup off. Older E3 builds reject schema-5 files.
+See [the desktop guide](docs/DESKTOP_V1.md#clean-an-image-background).
+
+## Detailed raster previews
+
+Large-job preparation stays on the Pi, with optimized exact-command validation
+and reuse of its unchanged validated program at START. Sending, checking,
+starting, failure and completion have distinct progress labels; a sent file
+is not displayed as a completed job. Temporary arming follows preparation.
+
+Jobs can contain up to 2,000,000 streamed commands. Raster previews open in
+high-contrast engraving detail with laser-off travel and gaps hidden. Use the
+Display controls to show them or restore layer colors/power shading. Zoom in
+to inspect the exact pattern; this view does not predict burn darkness. The
+matching Pi validator update is required for jobs above its installed command cap. Preview shows project checks separately from
+machine readiness and blocks START when required surface measurement is missing.
+
+Same-machine LAN/Tailscale camera aliases retain calibration after the saved
+endpoint enrolls an authenticated stable camera identity. Keep the same camera,
+focus, resolution and credential; changed optics or identity still require review.
+
+## Cancel a desktop tool
+
+Press Escape to cancel the active drawing tool or unfinished object transform
+and clear selection. This also works while typing polygon sides. Escape sends
+no machine command; use the dedicated Stop control for software stop/laser off.
+
+## Drawing tools (2026-09-17)
+
+- New stencil text uses aligned top-and-bottom material bridges. Stacked counters
+  share an axis; excessive widths that erase a letter are rejected.
+- Polygon in the left sidebar: click its center, move to choose radius/angle,
+  then click to freeze. Type 3–12 sides for live preview; higher values and other
+  invalid input disable Create. Enter/Create adds one undoable polygon; Cancel
+  discards it. Right-click or Select exits the persistent drawing tool.
+- Hold Ctrl while rotating to snap to horizontal/vertical (90-degree) orientations.
+  Press/release Ctrl updates immediately; free rotation resumes when released.
+  Shift retains 15-degree object rotation, with Ctrl taking priority. Template
+  placement and initial polygon orientation also support Ctrl.
+
+## Saved gauge status
+
+Setup wizard **Check progress** refreshes read-only machine status before checking
+the saved gauge calibration. If status is unavailable, restore the connection
+and check again; do not repeat gauge teaching merely because status is missing.
+Saving honeycomb height does not require teaching the gauge offset again.
+
+## Base-map grid containment (2026-09-17)
+
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
+Raster/image jobs use a fixed **7 mm gap above the measured material surface**,
+including when the material sits on supports. Cut/vector and Fill retain their
+existing focus settings. Mixed jobs switch focus with laser output off and a
+verified clearance move. This requires a matching Pi companion advertising
+`pi-operation-focus-v1`; measure the workpiece before preparing a raster job.
+
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
+## Update a saved layer profile
+
+Select a profile above the Cuts list, edit the layers, then click **Save**.
+Confirm **Yes** to overwrite that named profile, or **No** to leave it unchanged.
+**Save As…** creates a separate profile. Profiles do not autosave.
+
+
+## Distribute objects within an area
+
+Select objects, then open **Distribute horizontally…** or **Distribute vertically…**.
+Choose **Full bed (project work area)**, **Chosen rectangle**, or **Current selection
+span**. Bed and rectangle modes give equal empty gaps between object bounds and
+both end margins, without resizing. To use a custom area, first draw a rectangle,
+then choose it in the dialog. See [desktop distribution](docs/DESKTOP_V1.md#distribute-within-an-area).
+
+## Saved cut/layer profiles
+
+Use **Profiles** above the Cuts list to **Save As** a named layer set and **Load**
+it into another project for the same machine/tool profiles. Loading is undoable;
+review restored speed, power and output flags before Preview. Used layers must
+match by identity or unique color. Delete removes only the saved profile.
+Drawing, template and trace tools remain on the left sidebar with their shortcuts;
+their duplicate Tools-menu entries are removed.
+
+
+## Clearer setup instructions
+
+The Setup wizard now gives numbered instructions and links that reveal the exact
+controls. Step 4 is **Level the bed and save honeycomb height**; Step 5 names that
+step when it needs finishing. **Check progress** checks saved settings and
+measurements; technical reasons are available under **Troubleshooting details**.
+
+
+## Precision placement and guided setup
+
+The precision workflow targets **0.10 mm maximum radial XY error including
+measurement uncertainty**, on a flat parallel surface up to 20 mm above the
+honeycomb including spacers. Physical qualification is pending. Use
+**Measure surface → Capture for placement → optional Align to workpiece →
+place designs → Preview → Run**. Native-detail analysis, continuous template
+placement, measured-height mapping and stale-job rejection are described in
+[Precision placement](docs/PRECISION_PLACEMENT.md). Open **Tools → Machine
+Setup… → Setup wizard** for eight guided stages and an progress review.
+**Back** and **Next** browse setup; use each stage's explicit controls to perform
+actions or save evidence. **All setup tools** restores the seven setup tabs.
+Height-aware jobs require the matching Pi companion. New saves use project
+schema 5; existing schema 1–4 geometry is preserved on load.
+
 The Pi Start path now recognizes acknowledged Air Assist OFF after controller
 recovery from STOP, clearing the matching terminal job's stale recovery block.
 See [deployment status](CURRENT_STATE.md) and [Pi recovery](docs/NETWORK_MACHINE.md).
@@ -63,6 +237,10 @@ the Pi companion; updated desktop cleanup also avoids disconnecting controllers
 it has only observed on an older Pi. See [connection ownership](docs/NETWORK_MACHINE.md#first-connected-app-priority).
 
 ## Windows updates
+
+Development publication requires the complete Compatibility CI tier to pass for
+the exact release commit before packages are built. See [release review](docs/RELEASE_REVIEW.md)
+and [update policy](docs/UPDATES.md).
 
 Windows updates create the verified installer before starting E3's shutdown
 deadline. Launch failure keeps the app open; launch and setup diagnostics remain
@@ -296,8 +474,8 @@ incomplete decimals without losing keystrokes. Enter, Tab or leaving the field
 commits a valid value; existing Apply/Save actions remain. See
 [numeric editing](docs/NUMERIC_INPUT.md).
 
-E3 Dev's Machine tab now includes Ender Z jogging, adjacent reported height and
-a visible saved Z maximum. The matching Pi companion owns movement validation
+E3 Dev's Machine tab includes Ender Z jogging and adjacent reported height;
+the saved Z maximum is configured in Machine Setup. The matching Pi companion owns movement validation
 and persistence; see [Z controls](docs/MAINBOARD_Z_CONTROLS.md).
 
 The compact F401 source now includes a border-relative Z80 upper travel ceiling,
@@ -352,10 +530,11 @@ does not report material thickness; physical verification is pending.
 The test accepts either reset position or already-homed Z 20 clearance, and a
 rejected pre-check no longer shuts down otherwise healthy connections.
 
-An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
-can preserve two measured-height base maps, check a third height independently,
-and preview a height-specific camera correction. It does not yet apply height
-compensation to tracing/jobs. Machine Setup's seventh tab is now **7 · Z / laser
+The [production height workflow](docs/PRECISION_PLACEMENT.md) acquires lower,
+upper and independent middle-height observations without replacing the support
+map. Its selected measured plane applies consistently to photographs, tracing,
+template placement and bound jobs. Physical qualification remains pending.
+Machine Setup's seventh tab is **7 · Z / laser
 focus**, with the current surface-height V2 workflow, probe XY offset calibration
 and 7 mm gauge teaching. It replaces the earlier Material height page;
 [the focus guide](docs/LASER_FOCUS.md) and [current state](CURRENT_STATE.md) record
@@ -498,14 +677,15 @@ Native desktop workflow:
   overlapping frame work
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
-- Schema-3 native PATH/POLYGON geometry with versioned line and cubic Bézier
+- Schema-5 projects retain native PATH/POLYGON geometry with versioned line and cubic Bézier
   segments, multiple open or closed subpaths, and explicit even-odd or nonzero
   fill rules. Curves remain native through project editing, transforms,
   duplication, grouping, save/reopen, autosave, recovery, and workspace
   rendering; planning flattens them deterministically in physical millimetres
-  at one controlled boundary. Saving as schema 3 is forward-incompatible with
-  older E3 builds that understand only schema 2; those builds reject the newer
-  file instead of silently discarding native geometry
+  at one controlled boundary. Schema 4 adds validated optional material-surface
+  provenance; schema 5 adds optional image background cleanup. Older E3 builds
+  reject newer project files; schema 1–4 projects
+  migrate without changing geometry
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
   imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
   output-disabled speed/power layers, vector outline text, and automatically
@@ -881,6 +1061,19 @@ exact-program gates remain authoritative.
 
 ## Moving to the real C920
 
+In **Manage machines → Duplicate**, choose **Same machine — keep calibration**
+for another connection to the same physical machine and camera setup, such as
+LAN and Tailscale. This keeps the calibration associations and honeycomb span.
+**Different machine — clear calibration** copies the machine/laser settings
+without those associations. Both entries in a same-machine copy share the
+existing calibration; camera-address or optical changes still require review.
+The new entry takes effect only after selecting **Use on next launch** and
+restarting E3.
+
+Importing an image into a new raster layer starts with **Out** enabled. An
+existing raster layer keeps its current Out setting. Review speed and power in
+the job preview before starting.
+
 1. Copy the hardware example:
 
    ```bash
@@ -1017,7 +1210,10 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 - CSS stylesheets, clipping paths, masks, markers, dashed strokes, and
   geometry-changing CSS are not supported and are explicitly rejected rather
   than imported with a mismatched cut path.
-- The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
+- Height correction uses an accepted measured-surface model within its calibrated
+  height interval. With correction disabled, mapping applies only to the support
+  calibration plane. The 0.10 mm XY target still needs independent physical
+  qualification; see [precision placement](docs/PRECISION_PLACEMENT.md).
 - Cutting-template identification and alignment have automated coverage but
   have not been verified with real corrected label-sheet images. Automated
   tests cannot validate lens/bed calibration, parallax, camera pose, material height,
@@ -1069,3 +1265,5 @@ and requires a new acknowledged `M106 S0` before primary streaming. Failure of
 that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
 ON is never automatically replayed. Startup/restart, STOP, mapping validation,
 and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+Raster scans keep the selected engraving feed across powered spans and white gaps, using inline zero/nonzero power changes. Explicit laser-off remains at row boundaries before rapid travel. Machine-tab X, Y and Z positions have fixed-size boxes; X/Y show the last completed Home/jog position and clear during motion or unavailable status.

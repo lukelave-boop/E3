@@ -24,6 +24,11 @@ from typing import Any
 from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from ..operation_focus import CAPABILITY as OPERATION_FOCUS_CAPABILITY
+from ..operation_focus import mode as operation_focus_mode
+from ..operation_focus import validate_targets
+from ..raster_safety import CAPABILITY as RASTER_TRAVEL_CAPABILITY
+from ..raster_safety import program_raster_boundary
 from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
 from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
@@ -31,11 +36,14 @@ from .job_focus import program_binding as job_focus_binding
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
-from .laser_focus import THICKNESS_CAPABILITY, validate_thickness_plan
+from .laser_focus import THICKNESS_CAPABILITY, validate_setup_evidence, validate_thickness_plan
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import validate_control
+from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
+from .material_surface import program_binding as material_surface_binding
+from .material_surface import snapshot_from_plan, validate_program_binding
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
@@ -312,6 +320,8 @@ class RemoteMachineService:
         self._monitor_wake = threading.Event()
         self._retired_boot_ids: set[str] = set()
         self._selected_job_focus: dict[str, Any] | None = None
+        self._material_honeycomb_height: float | None = None
+        self._setup_evidence: dict[str, Any] | None = None
         self._job_focus_required = False
         self._workpiece_focus_observed = False
         self._focus_observation_epoch = 0
@@ -730,9 +740,9 @@ class RemoteMachineService:
                 if action == ACTION_MACHINE_DISCONNECT:
                     request["expected_control_owner_revision"] = owner_revision
             if boot_id is not None:
-                request["expected_boot_id"] = boot_id
+                request.setdefault("expected_boot_id", boot_id)
             if session_generation is not None:
-                request["expected_session_generation"] = session_generation
+                request.setdefault("expected_session_generation", session_generation)
         if control_supported and action == ACTION_MACHINE_STATUS and not detached:
             request["client_id"] = self._client_id
         if control_supported and action == ACTION_MACHINE_CONTROL_RELEASE:
@@ -1052,14 +1062,24 @@ class RemoteMachineService:
             if WORKPIECE_FOCUS_CAPABILITY in (self._node_capabilities or ()):
                 if focus_observation_epoch is None or focus_observation_epoch == self._focus_observation_epoch:
                     self._cache_workpiece_focus(status.get("workpiece_focus"))
+                    try:
+                        self._setup_evidence = validate_setup_evidence(
+                            status.get("setup_evidence"), primary_generation=self._controller_session_generation,
+                        ) if MATERIAL_SURFACE_CAPABILITY in (self._node_capabilities or ()) else None
+                    except SafetyError as exc:
+                        self._setup_evidence = None
+                        raise PiJobProtocolError(str(exc)) from exc
                 # An idle focus edit need not change the primary state revision.
                 # A status request begun before its accepted reply cannot undo it.
                 status["workpiece_focus"] = copy.deepcopy({
                     "job_focus_required": self._job_focus_required,
                     "job_focus": self._selected_job_focus,
+                    "honeycomb_height_mm": self._material_honeycomb_height,
                     "job_focus_block_reason": (self._job_focus_block_reason
                                                if self._selected_job_focus is None else None),
                 })
+                status["honeycomb_height_mm"] = self._material_honeycomb_height
+                status["setup_evidence"] = copy.deepcopy(self._setup_evidence)
             self._last_machine_status_monotonic = time.monotonic()
             self._last_node_response_monotonic = time.monotonic()
             self._machine_observation_sequence += 1
@@ -1800,24 +1820,20 @@ class RemoteMachineService:
             with self._state_lock:
                 self._require_workpiece_focus()
                 text = attach_job_focus(text, self._selected_job_focus)
-        return self._policy.preflight_program(
+        result = self._policy.preflight_program(
             text,
             guarded_output_polygon_mm=guarded_output_polygon_mm,
         )
+        if material_surface_binding(result.lines) is not None:
+            self._require_material_surface_capability()
+        self._require_operation_focus(result)
+        self._require_raster_travel_capability(result)
+        return result
 
     def _require_current_program(self, program: ValidatedProgram) -> None:
         if type(program) is not ValidatedProgram:
             raise SafetyError("Program authorization requires an exact preflight result")
-        fresh = self._policy.preflight_program(
-            "\n".join(program.lines),
-            guarded_output_polygon_mm=program.guarded_output_polygon_mm,
-        )
-        if fresh != program:
-            raise SafetyError(
-                "Program lines, digest, flags, machine bounds, offsets, feed ceilings, "
-                "or hardware gates changed after program preflight; validate the exact "
-                "program again"
-            )
+        self._policy._require_validated_program_integrity(program)
         if program.requires_laser_authorization:
             with self._state_lock:
                 self._require_workpiece_focus()
@@ -1826,6 +1842,71 @@ class RemoteMachineService:
                     raise SafetyError("Workpiece focus changed after preflight; prepare the job again")
                 if token is not None and self._selected_job_focus is None:
                     raise SafetyError("Measured workpiece focus is no longer current; measure the workpiece again")
+        if material_surface_binding(program.lines) is not None:
+            self._require_material_surface_capability()
+            validate_program_binding(program.lines, self.material_surface_snapshot())
+
+        self._require_operation_focus(program)
+        self._require_raster_travel_capability(program)
+
+    def _require_raster_travel_capability(self, program: ValidatedProgram) -> None:
+        if (program_raster_boundary(program.lines) is not None
+                and RASTER_TRAVEL_CAPABILITY not in (self._node_capabilities or ())):
+            raise SafetyError("Update the Pi companion and configure matching verified raster travel limits before preparing this job")
+
+    def _require_operation_focus(self, program: ValidatedProgram) -> None:
+        if not any(operation_focus_mode(line) is not None for line in program.lines):
+            return
+        if OPERATION_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
+            raise SafetyError("Update the Pi companion before running raster jobs with 7 mm surface focus")
+        with self._state_lock:
+            validate_targets(program.lines, self._selected_job_focus)
+
+    def _require_material_surface_capability(self) -> None:
+        if MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ()):
+            raise SafetyError("Update the Pi companion before using material-plane corrected jobs")
+
+    def setup_evidence_snapshot(self) -> dict[str, Any] | None:
+        """Return fresh accepted setup provenance without an RPC or motion grant."""
+        with self._state_lock:
+            if (self._setup_evidence is None or self._detached or not self._capabilities_verified
+                    or self._setup_evidence.get("controller_session") != self._controller_session_generation
+                    or MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ())
+                    or self._controller_state != "READY_MOTION"
+                    or self._status_cache.get("connected") is not True
+                    or self._status_cache.get("status_stale") is not False
+                    or self._status_cache.get("monitor_connected") is not True
+                    or self._last_machine_status_monotonic is None
+                    or time.monotonic() - self._last_machine_status_monotonic > _MACHINE_STATUS_MAX_AGE_SECONDS):
+                return None
+            return validate_setup_evidence(self._setup_evidence, primary_generation=self._controller_session_generation)
+
+    def material_surface_snapshot(self) -> dict[str, Any] | None:
+        """Return accepted, fresh Pi measurement evidence without network I/O."""
+        with self._state_lock:
+            now = time.monotonic()
+            if (self._selected_job_focus is None or self._detached
+                    or self._status_cache.get("connected") is not True
+                    or self._controller_state != "READY_MOTION"):
+                return None
+            if (
+                MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ())
+                or not self._capabilities_verified or not self._workpiece_focus_observed
+                or self._last_machine_status_monotonic is None
+                or now - self._last_machine_status_monotonic > _MACHINE_STATUS_MAX_AGE_SECONDS
+                or self._status_cache.get("status_stale") is not False
+                or self._status_cache.get("monitor_connected") is not True
+            ):
+                raise SafetyError("Selected material surface status is stale or incompatible; refresh the Pi and measure again")
+            try:
+                result = snapshot_from_plan(
+                    self._selected_job_focus, honeycomb_height_mm=self._material_honeycomb_height,
+                )
+                if result["session"][1] != self._controller_session_generation:
+                    raise SafetyError("Selected material surface controller session changed; measure the workpiece again")
+                return result
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SafetyError("Selected material surface metadata is invalid; measure the workpiece again") from exc
 
     def _require_workpiece_focus(self) -> None:
         capabilities = self._node_capabilities or ()
@@ -1839,6 +1920,7 @@ class RemoteMachineService:
     def _cache_workpiece_focus(self, raw: object) -> None:
         """Cache only accepted Pi evidence; this never creates focus authority."""
         self._selected_job_focus = None
+        self._material_honeycomb_height = None
         self._workpiece_focus_observed = False
         if not isinstance(raw, Mapping) or type(raw.get("job_focus_required")) is not bool:
             self._job_focus_required = True
@@ -1848,6 +1930,13 @@ class RemoteMachineService:
         if reason is not None and (type(reason) is not str or not 1 <= len(reason) <= 2048):
             raise PiJobProtocolError("Pi returned an invalid workpiece focus reason")
         self._job_focus_block_reason = reason or "Measure the workpiece before starting a powered job"
+        honeycomb = raw.get("honeycomb_height_mm")
+        if honeycomb is not None:
+            try:
+                self._material_honeycomb_height = finite_number(honeycomb, "Honeycomb height", -10, 10)
+                self._status_cache["honeycomb_height_mm"] = self._material_honeycomb_height
+            except SafetyError as exc:
+                raise PiJobProtocolError(str(exc)) from exc
         plan = raw.get("job_focus")
         if plan is None:
             self._workpiece_focus_observed = True
@@ -1904,6 +1993,9 @@ class RemoteMachineService:
             with self._state_lock:
                 if self._authorization_epoch != authorization_epoch:
                     raise MachineError("Arming was cancelled by disarm")
+                if material_surface_binding(program.lines) is not None:
+                    self._require_material_surface_capability()
+                    validate_program_binding(program.lines, self.material_surface_snapshot())
                 self._armed_until = time.time() + timeout
                 self._armed_until_monotonic = time.monotonic() + timeout
                 self._armed_program_digest = program.digest
@@ -2103,6 +2195,23 @@ class RemoteMachineService:
             validate_max_z(result.get("max_z_mm"))
         except SafetyError as exc:
             raise PiJobProtocolError(str(exc)) from exc
+        if MATERIAL_SURFACE_CAPABILITY in (self._node_capabilities or ()):
+            reference, reference_id = result.get("reference"), result.get("reference_id")
+            try:
+                if result.get("reference_ready") is True:
+                    if (type(reference) is not dict or set(reference) != {"border_z_mm", "firmware", "geometry"}
+                            or type(reference_id) is not str or str(uuid.UUID(reference_id)) != reference_id
+                            or type(reference["firmware"]) is not str or not reference["firmware"]
+                            or reference["geometry"] != result.get("firmware_geometry")):
+                        raise ValueError("inconsistent reference identity")
+                    finite_number(reference["border_z_mm"], "Border reference", -.5, .5)
+                elif result.get("reference_ready") is not False or reference is not None or reference_id is not None:
+                    raise ValueError("unexpected reference without current authority")
+            except (ValueError, TypeError, SafetyError) as exc:
+                with self._state_lock:
+                    self._selected_job_focus = None
+                    self._workpiece_focus_observed = False
+                raise PiJobProtocolError("Pi returned an invalid current border reference identity") from exc
         self._require_operation_current(generation)
         with self._stop_epoch_lock, self._state_lock:
             if self._stop_epoch != generation:
@@ -2110,6 +2219,8 @@ class RemoteMachineService:
             self._commit_current_response(response, action=ACTION_MACHINE_FOCUS)
             if workpiece_supported:
                 self._focus_observation_epoch += 1
+                self._setup_evidence = None
+                self._status_cache["setup_evidence"] = None
                 self._cache_workpiece_focus(result)
         result["workpiece_focus_available"] = workpiece_supported
         result["thickness_focus_available"] = THICKNESS_CAPABILITY in (self._node_capabilities or ())
@@ -2565,9 +2676,18 @@ class RemoteMachineService:
             self._job_submission = None
         try:
             yield
-        finally:
+        except Exception as exc:
+            with self._state_lock:
+                if self._job_submission is not None:
+                    self._job_submission.update(
+                        phase="starting" if self._start_ownership_uncertain else "failed",
+                        error=str(exc)[:512],
+                    )
+            raise
+        else:
             with self._state_lock:
                 self._job_submission = None
+        finally:
             self._monitor_wake.set()
 
     def _submission_progress(self, job_id: str, **fields: Any) -> None:
@@ -2581,6 +2701,7 @@ class RemoteMachineService:
         name: str = "generated.gcode",
         *,
         _expected_stop_epoch: int | None = None,
+        _deferred_authorization: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         generation = (
             self._operation_stop_epoch()
@@ -2602,7 +2723,13 @@ class RemoteMachineService:
                 )
             if hashlib.sha256(canonical).hexdigest() != program.digest:
                 raise SafetyError("Canonical job bytes did not match the preflight digest")
-            authorization = self._consume_start_authorization(program)
+            authorization = (
+                self._consume_start_authorization(program)
+                if _deferred_authorization is None else None
+            )
+            # Validation remains bounded, but its budget scales with job size.
+            # This affects preparation/START only, never status or STOP deadlines.
+            preparation_timeout = max(_DEFAULT_RPC_TIMEOUT_SECONDS, min(900.0, len(program.lines) / 1000.0))
             job_id = str(uuid.uuid4())
             local_job_created_at = time.time()
             self._record_local_job_identity(job_id, local_job_created_at)
@@ -2612,6 +2739,7 @@ class RemoteMachineService:
             )
             binding = self._start_binding(program)
             with self._state_lock:
+                preparation_session = (self._node_boot_id, self._controller_session_generation)
                 cached_job = self._status_cache.get("job")
                 accepted_active = bool(
                     isinstance(cached_job, Mapping)
@@ -2698,6 +2826,7 @@ class RemoteMachineService:
                 finalize = self._rpc(
                     ACTION_JOB_FINALIZE,
                     {"job_id": job_id, **binding},
+                    timeout=preparation_timeout,
                 )
                 self._require_operation_current(generation)
                 self._commit_current_response(
@@ -2715,12 +2844,35 @@ class RemoteMachineService:
                 )
                 self._cache_job_record(self._response_mapping(finalize, "job"))
                 self._require_operation_current(generation)
-            except Exception:
+            except Exception as exc:
                 with self._state_lock:
                     self._upload_job_id = None
+                    self._status_cache["job"] = {
+                        "job_id": job_id, "name": validated_name,
+                        "state": "failed", "phase": "failed", "running": False,
+                        "ownership_accepted": False,
+                        "error": "Job preparation failed: " + str(exc)[:512],
+                    }
                 raise
 
             try:
+                if _deferred_authorization is not None:
+                    # Explicit START intent spans inert preparation. Create the
+                    # short-lived one-use grant only after the Pi is ready; STOP,
+                    # disarm and session changes must still revoke that intent.
+                    phrase, authorization_epoch = _deferred_authorization
+                    self._require_current_program(program)
+                    with self._stop_epoch_lock, self._state_lock:
+                        if self._stop_epoch != generation:
+                            raise MachineError("Start was cancelled by software STOP")
+                        if self._authorization_epoch != authorization_epoch:
+                            raise SafetyError("START authorization was revoked during preparation; the prepared Pi job remains inert")
+                        if preparation_session != (self._node_boot_id, self._controller_session_generation):
+                            raise SafetyError("Controller session changed during preparation; prepare the job again")
+                        authorization = (phrase, time.monotonic() + float(self.laser_settings.arm_timeout_seconds), authorization_epoch)
+                if material_surface_binding(program.lines) is not None:
+                    self._require_material_surface_capability()
+                    validate_program_binding(program.lines, self.material_surface_snapshot())
                 authorization_phrase = self._authorization_phrase_for_start(
                     authorization
                 )
@@ -2728,7 +2880,11 @@ class RemoteMachineService:
                 with self._state_lock:
                     self._upload_job_id = None
                 raise
-            start_payload: dict[str, Any] = {"job_id": job_id, **binding}
+            start_payload: dict[str, Any] = {
+                "job_id": job_id, **binding,
+                "expected_boot_id": preparation_session[0],
+                "expected_session_generation": preparation_session[1],
+            }
             if authorization_phrase is not None:
                 start_payload["authorization_phrase"] = authorization_phrase
             self._mark_start_uncertain(
@@ -2741,7 +2897,7 @@ class RemoteMachineService:
             self._submission_progress(job_id, phase="starting")
             try:
                 self._require_operation_current(generation)
-                start = self._rpc(ACTION_JOB_START, start_payload)
+                start = self._rpc(ACTION_JOB_START, start_payload, timeout=preparation_timeout)
             except _RemoteRequestRejected as exc:
                 self._require_operation_current(generation)
                 with self._state_lock:
@@ -2815,14 +2971,27 @@ class RemoteMachineService:
         *,
         authorization_phrase: str | None = None,
     ) -> dict[str, Any]:
+        generation = self._operation_stop_epoch()
+        with self._state_lock:
+            self._authorization_epoch += 1
+            self._clear_arm_locked()
+            authorization_epoch = self._authorization_epoch
         self._require_current_program(program)
+        deferred = None
         if program.requires_laser_authorization:
             if authorization_phrase is None:
                 raise SafetyError(
                     "This powered program requires explicit START authorization"
                 )
-            self.arm_program(authorization_phrase, program)
-        return self.start_validated_program(program, name)
+            if type(authorization_phrase) is not str or authorization_phrase.strip() != self.ARM_PHRASE:
+                raise SafetyError("Arming phrase did not match")
+            if self.laser_lockout:
+                raise SafetyError("Laser output is locked out for this process")
+            deferred = (authorization_phrase.strip(), authorization_epoch)
+        return self.start_validated_program(
+            program, name, _expected_stop_epoch=generation,
+            _deferred_authorization=deferred,
+        )
 
     def start_job(self, text: str, name: str = "generated.gcode") -> dict[str, Any]:
         generation = self._operation_stop_epoch()

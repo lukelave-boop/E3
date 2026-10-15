@@ -79,7 +79,6 @@ from ..project import (
     build_job_preflight_report,
     center_selection_on_stock,
     clear_autosave,
-    distributed_transforms,
     fit_selection_to_stock,
     generate_project_gcode,
     is_stock_boundary,
@@ -101,6 +100,7 @@ from ..project import (
     transform_native_path,
     verify_project_job_assets,
 )
+from ..project.polygon import create_regular_polygon
 from ..storage import atomic_write_text
 from ..templates import (
     CutTemplate,
@@ -125,6 +125,7 @@ from .controller import (
     image_to_qimage,
 )
 from .controls import InspectorTabs, MeasurementSpinBox, WheelGuard
+from .distribution_dialog import DistributionDialog
 from .icons import action_icon, apply_action_icons
 from .import_review import review_import_manifest
 from .job_preflight import JobPreflightDialog
@@ -135,9 +136,10 @@ from .job_preview import (
     prepare_job_preview,
 )
 from .laser_focus import LaserFocusWorkspace
+from .layer_profiles import LayerProfilesBar
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
-from .machine_state import ControllerUiState, project_machine_state
+from .machine_state import ControllerUiState, job_start_block_reason, project_machine_state
 from .mainboard_z import MainboardZCoordinator
 from .panels import (
     CameraPanel,
@@ -153,6 +155,7 @@ from .panels import (
 from .qt import require_qt
 from .raster_vectorize_dialog import RasterVectorizationDialog
 from .runtime_strip import RuntimeSafetyStrip
+from .scroll_position import StableScrollArea
 from .setup_guide import show_setup_guide
 from .speed_controls import format_speed_percent, speed_tooltip
 from .stock_layout_bar import StockLayoutToolBar
@@ -215,6 +218,7 @@ _AUTHORING_ACTION_KEYS = (
     "lower",
     "send_back",
     "rectangle",
+    "polygon",
     "ellipse",
     "line",
     "text",
@@ -287,7 +291,7 @@ class LayerPaletteBar(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
 
-        self._scroll = QtWidgets.QScrollArea()
+        self._scroll = StableScrollArea()
         self._scroll.setObjectName("layerPaletteScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -624,8 +628,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("align_bottom", "Align bottom")
         action("align_center_y", "Align vertical centers")
         action("align_top", "Align top")
-        action("distribute_h", "Distribute horizontally")
-        action("distribute_v", "Distribute vertically")
+        action("distribute_h", "Distribute horizontally…")
+        action("distribute_v", "Distribute vertically…")
         action("bring_front", "Bring to front", "Ctrl+Shift+]")
         action("raise", "Raise one step", "Ctrl+]")
         action("lower", "Lower one step", "Ctrl+[")
@@ -636,8 +640,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("zoom_out", "Zoom out", "Ctrl+-")
         action("snap", "Snap to grid", "Ctrl+Alt+G", checkable=True)
         self.actions["snap"].setChecked(True)
+        action("precision_placement", "Precision placement", checkable=True)
+        self.actions["precision_placement"].setChecked(True)
+        self.actions["precision_placement"].setToolTip(
+            "Preserve calibrated camera detail and suspend grid snapping for precise placement."
+        )
         action("select_tool", "Select tool", checkable=True)
         action("rectangle", "Draw rectangle", "Alt+R", checkable=True)
+        action("polygon", "Draw polygon", checkable=True)
         action("ellipse", "Add ellipse", "Alt+E")
         action("line", "Add line", "Alt+L")
         action("text", "Add text", "Alt+T")
@@ -645,13 +655,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("trace_objects", "Detect / trace camera objects…", "Ctrl+Alt+T")
         action("template_alignment", "Cutting template alignment…", "Ctrl+Alt+A")
         action("refresh_camera", "Refresh camera", "F5")
+        action("capture_placement", "Capture for placement")
+        self.actions["capture_placement"].setToolTip(
+            "Home and park with laser off, then capture the measured surface for placement review."
+        )
         action("machine_manager", "Manage machines…", "Ctrl+Alt+Shift+M")
         action("machine_setup", "Machine Setup…", "Ctrl+Alt+M")
         action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
         action("optimize_paths", "Optimize path ordering")
         action("preview_job", "Preview generated job", "Alt+P")
         action("export_gcode", "Export generated G-code…", "Ctrl+Shift+E")
-        action("stop", "Software stop / laser off", "Esc")
+        action("stop", "Software stop / laser off")
+        action("cancel_tool", "Cancel current tool / deselect", "Esc")
+        self.actions["cancel_tool"].setAutoRepeat(False)
+        self.addAction(self.actions["cancel_tool"])
+        self.actions["cancel_tool"].triggered.connect(
+            lambda: self._cancel_current_function()
+        )
         action("minimize_window", "Minimize window", "Ctrl+M")
         action("maximize_window", "Maximize / restore window", "Ctrl+Shift+M")
         action("reset_window_size", "Reset window size")
@@ -663,6 +683,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._drawing_action_group.setExclusive(True)
         self._drawing_action_group.addAction(self.actions["select_tool"])
         self._drawing_action_group.addAction(self.actions["rectangle"])
+        self._drawing_action_group.addAction(self.actions["polygon"])
         self.actions["select_tool"].setChecked(True)
 
         apply_action_icons(self.actions, size=20)
@@ -709,11 +730,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["zoom_in"].triggered.connect(self.workspace.zoom_in)
         self.actions["zoom_out"].triggered.connect(self.workspace.zoom_out)
         self.actions["snap"].toggled.connect(self.workspace.set_snap_enabled)
+        self.actions["precision_placement"].toggled.connect(self._precision_placement_changed)
         self.actions["select_tool"].triggered.connect(
             lambda checked=False: self._activate_selection_tool()
         )
         self.actions["rectangle"].triggered.connect(
             lambda checked=False: self.add_rectangle()
+        )
+        self.actions["polygon"].triggered.connect(
+            lambda checked=False: self.add_polygon()
         )
         self.actions["ellipse"].triggered.connect(self.add_ellipse)
         self.actions["line"].triggered.connect(self.add_line)
@@ -724,6 +749,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["trace_objects"].triggered.connect(self.open_trace_panel)
         self.actions["template_alignment"].triggered.connect(self.open_template_panel)
         self.actions["refresh_camera"].triggered.connect(self.controller.retry_camera_image)
+        self.actions["capture_placement"].triggered.connect(self.controller.capture_for_placement)
         self.actions["machine_manager"].triggered.connect(self.open_machine_manager)
         self.actions["machine_setup"].triggered.connect(self.open_machine_setup)
         self.actions["setup_guide"].triggered.connect(
@@ -770,14 +796,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(self.actions["ungroup"])
 
         tools_menu = self.menuBar().addMenu("&Tools")
-        for key in ("rectangle", "ellipse", "line", "text"):
-            tools_menu.addAction(self.actions[key])
-        tools_menu.addSeparator()
-        tools_menu.addAction(self.actions["grid_template_designer"])
-        tools_menu.addAction(self.actions["trace_objects"])
-        tools_menu.addAction(self.actions["template_alignment"])
-        tools_menu.addSeparator()
         tools_menu.addAction(self.actions["refresh_camera"])
+        tools_menu.addAction(self.actions["capture_placement"])
         tools_menu.addAction(self.actions["machine_manager"])
         tools_menu.addAction(self.actions["machine_setup"])
 
@@ -814,7 +834,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.window_menu.addAction(self.actions["reset_window_size"])
         self.window_menu.addAction(self.actions["reset_workspace_layout"])
         self.window_menu.addSeparator()
-        for key in ("fit", "fit_selection", "zoom_in", "zoom_out", "snap"):
+        for key in ("fit", "fit_selection", "zoom_in", "zoom_out", "snap", "precision_placement"):
             self.window_menu.addAction(self.actions[key])
         self.window_menu.addSeparator()
 
@@ -874,7 +894,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tools.setMaximumWidth(44)
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, tools)
 
-        for key in ("select_tool", "line", "rectangle", "ellipse", "text"):
+        for key in ("select_tool", "line", "rectangle", "polygon", "ellipse", "text"):
             tools.addAction(self.actions[key])
         tools.addSeparator()
         for key in (
@@ -906,6 +926,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             snap_group.addAction(step_action)
         snap_button.setMenu(snap_menu)
         tools.addWidget(snap_button)
+        precision_button = QtWidgets.QToolButton()
+        precision_button.setDefaultAction(self.actions["precision_placement"])
+        precision_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        tools.addWidget(precision_button)
 
         arrange_toolbar = self.addToolBar("Arrange")
         arrange_toolbar.setObjectName("arrangeToolbar")
@@ -1031,6 +1055,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layer_panel = LayerPanel(
             max_work_feed_mm_min=self.runtime.settings.machine.max_work_feed_mm_min,
         )
+        self.layer_profiles_bar = LayerProfilesBar(self)
+        self.layer_panel.layout().insertWidget(0, self.layer_profiles_bar)
         self.object_panel = ObjectPanel()
         self.transform_panel = TransformPanel()
         self.trace_panel = TracePanel()
@@ -1114,7 +1140,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.direct_edit_label.setObjectName("directEditStatus")
         self.direct_edit_label.setToolTip(
             "Drag an object to move it; use its corner and rotation handles for "
-            "direct editing. Hold Shift while rotating for 15° snapping."
+            "direct editing. Hold Ctrl for horizontal/vertical; Shift for 15° snapping."
         )
         self.cursor_label = QtWidgets.QLabel("X —  Y —")
         self.selection_label = QtWidgets.QLabel("0 objects selected")
@@ -1151,6 +1177,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.deleteRequested.connect(self.delete_selection)
         self.workspace.pointPicked.connect(self._trace_point_picked)
         self.workspace.creationToolChanged.connect(self._creation_tool_changed)
+        self.workspace.polygonDrawCommitted.connect(self._polygon_draw_committed)
         self.workspace.rectangleDraftChanged.connect(self._rectangle_draft_changed)
         self.workspace.rectangleDrawCommitted.connect(
             self._rectangle_draw_committed
@@ -1184,6 +1211,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel.layerColorEditRequested.connect(
             self.layer_panel.choose_color
         )
+        self.object_panel.backgroundCleanupRequested.connect(self.clean_image_background)
         self.object_panel.rasterVectorizeRequested.connect(
             self.vectorize_raster_image
         )
@@ -1274,6 +1302,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.controller.set_live_camera_interval
         )
         self.camera_panel.captureRequested.connect(self.controller.capture_camera_still)
+        self.camera_panel.placementCaptureRequested.connect(self.controller.capture_for_placement)
         self.camera_panel.opacityChanged.connect(self.workspace.set_camera_opacity)
         self.camera_panel.focusApplyRequested.connect(
             self.controller.apply_camera_focus
@@ -1372,12 +1401,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         if not any(layer.id == self.active_layer_id for layer in self.document.layers):
             self.active_layer_id = self.document.active_layer_id
-        if self.workspace.creation_tool == "rectangle":
+        if self.workspace.creation_tool in {"rectangle", "polygon"}:
             self.workspace.set_creation_color(
                 self.document.get_layer(self.active_layer_id).color
             )
         self.workspace.set_document(self.document)
         self.layer_panel.set_document(self.document, self.active_layer_id)
+        self.layer_profiles_bar.update_save_highlight()
         self.object_panel.set_document(
             self.document,
             selected_ids or self.workspace.selected_object_ids(),
@@ -1524,7 +1554,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def set_active_layer(self, layer_id: str) -> None:
         layer = self.document.get_layer(layer_id)
         self.active_layer_id = layer_id
-        if self.workspace.creation_tool == "rectangle":
+        if self.workspace.creation_tool in {"rectangle", "polygon"}:
             self.workspace.set_creation_color(layer.color)
         self.layer_panel.set_document(self.document, layer_id)
         self.palette.set_layers(self.document.layers, layer_id)
@@ -1687,6 +1717,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.history.execute(command)
         self.workspace.select_objects([item.id])
 
+    def _cancel_current_function(self) -> None:
+        self.workspace.cancel_authoring_interaction()
+        self.actions["select_tool"].setChecked(True)
+        self.show_notice("Current tool cancelled; selection cleared")
+
     def _activate_selection_tool(self, *, show_message: bool = True) -> None:
         self.actions["select_tool"].setChecked(True)
         self.workspace.set_creation_tool(None)
@@ -1704,21 +1739,49 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "right-click the canvas to finish."
         )
 
+    def add_polygon(self) -> None:
+        layer = self.document.get_layer(self.active_layer_id)
+        self.actions["polygon"].setChecked(True)
+        self.workspace.set_creation_tool("polygon", color=layer.color)
+        self.show_notice(
+            "Polygon: click the center, move to set size and angle, then click again. "
+            "Enter 3–12 sides to preview; Create finishes, Cancel discards."
+        )
+
+    def _polygon_draw_committed(
+        self, center_x_mm: float, center_y_mm: float, radius_mm: float,
+        angle_deg: float, sides: int,
+    ) -> None:
+        self._add_object(
+            create_regular_polygon(
+                self.active_layer_id, (center_x_mm, center_y_mm), radius_mm, angle_deg, sides,
+            ),
+            "Add polygon",
+        )
+        self.show_notice(f"Created {sides}-sided polygon, radius {radius_mm:.3f} mm")
+
     def _creation_tool_changed(self, tool: str) -> None:
         drawing_rectangle = tool == "rectangle"
         self.actions["rectangle"].setChecked(drawing_rectangle)
-        self.actions["select_tool"].setChecked(not drawing_rectangle)
+        self.actions["polygon"].setChecked(tool == "polygon")
+        self.actions["select_tool"].setChecked(not tool)
         if drawing_rectangle:
             self.direct_edit_label.setText("Rectangle | drag to draw")
             self.direct_edit_label.setToolTip(
                 "Drag between opposite corners. The active operation color is "
                 "used; choose Select or right-click the canvas to finish."
             )
+        elif tool == "polygon":
+            self.direct_edit_label.setText("Polygon | click center, then size")
+            self.direct_edit_label.setToolTip(
+                "Click the center, move to size and rotate, then click to lock. "
+                "Type 3–12 sides for a live preview. Right-click exits drawing."
+            )
         else:
             self.direct_edit_label.setText("Move | Size | Rotate")
             self.direct_edit_label.setToolTip(
                 "Drag an object to move it; use its corner and rotation handles "
-                "for direct editing. Hold Shift while rotating for 15-degree snapping."
+                "for direct editing. Hold Ctrl for horizontal/vertical; Shift for 15-degree snapping."
             )
         self._update_status_bar_layout()
 
@@ -2036,14 +2099,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def distribute_selection(self, *, horizontal: bool) -> None:
         selected = self.workspace.selected_object_ids()
-        transforms = distributed_transforms(
-            self.document,
-            selected,
-            horizontal=horizontal,
-        )
-        if not transforms:
-            self.show_notice("Select at least three objects to distribute")
+        if not selected:
+            self.show_notice("Select the objects to distribute first")
             return
+        dialog = DistributionDialog(
+            self.document, selected, horizontal=horizontal, parent=self,
+        )
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        transforms = dialog.transforms
         self.history.execute(
             UpdateTransformsCommand(
                 self.document,
@@ -2346,7 +2410,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 color=self.document.next_layer_color(),
                 mode=LayerMode.RASTER,
                 priority=len(self.document.layers),
-                output_enabled=False,
+                output_enabled=True,
             )
             self.history.execute(
                 AddLayerCommand(self.document, layer, description="Add raster layer")
@@ -2372,6 +2436,40 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.show_notice(
             "Imported grayscale raster image with deterministic ordered dithering"
         )
+
+    def clean_image_background(self, object_id: str) -> None:
+        from .background_cleanup import BackgroundCleanupDialog
+
+        try:
+            source = self.document.get_object(object_id)
+            if (self.workspace.selected_object_ids() != [object_id]
+                    or source.kind is not ObjectKind.IMAGE or source.locked):
+                raise ValueError("Select one unlocked image to clean its background")
+            identity = self.workspace.raster_preview_identity_for_object(object_id)
+            if identity is None:
+                raise ValueError("The image needs a readable, verified canvas preview")
+            asset = source.geometry["asset"]
+            payload = read_raster_asset_payload(asset, expected_source_sha256=identity[1])
+            if payload.identity.path != identity[0]:
+                raise ValueError("The image source differs from its canvas preview")
+            before = source.to_dict()
+            dialog = BackgroundCleanupDialog(payload, source.geometry, self)
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            read_raster_asset_payload(asset, expected_source_sha256=payload.identity.sha256)
+            if self.document.get_object(object_id).to_dict() != before:
+                raise ValueError("The image changed during review; reopen background cleanup")
+            geometry = dict(source.geometry)
+            geometry["background_cleanup"] = dialog.settings
+            if geometry == source.geometry:
+                return
+            self.history.execute(UpdateObjectShapeCommand(
+                self.document, object_id, source.transform, geometry,
+                description="Clean image background",
+            ))
+            self.workspace.select_objects([object_id])
+        except Exception as exc:
+            self.show_error(f"Could not apply background cleanup: {exc}")
 
     def vectorize_raster_image(self, object_id: str) -> None:
         """Open the offline raster-to-vector review for one selected image."""
@@ -2734,6 +2832,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             start_position = (float(machine.photo_x), float(machine.photo_y))
             optimize_order = self.actions["optimize_paths"].isChecked()
             app_context = self.runtime.context
+            surface_provider = getattr(app_context, "material_surface_signature", None)
+            surface_signature = surface_provider() if callable(surface_provider) else None
+            placement_capture_signature = (self.controller.placement_capture_signature()
+                                           if surface_signature is not None else None)
             identity = app_context.machine_identity
             active_calibration_profile_id = (
                 app_context.calibration_profiles.current.key
@@ -2809,9 +2911,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "coordinate_space": source_document.coordinate_space,
             "work_area": work_area,
             "machine_work_area": machine_work_area,
+            "raster_travel_envelope": machine.raster_travel_envelope,
             "air_assist_commands": air_assist_commands,
             "coordinate_frame": coordinate_frame,
             "coordinate_frame_signature": coordinate_frame_signature,
+            "material_surface_signature": surface_signature,
+            "placement_capture_signature": placement_capture_signature,
             "guarded_output_polygon_mm": guarded_output_polygon_mm,
             "start_position": start_position,
             "optimize_order": optimize_order,
@@ -3056,11 +3161,27 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     start_position=start_position,
                     coordinate_frame=context["coordinate_frame"],
                     machine_work_area=context["machine_work_area"],
+                    raster_travel_envelope=context.get("raster_travel_envelope"),
+                    require_verified_raster_travel_limits=True,
                     guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
                     planning_cache=context["planning_cache"],
                     air_assist_commands=context["air_assist_commands"],
                     cancel_check=cancellation.is_set,
                 )
+                app_context = self.runtime.context
+                surface_provider = getattr(app_context, "material_surface_signature", None)
+                if callable(surface_provider) and surface_provider() != context.get("material_surface_signature"):
+                    raise ValueError("Material surface changed; regenerate the toolpath")
+                capture_signature = context.get("placement_capture_signature")
+                if capture_signature is not None and capture_signature != self.controller.placement_capture_signature():
+                    raise ValueError("Placement photograph changed; review and generate the toolpath again")
+                job.placement_capture_signature = capture_signature
+                bind_surface = getattr(app_context, "bind_material_surface_program", None)
+                if callable(bind_surface):
+                    bound_text = bind_surface(job.text)
+                    if bound_text != job.text:
+                        job.text = bound_text
+                        job.plan = None
                 plan = job.plan
                 if plan is None:
                     plan = build_job_plan(
@@ -3374,6 +3495,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     self.runtime.settings.machine.max_travel_feed_mm_min
                 ),
                 coordinate_frame=coordinate_frame,
+                engraving_surface_mm=getattr(self.last_job, "engraving_surface_mm", None),
                 preflight_report=self.last_job_preflight_report,
             )
         except Exception as exc:
@@ -3699,6 +3821,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 != context["calibration_guidance_signature"]
             ):
                 return False
+            if self.runtime.settings.machine.raster_travel_envelope != context.get("raster_travel_envelope"):
+                return False
             if self.runtime.settings.laser != context["laser"]:
                 return False
             if self.actions["optimize_paths"].isChecked() != bool(
@@ -3712,6 +3836,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
             ):
                 return False
             app_context = self.runtime.context
+            surface_provider = getattr(app_context, "material_surface_signature", None)
+            if callable(surface_provider) and surface_provider() != context.get("material_surface_signature"):
+                return False
+            if (context.get("placement_capture_signature") is not None
+                    and context["placement_capture_signature"] != self.controller.placement_capture_signature()):
+                return False
             identity = app_context.machine_identity
             return (
                 identity.machine_id == context["machine_id"]
@@ -3759,9 +3889,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         return {
             "air_assist_commands": air_assist_commands,
             "power_mode": str(laser.power_mode),
+            "raster_travel_envelope": machine.raster_travel_envelope,
             "spot_offset_mm": spot_offset_mm,
             "start_position": tuple(self._planned_job_start_position()),
             "work_area": self._work_area_signature(machine.work_area),
+            "placement_capture_signature": getattr(source_job, "placement_capture_signature", None),
         }
 
     def _start_here_request_context_is_current(
@@ -3772,12 +3904,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         try:
             machine = self.runtime.settings.machine
+            capture_signature = context.get("placement_capture_signature")
+            if capture_signature is not None and capture_signature != self.controller.placement_capture_signature():
+                return False
             return (
                 resolve_air_assist_commands(
                     machine.air_assist,
                     protocol=machine.protocol,
                 )
                 == context["air_assist_commands"]
+                and machine.raster_travel_envelope == context.get("raster_travel_envelope")
                 and str(self.runtime.settings.laser.power_mode)
                 == str(context["power_mode"])
                 and (
@@ -3903,7 +4039,19 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if job is None:
             return False
         try:
+            validate_surface = getattr(getattr(self.runtime, "context", None), "validate_material_surface_program", None)
+            if callable(validate_surface):
+                validate_surface(job.text)
+            capture_signature = getattr(job, "placement_capture_signature", None)
+            if capture_signature is not None and capture_signature != self.controller.placement_capture_signature():
+                return False
+        except Exception:
+            return False
+        try:
             laser = self.runtime.settings.laser
+            prepared_travel = getattr(job, "raster_travel_envelope", None)
+            if prepared_travel is not None and prepared_travel != self.runtime.settings.machine.raster_travel_envelope:
+                return False
             prepared_spot_offset_mm = tuple(
                 float(value) for value in job.spot_offset_mm
             )
@@ -4276,6 +4424,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 ),
                 air_assist_commands=restarted.air_assist_commands,
                 raster_assets=source_job.raster_assets,
+                engraving_surface_mm=getattr(source_job, "engraving_surface_mm", None),
+                raster_travel_envelope=getattr(source_job, "raster_travel_envelope", None),
+                placement_capture_signature=getattr(source_job, "placement_capture_signature", None),
                 coordinate_space=getattr(
                     source_job,
                     "coordinate_space",
@@ -4459,6 +4610,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             pending.pop("program_digest", None)
 
         run_options: dict[str, Any] = {"arm_phrase": phrase}
+        if getattr(self.last_job, "placement_capture_signature", None) is not None:
+            run_options["placement_capture_signature"] = self.last_job.placement_capture_signature
         if self.last_job_coordinate_frame is not None:
             run_options["honeycomb_signature"] = self.last_job_coordinate_frame
             run_options["guarded_output_polygon_mm"] = getattr(
@@ -4744,11 +4897,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self.controller.cancel_template_match()
         self._template_match_result = None
+        self._manual_template_surface_review = None
+        try:
+            self._manual_template_surface_review = E3MainWindow._manual_template_surface_context(self)
+        except Exception as exc:
+            self.template_panel.clear_placement()
+            self.template_panel.set_match_message(str(exc))
+            return
         center_x, center_y = self._document_center()
         self.template_panel.set_placement(center_x, center_y, 0.0)
         if self.runtime.context.bed.calibration is not None:
             self.template_panel.set_match_message(
-                "Manual placement is active. Choose Align selected template "
+                "Manual placement is active. Choose Align to workpiece "
                 "to replace it with a camera alignment."
             )
         else:
@@ -4797,6 +4957,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     image_area=E3MainWindow._camera_image_area(
                         payload.get("camera_image_area")
                     ),
+                    pixels_per_mm=payload.get("pixels_per_mm"),
                     fit=True,
                 )
         candidates = [dict(item) for item in payload.get("candidates", [])]
@@ -4826,6 +4987,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.inspector_tabs.select_panel("templates")
         self.show_notice(str(payload.get("message", "Template alignment ready for review")))
 
+    def _manual_template_surface_context(self) -> tuple[Any, dict[str, Any] | None]:
+        context = getattr(getattr(self, "runtime", None), "context", None)
+        provider = getattr(context, "material_surface_metadata", None)
+        surface = provider() if callable(provider) else None
+        if surface is None:
+            return None, None
+        capture = getattr(self.controller, "_placement_capture", None)
+        if capture is None or not self.controller.review_signature_is_current(capture["review_signature"]):
+            raise ValueError("Use Capture for placement, then review the template on the measured surface")
+        signature = (self.controller._placement_capture_epoch, capture["review_signature"])
+        return signature, copy.deepcopy(surface)
+
     def _template_placement_changed(self, payload: dict[str, Any]) -> None:
         template_id = str(payload.get("template_id") or "")
         template = self._templates.get(template_id)
@@ -4837,6 +5010,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         rotation = float(payload.get("rotation_deg", 0.0))
         self._update_template_match_adjustment(payload)
         try:
+            if self._template_match_result is None:
+                self._manual_template_surface_review = E3MainWindow._manual_template_surface_context(self)
             objects = instantiate_template(
                 template,
                 target_x_mm=center_x,
@@ -4955,6 +5130,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 )
                 return
         try:
+            surface = None
+            if self._template_match_result is None:
+                review = E3MainWindow._manual_template_surface_context(self)
+                if review[1] is not None:
+                    if review != getattr(self, "_manual_template_surface_review", None):
+                        raise ValueError("Material surface or placement photograph changed; review the template again")
+                    surface = review[1]
+            else:
+                surface = self._template_match_result.get("material_surface")
             objects = instantiate_template(
                 template,
                 target_x_mm=float(payload.get("center_x_mm", 0.0)),
@@ -4963,6 +5147,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 target_layer_id=self.active_layer_id,
             )
             area = self.document.work_area.expanded(WORK_AREA_TOLERANCE_MM)
+            if isinstance(surface, dict):
+                for item in objects:
+                    item.metadata["material_surface"] = copy.deepcopy(surface)
             outside = [
                 item.name
                 for item in objects
@@ -4980,6 +5167,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     description=f"Apply {template.name} template",
                 )
             )
+            if isinstance(surface, dict):
+                self.document.metadata["material_surface"] = copy.deepcopy(surface)
         except Exception as exc:
             self.show_error(f"Could not apply cutting template: {exc}")
             return
@@ -4993,6 +5182,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _clear_template_preview(self, show_message: bool = True) -> None:
         self.controller.cancel_template_match()
         self._template_match_result = None
+        self._manual_template_surface_review = None
         self.workspace.clear_template_preview()
         if hasattr(self, "template_panel"):
             self.template_panel.set_busy(False)
@@ -5165,6 +5355,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._trace_raster_preview_images = images
         self._trace_raster_preview_area = area
         self._trace_raster_preview_signature = signature
+        self._trace_raster_preview_pixels_per_mm = payload.get("pixels_per_mm")
         strategy = self._trace_raster_preview_value(preview, "strategy")
         selected_strategy = bool(
             self._trace_raster_preview_value(preview, "selected_strategy")
@@ -5217,7 +5408,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             settings = getattr(runtime, "settings", None)
             calibration = getattr(settings, "calibration", None)
             bed = getattr(calibration, "bed", None)
-            base_ppm = getattr(bed, "pixels_per_mm", None)
+            base_ppm = getattr(self, "_trace_raster_preview_pixels_per_mm", None)
+            if base_ppm is None:
+                base_ppm = getattr(bed, "pixels_per_mm", None)
             if base_ppm is not None:
                 display_ppm = float(base_ppm) * scale
             elif self._trace_raster_preview_area is not None:
@@ -5301,6 +5494,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     image_area=E3MainWindow._camera_image_area(
                         result.get("camera_image_area")
                     ),
+                    pixels_per_mm=result.get("pixels_per_mm"),
                     fit=True,
                 )
         self._trace_result = result
@@ -5813,6 +6007,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             if purpose == "stock":
                 objects = [mark_stock_boundary(objects[0])]
+            surface = self._trace_result.get("material_surface")
+            if isinstance(surface, dict):
+                for item in objects:
+                    item.metadata["material_surface"] = copy.deepcopy(surface)
             if trace_detail == "outer_silhouette":
                 for item in objects:
                     item.metadata["trace_detail"] = trace_detail
@@ -5874,6 +6072,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     description=create_description,
                 )
             self.history.execute(command)
+            if isinstance(surface, dict):
+                self.document.metadata["material_surface"] = copy.deepcopy(surface)
         except Exception as exc:
             self.show_error(f"Could not create traced objects: {exc}")
             return
@@ -5928,6 +6128,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         image = payload
         if isinstance(payload, dict):
             image = payload.get("image")
+            if pixels_per_mm is None:
+                pixels_per_mm = payload.get("pixels_per_mm")
             if image_area is None:
                 image_area = self._camera_image_area(
                     payload.get("camera_image_area")
@@ -5959,9 +6161,48 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if fit or area_changed:
             self.workspace.fit_camera_image()
         self.camera_panel.set_image_updated()
+        frame_metadata = payload.get("focus_frame_metadata") if isinstance(payload, dict) else None
+        if isinstance(frame_metadata, dict) and frame_metadata.get("approximate_support_preview"):
+            self.camera_panel.image_state.setText(
+                "APPROXIMATE support-plane preview · probe a broad solid patch, then capture for placement"
+            )
 
     def _camera_image_invalidated(self) -> None:
         self.workspace.set_camera_image(None)
+
+    def _precision_placement_changed(self, enabled: bool) -> None:
+        self.controller.set_precision_placement_enabled(enabled)
+        self.controller.release_placement_capture()
+        self._sync_precision_placement()
+        self._clear_trace_preview()
+        self._clear_template_preview(show_message=False)
+
+    def _sync_precision_placement(self) -> None:
+        action = self.actions.get("precision_placement")
+        if action is None:
+            return
+        provider = getattr(self.runtime.context, "material_surface_signature", None)
+        try:
+            surface_signature = provider() if callable(provider) else None
+            active = bool(action.isChecked() and self.runtime.context.bed.calibration is not None)
+        except Exception as exc:
+            surface_signature = ("invalid", str(exc))
+            # Invalid material evidence cannot restore grid rounding to a precision review.
+            active = bool(action.isChecked() and self.workspace.precision_placement_enabled)
+        previous_signature = getattr(self, "_observed_material_surface_signature", surface_signature)
+        self._observed_material_surface_signature = surface_signature
+        if previous_signature != surface_signature:
+            self.controller.release_placement_capture()
+            self._clear_trace_preview()
+            self._clear_template_preview(show_message=False)
+            self._invalidate_generated_job()
+            self.workspace.set_camera_image(None)
+        self.workspace.set_precision_placement_enabled(active)
+        snap = self.actions["snap"]
+        blocker = QtCore.QSignalBlocker(snap)
+        snap.setChecked(self.workspace.snap_enabled)
+        snap.setEnabled(not active)
+        del blocker
 
     def _camera_focus_changed(
         self,
@@ -5988,6 +6229,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.camera_panel.set_status(camera)
         self.camera_panel.set_calibration_profile(status.get("calibration_profile"))
+        self._sync_precision_placement()
         calibration_ready = bool((status.get("bed") or {}).get("calibrated", False))
         self.camera_panel.set_calibration_ready(calibration_ready)
         self.trace_panel.set_calibration_ready(calibration_ready)
@@ -6261,10 +6503,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._machine_status,
             operation_busy=self._controller_busy or self._job_preparation_busy,
         )
-        target.set_run_enabled(
-            state.can_start_job,
-            "" if state.can_start_job else state.blocked_reason("START JOB"),
+        reason = (
+            job_start_block_reason(
+                self._machine_status, powered=target.requires_laser_output,
+            ) if state.can_start_job else state.blocked_reason("START JOB")
         )
+        target.set_run_enabled(state.can_start_job and not reason, reason)
 
 
     def _refresh_machine_selector(self, selected_id: str | None = None) -> None:
@@ -6543,6 +6787,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._invalidate_generated_job()
         automatic_captures = {
             "Base bed mapping": (2, "capture_base_bed_mapping"),
+            "Surface height calibration": (2, "capture_surface_height_evidence"),
             "Fine registration": (3, "capture_fine_registration"),
             "Dense local correction": (3, "capture_dense_calibration"),
             "Accuracy validation": (4, "capture_accuracy_validation"),

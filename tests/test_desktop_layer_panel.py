@@ -675,6 +675,7 @@ def test_runtime_status_refreshes_recipes_from_running_identity(
         _machine_setup_dialog=None,
         _machine_manager_dialog=None,
         _sync_job_preview_machine_gate=lambda: None,
+        _sync_precision_placement=lambda: None,
     )
 
     E3MainWindow._runtime_status(

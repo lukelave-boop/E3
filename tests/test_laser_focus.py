@@ -123,6 +123,25 @@ def test_reference_and_high_measurement_ranges(focus):
     assert focus.serial.z == 80
 
 
+def test_reference_identity_is_stable_across_measurements_and_changes_on_rereference(focus):
+    focus.serial.contacts = [0., 5., 5., 0.]
+    initial = focus.run("reference")
+    assert initial["reference_ready"]
+    assert initial["reference"]["border_z_mm"] == 0
+    first_id = initial["reference_id"]
+    assert len(first_id) == 36
+    initial["reference"]["border_z_mm"] = 999
+    for _ in range(2):
+        measured = focus.run("measure")
+        assert measured["reference_id"] == first_id
+        assert measured["reference"]["border_z_mm"] == 0
+    assert focus.run("status")["reference_id"] == first_id
+    assert focus.run("reference")["reference_id"] != first_id
+    focus.state.drop_z_reference()
+    result = focus.run("status")
+    assert result["reference"] is None and result["reference_id"] is None
+
+
 @pytest.mark.parametrize("minimum,contact", [(-10, -10), (-10, -8), (-10, -2), (-2, -2)])
 def test_surface_contact_uses_advertised_minimum_and_returns_to_clearance(focus, minimum, contact):
     focus.serial.overrides["M115"] = [line.replace("MIN:-2 ", f"MIN:{minimum} ") for line in IDENTITY]

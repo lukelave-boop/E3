@@ -255,7 +255,7 @@ def test_development_update_workflow_publishes_only_main() -> None:
     assert "  workflow_dispatch:" in source
     assert "  cancel-in-progress: true" in source
     assert "fix/live-monitor-display-throughput" not in source
-    assert source.count("if: github.ref == 'refs/heads/main'") == 3
+    assert source.count("if: github.ref == 'refs/heads/main'") == 4
 
 
 def test_development_update_workflow_switches_verified_manifest_last() -> None:

@@ -143,7 +143,7 @@ def test_submission_progress_survives_delayed_job_poll_in_either_update_order(
         widget.set_job_status(previous_job)
         widget.set_machine_status(machine)
 
-    assert widget.progress.format() == "Uploading job 25%"
+    assert widget.progress.format() == "Sending file · 25% transferred"
     assert widget.progress.maximum() == 1000
     assert widget.progress.value() == 250
     assert "8,192/32,768 bytes acknowledged" in widget.toolTip()
@@ -152,7 +152,7 @@ def test_submission_progress_survives_delayed_job_poll_in_either_update_order(
     assert "Old failure" not in widget.toolTip()
     assert "Connection lost" not in widget.toolTip()
 
-    for phase, label in [("verifying", "Verifying job…"), ("starting", "Starting job…")]:
+    for phase, label in [("verifying", "File sent · checking on Pi · not ready yet"), ("starting", "Starting job…")]:
         machine["job_submission"]["phase"] = phase
         widget.set_machine_status(machine)
         assert widget.progress.format() == label
@@ -190,9 +190,28 @@ def test_upload_without_valid_acknowledged_byte_counts_is_indeterminate(
     widget = JobProgressWidget()
     widget.set_job_status({"phase": "uploading", **sizes})
     assert widget.progress.maximum() == 0
-    assert widget.progress.format() == "Uploading job…"
+    assert widget.progress.format() == "Sending file…"
     widget.close()
     widget.deleteLater()
+
+
+def test_verification_does_not_regress_on_poll_failure_or_claim_completion(qt_application):
+    widget = JobProgressWidget()
+    widget.set_job_status({"phase": "uploading", "received_size": 10, "expected_size": 10})
+    assert "%" not in widget.progress.format()
+    assert "not ready" in widget.progress.format()
+    widget.set_machine_status({
+        "status_refresh_error": "timed out", "node_reachable": False,
+        "job_submission": {"phase": "verifying"},
+    })
+    widget.set_job_status({"phase": "uploading", "received_size": 5, "expected_size": 10})
+    assert "checking on Pi" in widget.progress.format()
+    assert "timed out" in widget.toolTip()
+    widget.set_machine_status({"job_submission": {"phase": "failed", "error": "verification failed"}})
+    widget.set_job_status({"phase": "complete", "total_lines": 100, "completed_lines": 100})
+    assert widget.progress.format() == "Job failed"
+    assert widget.progress.value() == 0
+    widget.close()
 
 
 def test_delayed_pi_job_details_do_not_claim_monitor_connection_was_lost(

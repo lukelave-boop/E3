@@ -12,6 +12,7 @@ from ..project.job_preflight import JobPreflightReport
 from .columns import configure_resizable_columns
 from .job_preflight import JobPreflightView
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 from .speed_controls import format_speed_percent, speed_tooltip
 
 if TYPE_CHECKING:
@@ -219,6 +220,7 @@ class _ElidedLabel(QtWidgets.QLabel):
 
 
 class JobPreviewCanvas(QtWidgets.QGraphicsView):
+    footprintReady = QtCore.Signal()
     buildProgress = QtCore.Signal(int, int)
     buildFinished = QtCore.Signal()
     buildFailed = QtCore.Signal(str)
@@ -232,11 +234,30 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         move_ends: tuple[float, ...] | None = None,
         defer_render: bool = False,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
+        engraving_surface_mm: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.work_area = tuple(float(value) for value in work_area)
         self.coordinate_frame = coordinate_frame
+        self.engraving_surface_mm = (
+            plan.raster_boundary.engraving_polygon_mm
+            if plan.raster_boundary is not None
+            else engraving_surface_mm
+        )
+        self.movement_bounds_mm: tuple[float, float, float, float] | None = None
+        self.powered_bounds_mm: tuple[float, float, float, float] | None = None
+        self.raster_movement_bounds_mm: tuple[float, float, float, float] | None = None
+        self._approach_move_count = 0
+        for move in plan.moves:
+            if not move.rapid or move.laser_on:
+                if not (plan.raster_boundary or move.layer_mode == "raster" or move.focus_mode == "RASTER"):
+                    self._approach_move_count = 0
+                break
+            self._approach_move_count += 1
+        else:
+            self._approach_move_count = 0
+        self._footprints_ready = False
         self._scene = QtWidgets.QGraphicsScene(self)
         self.setScene(self._scene)
         self.setRenderHints(
@@ -253,6 +274,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         self._show_travel = True
         self._hidden_layers: set[str] = set()
         self._shade_power = False
+        self._high_contrast = False
         self._inverted = False
         self._elapsed = plan.total_seconds
         self._move_ends = (
@@ -295,6 +317,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             self._head_item.hide()
         else:
             self.set_elapsed(plan.total_seconds)
+            self._finalize_footprints()
         self._timeline_async_ready = True
 
     def _draw_bed(self) -> None:
@@ -324,8 +347,13 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             content_y_max - content_y_min + 2 * margin,
         )
         self._scene.setSceneRect(scene_rect)
-        bed = QtWidgets.QGraphicsRectItem(
-            QtCore.QRectF(x_min, -y_max, x_max - x_min, y_max - y_min)
+        surface_points = (
+            tuple(self._display_point(x, y) for x, y in self.engraving_surface_mm)
+            if self.engraving_surface_mm is not None
+            else ((x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max))
+        )
+        bed = QtWidgets.QGraphicsPolygonItem(
+            QtGui.QPolygonF([QtCore.QPointF(x, -y) for x, y in surface_points])
         )
         pen = QtGui.QPen(QtGui.QColor("#39B878"))
         pen.setWidthF(1.2)
@@ -334,15 +362,89 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         bed.setBrush(QtGui.QColor("#F4F5F2"))
         bed.setZValue(-20.0)
         self._scene.addItem(bed)
+        self._surface_item = bed
+        self._movement_footprint_item = self._boundary_item("#E7B55C", QtCore.Qt.PenStyle.DashLine)
+        self._approach_item = self._boundary_item("#E45A5A", QtCore.Qt.PenStyle.DashLine)
+        self._powered_footprint_item = self._boundary_item("#1E88E5", QtCore.Qt.PenStyle.DotLine)
         self.setBackgroundBrush(QtGui.QColor("#202326"))
+
+    def _boundary_item(
+        self, color: str, style: QtCore.Qt.PenStyle,
+    ) -> QtWidgets.QGraphicsPathItem:
+        item = QtWidgets.QGraphicsPathItem()
+        pen = QtGui.QPen(QtGui.QColor(color))
+        pen.setStyle(style)
+        pen.setWidthF(1.3)
+        pen.setCosmetic(True)
+        item.setPen(pen)
+        item.setZValue(15.0)
+        self._scene.addItem(item)
+        return item
+
+    def _finalize_footprints(self) -> None:
+        """Retain full-job extents from the already transformed exact paths.
+
+        This runs once after the initial render. Full extents include initial approaches,
+        white gaps and row transfers even when travel is hidden or playback is
+        rewound, without another Python pass over the plan or coordinate map.
+        """
+        self._approach_item.setPath(self._paths.get(("approach", "", None), QtGui.QPainterPath()))
+        for role, item in (
+            ("full", None),
+            ("raster", self._movement_footprint_item),
+            ("powered", self._powered_footprint_item),
+        ):
+            rectangles = [
+                path.boundingRect()
+                for key, path in self._paths.items()
+                if not path.isEmpty()
+                and (role != "powered" or key[0] == "powered")
+                and (role != "raster" or key[0] != "approach")
+            ]
+            if not rectangles:
+                continue
+            left = min(rect.left() for rect in rectangles)
+            right = max(rect.right() for rect in rectangles)
+            top = min(rect.top() for rect in rectangles)
+            bottom = max(rect.bottom() for rect in rectangles)
+            bounds = (left, -bottom, right, -top)
+            if role == "powered":
+                self.powered_bounds_mm = bounds
+            elif role == "full":
+                self.movement_bounds_mm = bounds
+                continue
+            else:
+                self.raster_movement_bounds_mm = bounds
+            path = QtGui.QPainterPath(QtCore.QPointF(left, top))
+            path.lineTo(right, top)
+            path.lineTo(right, bottom)
+            path.lineTo(left, bottom)
+            path.closeSubpath()
+            item.setPath(path)
+        surface_rect = self._surface_item.polygon().boundingRect()
+        if self.movement_bounds_mm is not None:
+            left, bottom, right, top = self.movement_bounds_mm
+            # QRectF.united treats a single horizontal/vertical row as empty.
+            left = min(left, surface_rect.left())
+            right = max(right, surface_rect.right())
+            top = max(top, -surface_rect.top())
+            bottom = min(bottom, -surface_rect.bottom())
+            content_rect = QtCore.QRectF(left, -top, right - left, top - bottom)
+        else:
+            content_rect = surface_rect
+        margin = max(1.0, content_rect.width(), content_rect.height()) * 0.06
+        self._scene.setSceneRect(content_rect.adjusted(-margin, -margin, margin, margin))
+        self._footprints_ready = True
+        self.footprintReady.emit()
 
     def _display_point(self, x_mm: float, y_mm: float) -> tuple[float, float]:
         if self.coordinate_frame is None:
             return float(x_mm), float(y_mm)
         return self.coordinate_frame.machine_to_local(x_mm, y_mm)
 
-    @staticmethod
-    def _key(move: PlannedMove) -> RenderKey:
+    def _key(self, move: PlannedMove) -> RenderKey:
+        if move.index < self._approach_move_count:
+            return "approach", "", None
         if move.rapid:
             return "travel", "", None
         if not move.laser_on:
@@ -351,13 +453,16 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
     def _pen(self, key: RenderKey, move: PlannedMove) -> QtGui.QPen:
         role, _, _ = key
-        if role == "travel":
+        if role in {"travel", "approach"}:
             pen = QtGui.QPen(QtGui.QColor("#E45A5A"))
             pen.setStyle(QtCore.Qt.PenStyle.DashLine)
             pen.setWidthF(0.55)
         elif role == "unpowered":
             pen = QtGui.QPen(QtGui.QColor("#E7B55C"))
             pen.setWidthF(0.55)
+        elif self._high_contrast:
+            pen = QtGui.QPen(QtGui.QColor("#F4F5F2" if self._inverted else "#101010"))
+            pen.setWidthF(0.75)
         elif self._shade_power:
             ratio = max(0.0, min(1.0, move.power / max(1, self.plan.power_max)))
             value = int(round(225 - ratio * 190))
@@ -478,6 +583,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
                     key: QtGui.QPainterPath(path)
                     for key, path in self._paths.items()
                 }
+                self._finalize_footprints()
             self._building = False
             self._initial_build = False
             self._update_item_visibility()
@@ -531,12 +637,18 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
     def _update_item_visibility(self) -> None:
         for key, item in self._items.items():
             item.setVisible(
-                (self._show_travel or key[0] != "travel")
+                key[0] != "approach"
+                and (self._show_travel or key[0] == "powered")
                 and (not key[1] or key[1] not in self._hidden_layers)
             )
 
     def _update_position(self) -> None:
         active = self.move_at(self._elapsed)
+        laser_on = active is not None and active.laser_on and not active.rapid
+        pen = self._head_item.pen()
+        pen.setColor(QtGui.QColor("#FFB300" if laser_on else "#00D4FF"))
+        self._head_item.setPen(pen)
+        self._head_item.setBrush(QtGui.QColor("#FFB300" if laser_on else "#062E37"))
         if active is None:
             self._active_item.hide()
             if self.plan.moves:
@@ -558,7 +670,10 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         start_x, start_y = self._display_point(active.start_x, active.start_y)
         x, y = self._display_point(x, y)
         self._active_item.setLine(start_x, -start_y, x, -y)
-        self._active_item.show()
+        self._active_item.setVisible(
+            (self._show_travel or (active.laser_on and not active.rapid))
+            and active.layer_id not in self._hidden_layers
+        )
         self._head_item.setPos(x, -y)
         self._head_item.show()
 
@@ -570,7 +685,11 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
     def set_show_travel(self, enabled: bool) -> None:
         self._show_travel = bool(enabled)
-        self.set_elapsed(self._elapsed)
+        # Display preferences must not start a timeline build before the
+        # deferred initial build, which owns the ready/progress signals.
+        self._update_item_visibility()
+        if not self._defer_render:
+            self._update_position()
 
     def set_layer_visible(self, layer_id: str, visible: bool) -> None:
         if visible:
@@ -584,12 +703,14 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         for key, item in self._items.items():
             item.setPen(self._pen(key, self._representative_moves[key]))
 
+    def set_high_contrast(self, enabled: bool) -> None:
+        self._high_contrast = bool(enabled)
+        self.set_power_shading(self._shade_power)
+
     def set_inverted(self, enabled: bool) -> None:
         self._inverted = bool(enabled)
         self.setBackgroundBrush(QtGui.QColor("#F0F0F0" if enabled else "#202326"))
-        for item in self._scene.items():
-            if isinstance(item, QtWidgets.QGraphicsRectItem) and item.zValue() < 0:
-                item.setBrush(QtGui.QColor("#17191B" if enabled else "#F4F5F2"))
+        self._surface_item.setBrush(QtGui.QColor("#17191B" if enabled else "#F4F5F2"))
         self.set_power_shading(self._shade_power)
 
     def fit_job(self) -> None:
@@ -637,15 +758,18 @@ class JobPreviewDialog(QtWidgets.QDialog):
         max_travel_feed_mm_min: float | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
         preflight_report: JobPreflightReport | None = None,
+        engraving_surface_mm: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.prepared = prepared or prepare_job_preview(plan)
         self.coordinate_frame = coordinate_frame
         self.preflight_report = preflight_report
+        self.requires_laser_output = plan.powered
         self.max_work_feed_mm_min = max_work_feed_mm_min
         self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
+        has_raster = any(move.layer_mode == "raster" and move.laser_on for move in plan.moves)
         self._render_completed = not self._deferred_render
         self._run_authorized = True
         self._run_blocked_reason = ""
@@ -683,6 +807,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
         completion_note.setWordWrap(True)
         completion_note.setMinimumWidth(0)
         layout.addWidget(completion_note)
+        if has_raster:
+            raster_note = QtWidgets.QLabel(
+                "Raster detail shows the exact laser-on pattern in high contrast. "
+                "Zoom in to inspect dots and gaps. This is not a prediction of burn darkness."
+            )
+            raster_note.setWordWrap(True)
+            layout.addWidget(raster_note)
 
         self.render_progress = QtWidgets.QProgressBar()
         self.render_progress.setObjectName("jobPreviewBuildProgress")
@@ -704,12 +835,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
             move_ends=self.prepared.move_ends,
             defer_render=self._deferred_render,
             coordinate_frame=coordinate_frame,
+            engraving_surface_mm=engraving_surface_mm,
         )
         self.canvas.setObjectName("jobPreviewCanvas")
         self.canvas.setMinimumSize(_MIN_CANVAS_WIDTH, _MIN_CANVAS_HEIGHT)
         self.body_splitter.addWidget(self.canvas)
 
-        self.sidebar = QtWidgets.QScrollArea()
+        self.sidebar = StableScrollArea()
         self.sidebar.setObjectName("jobPreviewSidebar")
         self.sidebar.setWidgetResizable(True)
         self.sidebar.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -794,18 +926,22 @@ class JobPreviewDialog(QtWidgets.QDialog):
         display_layout.setContentsMargins(6, 8, 6, 6)
         display_layout.setHorizontalSpacing(8)
         display_layout.setVerticalSpacing(4)
-        self.travel_check = QtWidgets.QCheckBox("Show traversal moves")
-        self.travel_check.setChecked(True)
+        self.travel_check = QtWidgets.QCheckBox("Show laser-off moves (travel and gaps)")
+        self.travel_check.setChecked(not has_raster)
+        self.detail_check = QtWidgets.QCheckBox("High-contrast engraving detail")
+        self.detail_check.setChecked(has_raster)
         self.power_check = QtWidgets.QCheckBox("Shade according to power")
+        self.power_check.setEnabled(not has_raster)
         self.invert_check = QtWidgets.QCheckBox("Invert dark material")
         self.legend_check = QtWidgets.QCheckBox("Show legend")
         self.legend_check.setChecked(True)
-        self.fit_button = QtWidgets.QPushButton("Fit bed")
+        self.fit_button = QtWidgets.QPushButton("Fit surface and movement")
         display_layout.addWidget(self.travel_check, 0, 0)
-        display_layout.addWidget(self.power_check, 1, 0)
-        display_layout.addWidget(self.invert_check, 2, 0)
-        display_layout.addWidget(self.legend_check, 3, 0)
-        display_layout.addWidget(self.fit_button, 4, 0)
+        display_layout.addWidget(self.detail_check, 1, 0)
+        display_layout.addWidget(self.power_check, 2, 0)
+        display_layout.addWidget(self.invert_check, 3, 0)
+        display_layout.addWidget(self.legend_check, 4, 0)
+        display_layout.addWidget(self.fit_button, 5, 0)
         side_layout.addWidget(display_group)
 
         self.statistics = QtWidgets.QLabel(
@@ -829,6 +965,19 @@ class JobPreviewDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
         side_layout.addWidget(self.statistics)
+
+        self.boundary_summary = QtWidgets.QLabel()
+        self.boundary_summary.setObjectName("jobPreviewBoundaries")
+        self.boundary_summary.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.boundary_summary.setWordWrap(True)
+        self.boundary_summary.setMinimumWidth(0)
+        self.boundary_summary.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        self.canvas.footprintReady.connect(self._update_boundary_summary)
+        self._update_boundary_summary()
+        side_layout.addWidget(self.boundary_summary)
 
         self.legend = QtWidgets.QLabel(self._legend_html())
         self.legend.setObjectName("jobPreviewLegend")
@@ -866,6 +1015,11 @@ class JobPreviewDialog(QtWidgets.QDialog):
         )
 
         self.travel_check.toggled.connect(self.canvas.set_show_travel)
+        self.detail_check.toggled.connect(self.canvas.set_high_contrast)
+        self.detail_check.toggled.connect(lambda enabled: self.power_check.setEnabled(not enabled))
+        self.detail_check.toggled.connect(lambda _enabled: self.legend.setText(self._legend_html()))
+        self.canvas.set_show_travel(self.travel_check.isChecked())
+        self.canvas.set_high_contrast(self.detail_check.isChecked())
         self.power_check.toggled.connect(self.canvas.set_power_shading)
         self.invert_check.toggled.connect(self.canvas.set_inverted)
         self.fit_button.clicked.connect(self.canvas.fit_job)
@@ -921,6 +1075,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
         keyboard_help.setMinimumWidth(0)
         layout.addWidget(keyboard_help)
 
+        self.start_readiness_label = QtWidgets.QLabel("Start readiness: waiting for machine status")
+        self.start_readiness_label.setWordWrap(True)
+        self.start_readiness_label.setObjectName("statusWarning")
+        layout.addWidget(self.start_readiness_label)
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         buttons.setObjectName("jobPreviewButtons")
         self.close_button = buttons.button(
@@ -1154,12 +1312,44 @@ class JobPreviewDialog(QtWidgets.QDialog):
             + "</span>"
             for row in self._layer_rows()
         )
-        prefix = f"{layers} · " if layers else ""
+        prefix = (
+            "High contrast: laser-on pattern · "
+            if self.detail_check.isChecked()
+            else (f"{layers} · " if layers else "")
+        )
         return (
             prefix
-            + "<span style='color:#E45A5A'>-- Travel</span> · "
+            + "<span style='color:#E45A5A'>-- Approach / travel</span> · "
             "<span style='color:#E7B55C'>— Laser-off feed</span> · "
-            "<span style='color:#00D4FF'>● Head</span>"
+            "<span style='color:#39B878'>— Engraving surface</span> · "
+            "<span style='color:#1E88E5'>·· Powered bounds</span> · "
+            "<span style='color:#E7B55C'>-- Movement bounds (excluding approach)</span> · "
+            "<span style='color:#FFB300'>● Laser on</span> / "
+            "<span style='color:#00D4FF'>● Laser off</span>"
+        )
+
+    def _update_boundary_summary(self) -> None:
+        def describe(bounds: tuple[float, float, float, float] | None) -> str:
+            if bounds is None:
+                return "none" if self.canvas._footprints_ready else "building"
+            left, bottom, right, top = bounds
+            left, bottom, right, top = (
+                0.0 if abs(value) < 0.0005 else value
+                for value in (left, bottom, right, top)
+            )
+            return f"X{left:.2f}…{right:.2f}, Y{bottom:.2f}…{top:.2f} mm"
+
+        frame_name = "Honeycomb" if self.coordinate_frame is not None else "Machine beam"
+        surface = self.canvas._surface_item.polygon().boundingRect()
+        self.boundary_summary.setText(
+            f"{frame_name} coordinates\n"
+            f"Engraving surface extents: {describe((surface.left(), -surface.bottom(), surface.right(), -surface.top()))}\n"
+            f"Powered bounds: {describe(self.canvas.powered_bounds_mm)}\n"
+            f"Movement bounds (excluding approach): {describe(self.canvas.raster_movement_bounds_mm)}\n"
+            f"Full movement bounds: {describe(self.canvas.movement_bounds_mm)}\n"
+            "Movement includes laser-off run-up, run-out, gaps and row transfers. "
+            "The red dashed approach from the job start is shown separately from the orange boundary. "
+            "Bounds and approach remain visible during playback."
         )
 
     def set_elapsed(self, seconds: float) -> None:
@@ -1183,7 +1373,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 "RAPID · laser off"
                 if move.rapid
                 else (
-                    f"POWER {power:.1f}% / S{move.power:g}"
+                    f"LASER ON · POWER {power:.1f}% / S{move.power:g}"
                     if move.laser_on
                     else "FEED · laser off"
                 )
@@ -1198,8 +1388,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     f"Honeycomb X{local_x:.3f} Y{local_y:.3f} · "
                     + coordinate_text
                 )
+            start = self.canvas._display_point(move.start_x, move.start_y)
+            end = self.canvas._display_point(move.end_x, move.end_y)
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            direction = ("→ left-to-right" if dx > 0 else "← right-to-left") if abs(dx) >= abs(dy) else ("↑ upward" if dy > 0 else "↓ downward")
+            focus_text = "Raster gap 7 mm above surface · " if move.focus_mode == "RASTER" else ""
             self.move_label.set_full_text(
-                f"{move.layer_name} · {role} · "
+                f"{move.layer_name} · {direction} · {role} · {focus_text}"
                 f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} · "
                 f"Move {move.index + 1}/{len(self.plan.moves)} · "
                 f"pass {move.pass_index}/{move.pass_count} "
@@ -1298,6 +1493,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
 
         self._run_authorized = bool(enabled)
         self._run_blocked_reason = str(reason).strip()
+        self.start_readiness_label.setText(
+            "Machine checks passed — START JOB will recheck the current state."
+            if enabled else "Cannot start: " + (self._run_blocked_reason or "Waiting for machine readiness")
+        )
         available = self._render_completed and self._run_authorized
         self.run_button.setEnabled(available)
         self.run_button.setToolTip(

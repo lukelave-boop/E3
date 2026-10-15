@@ -86,6 +86,91 @@ def test_height_is_separate_reported_z_with_explicit_cap_and_confirmation(panel)
     assert panel.firmware_note.text() == "Firmware ceiling: 80 mm confirmed"
 
 
+def test_daily_panel_omits_maximum_section_but_keeps_jog_and_errors(app):
+    widget = MainboardZPanel(daily=True)
+    widget.show()
+    widget.set_machine_status(status())
+    widget.set_result(result())
+    app.processEvents()
+    try:
+        assert widget.up.isVisible() and widget.height.isVisible()
+        for control in (widget.maximum, widget.apply, widget.active_maximum,
+                        widget.firmware_note, widget.refresh, widget.message):
+            assert not control.isVisible()
+        widget.invalidate("Z unavailable: controller rejected move")
+        assert widget.message.isVisible()
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
+def test_setup_maximum_reads_and_saves_in_own_modal_dialog(app):
+    dialog = QtWidgets.QDialog()
+    dialog.setModal(True)
+    layout = QtWidgets.QVBoxLayout(dialog)
+    widget = MainboardZPanel(maximum_only=True)
+    layout.addWidget(widget)
+    controller = Controller()
+    coordinator = MainboardZCoordinator(widget, controller, allow_own_modal=True)
+    coordinator._timer.stop()
+    coordinator.set_status(status())
+    dialog.show()
+    app.processEvents()
+    try:
+        assert widget.maximum.isVisible() and not widget.up.isVisible()
+        coordinator.tick()
+        assert len(controller.tasks) == 1
+        controller.finish()
+        widget.maximum.setValue(60)
+        widget.apply.click()
+        assert coordinator.mutation_busy
+        controller.machine.reply = result(action="z_max", max_z_mm=60)
+        controller.finish()
+        assert controller.machine.calls == [("status", None, False), ("z_max", 60, True)]
+        assert "60 mm" in widget.active_maximum.text()
+        assert not coordinator.mutation_busy
+
+        child = QtWidgets.QDialog(dialog)
+        child.setModal(True)
+        child.show()
+        app.processEvents()
+        coordinator._last_request = -100
+        coordinator.tick()
+        assert controller.tasks == []
+        child.close()
+    finally:
+        coordinator.close()
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_setup_maximum_external_busy_and_close_reject_requests(app):
+    widget = MainboardZPanel(maximum_only=True)
+    widget.show()
+    controller = Controller()
+    coordinator = MainboardZCoordinator(widget, controller, allow_own_modal=True)
+    coordinator._timer.stop()
+    coordinator.set_status(status())
+    widget.set_result(result())
+    try:
+        coordinator.set_external_busy(True)
+        coordinator.change("z_max", 60)
+        assert controller.tasks == []
+        coordinator.set_external_busy(False)
+        widget.set_result(result())
+        coordinator.change("z_max", 60)
+        assert len(controller.tasks) == 1
+        coordinator.close()
+        controller.finish()
+        assert controller.machine.calls == []
+        coordinator.refresh()
+        assert controller.tasks == []
+    finally:
+        coordinator.close()
+        widget.close()
+        widget.deleteLater()
+
+
 def test_step_choices_bounded_and_button_handlers_recheck_age(panel):
     assert [panel.step.itemData(i) for i in range(panel.step.count())] == [.1, 1, 5]
     panel.set_result(result(z_mm=78))

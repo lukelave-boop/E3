@@ -48,6 +48,28 @@ machine-coordinate plan is transformed through the prepared rigid honeycomb
 frame for display on the local X0..width, Y0..height canvas. This display
 transform does not replace or reindex the immutable plan.
 
+The green outline shows the calibrated engraving surface. The blue dotted
+rectangle encloses the powered moves; the amber dashed rectangle encloses every
+move in the generated program, including laser-off run-up, run-out, white gaps,
+initial positioning and row transfers. Both rectangles describe the whole job
+and remain visible when laser-off lines are hidden or playback is rewound.
+The sidebar reports their extents in the displayed frame. **Fit surface and
+movement** includes travel beyond the engraving surface. A rotated frame uses
+the actual transformed move endpoints, not an expanded machine-space bounding
+rectangle. These graphics are review data, not additional execution authority.
+
+Raster programs carry an immutable `E3RASTER` boundary record: the exact
+machine-beam engraving polygon and the separately configured, verified
+machine-carriage travel envelope digest and bounds. E3 intercepts this record;
+it is never sent to the primary controller. Preview preserves it and Start Here
+re-emits it before motion, so restarting cannot discard the reviewed limits.
+The current machine configuration and every powered/travel segment are still
+validated by the guarded execution path. Historical travel observations do not
+automatically configure or verify a travel envelope.
+For these raster jobs, **Start Here** accepts a row's laser-off rapid approach
+or its first lead-in feed move. Selecting a later move within a row is rejected
+because it would omit the required acceleration distance.
+
 The cyan head marker at the end of the timeline is the final point in that
 generated stream. Automatic hardware preflight and successful-powered-job
 Home/park/motor-release actions belong to `MachineService`, occur outside the
@@ -111,7 +133,8 @@ arm the laser, submit G-code, or grant execution authority.
 - Toggle rapid travel, controller-power shading, display inversion, and the
   legend without changing the job. Power shading retains distinct `S` values
   within one operation instead of assigning one shade to the complete layer.
-- Pan, zoom, fit the bed, and save the current view as a PNG.
+- Pan, zoom, fit the engraving surface and full movement, and save the current
+  view as a PNG.
 - Use the distinct bottom-right **START JOB** only after reviewing this exact
   program. It dismisses Preview before the guarded run attempt so software STOP
   is accessible.

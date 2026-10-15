@@ -700,6 +700,7 @@ def test_local_start_here_preserves_prepared_output_and_air_assist_authority(
         _capture_start_here_request_context=capture_start_here_context,
         controller=SimpleNamespace(run_background=run_background),
     )
+    harness.runtime.settings.machine.raster_travel_envelope = None
 
     E3MainWindow._prepare_start_here(harness, 0)
 
@@ -721,6 +722,7 @@ def test_local_start_here_preserves_prepared_output_and_air_assist_authority(
     assert isinstance(request_context, dict)
     assert request_context["air_assist_commands"] == commands
     assert request_context["spot_offset_mm"] == (0.0004, -0.0004)
+    assert request_context["raster_travel_envelope"] is None
     harness.runtime.settings.laser.spot_offset_y_mm = 0.1
     assert not E3MainWindow._start_here_request_context_is_current(
         harness,

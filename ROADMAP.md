@@ -1,5 +1,183 @@
 # Roadmap
 
+Release preparation now gates packaging and publication on exact-commit Windows
+compatibility, Ruff and POSIX controller checks. Physical run-up, placement and
+installed-update handoff qualification remain separate; see [release review](docs/RELEASE_REVIEW.md).
+
+Preview playback identifies direction and laser state: amber means laser on,
+cyan means laser off. Bidirectional raster output is unchanged.
+
+Raster preview draws the initial laser-off approach as a separate red dashed line.
+The orange boundary encloses job movement after that approach, including raster
+run-up/run-out and row transfers. Full travel extents still drive fitting and
+safety validation; generated motion, power, calibration and settings are unchanged.
+
+## Raster overscan separation (2026-10-15)
+
+Implemented for source verification: independently configured verified carriage
+travel, exact calibrated powered boundary, post-dither blank-margin use with a
+modeled acceleration floor, complete serialized-segment checks and separate
+Preview boundaries. Operator travel-envelope confirmation, supervised zero-power
+validation at the intended speeds, physical engraving acceptance, a matching Pi
+companion deployment and Windows compatibility CI remain release gates. No
+historical X-only travel record or provisional Y235 value qualifies a whole envelope.
+
+The measured performance follow-ups are ranked in
+[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md); raster caching and removal of
+the remote wrapper's unchanged-text duplicate preflight are separate future work.
+
+## Image background cleanup
+
+Implemented in source: per-image, edge-connected near-white cleanup, adjustable
+0–64 tolerance, linked before/after preview, and undoable schema-5 persistence.
+Windows offscreen and raster-generation verification is recorded in CURRENT_STATE.md.
+Frozen EXE, interactive operator and physical engraving validation remain pending.
+
+
+## Same-machine connection profiles (2026-10-15)
+
+Implemented: Duplicate distinguishes another connection to the same physical
+machine from a different machine, with explicit calibration/span retention.
+Authenticated camera-address aliasing now preserves unchanged optics/mapping
+for an enrolled stable camera identity. Different or missing identities remain
+blocked. Operator LAN/Tailscale switching verification is pending.
+
+Two-million-command capacity, corrected per-row command budgeting and visible
+measured-focus start readiness are implemented; focused verification is recorded
+in CURRENT_STATE.md. Physical enlarged-raster execution remains pending.
+
+New raster image layers now default to output enabled; existing saved layer
+choices remain intact.
+
+## Larger raster jobs (2026-10-15)
+
+Follow-up implements faster authoritative Pi validation, exact in-process proof
+reuse, post-preparation temporary authorization and honest progress stages.
+Recorded-file offline timing is separate from physical engraving acceptance.
+
+Implemented: a shared 1,000,000-command ceiling and high-contrast raster detail.
+Image/sample/row limits and machine safety checks remain bounded. Matching Pi
+installation and physical throughput/engraving acceptance remain separate
+from automated Windows validation; see CURRENT_STATE.md for verification.
+
+## Escape cancellation
+
+Implemented: Escape cancels desktop authoring and clears selection without
+sending a machine stop. Focused Windows offscreen tests cover polygon prompt
+focus, drawing, selection, point picking and unfinished transforms. Operator
+verification of the updated frozen build remains pending.
+
+## Drawing tools acceptance
+
+Implemented in source: consistent vertical stencil bridges, center-first polygon
+creation with live 3–12-side preview, and Ctrl axis snapping for rotation.
+Frozen-build, compatibility CI and operator acceptance are recorded in
+CURRENT_STATE.md. Additional sidebar shapes remain future work.
+
+## Saved gauge recognition
+
+Implemented: refresh wizard gauge evidence through read-only machine status,
+separate unknown/incompatible feedback, and preserve recognition of compatible
+saved teaching across bed-survey changes. Physical operator verification remains
+pending; this change does not implement an automatic bed mesh.
+
+## Base-map grid containment (2026-09-17)
+
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
+## Raster surface focus acceptance
+
+Raster/image jobs now request a 7 mm measured surface gap while cut/vector and
+Fill retain the current rule. Mixed-operation and Start Here source coverage
+uses fake controllers. E3 DEV TEST 0.7.181 is built and selected; the matching
+Pi companion is installed and hash-verified with 322 passing Linux/Pi checks.
+Physical qualification remains pending; installed firmware and calibration are preserved.
+
+
+## Daily Machine panel cleanup and setup Z maximum
+
+The daily panel omits the two spot-transfer buttons and the complete marked
+maximum/duplicate focus status/Ender reconnect/Saved Z section. Manual Z jog,
+reference/measurement, workpiece focus and actionable errors remain. Machine Setup
+-> 7 - Z / laser focus -> Maximum Z height provides the existing guarded host-side
+maximum editor; setup retains recovery and saved-Z controls. Backend limits,
+controller routes and persistence are unchanged. The setup editor observes modal,
+busy, suspension and shutdown gates. 455 focused Windows offscreen desktop/backend
+and remote tests passed in the shared tree; operator validation is pending.
+
+
+### Follow-up: keep the clicked button stationary during status layout changes
+
+The 0.7.175 operator recording still shows movement as live Z text wraps and a
+telemetry note appears. StableScrollArea now anchors the clicked button's viewport
+position across asynchronous layout changes, including disabled controls. Wheel,
+scrollbar, Tab and explicit reveal navigation release the anchor. Content remains
+fully readable and controller behavior is unchanged. Regression coverage includes
+the actual Home/reference layout, narrow/wide forms, disappearing controls, and
+user navigation; the recording is UI evidence, not physical hardware qualification.
+
+
+Desktop scroll stability: all form scroll areas preserve their position when
+action buttons disable and Qt transfers focus, including Home/reference.
+User scrolling, Tab/Shift+Tab and explicit setup-guide navigation are retained.
+Windows offscreen regression tests cover the real focus panel busy transition.
+Interactive operator validation and compatibility CI/integration remain pending.
+
+
+Desktop confirmation and profile feedback: Yes is green, No red and Cancel
+gray regardless of the default choice. Profile Save is green when the current
+ordered layer settings differ from the selected saved profile, and clears after
+saving, loading or reverting. Cancelled/failed saves retain the highlight.
+Existing defaults and hardware behavior are unchanged.
+
+Source verified by 42 focused Windows offscreen tests, affected-code Ruff and
+compileall; frozen build verification and interactive review are pending.
+
+
+## Saved-profile update acceptance
+
+Save with overwrite confirmation is implemented and verified by focused Windows
+tests and offscreen layout/popup inspection. Confirm the workflow interactively
+in the next DEV TEST build; profiles continue to save only on explicit request.
+
+
+## Distribution area operator review
+
+Desktop source supports full-bed, chosen-rectangle and selection-span distribution.
+Focused Windows geometry and offscreen widget checks cover both directions,
+rejections, cancel and undo. E3 DEV TEST 0.7.169 is selected; interactive review remains
+pending; compatibility CI is required before integration.
+
+## Cut/layer profile review
+
+The 98 focused profile, menu, desktop layer and launcher tests, repository Ruff
+and compileall pass on Windows. Compact layouts were inspected offscreen.
+Complete operator testing of saved layer sets in the frozen feature build.
+Compatibility CI remains required before integration.
+
+
+## Setup wizard operator feedback
+
+The operator found the progress wording and Step 4/5 handoff unclear. Plain
+step names, ordered instructions and direct control links address this feedback.
+Retest the complete setup path with the operator; software checks alone do not
+verify usability or physical calibration.
+
+
+## Precision placement qualification
+
+The measured-surface placement path and step-by-step Machine Setup wizard are
+implemented. The wizard reuses the existing controls and UI-neutral evidence
+workflow; its operator walkthrough and physical qualification remain pending.
+Complete independent one-height assessment, then lower/middle/upper physical
+trials through 20 mm above the honeycomb including spacers. Qualify only points
+where radial XY error plus measurement uncertainty is at most 0.10 mm. Publish
+tested area and interval, identify limiting contributions on failure, and qualify
+arbitrary tracing separately. Keep the current camera. See
+[precision workflow](docs/PRECISION_PLACEMENT.md) and CURRENT_STATE.md for current
+verification and build status.
+
 ## STOP Air Assist recovery
 
 Rechecking terminal-job OFF recovery at Start is implemented and focused tests
@@ -19,7 +197,7 @@ Home/park and job-completion testing remains operator qualification.
 An explicit saved height editor in Step 7 is implemented for the paired
 desktop/Pi feature build; automated checks pass and the Pi companion is installed; operator physical
 verification remains pending in CURRENT_STATE.md. Guided four-corner/center surveying, manual leveling guidance
-and measurement/return-button regrouping remain pending. Continuous bed mesh
+and measurement/return-button regrouping are implemented for precision setup. Continuous bed mesh
 compensation is separate scope. Small-negative thickness tolerance was canceled.
 
 
@@ -343,13 +521,11 @@ repeated G30 procedure is withdrawn.
 The supplied terminal history confirms a completed native test with final Z 20;
 verify the 5 mm version and the corrected repeat/pre-check handling next.
 
-Material-height work now has a two-plane camera calibration study with a
-separate intermediate-height check and an operator-positioned probe measurement
-using the existing Creality/Air Assist owner. The first operator border reference
-succeeded. Next: validate the corrected deployment sequence, known thicknesses,
-tall-material behavior and interruption, then integrate
-explicit material/support planes and provenance into tracing and execution.
-See [height model and probe redesign](docs/MATERIAL_HEIGHT.md).
+Material-height work now includes production material/support-plane separation,
+measured-height selection and bound tracing/placement/jobs. Physical acceptance
+of the 0.10 mm XY target through the intended height range remains pending.
+See [precision placement](docs/PRECISION_PLACEMENT.md); the earlier
+[height/probe study](docs/MATERIAL_HEIGHT.md) is retained as history.
 
 Development release publication now includes package retention: current plus
 two recent versions, followed by a seven-day retirement grace for older packages.
@@ -589,3 +765,7 @@ and requires a new acknowledged `M106 S0` before primary streaming. Failure of
 that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
 ON is never automatically replayed. Startup/restart, STOP, mapping validation,
 and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+## Continuous raster and fixed coordinate boxes (2026-09-16)
+
+Implemented inline raster power switching and matching preview/Start Here behavior, plus fixed-size X/Y/Z boxes near the Machine controls. Operator motion/engraving validation remains pending; acceleration and row reversals still limit achieved speed.

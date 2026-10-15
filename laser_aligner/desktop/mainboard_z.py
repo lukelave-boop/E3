@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from .controls import MeasurementSpinBox
+from .controls import AxisPositionReadout, MeasurementSpinBox
 from .machine_state import (
     controller_node_boot_id,
     controller_session_generation,
@@ -50,8 +50,11 @@ class MainboardZPanel(QtWidgets.QGroupBox):
     maximumRequested = QtCore.Signal(float)
     refreshRequested = QtCore.Signal()
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None, *, maximum_only: bool = False,
+                 daily: bool = False) -> None:
         super().__init__("Z axis · Ender", parent)
+        self.maximum_only = maximum_only
+        self.daily = daily
         self._machine_status: dict[str, Any] = {}
         self._result: dict[str, Any] = {}
         self._received_at: float | None = None
@@ -68,27 +71,25 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         for value in (0.1, 1.0, 5.0):
             self.step.addItem(f"{value:g} mm", value)
         self.step.setCurrentIndex(1)
-        self.height = QtWidgets.QLabel("Z — mm")
-        self.height.setWordWrap(True)
+        self.height = AxisPositionReadout("Z")
         self.height.setObjectName("zHeightReadout")
-        self.height.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.height.setToolTip(
             "Controller Z readback; live homing coordinates are unreferenced, not an encoder measurement."
         )
-        layout.addWidget(self.down, 0, 0)
-        layout.addWidget(self.up, 0, 1)
-        layout.addWidget(self.height, 0, 2, 1, 2)
-        layout.addWidget(QtWidgets.QLabel("Step"), 1, 0)
-        layout.addWidget(self.step, 1, 1)
+        layout.addWidget(self.height, 0, 0, 1, 4)
+        layout.addWidget(self.down, 1, 0)
+        layout.addWidget(self.up, 1, 1)
+        layout.addWidget(QtWidgets.QLabel("Step"), 1, 2)
+        layout.addWidget(self.step, 1, 3)
         self.readback_note = QtWidgets.QLabel("Reported position · waiting for connection")
         self.readback_note.setWordWrap(True)
-        layout.addWidget(self.readback_note, 1, 2, 1, 2)
+        layout.addWidget(self.readback_note, 2, 0, 1, 4)
         self.confirm = QtWidgets.QCheckBox("Probe stowed and Z path clear")
-        layout.addWidget(self.confirm, 2, 0, 1, 4)
+        layout.addWidget(self.confirm, 3, 0, 1, 4)
         self.active_maximum = QtWidgets.QLabel("Active maximum: unknown")
         self.active_maximum.setObjectName("zActiveMaximum")
         self.active_maximum.setWordWrap(True)
-        layout.addWidget(self.active_maximum, 3, 0, 1, 4)
+        layout.addWidget(self.active_maximum, 4, 0, 1, 4)
         self.maximum = MeasurementSpinBox()
         self.maximum.setRange(20.0, 80.0)
         self.maximum.setDecimals(1)
@@ -100,20 +101,33 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             "The firmware ceiling is 80 mm; this setting can only lower it."
         )
         self.apply = QtWidgets.QPushButton("Apply")
-        layout.addWidget(QtWidgets.QLabel("Set max"), 4, 0)
-        layout.addWidget(self.maximum, 4, 1, 1, 2)
-        layout.addWidget(self.apply, 4, 3)
+        layout.addWidget(QtWidgets.QLabel("Set max"), 5, 0)
+        layout.addWidget(self.maximum, 5, 1, 1, 2)
+        layout.addWidget(self.apply, 5, 3)
         self.firmware_note = QtWidgets.QLabel("Firmware ceiling not confirmed")
         self.firmware_note.setObjectName("mutedLabel")
         self.firmware_note.setWordWrap(True)
-        layout.addWidget(self.firmware_note, 5, 0, 1, 4)
+        layout.addWidget(self.firmware_note, 6, 0, 1, 4)
         self.message = QtWidgets.QLabel("Connect to read the Ender Z position and limit.")
         self.message.setWordWrap(True)
         self.message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        layout.addWidget(self.message, 6, 0, 1, 3)
+        layout.addWidget(self.message, 7, 0, 1, 3)
         self.refresh = QtWidgets.QPushButton("Refresh")
-        layout.addWidget(self.refresh, 6, 3)
+        layout.addWidget(self.refresh, 7, 3)
         layout.setColumnStretch(2, 1)
+        if maximum_only:
+            self.setTitle("Maximum Z height")
+            for index in reversed(range(layout.count())):
+                if layout.getItemPosition(index)[0] < 4:
+                    item = layout.takeAt(index)
+                    item.widget().hide()
+        elif daily:
+            for index in reversed(range(layout.count())):
+                if layout.getItemPosition(index)[0] >= 4:
+                    item = layout.takeAt(index)
+                    item.widget().hide()
+            # Keep failures readable without the routine setup/status section.
+            layout.addWidget(self.message, 4, 0, 1, 4)
         self.down.clicked.connect(lambda: self._jog(-1))
         self.up.clicked.connect(lambda: self._jog(1))
         self.apply.clicked.connect(self._apply)
@@ -130,7 +144,7 @@ class MainboardZPanel(QtWidgets.QGroupBox):
 
     def attach_focus_workspace(self, workspace: QtWidgets.QWidget) -> None:
         """Place daily reference and measurement controls inside the Z section."""
-        self.layout().addWidget(workspace, 7, 0, 1, 4)
+        self.layout().addWidget(workspace, 8, 0, 1, 4)
 
     def _edit_maximum(self, *_args: object) -> None:
         self._maximum_edited = True
@@ -180,6 +194,8 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         self.height.setText("Z — mm")
         self.readback_note.setText("Reported position unavailable")
         self.message.setText(message)
+        if self.daily:
+            self.message.setVisible(message.startswith(("Z unavailable:", "STOP requested")))
         if clear_confirmation:
             self._live_z.clear()
             self.confirm.setChecked(False)
@@ -223,6 +239,10 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             self.message.setText(f"Maximum saved: {maximum:g} mm above the border.")
         elif previous_max is not None and previous_max != maximum:
             self.message.setText(f"Active maximum changed to {maximum:g} mm.")
+        elif self.maximum_only:
+            self.message.setText("Save a maximum from 20 to 80 mm above the border. Applying does not move Z.")
+        if self.daily:
+            self.message.hide()
         self._sync()
 
     def fresh(self) -> bool:
@@ -236,14 +256,21 @@ class MainboardZPanel(QtWidgets.QGroupBox):
             self.invalidate("Z readback is stale; waiting for a fresh response.")
 
     def _sync_z_display(self) -> None:
+        self.height.setToolTip(
+            "Controller Z readback; live homing coordinates are unreferenced, not an encoder measurement."
+        )
         probe = self._machine_status.get("z_probe")
         active = bool(self._busy or (self._pending and not self.fresh())
                       or (isinstance(probe, Mapping) and probe.get("active") is True))
         fresh = self.fresh() and _read_allowed(self._machine_status)
         observed = self._live_z.readout(active=active, readback_at=self._received_at if fresh else None)
         if observed is not None:
-            self.height.setText(observed[0])
-            self.readback_note.setText(observed[1])
+            self.height.setText(observed[0].split(" · ", 1)[0])
+            self.height.setToolTip(observed[0] + "\n" + observed[1])
+            qualifier = observed[0].partition(" · ")[2]
+            self.readback_note.setText(
+                f"{qualifier}\n{observed[1]}" if qualifier else observed[1]
+            )
         elif fresh and not active and self._live_z.readback_current(self._received_at):
             z = _number(self._result.get("z_mm"))
             known = self._result.get("z_known") is True and z is not None
@@ -301,12 +328,17 @@ class MainboardZCoordinator(QtCore.QObject):
     """Serialize bounded worker requests without making ordinary status polls busy."""
 
     def __init__(self, panel: MainboardZPanel, controller: Any,
-                 parent: QtCore.QObject | None = None) -> None:
+                 parent: QtCore.QObject | None = None, *, allow_own_modal: bool = False) -> None:
         super().__init__(parent)
         self.panel = panel
         self.controller = controller
         self._status: dict[str, Any] = {}
         self._busy = False
+        self._closed = False
+        self._suspended = False
+        self._external_busy = False
+        self._controller_busy = bool(getattr(controller, "_active_tasks", 0))
+        self._allow_own_modal = allow_own_modal
         self._epoch = 0
         self._pending = False
         self._mutation = False
@@ -325,6 +357,36 @@ class MainboardZCoordinator(QtCore.QObject):
         panel.refreshRequested.connect(self.refresh)
         panel._display_timer.timeout.connect(self.observe_cached_z)
         self._timer.start()
+        self.set_busy(self._controller_busy)
+
+    @property
+    def mutation_busy(self) -> bool:
+        return self._mutation or self._queued is not None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._epoch += 1
+        self._queued = None
+        self._timer.stop()
+        self.panel._display_timer.stop()
+        self.controller.statusChanged.disconnect(self.set_status)
+        self.controller.busyChanged.disconnect(self.set_busy)
+        self.controller.stopInitiated.disconnect(self.stopped)
+
+    def set_external_busy(self, busy: bool) -> None:
+        self._external_busy = bool(busy)
+        self.set_busy(self._controller_busy)
+
+    def set_suspended(self, suspended: bool) -> None:
+        if self._closed or self._suspended == bool(suspended):
+            return
+        self._suspended = bool(suspended)
+        self._epoch += 1
+        self._queued = None
+        self._last_request = -math.inf
+        self.panel.invalidate("Z limit readback paused; refresh when setup is active.")
 
     def observe_cached_z(self) -> None:
         probe = self._status.get("z_probe")
@@ -360,11 +422,12 @@ class MainboardZCoordinator(QtCore.QObject):
         self.panel.set_machine_status(machine)
 
     def set_busy(self, busy: bool) -> None:
-        self._busy = bool(busy)
-        if busy and not self._mutation:
+        self._controller_busy = bool(busy)
+        self._busy = self._controller_busy or self._external_busy
+        if self._busy and not self._mutation:
             self._epoch += 1
             self._queued = None
-        self.panel.set_busy(busy)
+        self.panel.set_busy(self._busy)
 
     def stopped(self) -> None:
         self._epoch += 1
@@ -374,10 +437,16 @@ class MainboardZCoordinator(QtCore.QObject):
                               clear_confirmation=True)
 
     def tick(self) -> None:
+        if self._closed or self._suspended:
+            return
         self.panel.expire()
         # Hidden controls need no serial traffic. Modal setup owns its own
         # workers and receives the same controller gate for an in-flight read.
-        if not self.panel.isVisible() or QtWidgets.QApplication.activeModalWidget() is not None:
+        modal = QtWidgets.QApplication.activeModalWidget()
+        modal_blocked = modal is not None and not (
+            self._allow_own_modal and modal is self.panel.window()
+        )
+        if not self.panel.isVisible() or modal_blocked:
             if not self._ui_paused:
                 self._epoch += 1
                 self._queued = None
@@ -404,7 +473,8 @@ class MainboardZCoordinator(QtCore.QObject):
 
     def change(self, action: str, value: float) -> None:
         if (
-            self._busy or self.panel._busy or self._mutation or self._queued is not None
+            self._closed or self._suspended or self._busy or self.panel._busy
+            or self._mutation or self._queued is not None
             or not _read_allowed(self._status) or not self.panel.fresh()
             or (action == "z_jog" and not self.panel.confirm.isChecked())
         ):
@@ -455,6 +525,8 @@ class MainboardZCoordinator(QtCore.QObject):
         def finished() -> None:
             self._pending = False
             self._mutation = False
+            if self._closed:
+                return
             self.panel.set_pending(False)
             queued, self._queued = self._queued, None
             if queued is not None and not self._busy and _read_allowed(self._status):

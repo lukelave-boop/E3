@@ -1632,7 +1632,7 @@ def test_daily_and_setup_retained_home_never_references_or_forgets_automatically
         panel.set_result(controller.machine.payload)
         panel.show()
         app.processEvents()
-        assert panel.z_retention_group.isVisible()
+        assert panel.z_retention_group.isVisible() is calibration_mode
         assert panel.reference.text() == "Home / park XY"
         assert "no border probe" in panel.next_step.text()
         assert not panel.reference.isEnabled()

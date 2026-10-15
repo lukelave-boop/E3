@@ -227,12 +227,14 @@ def test_preview_machine_gate_blocks_only_start_job(
 
     assert not dialog.run_button.isEnabled()
     assert "Reconnect" in dialog.run_button.toolTip()
+    assert "Reconnect" in dialog.start_readiness_label.text()
     assert dialog.reset_button.isEnabled()
     assert dialog.play_button.isEnabled()
     dialog.run_button.click()
     assert requests == []
 
     dialog.set_run_enabled(True)
+    assert "Machine checks passed" in dialog.start_readiness_label.text()
     dialog.run_button.click()
     assert requests == [True]
 
@@ -370,7 +372,7 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
     dialog.set_elapsed(plan.moves[1].start_seconds + 0.1)
 
     assert "POWER 20.0% / S200" in dialog.move_label.text()
-    assert "16.67%" in dialog.move_label.text()
+    assert "16.67%" in dialog.move_label.full_text
     assert "F1000" not in dialog.move_label.full_text
     assert "Line 01" in dialog.move_label.text()
     assert "Machine X80.000 Y20.000" in dialog.move_label.full_text
@@ -689,6 +691,101 @@ def test_power_shading_keeps_distinct_s_values_within_one_layer(
     qt_application.processEvents()
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_raster_detail_hides_all_off_moves_without_changing_plan(
+    qt_application: QtWidgets.QApplication, deferred: bool,
+) -> None:
+    text = "\n".join([
+        "G21", "G90", "M5",
+        e3_metadata_line("layer", {
+            "id": "raster", "name": "Raster", "mode": "raster", "color": "#EE88CC",
+        }),
+        "G0 X10 Y10 F2000", "M4 S100", "G1 X20 Y10 F1000",
+        "M5", "G1 X30 Y10 F1000", "M4 S100", "G1 X40 Y10 F1000", "M5",
+    ])
+    plan = build_job_plan(text, power_max=1000, start_position=(0, 0))
+    dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "raster.gcode", defer_render=deferred)
+    dialog.show()
+    for _ in range(30):
+        qt_application.processEvents()
+    assert dialog.detail_check.isChecked()
+    assert not dialog.travel_check.isChecked()
+    assert not dialog.power_check.isEnabled()
+    assert {key[0] for key in dialog.canvas._items} == {"approach", "unpowered", "powered"}
+    for key, item in dialog.canvas._items.items():
+        assert item.isVisible() == (key[0] == "powered")
+        if key[0] == "powered":
+            assert item.pen().color().name() == "#101010"
+    off_move = next(move for move in plan.moves if not move.rapid and not move.laser_on)
+    dialog.set_elapsed(off_move.start_seconds + off_move.duration_seconds / 2)
+    assert not dialog.canvas._active_item.isVisible()
+    assert dialog.canvas._head_item.isVisible()
+    dialog.travel_check.setChecked(True)
+    assert dialog.canvas._active_item.isVisible()
+    dialog.set_elapsed(plan.total_seconds)
+    assert all(item.isVisible() for key, item in dialog.canvas._items.items() if key[0] != "approach")
+    assert dialog.canvas._approach_item.isVisible()
+    dialog.invert_check.setChecked(True)
+    assert all(item.pen().color().name() == "#f4f5f2"
+               for key, item in dialog.canvas._items.items() if key[0] == "powered")
+    dialog.detail_check.setChecked(False)
+    assert dialog.power_check.isEnabled()
+    assert "High contrast" not in dialog.legend.text()
+    assert dialog.plan is plan
+    assert plan == build_job_plan(text, power_max=1000, start_position=(0, 0))
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_unpowered_raster_preview_keeps_geometry_visible(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    plan = _plan()
+    plan = replace(plan, moves=tuple(
+        replace(move, layer_mode="raster", laser_on=False, power=0) for move in plan.moves
+    ))
+    dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "unpowered.gcode")
+    assert dialog.travel_check.isChecked()
+    assert not dialog.detail_check.isChecked()
+    assert all(item.isVisible() for key, item in dialog.canvas._items.items() if key[0] != "approach")
+    assert dialog.canvas._approach_item.isVisible()
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_large_raster_display_defaults_do_not_preempt_initial_build(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    text = "\n".join([
+        "G21", "G90", "M5",
+        e3_metadata_line("layer", {"id": "raster", "mode": "raster"}),
+        "G0 X10 Y10 F2000", "M4 S100",
+        *(f"G1 X{10 + index % 2} Y10 F1000" for index in range(2500)),
+        "M5",
+    ])
+    plan = build_job_plan(text, power_max=1000)
+    dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "large.gcode", defer_render=True)
+    assert not dialog.canvas._building
+    assert not dialog.canvas._items
+    completed = QtTest.QSignalSpy(dialog.renderFinished)
+    dialog.show()
+    for _ in range(100):
+        qt_application.processEvents()
+        if dialog._render_completed:
+            break
+    assert dialog._render_completed
+    assert completed.count() == 1
+    assert dialog.run_button.isEnabled()
+    assert dialog.canvas._rendered_count == len(plan.moves)
+    assert all(item.isVisible() == (key[0] == "powered")
+               for key, item in dialog.canvas._items.items())
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
 def test_preview_escapes_rich_metadata_and_uses_warning_theme_contract(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -895,7 +992,7 @@ def test_controller_progress_does_not_overwrite_prepared_power(
 
     assert "max power 20.0% / S200" in progress.toolTip()
     assert "Controller idle · no job started" in progress.toolTip()
-    assert progress.progress.format() == "Execution 0%"
+    assert progress.progress.format() == "Idle"
     progress.set_job_status(
         {
             "running": True,
@@ -1033,3 +1130,70 @@ def test_preview_index_polls_cooperative_cancellation() -> None:
         _plan(),
         cancel_check=lambda: False,
     ) == prepare_job_preview(_plan())
+
+
+def test_main_window_preview_gate_tracks_surface_measurement(qt_application):
+    from types import SimpleNamespace
+    from laser_aligner.desktop.main_window import E3MainWindow
+    dialog = JobPreviewDialog(_plan(), (0.0, 100.0, 0.0, 100.0), "focus.gcode")
+    focus = {"job_focus_required": True, "job_focus": None,
+             "job_focus_block_reason": "Measure the material surface"}
+    host = SimpleNamespace(_machine_status={
+        "controller_state": "READY_MOTION", "allow_motion": True,
+        "armed": False, "workpiece_focus": focus,
+    }, _controller_busy=False, _job_preparation_busy=False)
+    E3MainWindow._sync_job_preview_machine_gate(host, dialog)
+    assert not dialog.run_button.isEnabled()
+    assert "Measure the material surface" in dialog.start_readiness_label.text()
+    assert dialog.play_button.isEnabled()
+    focus["job_focus"] = {"id": "current-measurement"}
+    E3MainWindow._sync_job_preview_machine_gate(host, dialog)
+    assert dialog.run_button.isEnabled()
+    focus["job_focus"] = None
+    E3MainWindow._sync_job_preview_machine_gate(host, dialog)
+    assert not dialog.run_button.isEnabled()
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_bidirectional_raster_playback_reports_power_in_both_directions(qt_application, deferred):
+    text = "\n".join([
+        "G21", "G90", "M5",
+        e3_metadata_line("layer", {"id": "raster", "mode": "raster"}),
+        "G0 X5 Y10 F2000", "M4 S0", "G1 X10 Y10 F1000 S0",
+        "G1 X20 Y10 F1000 S100", "G1 X25 Y10 F1000 S0", "M5",
+        "G0 X25 Y11 F2000", "M4 S0", "G1 X20 Y11 F1000 S0",
+        "G1 X15 Y11 F1000 S100", "G1 X14 Y11 F1000 S0",
+        "G1 X10 Y11 F1000 S100", "G1 X5 Y11 F1000 S0", "M5",
+    ])
+    plan = build_job_plan(text, power_max=1000, start_position=(-12, 157))
+    original = tuple(plan.moves)
+    dialog = JobPreviewDialog(plan, (0, 191, 0, 191), "bidirectional.gcode", defer_render=deferred)
+    if deferred:
+        dialog.canvas.start_deferred_render()
+        while dialog.canvas._building:
+            dialog.canvas._build_slice()
+    directions = set()
+    for move in plan.moves:
+        dialog.set_elapsed((move.start_seconds + move.end_seconds) / 2)
+        while dialog.canvas._building:
+            dialog.canvas._build_slice()
+        expected = "#ffb300" if move.laser_on else "#00d4ff"
+        assert dialog.canvas._head_item.pen().color().name() == expected
+        if move.laser_on:
+            direction = "left-to-right" if move.end_x > move.start_x else "right-to-left"
+            directions.add(direction)
+            assert direction in dialog.move_label.text()
+            assert "LASER ON" in dialog.move_label.text()
+            assert dialog.canvas._active_item.isVisible()
+        else:
+            assert "laser off" in dialog.move_label.text()
+    assert directions == {"left-to-right", "right-to-left"}
+    assert plan.moves == original
+    dialog.set_elapsed(plan.total_seconds)
+    assert dialog.canvas._head_item.pen().color().name() == "#00d4ff"
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()

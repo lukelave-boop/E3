@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_thickness_focus as packager
 from scripts.package_thickness_focus import (
     COOLING_REVISION,
     HOME_COOLING_REVISION,
@@ -21,6 +22,13 @@ from scripts.package_thickness_focus import (
 
 @pytest.fixture(params=["synthetic", "integrated", "thickness", "cooling", "rejection", "honeycomb", "home_cooling"])
 def kit(tmp_path, monkeypatch, request):
+    # Keep predecessor reads exact; payload fixtures represent the historical
+    # partial update, which cannot ship current raster-travel sources.
+    monkeypatch.setattr(packager, "source", lambda revision, name: (
+        f"# historical payload fixture: {name}\n".encode()
+        if name in packager.PREVIOUS
+        else (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
+    ))
     bundle = package(tmp_path / "dist", "HEAD", "0.7.133")
     spec = importlib.util.spec_from_file_location("thickness_installer", bundle / "install_thickness_focus.py")
     installer = importlib.util.module_from_spec(spec)

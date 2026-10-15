@@ -513,10 +513,16 @@ def snapshot_case(case_name: str) -> dict[str, str]:
     job = result
     if job.plan is None:
         raise AssertionError(f"Planning golden case {case_name} produced no JobPlan")
+    preview_payload = asdict(job.plan)
+    if job.plan.raster_boundary is None:
+        # Legacy snapshots retain their established schema. These derived
+        # display fields have focused coverage; new envelope cases retain them.
+        preview_payload.pop("powered_bounds_mm")
+        preview_payload.pop("raster_boundary")
     return {
         "program.gcode": canonical_program(job.text),
         "result.json": canonical_json_text(result_payload(job)),
-        "preview.json": canonical_json_text(job.plan),
+        "preview.json": canonical_json_text(preview_payload),
     }
 
 

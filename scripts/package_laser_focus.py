@@ -5,6 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 
+if __package__:
+    from .package_source_dependencies import material_dependencies
+else:
+    from package_source_dependencies import material_dependencies
+
 ROOT = Path(__file__).resolve().parents[1]
 # Authoritative main after the recorded installed focus/park correction. Accept
 # exactly this predecessor or the bundled bytes; preserve all unknown edits.
@@ -78,10 +83,12 @@ def installation_guide(folder: Path) -> str:
 
 def package(destination: Path) -> Path:
     sources = {name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in PREVIOUS}
+    dependencies = material_dependencies(sources, lambda name: (ROOT / name).read_bytes().replace(b"\r\n", b"\n"))
+    previous_files = {**PREVIOUS, **dependencies}
     manifest = json.dumps({"predecessor_revision": PREVIOUS_REVISION, "files": [
         {"path": name, "previous_sha256_lf": previous,
          "sha256_lf": hashlib.sha256(sources[name]).hexdigest()}
-        for name, previous in PREVIOUS.items()
+        for name, previous in previous_files.items()
     ]}, indent=2).encode()
     digest = hashlib.sha256(manifest).hexdigest()
     folder = destination / f"e3-pi-laser-focus-{digest[:8]}"

@@ -1,5 +1,8 @@
 # Calibration workflow
 
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
+
+
 Follow the canonical
 [Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for operator actions and tab transitions. This document is the supporting model,
@@ -209,7 +212,13 @@ consensus strategy described above.
 
 ## Height/parallax limitation
 
-A planar homography is exact only for the plane used during calibration. A workpiece top surface above or below that plane appears shifted, especially near image edges. Until height compensation is implemented, perform bed mapping on the actual material top plane or keep material top surfaces at the calibrated height.
+A planar homography is exact only for the plane used during calibration. A workpiece
+top surface above or below that plane appears shifted, especially near image edges.
+The [precision placement workflow](PRECISION_PLACEMENT.md) uses fresh two-height
+camera evidence plus an independent middle check and a validated probe measurement
+to select the top plane. It preserves the support map and requires physical
+qualification. With height correction disabled, placement remains valid only for
+the calibrated plane; a diagnostic calibration pass does not establish 0.10 mm XY.
 
 ## Recalibrate when
 

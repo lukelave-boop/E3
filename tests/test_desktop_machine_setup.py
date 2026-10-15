@@ -2800,3 +2800,25 @@ def test_machine_setup_reopens_with_saved_reversed_axis_highlighted(
             reopened.close()
     finally:
         runtime.stop()
+
+
+def test_base_grid_status_uses_generated_support_grid(qt_application, tmp_path, monkeypatch):
+    from tests.test_base_bed_mapping import _offset_support
+
+    runtime = _runtime(tmp_path)
+    context = runtime.context
+    monkeypatch.setattr(context, "_current_honeycomb_support", _offset_support)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        dialog.base_grid_mark_size.setValue(4)
+        dialog._refresh_base_grid_geometry_status()
+        targets = context.base_bed_mapping_targets(4)
+        xs = sorted({target.machine_x for target in targets})
+        ys = sorted({target.machine_y for target in targets})
+        status = dialog.base_grid_status.text()
+        assert f"X {', '.join(f'{value:g}' for value in xs)}" in status
+        assert f"Y {', '.join(f'{value:g}' for value in ys)}" in status
+        assert min(ys) > 40
+    finally:
+        dialog.close()
+        runtime.stop()

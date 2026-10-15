@@ -24,7 +24,7 @@ from laser_aligner.config import (
     PrecisionCaptureSettings,
     WorkArea,
 )
-from laser_aligner.errors import MachineError
+from laser_aligner.errors import MachineError, SafetyError
 from laser_aligner.machine import pi_job_store as store_module
 from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
@@ -58,7 +58,7 @@ from laser_aligner.machine.pi_job_service import (
     execution_policy_digest,
     execution_policy_mismatch_labels,
 )
-from laser_aligner.machine.pi_job_store import PiJobStore
+from laser_aligner.machine.pi_job_store import PiJobStore, PiJobStoreError
 from laser_aligner.machine.pi_machine_server import (
     ACTION_JOB_LATEST,
     ACTION_MACHINE_COMMAND,
@@ -77,6 +77,7 @@ from laser_aligner.machine.pi_machine_server import (
 )
 from laser_aligner.machine.remote_service import RemoteMachineService
 from laser_aligner.machine.service import MachineService, ValidatedProgram
+from laser_aligner.raster_safety import COORDINATE_REFERENCE, RasterTravelEnvelope
 from tests.fakes.simulator_transport import SimulatedTransport
 
 _TOKEN = "pi-machine-test-token-0123456789abcdef"
@@ -542,15 +543,23 @@ def _start_fields(job_id: str, program: ValidatedProgram) -> dict[str, Any]:
 
 
 def test_execution_policy_diagnostic_manifest_has_fixed_labels_and_shape() -> None:
-    assert len(EXECUTION_POLICY_FIELD_LABELS) == 25
+    assert len(EXECUTION_POLICY_FIELD_LABELS) == 26
     assert EXECUTION_POLICY_FIELD_LABELS[8] == "machine.work_area.x_max"
     assert EXECUTION_POLICY_FIELD_LABELS[24] == "air_assist.mapping"
+    assert EXECUTION_POLICY_FIELD_LABELS[25] == "machine.raster_travel_envelope"
 
     profile_24 = tuple(range(24))
     profile_25 = tuple(range(25))
+    profile_26 = tuple(range(26))
     assert execution_policy_mismatch_labels(profile_24, profile_25) == (
         "air_assist.mapping",
     )
+    assert execution_policy_mismatch_labels(profile_25, profile_25) == ()
+    assert execution_policy_mismatch_labels(profile_26, profile_26) == ()
+    for left, right in ((profile_25, profile_26), (profile_26, profile_25)):
+        assert execution_policy_mismatch_labels(left, right) == (
+            "machine.raster_travel_envelope",
+        )
 
     changed = list(profile_25)
     changed[8] = "different"
@@ -640,11 +649,13 @@ def test_execution_policy_diagnostic_labels_follow_machine_safety_profile_order(
         *mutation_labels[:-1],
         "job.guarded_output_polygon",
         mutation_labels[-1],
+        "machine.raster_travel_envelope",
     )
 
     baseline = _machine(SimulatedTransport()).preflight_program(
         program_text
     ).safety_profile
+    assert len(baseline) == 25
     backend_index = EXECUTION_POLICY_FIELD_LABELS.index("machine.backend")
     assert baseline[backend_index] == "serial"
     assert tuple(index for index, value in enumerate(baseline) if value == "serial") == (
@@ -674,6 +685,42 @@ def test_execution_policy_diagnostic_labels_follow_machine_safety_profile_order(
         configured_only,
         configured_and_requested,
     ) == ("job.guarded_output_polygon",)
+
+
+def test_raster_travel_policy_extends_legacy_diagnostic_without_shifting_fields() -> None:
+    program_text = "\n".join(("G21", "G90", "M5"))
+    machine = _machine(SimulatedTransport())
+    legacy = machine.preflight_program(program_text)
+    assert len(execution_policy_diagnostic_profile(legacy)["profile"]) == 25
+
+    travel = RasterTravelEnvelope(
+        x_min=-10.0,
+        x_max=245.0,
+        y_min=-10.0,
+        y_max=215.0,
+        verified=True,
+        controller="simulated policy test controller",
+        firmware="simulated GRBL",
+        configuration="synthetic policy fixture only",
+        reference=COORDINATE_REFERENCE,
+        tested_at="2026-10-15",
+    )
+    machine.settings.raster_travel_envelope = travel
+    extended = machine.preflight_program(program_text)
+    assert len(execution_policy_diagnostic_profile(extended)["profile"]) == 26
+    assert extended.safety_profile[:-1] == legacy.safety_profile
+    assert extended.safety_profile[-1] == travel.digest
+    assert execution_policy_mismatch_labels(
+        legacy.safety_profile, extended.safety_profile
+    ) == ("machine.raster_travel_envelope",)
+
+    machine.settings.raster_travel_envelope = replace(
+        travel, configuration="changed synthetic policy fixture"
+    )
+    changed = machine.preflight_program(program_text)
+    assert execution_policy_mismatch_labels(
+        extended.safety_profile, changed.safety_profile
+    ) == ("machine.raster_travel_envelope",)
 
 
 def test_server_advertises_policy_diagnostics_capability() -> None:
@@ -1575,6 +1622,7 @@ def test_trace_capture_prepares_before_remote_hold_without_lease_timeout(
 
     context = SimpleNamespace(
         _require_valid_bed_calibration=lambda: events.append("calibration:valid"),
+        material_surface_signature=lambda: None,
         machine=remote,
         settings=SimpleNamespace(
             machine=remote_settings,
@@ -1704,6 +1752,37 @@ def test_pi_restart_marks_persisted_running_job_interrupted_without_resume(
     finally:
         first.shutdown(stop_machine=False)
         restarted.shutdown(stop_machine=False)
+
+
+@pytest.mark.parametrize("change", [None, "file", "limits", "restart"])
+def test_prepared_program_reuses_local_proof_but_checks_disk_and_policy(tmp_path, monkeypatch, change):
+    machine = _machine(SimulatedTransport())
+    store = PiJobStore(tmp_path / "proof")
+    service = PiJobService(machine, store)
+    program = machine.preflight_program(_POWERED_PROGRAM)
+    payload = canonical_program_bytes(program)
+    job_id = str(uuid.uuid4())
+    service.begin_upload(job_id, "proof.gcode", len(payload), program.digest)
+    service.append_upload_chunk(job_id, 0, payload)
+    service.finalize_upload(job_id, **_service_binding(program))
+    record = store.get(job_id)
+    if change == "restart":
+        service._prepared_program = None
+        monkeypatch.setattr(service, "_validate_canonical_text", lambda *a: pytest.fail("restart must revalidate"))
+        with pytest.raises(pytest.fail.Exception, match="restart must revalidate"):
+            service._preflight_committed_program(record)
+    else:
+        monkeypatch.setattr(service, "_validate_canonical_text", lambda *a: pytest.fail("unnecessary full reparse"))
+        if change == "file":
+            (store.programs_dir / (job_id + ".gcode")).write_bytes(payload.replace(b"F500", b"F999"))
+        elif change == "limits":
+            machine.settings.max_work_feed_mm_min = 10
+        if change:
+            with pytest.raises((SafetyError, PiJobStoreError)):
+                service._preflight_committed_program(record)
+        else:
+            assert service._preflight_committed_program(record) == program
+    service.shutdown(stop_machine=False)
 
 
 @pytest.mark.parametrize("recovery", [

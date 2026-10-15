@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from ..calibration.bed import BedPoint
-from ..calibration.registration import base_bed_grid_mark_sizes, base_bed_grid_targets
+from ..calibration.registration import base_bed_grid_mark_sizes
 from ..calibration.support import HoneycombSupportReference
 from ..config import effective_laser_output_area
 from ..core import CoreRuntime
@@ -31,6 +31,7 @@ from .machine_state import (
     project_machine_state,
 )
 from .qt import require_qt
+from .scroll_position import StableScrollArea
 from .setup_guide import show_setup_guide
 from .speed_controls import PercentageSpeedSpinBox
 from .tasks import FunctionTask
@@ -833,6 +834,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._bed_dependent_result_actions: list[QtWidgets.QWidget] = []
         self._thread_pool = QtCore.QThreadPool.globalInstance()
         self._active_task: FunctionTask | None = None
+        self._active_observational_read = False
         self._active_operation_name: str | None = None
         self._operation_generation = 0
         self._stop_requested_generation: int | None = None
@@ -910,6 +912,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.preferences_note.setWordWrap(True)
         self.preferences_note.setObjectName("mutedLabel")
         layout.addWidget(self.preferences_note)
+        from .setup_wizard import SetupWizardPanel
+
+        self.setup_wizard = SetupWizardPanel(self)
+        self.setup_wizard.hide()
+        layout.addWidget(self.setup_wizard)
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs, 1)
         self._build_camera_tab()
@@ -921,6 +928,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if controller is not None:
             self.focus_workspace = LaserFocusWorkspace(
                 controller, self, calibration_mode=True,
+            )
+            from ..setup_workflow import PrecisionEvidenceStore
+
+            self.focus_workspace.panel.precision_evidence_store = PrecisionEvidenceStore(
+                self.context.surface_calibration.path.parent,
             )
             self.tabs.addTab(self.focus_workspace, "7 · Z / laser focus")
         else:
@@ -959,6 +971,14 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.setup_guide_button.clicked.connect(
             lambda: show_setup_guide(self, self.tabs.currentIndex())
         )
+        self.setup_wizard_button = self.dialog_buttons.addButton(
+            "Setup wizard", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.setup_wizard_button.clicked.connect(self.setup_wizard.begin)
+        self.precision_setup_button = self.dialog_buttons.addButton(
+            "Precision setup", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.precision_setup_button.clicked.connect(self.open_precision_setup)
         self.close_button = self.dialog_buttons.button(
             QtWidgets.QDialogButtonBox.StandardButton.Close
         )
@@ -992,7 +1012,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         return bool(
             self._active_task is not None
             or self._controller_busy
-            or (focus is not None and focus.coordinator.mutation_busy)
+            or (focus is not None and focus.mutation_busy)
         )
 
     def _controller_busy_changed(self, busy: bool) -> None:
@@ -1008,8 +1028,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         busy = self.operation_busy
         self.tabs.setEnabled(not local_busy)
         for index in range(self.tabs.count()):
-            self.tabs.setTabEnabled(index, not busy or index == 6)
+            self.tabs.setTabEnabled(index, not busy or local_busy or index == 6)
         self.close_button.setEnabled(not busy)
+        self.setup_wizard_button.setEnabled(not busy)
+        self.setup_wizard.set_busy(busy)
         self.set_machine_status(self._machine_status)
 
     def _register_motion_action(self, action: QtWidgets.QWidget) -> None:
@@ -1072,10 +1094,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._machine_status,
             operation_busy=self.operation_busy,
         )
+        pose_state = self._machine_ui_state
+        if self._active_observational_read and not self._controller_busy:
+            pose_state = pose_state.with_busy(False)
         if self._photo_pose_confirmed and (
             self._machine_ui_state.session_generation
             != self._photo_pose_confirmed_generation
-            or not self._machine_ui_state.can_recapture_without_homing
+            or not pose_state.can_recapture_without_homing
         ):
             self._photo_pose_confirmed = False
             self._photo_pose_confirmed_generation = None
@@ -1121,6 +1146,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         requires_controller: bool = False,
         recapture_without_homing: bool = False,
         machine_bound: bool = False,
+        observational_read: bool = False,
         invalidate: Callable[[], None] | None = None,
         on_failure: Callable[[str], None] | None = None,
     ) -> bool:
@@ -1249,8 +1275,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         task = FunctionTask(scoped_operation, label=f"Machine Setup: {name}")
         self._active_task = task
-        if self.focus_workspace is not None:
-            self.focus_workspace.coordinator.set_external_busy(True)
+        self._active_observational_read = observational_read
+        if self.focus_workspace is not None and not observational_read:
+            self.focus_workspace.set_external_busy(True)
+        self._sync_operation_controls()
         task.signals.succeeded.connect(
             lambda result, generation=generation: self._operation_succeeded(
                 generation,
@@ -1432,10 +1460,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "its stale completion was discarded."
             )
         self._active_task = None
+        self._active_observational_read = False
         self._active_operation_name = None
         self._stop_requested_generation = None
         if self.focus_workspace is not None:
-            self.focus_workspace.coordinator.set_external_busy(False)
+            self.focus_workspace.set_external_busy(False)
         self.operation_progress.hide()
         self.operation_status.setText(self._operation_outcome)
         self.tabs.setEnabled(True)
@@ -1674,7 +1703,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 QtWidgets.QLayout.SizeConstraint.SetMinimumSize
             )
 
-        scroll = QtWidgets.QScrollArea()
+        scroll = StableScrollArea()
         scroll.setObjectName("machineSetupTabScroll")
         scroll.setProperty("setupTabScroll", True)
         scroll.setWidgetResizable(True)
@@ -1695,6 +1724,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def focus_navigation_target(self, target: str) -> bool:
         """Select and visibly focus a stable, UI-only Machine Setup destination."""
 
+        if self.operation_busy or self._shutdown_started:
+            return False
         destinations: dict[str, tuple[int, QtWidgets.QWidget]] = {
             "machine_setup.camera": (0, self.camera_guidance),
             "machine_setup.lens": (1, self.lens_guidance),
@@ -1703,6 +1734,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
             "machine_setup.accuracy_validation": (4, self.validation_guidance),
             "machine_setup.coordinate_audit": (5, self.audit_guidance),
         }
+        panel = getattr(self.focus_workspace, "panel", None)
+        if panel is not None:
+            destinations.update({
+                "machine_setup.focus_reference": (6, panel.reference),
+                "machine_setup.focus_probe": (6, panel.position_probe),
+                "machine_setup.honeycomb_height": (6, panel.save_honeycomb),
+                "machine_setup.focus_measure": (6, panel.measure),
+                "machine_setup.focus_teach": (6, panel.teach),
+            })
         destination = destinations.get(str(target))
         if destination is None:
             return False
@@ -1710,12 +1750,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         previous = self._navigation_highlighted_widget
         if previous is not None and previous is not widget:
             previous.setProperty("navigationHighlighted", False)
-            previous.setStyleSheet("")
+            previous.setStyleSheet(previous.property("navigationOriginalStyle") or "")
+        if previous is not widget:
+            widget.setProperty("navigationOriginalStyle", widget.styleSheet())
         self._navigation_highlighted_widget = widget
         widget.setProperty("navigationHighlighted", True)
-        selector = (
-            "QGroupBox" if isinstance(widget, QtWidgets.QGroupBox) else "QFrame"
-        )
+        if not widget.objectName():
+            widget.setObjectName(str(target).replace(".", "_"))
+        selector = ("QPushButton" if isinstance(widget, QtWidgets.QPushButton) else
+                    "QGroupBox" if isinstance(widget, QtWidgets.QGroupBox) else "QFrame")
         widget.setStyleSheet(
             f"{selector}#{widget.objectName()} {{ border: 2px solid #4f9cff; "
             "border-radius: 4px; }}"
@@ -1723,7 +1766,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
         self.tabs.setCurrentIndex(tab_index)
-        scroll = self.tabs.widget(tab_index)
+        scroll = widget.parentWidget()
+        while scroll is not None and not isinstance(scroll, QtWidgets.QScrollArea):
+            scroll = scroll.parentWidget()
 
         def reveal() -> None:
             if isinstance(scroll, QtWidgets.QScrollArea):
@@ -2316,7 +2361,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         manual_body = QtWidgets.QWidget()
         manual_layout = QtWidgets.QVBoxLayout(manual_body)
         manual_layout.setContentsMargins(0, 0, 0, 0)
-        manual_scroll = QtWidgets.QScrollArea()
+        manual_scroll = StableScrollArea()
         manual_scroll.setWidgetResizable(True)
         manual_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         manual_scroll.setWidget(manual_body)
@@ -2434,12 +2479,46 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def open_surface_height_study(self) -> None:
         from .surface_height import SurfaceHeightDialog
 
-        preview = ImagePicker()
-        dialog = SurfaceHeightDialog(
-            self.context, preview, self._bed_image, self,
-            image_binding=self._surface_capture_binding,
-        )
-        dialog.exec()
+        dialog = getattr(self, "_surface_height_dialog", None)
+        if dialog is None:
+            dialog = SurfaceHeightDialog(
+                self.context, ImagePicker(), self._bed_image, self,
+                image_binding=self._surface_capture_binding,
+            )
+            self._surface_height_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def capture_surface_height_evidence(self) -> None:
+        self.open_surface_height_study()
+        self._surface_height_dialog.capture_evidence()
+
+    def open_precision_setup(self, *, qualification: bool = False) -> None:
+        from .precision_setup import PrecisionSetupDialog
+
+        dialog = getattr(self, "_precision_setup_dialog", None)
+        if dialog is None:
+            dialog = PrecisionSetupDialog(self)
+            self._precision_setup_dialog = dialog
+        dialog.tabs.setCurrentIndex(1 if qualification else 0)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def navigate_setup_step(self, action: str) -> None:
+        if self.operation_busy or self._shutdown_started:
+            return
+        tabs = {"camera": 0, "lens": 1, "bed": 2, "focus": 6, "datum": 6}
+        if action in tabs:
+            self.tabs.setCurrentIndex(tabs[action])
+            if action == "datum" and self.focus_workspace is not None:
+                self.focus_workspace.panel.open_bed_survey()
+        elif action == "heights":
+            self.tabs.setCurrentIndex(2)
+            self.open_surface_height_study()
+        elif action in {"precision", "qualification"}:
+            self.open_precision_setup(qualification=action == "qualification")
 
     def _remember_surface_capture_binding(self) -> None:
         try:
@@ -4320,6 +4399,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         active_task = self._active_task
         lens_index_task = self._lens_index_task
         self._active_task = None
+        self._active_observational_read = False
         self._lens_index_task = None
         self._active_operation_name = None
         for task in (active_task, lens_index_task):
@@ -4373,14 +4453,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def _refresh_base_grid_geometry_status(self) -> None:
         if not hasattr(self, "base_grid_mark_size"):
             return
-        area = self.context.settings.machine.work_area
         laser = self.context.settings.laser
         try:
-            targets = base_bed_grid_targets(
-                area,
-                mark_size_mm=self.base_grid_mark_size.value(),
-                boundary_margin_mm=laser.boundary_margin_mm,
-            )
+            targets = self.context.base_bed_mapping_targets(self.base_grid_mark_size.value())
             keyed_sizes = base_bed_grid_mark_sizes(self.base_grid_mark_size.value())
         except Exception as exc:
             self.base_grid_status.setText(str(exc))

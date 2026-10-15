@@ -1,11 +1,80 @@
 # Permanent Camera Setup Runbook
 
-Applies to E3 Positioning System `0.7.x`, its five numbered calibration steps,
-and the sixth read-only **Coordinate Audit** tab in **Machine Setup**.
+Base-map recalibration now fits the complete keyed 5 x 5 pattern, with boundary clearance, inside the current saved four-corner honeycomb and machine area. Setup coordinates and generated marks use the same grid. Prepared recalibration jobs bind the saved support/map and reject changed geometry at Start or capture. First-time mapping without a current support retains the machine-bounded bootstrap pattern.
 
-This is the canonical operator sequence. Follow the tabs from left to right.
-Technical background belongs in `docs/MACHINE_SETUP.md`; it must not add an
-unlisted calibration step or interrupt a tab transition described here.
+
+## Start with the wizard
+
+Follow **Setup wizard** pages 1 through 8. The detailed tool chapters below use
+their older tool numbering. The wizard gives numbered actions and links that
+reveal the actual buttons. **Check progress** checks saved settings and
+measurements; detailed technical reasons are under **Troubleshooting details**.
+
+For Step 4, **Level the bed and save honeycomb height**:
+
+1. Follow the link to establish the black-border reference using the guarded
+   reference controls and their physical clearance confirmations.
+2. Open **Bed leveling measurements**. Measure the same rigid block of known
+   thickness at four corners and the center; reopen the measurements window
+   after each reading and use **Record this position**.
+3. Review the five heights. Repeat all five readings after any leveling change.
+4. Choose **Copy average to Honeycomb height**, close the measurements window,
+   and explicitly click the highlighted **Save honeycomb height** button.
+5. Click **Check progress**, then continue to Step 5 for the 7 mm gauge.
+
+Honeycomb height is the bare-bed height relative to the black border. Older
+technical descriptions call it the datum. Copying the average does not save it.
+
+
+Applies to E3 Positioning System `0.7.x`, its existing calibration tabs,
+read-only **Coordinate Audit**, **Z / laser focus**, and guided precision setup.
+
+Use this runbook's Steps 1–5 to establish the camera and support mapping. In
+Machine Setup, **Setup wizard** presents eight guided stages and a final
+progress review using the existing controls. It links to the leveling survey,
+measured focus, one-height precision assessment, surface-height calibration and
+independent XY qualification. **Back** and **Next** only browse the stages; use
+the explicit controls to perform actions and save evidence.
+
+Choose **All setup tools** for the seven tabs used in this runbook, including
+Fine Registration, Accuracy Validation and Coordinate Audit. **Setup wizard**
+resumes the same stage when reopened. **Setup guide** retains this runbook and
+the checklist. Check progress after using a tool; the review lists current,
+missing and stale evidence without declaring the machine calibrated. Navigation
+is held during an active operation, and **STOP / LASER OFF** remains available.
+A diagnostic calibration PASS is not a 0.10 mm XY claim.
+
+## Precision setup and daily placement
+
+The target is **0.10 mm maximum radial XY error including measurement
+uncertainty**, on one flat parallel surface through a qualified interval reaching
+20 mm above the honeycomb including spacers. Physical qualification is pending.
+
+After camera/support mapping, use the wizard to survey a known-thickness rigid
+target at four corners and center and explicitly save the reviewed honeycomb
+datum. Measure a solid patch, return the laser to that measured spot, then teach
+with the existing gauge action. At the repeatability stage, **Prepare holdout
+marks** opens Accuracy Validation for its existing guarded mark/Preview/Run
+sequence. Measure ten stationary captures and ten separate Home / park captures
+against independent holdouts before extending the height range. Compare optical
+and positioning variation and independently measure laser-center errors across
+corners, edges and center.
+
+Surface-height calibration collects lower/upper marks and a separate middle
+check without replacing the working support map. Enter measured top elevation
+relative to the same reference and its uncertainty; follow the existing guarded
+mark/preview/run/capture actions. Numerical acceptance enables model testing.
+Independent physical observations, including repeated Home / park, must satisfy
+`sqrt(X_error² + Y_error²) + uncertainty <= 0.10 mm` throughout the reported area
+and height interval. Keep this limit on failure and identify the dominant error.
+
+Daily: **Measure surface → Capture for placement → optional Align to workpiece →
+Place designs → Preview → Run**. Precision capture retains native detail,
+suspends snapping and keeps template dimensions fixed. Height changes invalidate
+the photograph and review without moving or resizing saved designs. Before a
+first measurement the probe-selection image is explicitly approximate. A new
+compatible Pi companion is required for height-aware jobs. Neither image matching
+nor camera-fit scores establish cut dimensions or physical laser placement.
 
 ## Safety Boundary
 
@@ -83,7 +152,7 @@ and calibration readiness is `READY`.
 **Goal:** map corrected camera pixels to machine coordinates without trusting
 an old camera map.
 
-The powered base-map job is the sole support-containment bootstrap exception:
+Without a current saved support, the powered base-map job is the sole support-containment bootstrap exception:
 the image-to-machine map must exist before honeycomb corners can be expressed
 in machine coordinates. It remains bounded by the configured machine area. The
 restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.

@@ -60,6 +60,7 @@ EXECUTION_POLICY_FIELD_LABELS = (
     "laser.configured_guarded_output_polygon",
     "job.guarded_output_polygon",
     "air_assist.mapping",
+    "machine.raster_travel_envelope",
 )
 EXECUTION_POLICY_MISMATCH_ERROR = (
     "Execution policy does not match Pi-local safety settings"
@@ -167,7 +168,7 @@ def execution_policy_diagnostic_profile(program: ValidatedProgram) -> dict[str, 
     if (
         type(program) is not ValidatedProgram
         or type(program.safety_profile) is not tuple
-        or len(program.safety_profile) != len(EXECUTION_POLICY_FIELD_LABELS)
+        or len(program.safety_profile) not in {len(EXECUTION_POLICY_FIELD_LABELS) - 1, len(EXECUTION_POLICY_FIELD_LABELS)}
     ):
         raise SafetyError(
             "Execution-policy diagnostics require the exact versioned safety profile"
@@ -219,6 +220,8 @@ def execution_policy_mismatch_labels(
         return EXECUTION_POLICY_FIELD_LABELS
     mismatches: list[str] = []
     for index, label in enumerate(EXECUTION_POLICY_FIELD_LABELS):
+        if index >= len(left) and index >= len(right):
+            continue
         if index >= len(left) or index >= len(right):
             mismatches.append(label)
             continue
@@ -340,6 +343,7 @@ class PiJobService:
         self._latest_terminal_record: dict[str, Any] | None = None
         self._refresh_latest_result_cache()
         self._cached_machine_status: dict[str, Any] = {}
+        self._prepared_program: tuple[str, ValidatedProgram] | None = None
         self._refresh_machine_status()
 
     def begin_shutdown(self) -> None:
@@ -400,9 +404,9 @@ class PiJobService:
             if raw.get("schema") != EXECUTION_POLICY_DIAGNOSTIC_SCHEMA:
                 raise ValueError
             profile = raw.get("profile")
-            if type(profile) is not list or len(profile) != len(
-                EXECUTION_POLICY_FIELD_LABELS
-            ):
+            if type(profile) is not list or len(profile) not in {
+                len(EXECUTION_POLICY_FIELD_LABELS) - 1, len(EXECUTION_POLICY_FIELD_LABELS)
+            }:
                 raise ValueError
             diagnostic_bytes = json.dumps(
                 raw,
@@ -585,7 +589,8 @@ class PiJobService:
             )
 
         with self._ordinary_lock:
-            self.store.finalize(job_id, validator=validator)
+            finalized = self.store.finalize(job_id, validator=validator)
+            self._prepared_program = (job_id, finalized.validation.value)
             verification_seconds = round(
                 max(0.0, time.monotonic() - verification_started),
                 6,
@@ -664,7 +669,20 @@ class PiJobService:
         polygon = _normalize_polygon(
             _record_value(record, "guarded_output_polygon_mm")
         )
-        program = self._validate_canonical_text(text, polygon)
+        cached = self._prepared_program
+        if cached is not None and cached[0] == job_id:
+            program = cached[1]
+            # Disk bytes are still read and hashed above on every START. Only
+            # reuse this process's exact validation after comparing those bytes.
+            if raw != canonical_program_bytes(program):
+                raise SafetyError("Committed bytes changed after local validation")
+            current_profile = self.machine._program_safety_profile(polygon)
+            if current_profile != program.safety_profile:
+                self._log_execution_policy_mismatch(diagnostic_profile, current_profile)
+                raise SafetyError(EXECUTION_POLICY_MISMATCH_ERROR)
+            self.machine._require_validated_program_integrity(program)
+        else:
+            program = self._validate_canonical_text(text, polygon)
         self._assert_program_binding(
             program,
             program_digest=_record_value(record, "program_digest"),

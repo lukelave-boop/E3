@@ -25,10 +25,22 @@ from ..project.path_geometry import (
     PathFillRule,
     PathLineSegment,
 )
+from ..project.polygon import regular_polygon_points
+from .polygon_prompt import PolygonSidesPrompt
 from .qt import require_qt
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY, DRAFTING_COLORS
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+
+def _snap_rotation(rotation: float, modifiers: QtCore.Qt.KeyboardModifier) -> float:
+    if modifiers & QtCore.Qt.KeyboardModifier.ControlModifier:
+        step = 90.0
+    elif modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
+        step = 15.0
+    else:
+        return Transform.normalized_rotation(rotation)
+    return Transform.normalized_rotation(round(rotation / step) * step)
 
 
 class _TraceIndexBadge(QtWidgets.QGraphicsItem):
@@ -324,7 +336,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
     _IMAGE_PREVIEW_MAX_PIXELS = 4_000_000
     _project_raster_source_count = 1
     _image_cache: OrderedDict[
-        tuple[str, str], QtGui.QImage
+        tuple, QtGui.QImage
     ] = OrderedDict()
 
     def __init__(
@@ -344,6 +356,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         self._raster_identity_sha: str | None = None
         self._raster_source_size: tuple[int, int] | None = None
         self._raster_asset_reference: str | None = None
+        self._cleanup_tolerance: int | None = None
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -381,9 +394,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         cls,
         items: list[ObjectGraphicsItem],
     ) -> None:
-        groups: dict[tuple[str, str], list[ObjectGraphicsItem]] = {}
+        groups: dict[tuple, list[ObjectGraphicsItem]] = {}
         for item in items:
-            identity = item.raster_preview_identity
+            identity = item.raster_cache_key
             if identity is not None and item._raster_image is not None:
                 groups.setdefault(identity, []).append(item)
         pixel_budget = cls._preview_pixel_budget()
@@ -410,9 +423,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         cls,
         items: list[ObjectGraphicsItem],
     ) -> None:
-        retained: OrderedDict[tuple[str, str], QtGui.QImage] = OrderedDict()
+        retained: OrderedDict[tuple, QtGui.QImage] = OrderedDict()
         for item in items:
-            identity = item.raster_preview_identity
+            identity = item.raster_cache_key
             if identity is not None and item._raster_image is not None:
                 retained[identity] = item._raster_image
         cls._image_cache = retained
@@ -424,6 +437,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         asset: Any,
         *,
         use_cache: bool = True,
+        cleanup_tolerance: int | None = None,
     ) -> tuple[
         str,
         QtGui.QImage | None,
@@ -442,10 +456,28 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         resolved = identity.path
         source_size_px = (identity.width, identity.height)
         key = (resolved, identity.sha256)
+        if cleanup_tolerance is not None:
+            key = (*key, cleanup_tolerance)
         cached = cls._image_cache.get(key) if use_cache else None
         if cached is not None:
             cls._image_cache.move_to_end(key)
             return resolved, cached, identity.sha256, source_size_px
+
+        if cleanup_tolerance is not None:
+            from .background_cleanup import cleanup_preview_image
+
+            image = cleanup_preview_image(payload, cleanup_tolerance)
+            budget = cls._preview_pixel_budget()
+            if image.width() * image.height() > budget:
+                scale = math.sqrt(budget / (image.width() * image.height()))
+                image = image.scaled(
+                    max(1, int(image.width() * scale)), max(1, int(image.height() * scale)),
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+            cls._image_cache[key] = image
+            cls._prune_image_cache()
+            return resolved, image, identity.sha256, source_size_px
 
         encoded = QtCore.QByteArray(payload.encoded)
         buffer = QtCore.QBuffer()
@@ -489,6 +521,13 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             return None
         return self._raster_source, self._raster_identity_sha
 
+    @property
+    def raster_cache_key(self) -> tuple | None:
+        identity = self.raster_preview_identity
+        if identity is None or self._cleanup_tolerance is None:
+            return identity
+        return (*identity, self._cleanup_tolerance)
+
     def refresh_raster_snapshot(self) -> bool:
         reference = self._raster_asset_reference
         if reference is None:
@@ -498,7 +537,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             self._raster_image,
             self._raster_identity_sha,
             self._raster_source_size,
-        ) = self._load_raster_snapshot(reference)
+        ) = self._load_raster_snapshot(reference, cleanup_tolerance=self._cleanup_tolerance)
         self.update()
         return self._raster_image is not None
 
@@ -615,22 +654,31 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 asset_reference = str(
                     scene_object.geometry.get("asset") or ""
                 ).strip()
-                if asset_reference != self._raster_asset_reference:
+                from ..project.raster_cleanup import cleanup_settings
+
+                enabled, tolerance = cleanup_settings(scene_object.geometry)
+                cleanup_tolerance = tolerance if enabled else None
+                if (asset_reference != self._raster_asset_reference
+                        or cleanup_tolerance != self._cleanup_tolerance):
                     (
                         self._raster_source,
                         self._raster_image,
                         self._raster_identity_sha,
                         self._raster_source_size,
                     ) = (
-                        self._load_raster_snapshot(asset_reference)
+                        self._load_raster_snapshot(
+                            asset_reference, cleanup_tolerance=cleanup_tolerance
+                        )
                     )
                     self._raster_asset_reference = asset_reference
+                    self._cleanup_tolerance = cleanup_tolerance
             else:
                 self._raster_source = ""
                 self._raster_image = None
                 self._raster_identity_sha = None
                 self._raster_source_size = None
                 self._raster_asset_reference = None
+                self._cleanup_tolerance = None
             self.setPath(self._path_for_object(scene_object, transform))
             stock_boundary = is_stock_boundary(scene_object)
             color = (
@@ -785,7 +833,7 @@ class _ObjectRotationHandle(QtWidgets.QGraphicsEllipseItem):
         self.setBrush(QtGui.QColor("#E7B55C"))
         self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.LeftButton)
         self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
-        self.setToolTip("Drag to rotate; hold Shift to snap to 15°")
+        self.setToolTip("Drag to rotate; hold Ctrl for horizontal/vertical, Shift for 15°")
         self.setZValue(2.0)
 
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
@@ -812,7 +860,6 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
 
     _HANDLE_OFFSET_PX = 24.0
     _MINIMUM_SIZE_MM = 0.1
-    _ROTATION_SNAP_DEG = 15.0
     _CORNER_SIGNS = {
         "top_left": (-1.0, 1.0),
         "top_right": (1.0, 1.0),
@@ -835,6 +882,7 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
         self._resize_start_scene: QtCore.QPointF | None = None
         self._resize_moved = False
         self._rotation_start_pointer_deg: float | None = None
+        self._rotation_current_scene: QtCore.QPointF | None = None
         self._changed = False
         self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
         self.setZValue(400.0)
@@ -968,6 +1016,7 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
     def begin_rotation(self, scene_position: QtCore.QPointF) -> None:
         self._interaction_before = self._display_transform.copy()
         self._rotation_start_pointer_deg = self._pointer_angle(scene_position)
+        self._rotation_current_scene = QtCore.QPointF(scene_position)
         self._active_corner = None
         self._resize_start_scene = None
         self._resize_moved = False
@@ -982,13 +1031,11 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
         start_angle = self._rotation_start_pointer_deg
         if before is None or start_angle is None:
             return
+        self._rotation_current_scene = QtCore.QPointF(scene_position)
         pointer_angle = self._pointer_angle(scene_position)
         delta = Transform.normalized_rotation(pointer_angle - start_angle)
         rotation = Transform.normalized_rotation(before.rotation_deg + delta)
-        if modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
-            rotation = Transform.normalized_rotation(
-                round(rotation / self._ROTATION_SNAP_DEG) * self._ROTATION_SNAP_DEG
-            )
+        rotation = _snap_rotation(rotation, modifiers)
         self._preview(before.copy(rotation_deg=rotation))
 
     def finish_rotation(
@@ -1018,6 +1065,11 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
         self.apply_transform(transform)
         self._view._preview_object_transform(self.object_id, transform)
 
+    def cancel_interaction(self) -> None:
+        if self._interaction_before is not None:
+            self._preview(self._interaction_before)
+            self._finish_interaction()
+
     def _finish_interaction(self) -> None:
         before = self._interaction_before
         after = self._display_transform.copy()
@@ -1027,6 +1079,7 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
         self._resize_start_scene = None
         self._resize_moved = False
         self._rotation_start_pointer_deg = None
+        self._rotation_current_scene = None
         self._changed = False
         if before is not None and changed:
             self._view.objectTransformCommitted.emit(self.object_id, before, after)
@@ -1090,7 +1143,7 @@ class _TemplateRotationHandle(QtWidgets.QGraphicsEllipseItem):
         self.setBrush(QtGui.QColor("#45D7FF"))
         self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.LeftButton)
         self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
-        self.setToolTip("Drag to rotate the entire template preview")
+        self.setToolTip("Drag to rotate the entire template preview; hold Ctrl for horizontal/vertical")
         self.setZValue(1002.0)
 
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
@@ -1101,12 +1154,12 @@ class _TemplateRotationHandle(QtWidgets.QGraphicsEllipseItem):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
-        self._owner.update_rotation(event.scenePos())
+        self._owner.update_rotation(event.scenePos(), event.modifiers())
         event.accept()
 
     def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self._owner.finish_rotation(event.scenePos())
+            self._owner.finish_rotation(event.scenePos(), event.modifiers())
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -1141,6 +1194,7 @@ class _TemplatePreviewGraphicsItem(QtWidgets.QGraphicsItemGroup):
         self._drag_start_position = QtCore.QPointF()
         self._drag_moved = False
         self._rotation_last_angle_deg: float | None = None
+        self._rotation_current_scene: QtCore.QPointF | None = None
         self._rotation_start_group_deg = 0.0
         self._rotation_accumulated_deg = 0.0
         self._rotation_moved = False
@@ -1253,13 +1307,18 @@ class _TemplatePreviewGraphicsItem(QtWidgets.QGraphicsItemGroup):
 
     def begin_rotation(self, scene_position: QtCore.QPointF) -> None:
         self._rotation_last_angle_deg = self._pointer_angle(scene_position)
+        self._rotation_current_scene = QtCore.QPointF(scene_position)
         self._rotation_start_group_deg = self.rotation()
         self._rotation_accumulated_deg = 0.0
         self._rotation_moved = False
 
-    def update_rotation(self, scene_position: QtCore.QPointF) -> None:
+    def update_rotation(
+        self, scene_position: QtCore.QPointF,
+        modifiers: QtCore.Qt.KeyboardModifier = QtCore.Qt.KeyboardModifier.NoModifier,
+    ) -> None:
         if self._rotation_last_angle_deg is None:
             return
+        self._rotation_current_scene = QtCore.QPointF(scene_position)
         angle = self._pointer_angle(scene_position)
         increment = Transform.normalized_rotation(
             angle - self._rotation_last_angle_deg
@@ -1268,17 +1327,25 @@ class _TemplatePreviewGraphicsItem(QtWidgets.QGraphicsItemGroup):
         if abs(increment) > 1e-12:
             self._rotation_moved = True
             self._rotation_accumulated_deg += increment
-            self.setRotation(
-                self._rotation_start_group_deg - self._rotation_accumulated_deg
-            )
+        group_rotation = self._rotation_start_group_deg - self._rotation_accumulated_deg
+        if modifiers & QtCore.Qt.KeyboardModifier.ControlModifier:
+            placement_rotation = self._initial_rotation_deg - group_rotation
+            group_rotation = self._initial_rotation_deg - _snap_rotation(placement_rotation, modifiers)
+        if abs(group_rotation - self.rotation()) > 1e-12:
+            self._rotation_moved = True
+            self.setRotation(group_rotation)
             self._emit_edited()
 
-    def finish_rotation(self, scene_position: QtCore.QPointF) -> None:
+    def finish_rotation(
+        self, scene_position: QtCore.QPointF,
+        modifiers: QtCore.Qt.KeyboardModifier = QtCore.Qt.KeyboardModifier.NoModifier,
+    ) -> None:
         if self._rotation_last_angle_deg is None:
             return
-        self.update_rotation(scene_position)
+        self.update_rotation(scene_position, modifiers)
         moved = self._rotation_moved
         self._rotation_last_angle_deg = None
+        self._rotation_current_scene = None
         self._rotation_moved = False
         if moved:
             self._emit_committed()
@@ -1541,6 +1608,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     creationToolChanged = QtCore.Signal(str)
     rectangleDraftChanged = QtCore.Signal(object)
     rectangleDrawCommitted = QtCore.Signal(float, float, float, float)
+    polygonDrawCommitted = QtCore.Signal(float, float, float, float, int)
 
     _MINIMUM_DRAW_SIZE_MM = 0.1
     _DRAW_SIZE_EPSILON_MM = 1e-9
@@ -1619,7 +1687,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._raster_restore_slice
         )
         self._raster_restore_queue: list[
-            tuple[str, tuple[str, ...], int]
+            tuple[tuple[str, int | None], tuple[str, ...], int]
         ] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
         self._trace_candidates_by_id: dict[str, _TraceCandidateGraphicsItem] = {}
@@ -1639,8 +1707,17 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._rectangle_anchor_mm: tuple[float, float] | None = None
         self._rectangle_current_mm: tuple[float, float] | None = None
         self._rectangle_preview_item: QtWidgets.QGraphicsPathItem | None = None
+        self._polygon_center_mm: tuple[float, float] | None = None
+        self._polygon_pointer_mm: tuple[float, float] | None = None
+        self._polygon_radius_mm = 0.0
+        self._polygon_angle_deg = 0.0
+        self._polygon_sides = 6
+        self._polygon_preview_item: QtWidgets.QGraphicsPathItem | None = None
+        self._polygon_prompt: PolygonSidesPrompt | None = None
         self._point_pick_active = False
         self.snap_enabled = True
+        self.precision_placement_enabled = False
+        self._precision_previous_snap = True
         self.snap_step_mm = 1.0
         self._panning = False
         self._pan_start = QtCore.QPoint()
@@ -1881,7 +1958,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         color: str | QtGui.QColor | None = None,
     ) -> None:
         normalized = "" if tool is None else str(tool).strip().lower()
-        if normalized not in {"", "rectangle"}:
+        if normalized not in {"", "rectangle", "polygon"}:
             raise ValueError(f"Unsupported workspace creation tool: {tool}")
         if color is not None:
             self.set_creation_color(color)
@@ -1906,12 +1983,23 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         if not resolved.isValid():
             raise ValueError(f"Invalid creation preview color: {color}")
         self._creation_color = resolved
-        if self._rectangle_preview_item is not None:
-            pen = self._rectangle_preview_item.pen()
-            pen.setColor(resolved)
-            self._rectangle_preview_item.setPen(pen)
+        for preview in (self._rectangle_preview_item, self._polygon_preview_item):
+            if preview is not None:
+                pen = preview.pen()
+                pen.setColor(resolved)
+                preview.setPen(pen)
 
     def cancel_shape_draft(self) -> None:
+        self._polygon_center_mm = None
+        self._polygon_pointer_mm = None
+        self._polygon_radius_mm = 0.0
+        if self._polygon_preview_item is not None:
+            self.workspace_scene.removeItem(self._polygon_preview_item)
+            self._polygon_preview_item = None
+        if self._polygon_prompt is not None:
+            self._polygon_prompt.hide()
+            self._polygon_prompt.deleteLater()
+            self._polygon_prompt = None
         had_draft = (
             self._rectangle_anchor_mm is not None
             or self._rectangle_preview_item is not None
@@ -1924,6 +2012,29 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.workspace_scene.removeItem(preview)
         if had_draft:
             self.rectangleDraftChanged.emit(None)
+
+    def cancel_authoring_interaction(self) -> None:
+        """Cancel local canvas edits without invoking any machine operation."""
+        grabber = self.workspace_scene.mouseGrabberItem()
+        if grabber is not None:
+            grabber.ungrabMouse()
+        if self._object_transform_overlay is not None:
+            self._object_transform_overlay.cancel_interaction()
+        for object_id in self.selected_object_ids():
+            self.refresh_object(object_id)
+        self.set_creation_tool(None)
+        self.cancel_point_pick()
+        self.select_objects([])
+        self._trace_pointer_select_active = False
+        self._trace_drag_inferred_selection = {}
+        self._syncing_trace_selection = False
+        self.set_trace_selected_ids([])
+        self.traceSelectionIdsChanged.emit([])
+        self._panning = False
+        self._space_pan = False
+        self._pan_button = QtCore.Qt.MouseButton.NoButton
+        self._restore_interaction_cursor()
+        self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
     def _restore_interaction_cursor(self) -> None:
         if self._space_pan:
@@ -1993,6 +2104,95 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         )
         self._rectangle_preview_item.setPath(path)
         self.rectangleDraftChanged.emit(bounds)
+
+    def _update_polygon_draft(
+        self, point: tuple[float, float],
+        modifiers: QtCore.Qt.KeyboardModifier = QtCore.Qt.KeyboardModifier.NoModifier,
+    ) -> None:
+        if self._polygon_center_mm is None or self._polygon_prompt is not None:
+            return
+        self._polygon_pointer_mm = point
+        x, y = self._snap_and_clamp_machine_point(point)
+        cx, cy = self._polygon_center_mm
+        self._polygon_radius_mm = math.hypot(x - cx, y - cy)
+        self._polygon_angle_deg = _snap_rotation(
+            math.degrees(math.atan2(y - cy, x - cx)),
+            modifiers & QtCore.Qt.KeyboardModifier.ControlModifier,
+        )
+        self._refresh_polygon_preview()
+
+    def _refresh_polygon_preview(self) -> None:
+        if self._polygon_center_mm is None or self._polygon_radius_mm <= 0:
+            return
+        points = regular_polygon_points(
+            self._polygon_center_mm, self._polygon_radius_mm,
+            self._polygon_angle_deg, self._polygon_sides,
+        )
+        if self._polygon_preview_item is None:
+            preview = QtWidgets.QGraphicsPathItem()
+            pen = QtGui.QPen(self._creation_color)
+            pen.setWidthF(1.5)
+            pen.setCosmetic(True)
+            preview.setPen(pen)
+            preview.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            preview.setZValue(450.0)
+            preview.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            self.workspace_scene.addItem(preview)
+            self._polygon_preview_item = preview
+        path = QtGui.QPainterPath()
+        path.moveTo(self.workspace_scene.machine_to_scene(*points[0]))
+        for point in points[1:]:
+            path.lineTo(self.workspace_scene.machine_to_scene(*point))
+        path.closeSubpath()
+        self._polygon_preview_item.setPath(path)
+        if self._polygon_prompt is not None:
+            fits = all(self.workspace_scene.work_area.contains(*point) for point in points)
+            self._polygon_prompt.set_error(
+                "" if fits else "Polygon extends beyond the work area. Cancel and draw a smaller polygon."
+            )
+
+    def _polygon_sides_changed(self, sides: int) -> None:
+        if self._polygon_center_mm is None:
+            return
+        # Validate before changing the draft; callers cannot bypass the 12-side cap.
+        regular_polygon_points(
+            self._polygon_center_mm, self._polygon_radius_mm, self._polygon_angle_deg, sides,
+        )
+        self._polygon_sides = sides
+        self._refresh_polygon_preview()
+
+    def _freeze_polygon_draft(self) -> None:
+        if self._polygon_radius_mm < self._MINIMUM_DRAW_SIZE_MM:
+            return
+        prompt = PolygonSidesPrompt(self.viewport())
+        self._polygon_prompt = prompt
+        prompt.sides_edit.setText(str(self._polygon_sides))
+        prompt.sidesChanged.connect(self._polygon_sides_changed)
+        prompt.accepted.connect(self._commit_polygon_draft)
+        prompt.cancelled.connect(self.cancel_shape_draft)
+        prompt.move(12, 12)
+        self._refresh_polygon_preview()
+        prompt.show()
+        prompt.raise_()
+        prompt.focus_sides()
+
+    def _commit_polygon_draft(self) -> None:
+        if self._polygon_center_mm is None or self._polygon_prompt is None:
+            return
+        if not self._polygon_prompt.create_button.isEnabled():
+            return
+        points = regular_polygon_points(
+            self._polygon_center_mm, self._polygon_radius_mm,
+            self._polygon_angle_deg, self._polygon_sides,
+        )
+        if not all(self.workspace_scene.work_area.contains(*point) for point in points):
+            self._refresh_polygon_preview()
+            return
+        cx, cy = self._polygon_center_mm
+        radius, angle, sides = self._polygon_radius_mm, self._polygon_angle_deg, self._polygon_sides
+        self.cancel_shape_draft()
+        self.polygonDrawCommitted.emit(cx, cy, radius, angle, sides)
+        self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
     def _creation_hit_is_direct_edit(self, viewport_position: QtCore.QPoint) -> bool:
         for hit_item in self.items(viewport_position):
@@ -2671,7 +2871,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._syncing_document = True
         try:
             raster_sources = {
-                str(item.geometry.get("asset", "")).strip()
+                (str(item.geometry.get("asset", "")).strip(),
+                 repr(item.geometry.get("background_cleanup")))
                 for item in document.objects
                 if item.kind == ObjectKind.IMAGE
                 and str(item.geometry.get("asset", "")).strip()
@@ -2760,7 +2961,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         pixel_budget: int,
     ) -> None:
         self._cancel_raster_preview_quality_restore()
-        groups: dict[str, list[str]] = {}
+        groups: dict[tuple[str, int | None], list[str]] = {}
         for item in items:
             source_size = item._raster_source_size
             image = item._raster_image
@@ -2773,7 +2974,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             )
             if image.width() * image.height() >= desired_pixels:
                 continue
-            groups.setdefault(reference, []).append(item.object_id)
+            groups.setdefault((reference, item._cleanup_tolerance), []).append(item.object_id)
         self._raster_restore_queue = [
             (reference, tuple(object_ids), pixel_budget)
             for reference, object_ids in groups.items()
@@ -2785,7 +2986,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         if not self._raster_restore_queue:
             self._raster_restore_timer.stop()
             return
-        reference, object_ids, expected_budget = self._raster_restore_queue.pop(0)
+        variant, object_ids, expected_budget = self._raster_restore_queue.pop(0)
+        reference, cleanup_tolerance = variant
         if (
             expected_budget != self._raster_preview_pixel_budget
             or expected_budget != ObjectGraphicsItem._preview_pixel_budget()
@@ -2797,6 +2999,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             for object_id in object_ids
             if (item := self._items_by_id.get(object_id)) is not None
             and item._raster_asset_reference == reference
+            and item._cleanup_tolerance == cleanup_tolerance
         ]
         if group:
             (
@@ -2807,6 +3010,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             ) = ObjectGraphicsItem._load_raster_snapshot(
                 reference,
                 use_cache=False,
+                cleanup_tolerance=cleanup_tolerance,
             )
             if (
                 image is not None
@@ -2885,7 +3089,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def refresh_raster_previews(self, paths: tuple[str, ...]) -> bool:
         pending = set(paths)
-        by_path: dict[str, list[ObjectGraphicsItem]] = {}
+        by_path: dict[tuple[str, int | None], list[ObjectGraphicsItem]] = {}
         for item in self._items_by_id.values():
             identity = item.raster_preview_identity
             candidate = (
@@ -2898,9 +3102,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 )
             )
             if candidate in pending:
-                by_path.setdefault(candidate, []).append(item)
+                by_path.setdefault((candidate, item._cleanup_tolerance), []).append(item)
         refreshed = set()
-        for path, items in by_path.items():
+        for (path, _tolerance), items in by_path.items():
             primary = items[0]
             if not primary.refresh_raster_snapshot():
                 continue
@@ -2965,7 +3169,22 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
 
     def set_snap_enabled(self, enabled: bool) -> None:
-        self.snap_enabled = bool(enabled)
+        if self.precision_placement_enabled:
+            self._precision_previous_snap = bool(enabled)
+        else:
+            self.snap_enabled = bool(enabled)
+
+    def set_precision_placement_enabled(self, enabled: bool) -> None:
+        """Suspend grid rounding without discarding the operator's snap preference."""
+        enabled = bool(enabled)
+        if enabled == self.precision_placement_enabled:
+            return
+        if enabled:
+            self._precision_previous_snap = self.snap_enabled
+            self.snap_enabled = False
+        else:
+            self.snap_enabled = self._precision_previous_snap
+        self.precision_placement_enabled = enabled
 
     def set_snap_step(self, step_mm: float) -> None:
         self.snap_step_mm = max(0.001, float(step_mm))
@@ -3082,6 +3301,30 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
+        if self._creation_tool == "polygon":
+            if event.button() == QtCore.Qt.MouseButton.RightButton:
+                self.set_creation_tool(None)
+                event.accept()
+                return
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                if self._polygon_prompt is not None:
+                    self._polygon_prompt.focus_sides()
+                else:
+                    position = event.position().toPoint()
+                    point = self.workspace_scene.scene_to_machine(self.mapToScene(position))
+                    if self._polygon_center_mm is None:
+                        if self._creation_hit_is_direct_edit(position):
+                            super().mousePressEvent(event)
+                            return
+                        if self.workspace_scene.work_area.contains(*point):
+                            self.select_objects([])
+                            self._polygon_center_mm = self._snap_and_clamp_machine_point(point)
+                            self._polygon_sides = 6
+                    else:
+                        self._update_polygon_draft(point, event.modifiers())
+                        self._freeze_polygon_draft()
+                event.accept()
+                return
         if self._creation_tool == "rectangle":
             if event.button() == QtCore.Qt.MouseButton.RightButton:
                 self.set_creation_tool(None)
@@ -3129,6 +3372,10 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
             event.accept()
             return
+        if self._creation_tool == "polygon" and self._polygon_center_mm is not None:
+            self._update_polygon_draft((x_mm, y_mm), event.modifiers())
+            event.accept()
+            return
         if self._creation_tool == "rectangle" and self._rectangle_anchor_mm is not None:
             self._update_rectangle_draft((x_mm, y_mm))
             event.accept()
@@ -3140,6 +3387,12 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._panning = False
             self._pan_button = QtCore.Qt.MouseButton.NoButton
             self._restore_interaction_cursor()
+            event.accept()
+            return
+        if (
+            self._creation_tool == "polygon" and self._polygon_center_mm is not None
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
             event.accept()
             return
         if (
@@ -3185,7 +3438,21 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             return
         super().mouseReleaseEvent(event)
 
+    def _refresh_rotation_modifiers(self, modifiers: QtCore.Qt.KeyboardModifier) -> None:
+        for overlay in (self._object_transform_overlay, self._template_preview_item):
+            if overlay is not None and overlay._rotation_current_scene is not None:
+                overlay.update_rotation(overlay._rotation_current_scene, modifiers)
+        if self._polygon_pointer_mm is not None:
+            self._update_polygon_draft(self._polygon_pointer_mm, modifiers)
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() in (QtCore.Qt.Key.Key_Control, QtCore.Qt.Key.Key_Shift):
+            modifier = (
+                QtCore.Qt.KeyboardModifier.ControlModifier
+                if event.key() == QtCore.Qt.Key.Key_Control
+                else QtCore.Qt.KeyboardModifier.ShiftModifier
+            )
+            self._refresh_rotation_modifiers(event.modifiers() | modifier)
         if event.key() == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_pan = True
             self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
@@ -3202,6 +3469,13 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() in (QtCore.Qt.Key.Key_Control, QtCore.Qt.Key.Key_Shift):
+            modifier = (
+                QtCore.Qt.KeyboardModifier.ControlModifier
+                if event.key() == QtCore.Qt.Key.Key_Control
+                else QtCore.Qt.KeyboardModifier.ShiftModifier
+            )
+            self._refresh_rotation_modifiers(event.modifiers() & ~modifier)
         if event.key() == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_pan = False
             if not self._panning:

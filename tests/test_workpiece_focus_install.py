@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 from scripts.package_workpiece_focus import (
     INSTALLED_FOCUS_REVISION,
     PREDECESSORS,
@@ -19,6 +20,8 @@ from scripts.package_workpiece_focus import (
     SAVED_Z,
     package,
 )
+
+CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
 
 RECORDED_REMOTE_REVISION = "050498c0e31d7778c161688c9c232224aceb2717"
 REMOTE_SERVICE = "laser_aligner/machine/remote_service.py"
@@ -54,6 +57,7 @@ def kit(tmp_path, monkeypatch, request):
     (project / "laser_aligner/machine").mkdir(parents=True)
     for name, original in originals[request.param].items():
         if original is not None:
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
             (project / name).write_bytes(original)
     monkeypatch.setattr(installer, "inactive", lambda: None)
     return installer, project, bundle, originals, request.param
@@ -71,7 +75,7 @@ def test_upgrade_preserves_operator_data_backups_and_newlines_and_is_idempotent(
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["applied"] and not result["service_started"]
     assert result["compatible_predecessors"] == [list(PREDECESSORS)[baseline]]
-    assert len(result["files"]) == len(SAVED_Z) == 17
+    assert len(result["files"]) == len({**SAVED_Z, **CURRENT_DEPENDENCIES}) == 22
     for entry in result["files"]:
         target = Path(entry["path"])
         relative = target.relative_to(project).as_posix()
@@ -155,10 +159,11 @@ def test_missing_file_is_not_accepted_when_baseline_requires_it(kit):
 def test_package_pins_complete_baselines_and_copies_only_application_sources(tmp_path):
     bundle = package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
-    assert {entry["revision"]: entry["files"] for entry in manifest["predecessors"]} == PREDECESSORS
-    assert {entry["path"] for entry in manifest["files"]} == SAVED_Z.keys()
+    expected = {revision: {**files, **CURRENT_DEPENDENCIES} for revision, files in PREDECESSORS.items()}
+    assert {entry["revision"]: entry["files"] for entry in manifest["predecessors"]} == expected
+    assert {entry["path"] for entry in manifest["files"]} == SAVED_Z.keys() | CURRENT_DEPENDENCIES.keys()
     for previous in manifest["predecessors"]:
-        assert previous["files"].keys() == SAVED_Z.keys()
+        assert previous["files"].keys() == SAVED_Z.keys() | CURRENT_DEPENDENCIES.keys()
     assert all(path.startswith("laser_aligner/") for path in SAVED_Z)
     assert {PI_JOB_PROTOCOL, SETUP_MOTION} <= SAVED_Z.keys()
     assert all(previous["files"][SETUP_MOTION] is None for previous in manifest["predecessors"])

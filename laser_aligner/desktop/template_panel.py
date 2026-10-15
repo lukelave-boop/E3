@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .controls import MeasurementSpinBox, NumericDoubleSpinBox
@@ -72,6 +73,7 @@ class TemplatePanel(QtWidgets.QWidget):
         self._generate_enabled = True
         self._camera_match_summary: str | None = None
         self._camera_match_adjusted = False
+        self._placement_values = dict(center_x_mm=0.0, center_y_mm=0.0, rotation_deg=0.0)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 12)
@@ -148,9 +150,9 @@ class TemplatePanel(QtWidgets.QWidget):
             ),
         )
         self.match_selected_button = _ResponsiveActionButton(
-            "Align selected template",
-            "Align selected",
-            tool_tip="Align the selected template to the detected sheet geometry.",
+            "Align to workpiece",
+            "Align workpiece",
+            tool_tip="Optionally align the selected template to detected workpiece geometry, then review the placement.",
         )
         match_layout.addWidget(self.auto_button)
         match_layout.addWidget(self.match_selected_button)
@@ -325,9 +327,7 @@ class TemplatePanel(QtWidgets.QWidget):
     def placement(self) -> dict[str, Any]:
         return {
             "template_id": self.current_template_id(),
-            "center_x_mm": self.x_spin.value(),
-            "center_y_mm": self.y_spin.value(),
-            "rotation_deg": self.rotation_spin.value(),
+            **self._placement_values,
         }
 
     def has_placement(self) -> bool:
@@ -415,6 +415,10 @@ class TemplatePanel(QtWidgets.QWidget):
         *,
         emit: bool = True,
     ) -> None:
+        values = dict(center_x_mm=float(center_x_mm), center_y_mm=float(center_y_mm),
+                      rotation_deg=float(rotation_deg))
+        if not all(math.isfinite(value) for value in values.values()):
+            raise ValueError("Template placement must contain finite coordinates")
         self._updating = True
         try:
             self.x_spin.setValue(float(center_x_mm))
@@ -422,6 +426,7 @@ class TemplatePanel(QtWidgets.QWidget):
             self.rotation_spin.setValue(float(rotation_deg))
         finally:
             self._updating = False
+        self._placement_values = values
         self._placement_valid = bool(self.current_template_id())
         self._update_enabled()
         if emit:
@@ -573,18 +578,21 @@ class TemplatePanel(QtWidgets.QWidget):
     def _emit_placement(self, *args: Any) -> None:
         del args
         if not self._updating and self.current_template_id():
+            for key, editor in (("center_x_mm", self.x_spin), ("center_y_mm", self.y_spin),
+                                ("rotation_deg", self.rotation_spin)):
+                if editor is self.sender():
+                    self._placement_values[key] = editor.value()
             self._placement_valid = True
             self._update_enabled()
             self.placementChanged.emit(self.placement())
 
     def _nudge(self, axis: str, direction: float) -> None:
         step = self.nudge_step.value() * float(direction)
-        if axis == "x":
-            self.x_spin.setValue(self.x_spin.value() + step)
-        elif axis == "y":
-            self.y_spin.setValue(self.y_spin.value() + step)
-        else:
-            self.rotation_spin.setValue(self.rotation_spin.value() + step)
+        values = dict(self._placement_values)
+        key = "center_x_mm" if axis == "x" else "center_y_mm" if axis == "y" else "rotation_deg"
+        editor = self.x_spin if axis == "x" else self.y_spin if axis == "y" else self.rotation_spin
+        values[key] = min(editor.maximum(), max(editor.minimum(), values[key] + step))
+        self.set_placement(**values)
 
     def _match_selected(self) -> None:
         template_id = self.current_template_id()

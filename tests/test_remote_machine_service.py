@@ -389,7 +389,11 @@ def test_submission_progress_tracks_acknowledged_bytes_and_clears_on_exit(
     else:
         with pytest.raises(MachineError):
             service.start_validated_program(program)
-    assert service.status()["job_submission"] is None
+    submission = service.status()["job_submission"]
+    if fail_action is None:
+        assert submission is None
+    else:
+        assert submission["phase"] == "failed"
 
 
 def test_machine_refresh_error_is_separate_from_snapshot_expiry(monkeypatch):
@@ -406,6 +410,60 @@ def test_machine_refresh_error_is_separate_from_snapshot_expiry(monkeypatch):
     service._refresh_once()
     assert service.status()["status_refresh_error"] is None
     assert service.status()["status_stale"] is False
+
+
+def test_start_rpc_keeps_session_pinned_when_monitor_changes_after_preparation(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    initial_session = service._controller_session_generation
+    original_progress = service._submission_progress
+
+    def change_after_checks(job_id, **fields):
+        original_progress(job_id, **fields)
+        if fields.get("phase") == "starting":
+            service._controller_session_generation += 1
+
+    monkeypatch.setattr(service, "_submission_progress", change_after_checks)
+    program = service.preflight_program(_UNPOWERED_GCODE)
+    try:
+        service.start_preflighted_program(program)
+    except MachineError:
+        pass  # Fake's old response may be rejected; inspect the sent authority.
+    start = next(r for r in fake.requests if r["action"] == ACTION_JOB_START)
+    assert start["expected_session_generation"] == initial_session
+
+
+@pytest.mark.parametrize("revoke", [None, "disarm", "stop", "session"])
+def test_explicit_start_arms_after_preparation_and_preserves_revocation(monkeypatch, revoke):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service(arm_timeout_seconds=1)
+    now = [10.0]
+    monkeypatch.setattr(remote_service_module.time, "monotonic", lambda: now[0])
+    program = service.preflight_program(_POWERED_GCODE)
+
+    def preparation(action, request):
+        if action == ACTION_JOB_FINALIZE:
+            assert not service.armed
+            now[0] += 200
+            if revoke == "disarm":
+                service.disarm()
+            elif revoke == "stop":
+                service.request_stop()
+            elif revoke == "session":
+                fake.boot_id = str(uuid.uuid4())
+
+    fake.before_request = preparation
+    if revoke:
+        with pytest.raises(MachineError):
+            service.start_preflighted_program(program, authorization_phrase=service.ARM_PHRASE)
+        assert not any(r["action"] == ACTION_JOB_START for r in fake.requests)
+    else:
+        service.start_preflighted_program(program, authorization_phrase=service.ARM_PHRASE)
+        assert sum(r["action"] == ACTION_JOB_START for r in fake.requests) == 1
+    assert not service.armed
 
 
 def test_new_controller_metadata_wakes_monitor_without_granting_authority(monkeypatch):
@@ -620,11 +678,9 @@ def test_arm_expiry_during_upload_leaves_prepared_job_inert(
     service = _service(arm_timeout_seconds=1)
     program = service.preflight_program(_POWERED_GCODE)
 
+    service.arm_program(service.ARM_PHRASE, program)
     with pytest.raises(SafetyError, match="expired or was revoked during upload"):
-        service.start_preflighted_program(
-            program,
-            authorization_phrase=service.ARM_PHRASE,
-        )
+        service.start_validated_program(program)
 
     actions = [request["action"] for request in fake.requests]
     assert ACTION_JOB_FINALIZE in actions

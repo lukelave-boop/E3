@@ -492,11 +492,11 @@ def test_raster_correction_only_enters_image_when_overscan_is_insufficient():
         for line in insufficient.text.splitlines()
     )
     assert all(
-        " S" not in line
-        for line in sufficient.text.splitlines()
-        if line.startswith("G1 ")
+        move.power == 100
+        for move in sufficient.plan.moves
+        if move.laser_on
     )
-    assert "M4 S100" in insufficient.text
+    assert "M4 S0" in insufficient.text
     assert "M3" not in insufficient.text
 
 
@@ -1652,20 +1652,18 @@ def test_image_raster_uses_contiguous_serpentine_rows_and_off_overscan(
     expected_rows = "\n".join(
         [
             "G0 X47 Y49.5 F3000",
-            "G1 X48 Y49.5 F600",
-            "M4 S100",
-            "G1 X49 Y49.5 F600",
+            "M4 S0",
+            "G1 X48 Y49.5 F600 S0",
+            "G1 X49 Y49.5 F600 S100",
+            "G1 X50 Y49.5 F600 S0",
+            "G1 X51 Y49.5 F600 S100",
+            "G1 X52 Y49.5 F600 S0",
+            "G1 X53 Y49.5 F600 S0",
             "M5",
-            "G1 X50 Y49.5 F600",
-            "M4 S100",
-            "G1 X51 Y49.5 F600",
-            "M5",
-            "G1 X52 Y49.5 F600",
-            "G1 X53 Y49.5 F600",
         ]
     )
     assert expected_rows in job.text
-    assert "G0 X53 Y50.5 F3000\nG1 X52 Y50.5 F600" in job.text
+    assert "G0 X53 Y50.5 F3000\nM4 S0\nG1 X52 Y50.5 F600 S0" in job.text
     assert job.plan is not None
     assert job.plan.planner_mode == "nearest path + fixed raster rows"
     assert job.plan.cut_distance_mm == pytest.approx(4.0)
@@ -2039,15 +2037,13 @@ def test_vector_raster_islands_share_one_constant_feed_row() -> None:
     expected_row = "\n".join(
         [
             "G0 X38 Y50 F3000",
-            "G1 X40 Y50 F600",
-            "M4 S100",
-            "G1 X48 Y50 F600",
+            "M4 S0",
+            "G1 X40 Y50 F600 S0",
+            "G1 X48 Y50 F600 S100",
+            "G1 X52 Y50 F600 S0",
+            "G1 X60 Y50 F600 S100",
+            "G1 X62 Y50 F600 S0",
             "M5",
-            "G1 X52 Y50 F600",
-            "M4 S100",
-            "G1 X60 Y50 F600",
-            "M5",
-            "G1 X62 Y50 F600",
         ]
     )
     assert expected_row in job.text
@@ -2363,13 +2359,13 @@ def test_image_raster_rejects_unbounded_sample_and_command_counts(
             generate_project_gcode(too_many_rows, LaserSettings(power_max=1000))
 
     checker_path = tmp_path / "checker.png"
-    checker = (np.indices((512, 512)).sum(axis=0) % 2 * 255).astype(np.uint8)
+    checker = (np.indices((1440, 1440)).sum(axis=0) % 2 * 255).astype(np.uint8)
     assert cv2.imwrite(str(checker_path), checker)
     too_many_commands = make_image_document(
         checker_path,
-        width_mm=512,
-        height_mm=512,
-        work_area=Bounds(0, 0, 600, 600),
+        width_mm=1440,
+        height_mm=1440,
+        work_area=Bounds(0, 0, 1500, 1500),
     )
     with pytest.raises(ValueError, match="command stream limit"):
         generate_project_gcode(too_many_commands, LaserSettings(power_max=1000))
@@ -2446,6 +2442,7 @@ def test_single_dense_vector_row_is_rejected_before_span_construction(
     points = np.column_stack([x, y])
     points[-1] = points[0]
     dense = toolpath_module.Polyline(points, closed=True, source_tag="dense")
+    monkeypatch.setattr(toolpath_module, "_MAX_STREAM_COMMANDS", 250_000)
     monkeypatch.setattr(toolpath_module, "object_polylines", lambda _item: [dense])
     monkeypatch.setattr(
         toolpath_module,
@@ -2467,6 +2464,7 @@ def test_raster_command_budget_aggregates_objects_and_passes_before_rows(
     layer.mode = LayerMode.RASTER
     layer.line_interval_mm = 1
     layer.passes = 110
+    monkeypatch.setattr(toolpath_module, "_MAX_STREAM_COMMANDS", 250_000)
     for x_position in (60, 140):
         document.add_object(
             SceneObject.rectangle(
@@ -2571,7 +2569,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
     document.add_object(
         SceneObject.line(layer.id, center=(15, 15), length_mm=10, name="Source")
     )
-    oversized = Polyline(np.zeros((249_999, 2), dtype=np.float64))
+    oversized = Polyline(np.zeros((toolpath_module._MAX_STREAM_COMMANDS - 1, 2), dtype=np.float64))
     monkeypatch.setattr(
         toolpath_module,
         "_operation_paths",
@@ -2585,7 +2583,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
         ),
     )
 
-    with pytest.raises(ValueError, match="more than 250,000 streamed commands"):
+    with pytest.raises(ValueError, match="more than 2,000,000 streamed commands"):
         generate_project_gcode(document, LaserSettings(power_max=1000))
 
 

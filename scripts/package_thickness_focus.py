@@ -8,8 +8,10 @@ import subprocess
 from pathlib import Path
 
 if __package__:
+    from .package_source_dependencies import reject_partial_raster_sources
     from .package_z_setup_speed import PREVIOUS
 else:
+    from package_source_dependencies import reject_partial_raster_sources
     from package_z_setup_speed import PREVIOUS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +84,7 @@ def package(destination, revision, version):
     revision = subprocess.check_output(["git", "rev-parse", "--verify", f"{revision}^{{commit}}"],
                                        cwd=ROOT, text=True).strip()
     sources = {name: source(revision, name) for name in PREVIOUS}
+    reject_partial_raster_sources(sources)
     manifest = json.dumps({
         "revision": revision, "compatible_windows_version": version,
         "required_capability": "pi-thickness-focus-v2",

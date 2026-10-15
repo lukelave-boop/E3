@@ -92,6 +92,7 @@ def test_capture_metadata_uses_pre_capture_age_and_immutable_mapping(capture):
         "camera_image_area": {"x_min": 10., "x_max": 110., "y_min": 20., "y_max": 80.},
         "received_monotonic": 100., "frame_age_seconds": 0.25,
         "corrected_width": 200, "corrected_height": 120,
+        "approximate_support_preview": False,
     }
     capture.settings.camera.controls["focus_absolute"] = 20
     assert metadata["camera_settings"]["controls"] == {}
