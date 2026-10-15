@@ -96,7 +96,7 @@ sources' required shared modules, including `raster_safety`, with explicit
 absent-only predecessor guards. The matching Pi runtime was installed on 2026-10-15 from selected revision
 `aac45cd`, using a hash-guarded 64-file runtime dependency bundle. All replaced
 predecessors matched reviewed Git revisions. See `CURRENT_STATE.md` for Linux
-tests, preserved calibration and the still-pending X travel evidence record.
+tests, preserved calibration and the activated operator-confirmed X travel record.
 
 ## Current installation evidence inspected on 2026-10-15
 

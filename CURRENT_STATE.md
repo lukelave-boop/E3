@@ -1,6 +1,6 @@
 # Current repository state
 
-## Pi raster companion installed; X evidence record pending (2026-10-15)
+## Pi raster companion and verified X clearance applied (2026-10-15)
 
 The Pi is online again. The operator reports physically verifying 6 mm extra X
 clearance on both sides and requires all Y settings/calibration to stay unchanged.
@@ -27,14 +27,34 @@ The main configuration, all calibration files, Y limits, offsets and park settin
 are unchanged. Saved Y remains **10..210 machine mm** on both sides. No Y clearance
 was added. Normal focus/reference/start safeguards still apply after restart.
 
-The X travel record is **not activated yet**. Saved calibration maps the surface
-carriage X extent to 27.5065275307..219.7672592962 mm. The requested 6 mm extension
-gives 21.5065275307..225.7672592962; retaining existing X10 travel gives the planned
-rectangle X10..225.7672592962, with existing Y10..210 unchanged. The disconnected
-Pi has no saved primary ESP32 firmware identity; operator firmware/unchanged-since-
-test confirmation was requested to complete the physical evidence record. Do not
-invent that identity or mark an incomplete record verified. Raster execution still
-requires this identical record on desktop and Pi, and jobs must fit preserved Y.
+The operator confirmed the ESP32 firmware has not changed since the physical X
+clearance test and explicitly authorized activation. The identical verified
+raster travel record is now saved in Windows network-local.json, the active
+Ender 3 Tailscale profile and Pi pi-hardware.json. Record SHA-256:
+`867afc67d438fe7b06013da6ed4c6b45507c85ed57faab98fdc764a92ac2d174`.
+It records the installed ESP32 USB identity, operator-confirmed unchanged
+GRBL-compatible firmware (version not re-read), configuration/calibration hashes,
+zero beam/head offsets and the operator's physical X test dated 2026-10-15.
+
+Saved calibration maps carriage surface X to 27.5065275307..219.7672592962 mm.
+Six millimetres beyond each edge gives X21.5065275307..225.7672592962;
+retaining existing X10 travel yields **X10..225.7672592962, Y10..210**.
+Only `raster_travel_envelope` was added; structural comparison against atomic
+backups confirms every other setting, all other profiles, all Y values and all
+calibration files are unchanged. No newly verified Y extension is claimed.
+The service restart can update saved-Z retention metadata; normal reference,
+focus, homing, arming and start checks remain required.
+
+Focused Windows raster safety tests passed **43 tests in 2.93 s**. An initial
+sandbox temporary-directory failure was resolved by using a workspace basetemp.
+Offline preflight using the saved configuration and configured guarded polygon
+accepted laser-off X overscan and rejected excessive X travel, powered output
+outside the calibrated surface, and a row transition beyond unchanged Y210.
+The desktop and Pi envelope digests match. No job was uploaded or started; no
+controller connection, motion, probing, arming or laser firing occurred. The Pi
+was read back disconnected, disarmed and idle after restarting. Regenerate any
+previously prepared jobs; jobs still must fit the unchanged Y limits. Physical
+run-up performance at the selected feed remains operator validation.
 
 Ignored `build/` artifacts hold before/after source and protected-file hashes,
 installer receipts, the reviewed baseline, read-only status and the deployment
