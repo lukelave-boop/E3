@@ -16,8 +16,16 @@ The requested follow-up enables Out by default on newly created raster image
 layers. Existing raster-layer choices and saved-project values remain unchanged.
 All seven raster-import tests pass, including existing On/Off persistence and
 invalid-import rejection, bringing the focused set to 79. Affected Ruff and
-compilation checks pass. Packaging was restarted to include both requested
-changes; frozen packaging and interactive operator verification are pending.
+compilation checks pass. Canonical Windows packaging and installer creation
+passed for v0.7.197 at exact application revision
+9983442b36d9cf271f150856a6996bf1d31ced29. All 181 frozen modules and three
+resources match that revision. Isolated frozen offscreen startup passed with
+camera startup and motion disabled; the duplicate dialog was also rendered and
+visually inspected with native Windows fonts. The permanent E3 DEV TEST pointer
+selects Calibration copies and raster output defaults at
+C:\Users\lukel\Documents\E3\.codex-worktrees\raster-capacity-dev\dist\E3\E3.exe.
+No Pi update was needed. Interactive operator/hardware verification and full
+Windows compatibility CI remain pending; the feature is not merged into main.
 
 ## Pi Tailscale access (2026-10-15)
 
