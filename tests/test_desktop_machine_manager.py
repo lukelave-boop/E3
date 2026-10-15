@@ -19,6 +19,7 @@ from laser_aligner.config import load_settings
 from laser_aligner.deployment import load_build_info
 from laser_aligner.desktop.machine_manager import (
     MachineManagerDialog,
+    _DuplicateMachineDialog,
     _NewMachineDialog,
 )
 from laser_aligner.machine.profiles import MachineRegistry
@@ -550,9 +551,12 @@ def test_manager_add_from_profiles_is_safe_unbound_and_does_not_change_running(
     dialog.close()
 
 
-def test_manager_duplicate_clears_machine_specific_bindings(
+@pytest.mark.parametrize("keep_calibration", [False, True])
+def test_manager_duplicate_calibration_choice_persists_without_changing_running_machine(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keep_calibration: bool,
 ) -> None:
     runtime = _runtime(tmp_path)
     source = runtime.machine_registry.active_machine
@@ -568,6 +572,13 @@ def test_manager_duplicate_clears_machine_specific_bindings(
     runtime.machine_registry.update_machine(source)
     dialog = MachineManagerDialog(runtime)
 
+    def choose(duplicate_dialog):
+        duplicate_dialog.name.setText("Alternate connection")
+        duplicate_dialog.same_machine.setChecked(keep_calibration)
+        return QtWidgets.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(_DuplicateMachineDialog, "exec", choose)
+
     dialog._duplicate_machine()
     qt_application.processEvents()
 
@@ -576,17 +587,54 @@ def test_manager_duplicate_clears_machine_specific_bindings(
         for machine in runtime.machine_registry.machines()
         if machine.created_from == f"duplicate:{source.id}"
     )
-    assert duplicated.camera_profile_id is None
-    assert duplicated.calibration_profile_id is None
-    assert duplicated.machine.honeycomb_span_mm is None
+    assert duplicated.camera_profile_id == (source.camera_profile_id if keep_calibration else None)
+    assert duplicated.calibration_profile_id == (source.calibration_profile_id if keep_calibration else None)
+    assert duplicated.machine.honeycomb_span_mm == (191.0 if keep_calibration else None)
     assert (
         duplicated.laser.guarded_output_polygon_mm
         == source.laser.guarded_output_polygon_mm
     )
     assert duplicated.machine.port == source.machine.port
     assert duplicated.id != source.id
+    assert duplicated.name == "Alternate connection"
+    assert runtime.running_machine_id == source.id
+    assert runtime.machine_registry.active_machine_id == source.id
+    reopened = MachineRegistry(runtime.machine_registry.path)
+    reopened.load()
+    assert reopened.get_machine(duplicated.id) == duplicated
+    assert reopened.get_machine(source.id) == source
+    if keep_calibration:
+        assert duplicated.machine == source.machine
+        assert duplicated.laser == source.laser
 
     dialog.close()
+
+
+def test_duplicate_dialog_defaults_and_cancel_do_not_write(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    source = runtime.machine_registry.active_machine
+    choice = _DuplicateMachineDialog(source)
+    assert choice.values() == (f"{source.name} copy", False)
+    choice.same_machine.setChecked(True)
+    assert choice.values()[1] is True
+    assert "Both entries use the same calibration" in choice.explanation.text()
+    choice.name.setText("   ")
+    assert not choice.duplicate_button.isEnabled()
+    choice.close()
+    before = runtime.machine_registry.path.read_bytes()
+    monkeypatch.setattr(
+        _DuplicateMachineDialog, "exec",
+        lambda self: QtWidgets.QDialog.DialogCode.Rejected,
+    )
+    manager = MachineManagerDialog(runtime)
+    manager._duplicate_machine()
+    assert runtime.machine_registry.path.read_bytes() == before
+    assert len(runtime.machine_registry.machines()) == 1
+    manager.close()
 
 
 def test_manager_saves_backend_and_explicit_motion_permission_across_reopen(

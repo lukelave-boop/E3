@@ -1,5 +1,12 @@
 # Roadmap
 
+## Same-machine connection profiles (2026-10-15)
+
+Implemented: Duplicate distinguishes another connection to the same physical
+machine from a different machine, with explicit calibration/span retention.
+Camera endpoint changes still require calibration review; automatic verified
+camera-address aliasing is not implemented.
+
 ## Larger raster jobs (2026-10-15)
 
 Follow-up implements faster authoritative Pi validation, exact in-process proof

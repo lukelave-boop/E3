@@ -1,5 +1,19 @@
 # Current repository state
 
+## Duplicate machine calibration choice (2026-10-15)
+
+Branch codex/duplicate-calibration adds a Duplicate dialog with a name and
+same-machine/different-machine choice. Explicit same-machine selection retains
+camera/calibration profile IDs and honeycomb span; the different-machine default
+clears them. Machine/laser settings are deep-copied; no running session,
+machine-ID-scoped reach evidence, or hardware authority is cloned. Existing
+camera-provenance checks remain unchanged. All 72 focused Windows machine-manager
+and registry tests pass, including both choices, persistence, unchanged source
+and running identity, and cancellation. These are offscreen widget/simulator
+checks. A first attempt hit temporary-folder ACL errors; the fresh workspace
+temporary-directory run passed. Affected Ruff and compilation checks pass.
+Frozen Windows packaging and interactive operator verification are pending.
+
 ## Pi Tailscale access (2026-10-15)
 
 The installed hardware node remains bound to 192.168.5.18:8765/8766. Added

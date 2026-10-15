@@ -101,6 +101,66 @@ def _tool_head_profile_text(profile: Any, *, new_machine: bool) -> str:
     )
 
 
+class _DuplicateMachineDialog(QtWidgets.QDialog):
+    def __init__(
+        self, source: MachineInstance, parent: QtWidgets.QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Duplicate machine")
+        self.setMinimumWidth(540)
+        outer = QtWidgets.QVBoxLayout(self)
+        form = QtWidgets.QFormLayout()
+        self.name = QtWidgets.QLineEdit(f"{source.name} copy")
+        form.addRow("New name", self.name)
+        outer.addLayout(form)
+
+        intro = QtWidgets.QLabel(
+            "Machine and laser settings are copied in both cases. "
+            "Choose whether this is the same physical machine and camera setup."
+        )
+        intro.setWordWrap(True)
+        outer.addWidget(intro)
+        self.same_machine = QtWidgets.QRadioButton("Same machine — keep calibration")
+        self.different_machine = QtWidgets.QRadioButton(
+            "Different machine — clear calibration"
+        )
+        self.different_machine.setChecked(True)
+        outer.addWidget(self.same_machine)
+        outer.addWidget(self.different_machine)
+        self.explanation = QtWidgets.QLabel()
+        self.explanation.setWordWrap(True)
+        outer.addWidget(self.explanation)
+        self.same_machine.toggled.connect(self._update_explanation)
+        self._update_explanation()
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        self.duplicate_button = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        self.duplicate_button.setText("Duplicate")
+        self.name.textChanged.connect(
+            lambda text: self.duplicate_button.setEnabled(bool(text.strip()))
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+
+    def _update_explanation(self) -> None:
+        self.explanation.setText(
+            "Keeps the saved camera and calibration associations and honeycomb span. "
+            "Use this for another controller connection to the same machine, such as "
+            "LAN or Tailscale. Both entries use the same calibration. Changing the "
+            "camera address or setup can still require calibration review."
+            if self.same_machine.isChecked()
+            else "Clears the camera and calibration associations and honeycomb span. "
+            "Set up calibration for the other machine before using its overlay."
+        )
+
+    def values(self) -> tuple[str, bool]:
+        return self.name.text().strip(), self.same_machine.isChecked()
+
+
 class _NewMachineDialog(QtWidgets.QDialog):
     def __init__(self, registry: Any, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -784,9 +844,9 @@ class MachineManagerDialog(QtWidgets.QDialog):
         )
         note = QtWidgets.QLabel(
             "The endpoint and optics above belong to the immutable running process. "
-            "New and duplicated saved machines begin with no camera, calibration, "
-            "or honeycomb-support binding; Setup must establish evidence for that "
-            "machine after it is actually running."
+            "When duplicating this same physical machine, choose Keep calibration "
+            "to retain its camera/calibration associations and honeycomb span. "
+            "New or different machines need their own setup."
         )
         note.setWordWrap(True)
         form.addRow("Camera endpoint", self.camera_endpoint)
@@ -1190,16 +1250,21 @@ class MachineManagerDialog(QtWidgets.QDialog):
         if machine_id is None:
             return
         source = self.registry.get_machine(machine_id)
+        dialog = _DuplicateMachineDialog(source, self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        name, keep_calibration = dialog.values()
         duplicated: MachineInstance | None = None
         try:
             duplicated = self.registry.duplicate_machine(
                 machine_id,
-                name=f"{source.name} copy",
+                name=name,
                 persist=False,
             )
-            duplicated.camera_profile_id = None
-            duplicated.calibration_profile_id = None
-            duplicated.machine.honeycomb_span_mm = None
+            if not keep_calibration:
+                duplicated.camera_profile_id = None
+                duplicated.calibration_profile_id = None
+                duplicated.machine.honeycomb_span_mm = None
             duplicated = self.registry.update_machine(duplicated)
         except MachineRegistryError as exc:
             if duplicated is not None:
@@ -1208,6 +1273,10 @@ class MachineManagerDialog(QtWidgets.QDialog):
             return
         self._reload_list(duplicated.id)
         self.status_label.setText(
+            "Duplicated for the same physical machine. Camera and calibration "
+            "associations and honeycomb span were kept. Select Use on next launch "
+            "when ready; the running machine is unchanged."
+            if keep_calibration else
             "Duplicated the concrete settings. Camera, calibration, and physical "
             "honeycomb-span bindings were cleared for the new saved-machine ID."
         )

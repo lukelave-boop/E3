@@ -2439,10 +2439,14 @@ and tool defaults. Later profile selection changes identity only unless the
 operator explicitly loads that profile's defaults into the editable form and
 saves. Creating, editing, duplicating, or choosing the next-launch instance
 does not call `MachineService` and cannot connect, Home, jog, arm, move, emit, or
-execute. Instances created from profiles, and duplicates created through
-Machine Manager, start without camera, calibration, support, or coordinate
-evidence from another machine; profile-created instances are also
-motion-disabled. Machine Setup may
+execute. Machine Manager duplication asks whether the copy represents the same
+physical machine/camera setup. Explicit same-machine selection preserves the
+camera/calibration profile IDs and physical honeycomb span; different-machine
+selection (the default) clears them. Both modes deep-copy machine/laser settings
+into a new saved ID; neither copies live session authority or machine-ID-scoped
+reach evidence. Calibration validity checks still apply, including camera
+endpoint changes. Profile-created instances have no calibration associations
+and are motion-disabled. Machine Setup may
 explicitly persist the active optical/calibration profile IDs onto the running
 saved instance for a future launch, but the frozen current runtime identity is
 not rewritten and existing calibration/support validity gates still apply.

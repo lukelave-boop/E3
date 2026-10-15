@@ -1020,6 +1020,15 @@ exact-program gates remain authoritative.
 
 ## Moving to the real C920
 
+In **Manage machines → Duplicate**, choose **Same machine — keep calibration**
+for another connection to the same physical machine and camera setup, such as
+LAN and Tailscale. This keeps the calibration associations and honeycomb span.
+**Different machine — clear calibration** copies the machine/laser settings
+without those associations. Both entries in a same-machine copy share the
+existing calibration; camera-address or optical changes still require review.
+The new entry takes effect only after selecting **Use on next launch** and
+restarting E3.
+
 1. Copy the hardware example:
 
    ```bash

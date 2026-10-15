@@ -1,5 +1,12 @@
 # Changelog
 
+## Duplicate machine calibration choice (2026-10-15)
+
+- Duplicate now offers a name and an explicit same-machine choice that keeps
+  camera/calibration associations and the saved honeycomb span.
+- The different-machine default clears those associations; Cancel writes
+  nothing. Existing calibration checks and next-launch activation remain.
+
 ## Large-job preparation (2026-10-15)
 
 - Remove repeated command parsing/configuration reconstruction and reuse one
