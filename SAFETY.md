@@ -378,7 +378,7 @@ emitted at engraving feed with the laser off; rows are never passed through
 nearest-path reordering. Raster planning accepts only bounded PNG/JPEG/BMP
 metadata, file size, and conservative decoded bytes before full decode, then
 caps aggregate row, sample, vector-edge, span, and command work. Programs
-beyond the 250,000 streamed-command limit are rejected. Inspect the powered
+beyond the 1,000,000 streamed-command limit are rejected. Inspect the powered
 pattern and maximum power in Preview. Nonzero Power Correction deliberately
 changes commanded `S` values near modeled corners or insufficiently overscanned
 raster edges while retaining GRBL `M4`; positive correction can increase the

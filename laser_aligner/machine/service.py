@@ -25,6 +25,7 @@ from ..air_assist import (
 )
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
+from ..gcode.limits import MAX_STREAM_COMMANDS
 from ..gcode.preview import contains_motion, parse_words, strip_comment
 from ..geometry.polygon import (
     ConvexPolygon,
@@ -5324,8 +5325,10 @@ class MachineService:
                 lines.append(cleaned)
         if not lines:
             raise SafetyError("G-code program is empty")
-        if len(lines) > 250_000:
-            raise SafetyError("G-code program exceeds the 250,000-line safety limit")
+        if len(lines) > MAX_STREAM_COMMANDS:
+            raise SafetyError(
+                f"G-code program exceeds the {MAX_STREAM_COMMANDS:,}-line limit"
+            )
 
         has_operation_focus = any(operation_focus_mode(line) is not None for line in lines)
         selected_focus_mode = None

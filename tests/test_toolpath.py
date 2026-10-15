@@ -2359,13 +2359,13 @@ def test_image_raster_rejects_unbounded_sample_and_command_counts(
             generate_project_gcode(too_many_rows, LaserSettings(power_max=1000))
 
     checker_path = tmp_path / "checker.png"
-    checker = (np.indices((512, 512)).sum(axis=0) % 2 * 255).astype(np.uint8)
+    checker = (np.indices((1024, 1024)).sum(axis=0) % 2 * 255).astype(np.uint8)
     assert cv2.imwrite(str(checker_path), checker)
     too_many_commands = make_image_document(
         checker_path,
-        width_mm=512,
-        height_mm=512,
-        work_area=Bounds(0, 0, 600, 600),
+        width_mm=1024,
+        height_mm=1024,
+        work_area=Bounds(0, 0, 1100, 1100),
     )
     with pytest.raises(ValueError, match="command stream limit"):
         generate_project_gcode(too_many_commands, LaserSettings(power_max=1000))
@@ -2442,6 +2442,7 @@ def test_single_dense_vector_row_is_rejected_before_span_construction(
     points = np.column_stack([x, y])
     points[-1] = points[0]
     dense = toolpath_module.Polyline(points, closed=True, source_tag="dense")
+    monkeypatch.setattr(toolpath_module, "_MAX_STREAM_COMMANDS", 250_000)
     monkeypatch.setattr(toolpath_module, "object_polylines", lambda _item: [dense])
     monkeypatch.setattr(
         toolpath_module,
@@ -2463,6 +2464,7 @@ def test_raster_command_budget_aggregates_objects_and_passes_before_rows(
     layer.mode = LayerMode.RASTER
     layer.line_interval_mm = 1
     layer.passes = 110
+    monkeypatch.setattr(toolpath_module, "_MAX_STREAM_COMMANDS", 250_000)
     for x_position in (60, 140):
         document.add_object(
             SceneObject.rectangle(
@@ -2567,7 +2569,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
     document.add_object(
         SceneObject.line(layer.id, center=(15, 15), length_mm=10, name="Source")
     )
-    oversized = Polyline(np.zeros((249_999, 2), dtype=np.float64))
+    oversized = Polyline(np.zeros((999_999, 2), dtype=np.float64))
     monkeypatch.setattr(
         toolpath_module,
         "_operation_paths",
@@ -2581,7 +2583,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
         ),
     )
 
-    with pytest.raises(ValueError, match="more than 250,000 streamed commands"):
+    with pytest.raises(ValueError, match="more than 1,000,000 streamed commands"):
         generate_project_gcode(document, LaserSettings(power_max=1000))
 
 

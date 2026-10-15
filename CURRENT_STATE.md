@@ -1,5 +1,27 @@
 # Current repository state
 
+## Raster capacity and preview work (2026-10-15)
+
+Isolated branch codex/raster-capacity starts from the currently selected Escape
+DEV TEST baseline. Shared-tree pending work is untouched; no prior feature tip
+was already merged into main. Command capacity is raised from 250,000 to
+1,000,000 through a shared generator/planner/MachineService constant. Existing
+row, sample, asset, byte and hardware validation gates remain in place.
+Raster previews default to high-contrast powered detail; the laser-off display
+toggle now hides feed gaps as well as rapids, including active overlays.
+Verification: 596 focused Windows Python 3.14 tests passed, covering larger
+raster generation/indexing/validation, exact-cap acceptance, above-cap and
+unsafe-tail rejection, browser generation, machine guards, Pi protocol/store,
+planning goldens, preview widgets and the guarded companion installer. Repository
+Ruff and application compileall passed. The final preview was rendered offscreen
+and visually inspected with native Windows fonts. Initial sandbox test runs
+were interrupted by local socketpair restrictions and temporary-directory ACLs;
+the complete focused run outside the sandbox passed. Frozen build is pending.
+Pi installation, interactive GUI, camera, controller and physical engraving
+verification are pending.
+The Pi companion is source-only and checks the recorded operation-focus
+predecessor before replacement. Compatibility CI and integration pending.
+
 ## Escape fix frozen DEV TEST handoff (2026-09-18)
 
 E3 DEV TEST selects Escape cancels tools, version 0.7.192, branch

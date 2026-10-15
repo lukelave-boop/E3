@@ -1,5 +1,15 @@
 # E3 native desktop v1 foundation
 
+## Raster preview detail and capacity
+
+Raster jobs open in high-contrast engraving detail with laser-off travel and
+gaps hidden. Show laser-off moves restores both rapid travel and feed gaps.
+Disable high contrast to see layer colors or enable power shading. Zoom in to
+inspect the exact generated pattern; no preview style predicts material burn.
+The generated/validated command ceiling is 1,000,000. Larger jobs may need
+more preparation time and memory. Remote execution above 250,000 requires
+the matching Pi companion; Windows preview alone does not upgrade the Pi.
+
 ## Drawing tools (2026-09-17)
 
 - New stencil text uses aligned top-and-bottom material bridges. Stacked counters

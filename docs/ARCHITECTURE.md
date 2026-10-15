@@ -1,5 +1,16 @@
 # Architecture
 
+## Shared job capacity and raster display
+
+`gcode/limits.py` owns the 1,000,000-command ceiling imported by the browser
+generator, project planner/preflight and MachineService (including the Pi).
+Raster sample, row, edge and asset limits, and the Pi 64 MiB upload cap, remain
+independent. Older Pi validators still reject jobs above 250,000 commands.
+The exact JobPlan remains authoritative. High-contrast preview changes pens
+only; hiding laser-off moves covers both rapid and feed moves and their active
+overlay. Raster jobs default to this view; vector-only jobs retain layer colors
+and visible travel. Power shading is available after disabling high contrast.
+
 ## Desktop authoring cancellation
 
 The window owns an Escape action separate from the machine Stop action.

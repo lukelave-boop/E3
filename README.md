@@ -1,5 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Detailed raster previews
+
+Jobs can contain up to 1,000,000 streamed commands. Raster previews open in
+high-contrast engraving detail with laser-off travel and gaps hidden. Use the
+Display controls to show them or restore layer colors/power shading. Zoom in
+to inspect the exact pattern; this view does not predict burn darkness. The
+matching Pi validator update is required for jobs above the former 250,000 cap.
+
 ## Cancel a desktop tool
 
 Press Escape to cancel the active drawing tool or unfinished object transform

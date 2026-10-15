@@ -689,6 +689,68 @@ def test_power_shading_keeps_distinct_s_values_within_one_layer(
     qt_application.processEvents()
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_raster_detail_hides_all_off_moves_without_changing_plan(
+    qt_application: QtWidgets.QApplication, deferred: bool,
+) -> None:
+    text = "\n".join([
+        "G21", "G90", "M5",
+        e3_metadata_line("layer", {
+            "id": "raster", "name": "Raster", "mode": "raster", "color": "#EE88CC",
+        }),
+        "G0 X10 Y10 F2000", "M4 S100", "G1 X20 Y10 F1000",
+        "M5", "G1 X30 Y10 F1000", "M4 S100", "G1 X40 Y10 F1000", "M5",
+    ])
+    plan = build_job_plan(text, power_max=1000, start_position=(0, 0))
+    dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "raster.gcode", defer_render=deferred)
+    dialog.show()
+    for _ in range(30):
+        qt_application.processEvents()
+    assert dialog.detail_check.isChecked()
+    assert not dialog.travel_check.isChecked()
+    assert not dialog.power_check.isEnabled()
+    assert {key[0] for key in dialog.canvas._items} == {"travel", "unpowered", "powered"}
+    for key, item in dialog.canvas._items.items():
+        assert item.isVisible() == (key[0] == "powered")
+        if key[0] == "powered":
+            assert item.pen().color().name() == "#101010"
+    off_move = next(move for move in plan.moves if not move.rapid and not move.laser_on)
+    dialog.set_elapsed(off_move.start_seconds + off_move.duration_seconds / 2)
+    assert not dialog.canvas._active_item.isVisible()
+    assert dialog.canvas._head_item.isVisible()
+    dialog.travel_check.setChecked(True)
+    assert dialog.canvas._active_item.isVisible()
+    dialog.set_elapsed(plan.total_seconds)
+    assert all(item.isVisible() for item in dialog.canvas._items.values())
+    dialog.invert_check.setChecked(True)
+    assert all(item.pen().color().name() == "#f4f5f2"
+               for key, item in dialog.canvas._items.items() if key[0] == "powered")
+    dialog.detail_check.setChecked(False)
+    assert dialog.power_check.isEnabled()
+    assert "High contrast" not in dialog.legend.text()
+    assert dialog.plan is plan
+    assert plan == build_job_plan(text, power_max=1000, start_position=(0, 0))
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_unpowered_raster_preview_keeps_geometry_visible(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    plan = _plan()
+    plan = replace(plan, moves=tuple(
+        replace(move, layer_mode="raster", laser_on=False, power=0) for move in plan.moves
+    ))
+    dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "unpowered.gcode")
+    assert dialog.travel_check.isChecked()
+    assert not dialog.detail_check.isChecked()
+    assert all(item.isVisible() for item in dialog.canvas._items.values())
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
 def test_preview_escapes_rich_metadata_and_uses_warning_theme_contract(
     qt_application: QtWidgets.QApplication,
 ) -> None:

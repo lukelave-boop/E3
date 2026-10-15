@@ -1,5 +1,12 @@
 # Roadmap
 
+## Larger raster jobs (2026-10-15)
+
+Implemented: a shared 1,000,000-command ceiling and high-contrast raster detail.
+Image/sample/row limits and machine safety checks remain bounded. Matching Pi
+installation and physical throughput/engraving acceptance remain separate
+from automated Windows validation; see CURRENT_STATE.md for verification.
+
 ## Escape cancellation
 
 Implemented: Escape cancels desktop authoring and clears selection without

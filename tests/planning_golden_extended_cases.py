@@ -504,11 +504,15 @@ def _aggregate_command_budget_rejected() -> RejectionResult:
     )
     rectangle = SceneObject(
         id="object-golden-command-budget",
-        name="Golden command-budget rectangle",
-        kind=ObjectKind.RECTANGLE,
+        name="Golden command-budget contours",
+        kind=ObjectKind.PATH,
         layer_id=layer.id,
         transform=Transform(50.0, 50.0, 20.0, 20.0),
-        geometry={"corner_radius_mm": 0.0},
+        geometry={"polylines": [
+            {"points": [[x, -0.5], [x + 0.2, -0.5], [x + 0.2, 0.5], [x, 0.5]],
+             "closed": True}
+            for x in (-0.5, -0.1, 0.3)
+        ]},
     )
     document = _document(
         project_id="project-golden-command-budget",

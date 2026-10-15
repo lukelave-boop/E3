@@ -1,5 +1,12 @@
 # Changelog
 
+## Raster capacity and preview clarity (2026-10-15)
+
+- Raise the shared planner and machine-validator ceiling to 1,000,000 commands.
+- Default raster previews to high-contrast powered detail, with laser-off moves hidden.
+- Fix the travel toggle to include laser-off feed gaps and the active move overlay.
+- Provide a guarded, two-file Pi companion for the recorded operation-focus installation.
+
 ## Escape cancels authoring (2026-09-18)
 
 - Escape exits the current drawing tool, discards drafts and clears selection.

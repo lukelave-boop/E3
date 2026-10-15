@@ -254,6 +254,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         self._show_travel = True
         self._hidden_layers: set[str] = set()
         self._shade_power = False
+        self._high_contrast = False
         self._inverted = False
         self._elapsed = plan.total_seconds
         self._move_ends = (
@@ -359,6 +360,9 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         elif role == "unpowered":
             pen = QtGui.QPen(QtGui.QColor("#E7B55C"))
             pen.setWidthF(0.55)
+        elif self._high_contrast:
+            pen = QtGui.QPen(QtGui.QColor("#F4F5F2" if self._inverted else "#101010"))
+            pen.setWidthF(0.75)
         elif self._shade_power:
             ratio = max(0.0, min(1.0, move.power / max(1, self.plan.power_max)))
             value = int(round(225 - ratio * 190))
@@ -532,7 +536,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
     def _update_item_visibility(self) -> None:
         for key, item in self._items.items():
             item.setVisible(
-                (self._show_travel or key[0] != "travel")
+                (self._show_travel or key[0] == "powered")
                 and (not key[1] or key[1] not in self._hidden_layers)
             )
 
@@ -559,7 +563,10 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         start_x, start_y = self._display_point(active.start_x, active.start_y)
         x, y = self._display_point(x, y)
         self._active_item.setLine(start_x, -start_y, x, -y)
-        self._active_item.show()
+        self._active_item.setVisible(
+            (self._show_travel or (active.laser_on and not active.rapid))
+            and active.layer_id not in self._hidden_layers
+        )
         self._head_item.setPos(x, -y)
         self._head_item.show()
 
@@ -584,6 +591,10 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         self._shade_power = bool(enabled)
         for key, item in self._items.items():
             item.setPen(self._pen(key, self._representative_moves[key]))
+
+    def set_high_contrast(self, enabled: bool) -> None:
+        self._high_contrast = bool(enabled)
+        self.set_power_shading(self._shade_power)
 
     def set_inverted(self, enabled: bool) -> None:
         self._inverted = bool(enabled)
@@ -647,6 +658,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.max_work_feed_mm_min = max_work_feed_mm_min
         self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
+        has_raster = any(move.layer_mode == "raster" and move.laser_on for move in plan.moves)
         self._render_completed = not self._deferred_render
         self._run_authorized = True
         self._run_blocked_reason = ""
@@ -684,6 +696,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
         completion_note.setWordWrap(True)
         completion_note.setMinimumWidth(0)
         layout.addWidget(completion_note)
+        if has_raster:
+            raster_note = QtWidgets.QLabel(
+                "Raster detail shows the exact laser-on pattern in high contrast. "
+                "Zoom in to inspect dots and gaps. This is not a prediction of burn darkness."
+            )
+            raster_note.setWordWrap(True)
+            layout.addWidget(raster_note)
 
         self.render_progress = QtWidgets.QProgressBar()
         self.render_progress.setObjectName("jobPreviewBuildProgress")
@@ -795,18 +814,22 @@ class JobPreviewDialog(QtWidgets.QDialog):
         display_layout.setContentsMargins(6, 8, 6, 6)
         display_layout.setHorizontalSpacing(8)
         display_layout.setVerticalSpacing(4)
-        self.travel_check = QtWidgets.QCheckBox("Show traversal moves")
-        self.travel_check.setChecked(True)
+        self.travel_check = QtWidgets.QCheckBox("Show laser-off moves (travel and gaps)")
+        self.travel_check.setChecked(not has_raster)
+        self.detail_check = QtWidgets.QCheckBox("High-contrast engraving detail")
+        self.detail_check.setChecked(has_raster)
         self.power_check = QtWidgets.QCheckBox("Shade according to power")
+        self.power_check.setEnabled(not has_raster)
         self.invert_check = QtWidgets.QCheckBox("Invert dark material")
         self.legend_check = QtWidgets.QCheckBox("Show legend")
         self.legend_check.setChecked(True)
         self.fit_button = QtWidgets.QPushButton("Fit bed")
         display_layout.addWidget(self.travel_check, 0, 0)
-        display_layout.addWidget(self.power_check, 1, 0)
-        display_layout.addWidget(self.invert_check, 2, 0)
-        display_layout.addWidget(self.legend_check, 3, 0)
-        display_layout.addWidget(self.fit_button, 4, 0)
+        display_layout.addWidget(self.detail_check, 1, 0)
+        display_layout.addWidget(self.power_check, 2, 0)
+        display_layout.addWidget(self.invert_check, 3, 0)
+        display_layout.addWidget(self.legend_check, 4, 0)
+        display_layout.addWidget(self.fit_button, 5, 0)
         side_layout.addWidget(display_group)
 
         self.statistics = QtWidgets.QLabel(
@@ -867,6 +890,11 @@ class JobPreviewDialog(QtWidgets.QDialog):
         )
 
         self.travel_check.toggled.connect(self.canvas.set_show_travel)
+        self.detail_check.toggled.connect(self.canvas.set_high_contrast)
+        self.detail_check.toggled.connect(lambda enabled: self.power_check.setEnabled(not enabled))
+        self.detail_check.toggled.connect(lambda _enabled: self.legend.setText(self._legend_html()))
+        self.canvas.set_show_travel(self.travel_check.isChecked())
+        self.canvas.set_high_contrast(self.detail_check.isChecked())
         self.power_check.toggled.connect(self.canvas.set_power_shading)
         self.invert_check.toggled.connect(self.canvas.set_inverted)
         self.fit_button.clicked.connect(self.canvas.fit_job)
@@ -1155,7 +1183,11 @@ class JobPreviewDialog(QtWidgets.QDialog):
             + "</span>"
             for row in self._layer_rows()
         )
-        prefix = f"{layers} · " if layers else ""
+        prefix = (
+            "High contrast: laser-on pattern · "
+            if self.detail_check.isChecked()
+            else (f"{layers} · " if layers else "")
+        )
         return (
             prefix
             + "<span style='color:#E45A5A'>-- Travel</span> · "
