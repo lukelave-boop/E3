@@ -1,5 +1,66 @@
 # Current repository state
 
+## Raster overscan frozen DEV TEST handoff (2026-10-15)
+
+E3 DEV TEST now selects **Raster overscan and saved Z**, version **0.7.210**,
+branch `codex/raster-overscan`, exact frozen application revision
+`aac45cdb58f1e746ecfd4c08624fd74230c172f4`. Target:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-overscan-dev\dist\E3\E3.exe`.
+The permanent pointer was updated atomically with `packaging/set_dev_test_feature.py`
+and read back through the launcher validator. The permanent launcher EXE and
+Desktop shortcut hashes are unchanged. Save current work, close the older E3
+window, and reopen the permanent **E3 DEV TEST** launcher to use this build.
+
+[Compatibility CI run 38774940560](https://github.com/lukelave-boop/E3/actions/runs/38774940560)
+passed all jobs on that exact revision: Windows Python 3.12 desktop **7,365 passed,
+54 skipped in 764.58 s**; Windows Python 3.10 core **5,895 passed, 141 skipped in
+598.38 s**; Linux serial/controller **652 passed in 106.35 s**; Ruff passed.
+Local Windows offscreen layout/focus tests passed 180 cases in 49.67 s, and
+cleanup plus parser-duplication regression tests passed 35 in 2.22 s. Application
+compileall and diff checks passed. The saved-Z failure was a stale daily-panel
+assertion: Saved Z remains in Machine Setup -> 7 - Z / laser focus. Seven new
+setup-dialog cases verify visibility and disabled-action rejection. No production
+UI, retention behavior, cleanup default or hardware safeguard changed in this
+follow-up.
+
+The canonical Windows packager produced the EXE with Python 3.14.4/PyInstaller
+6.22.3 and passed its native-library guard. All **185 application modules**, the
+frozen entry, six resources and packaged default configuration match the exact
+commit. EXE SHA256:
+`ef5291a78a83e30307cdc57ebf18fb1f2c49ba200cd475be600025ef213acbea`.
+The 15.205-second hidden native Windows startup smoke observed the exact DEV TEST
+main-window title and loaded Qt, with no startup-error dialog/log. It used fresh
+isolated configuration/state/data, camera autostart off, motion disabled, and a
+confirmed nonexistent serial device. The desktop process hardware gate itself
+remains enabled as designed; no connection or UI action was invoked. Only the
+owned smoke process was terminated. The actual machine configuration and registry
+files, and the shared Windows QSettings registry, were byte/hash unchanged.
+Installer compilation also completed successfully in 186.578 s. The installer
+was not executed.
+
+[The cleanup diagnosis](docs/BACKGROUND_CLEANUP_DIAGNOSIS.md) records the actual
+barrel image and saved-project evidence: cleanup was saved **disabled** at
+tolerance 5. Enabling it in an in-memory comparison whitened 578,173 pixels and
+removed all 120 powered moves in the clear outer 1 mm border of the 80 mm job.
+The actual engraving previews were rendered and visually inspected. Source image,
+autosave and operator settings were unchanged; an unsaved checkbox state or an
+older open preview cannot be established from saved files. Enable the checkbox,
+review the nonzero whitening summary, Apply and regenerate the preview.
+
+No controller/Pi connection, machine movement, laser output, real camera test,
+interactive operator acceptance or Pi deployment occurred. Active settings still
+have no verified raster travel envelope. This build fails clearly until the
+current whole travel envelope and evidence are configured and the matching Pi
+companion is deployed; no historical/provisional limit was adopted. Physical
+calibration, offsets, cable clearance and speed/run-up acceptance remain as listed
+in [RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). The feature branch remains for
+operator validation; main integration is not claimed. The original shared checkout
+remains on `codex/setup-wizard` at `8e58ae5` with its 77 pre-existing modified files.
+
+Ignored receipts: `build/raster-frozen-verification.json`,
+`build/raster-frozen-smoke.json`, `build/windows-build.log`, the three
+`build/ci-38774940560-*.log` files, and `build/cleanup-diagnosis/` preview images.
+
 ## Saved-Z compatibility correction and DEV TEST preparation (2026-10-15)
 
 Follow-up work remains isolated on `codex/raster-overscan`; the original shared
