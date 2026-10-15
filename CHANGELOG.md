@@ -6,6 +6,8 @@
   camera/calibration associations and the saved honeycomb span.
 - The different-machine default clears those associations; Cancel writes
   nothing. Existing calibration checks and next-launch activation remain.
+- Newly created image-import raster layers default to Out on. Importing into
+  an existing raster layer preserves its output choice, including Off.
 
 ## Large-job preparation (2026-10-15)
 

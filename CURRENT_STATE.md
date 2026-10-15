@@ -12,7 +12,12 @@ and registry tests pass, including both choices, persistence, unchanged source
 and running identity, and cancellation. These are offscreen widget/simulator
 checks. A first attempt hit temporary-folder ACL errors; the fresh workspace
 temporary-directory run passed. Affected Ruff and compilation checks pass.
-Frozen Windows packaging and interactive operator verification are pending.
+The requested follow-up enables Out by default on newly created raster image
+layers. Existing raster-layer choices and saved-project values remain unchanged.
+All seven raster-import tests pass, including existing On/Off persistence and
+invalid-import rejection, bringing the focused set to 79. Affected Ruff and
+compilation checks pass. Packaging was restarted to include both requested
+changes; frozen packaging and interactive operator verification are pending.
 
 ## Pi Tailscale access (2026-10-15)
 

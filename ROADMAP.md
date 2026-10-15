@@ -7,6 +7,9 @@ machine from a different machine, with explicit calibration/span retention.
 Camera endpoint changes still require calibration review; automatic verified
 camera-address aliasing is not implemented.
 
+New raster image layers now default to output enabled; existing saved layer
+choices remain intact.
+
 ## Larger raster jobs (2026-10-15)
 
 Follow-up implements faster authoritative Pi validation, exact in-process proof

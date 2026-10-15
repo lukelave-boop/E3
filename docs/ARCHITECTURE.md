@@ -1,5 +1,10 @@
 # Architecture
 
+New desktop raster-image imports create output-enabled raster layers, matching
+ordinary operation-layer defaults. Imports into an existing raster layer keep
+its saved output choice. This authoring default does not start a job or change
+machine arming, motion, or preflight gates.
+
 ## Shared job capacity and raster display
 
 `gcode/limits.py` owns the 1,000,000-command ceiling imported by the browser

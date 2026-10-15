@@ -2409,7 +2409,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 color=self.document.next_layer_color(),
                 mode=LayerMode.RASTER,
                 priority=len(self.document.layers),
-                output_enabled=False,
+                output_enabled=True,
             )
             self.history.execute(
                 AddLayerCommand(self.document, layer, description="Add raster layer")

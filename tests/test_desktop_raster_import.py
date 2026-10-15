@@ -151,7 +151,7 @@ def test_desktop_raster_review_preserves_result_and_existing_undo_semantics(
     ]
     assert len(imported_layers) == 1
     assert imported_layers[0].mode == LayerMode.RASTER
-    assert imported_layers[0].output_enabled is False
+    assert imported_layers[0].output_enabled is True
     assert harness.active_layer_id == imported_layers[0].id
     assert len(harness.document.objects) == 1
     item = harness.document.objects[0]
@@ -190,6 +190,34 @@ def test_desktop_raster_review_preserves_result_and_existing_undo_semantics(
     assert len(harness.document.objects) == 1
     assert harness.document.objects[0].id == item.id
     assert harness.history.depth == 2
+
+
+@pytest.mark.parametrize("output_enabled", [False, True])
+def test_raster_import_preserves_existing_layer_output_choice(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    output_enabled: bool,
+) -> None:
+    filename = tmp_path / "engraving.png"
+    _write_image(filename, width=12, height=6, value=83)
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog, "getOpenFileName",
+        lambda *_args, **_kwargs: (str(filename), ""),
+    )
+    monkeypatch.setattr(main_window_module, "review_import_manifest", lambda *_: True)
+    harness = _harness()
+    layer = harness.document.get_layer(harness.active_layer_id)
+    layer.mode = LayerMode.RASTER
+    layer.output_enabled = output_enabled
+    layer_count = len(harness.document.layers)
+    E3MainWindow.import_image(harness)
+    assert not harness.errors
+    assert len(harness.document.layers) == layer_count
+    assert harness.document.objects[0].layer_id == layer.id
+    assert layer.output_enabled is output_enabled
+    reopened = ProjectDocument.from_dict(harness.document.to_dict())
+    assert reopened.get_layer(layer.id).output_enabled is output_enabled
 
 
 def test_desktop_raster_blocker_never_reaches_strict_probe_and_changes_nothing(

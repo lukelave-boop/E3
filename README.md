@@ -1029,6 +1029,10 @@ existing calibration; camera-address or optical changes still require review.
 The new entry takes effect only after selecting **Use on next launch** and
 restarting E3.
 
+Importing an image into a new raster layer starts with **Out** enabled. An
+existing raster layer keeps its current Out setting. Review speed and power in
+the job preview before starting.
+
 1. Copy the hardware example:
 
    ```bash
