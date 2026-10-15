@@ -347,6 +347,36 @@ class ValidatedProgram:
 
 class MachineService:
     ARM_PHRASE = "ENABLE LASER CONTROL"
+    # Exact generator form only. All other syntax uses the general allowlist.
+    _RASTER_MOTION = re.compile(
+        r"G([01]) X(-?[0-9]+(?:\.[0-9]+)?) Y(-?[0-9]+(?:\.[0-9]+)?) "
+        r"F([0-9]+(?:\.[0-9]+)?)(?: S([0-9]+(?:\.[0-9]+)?))?",
+        re.ASCII,
+    )
+
+    def _raster_motion_values(self, line: str) -> tuple[set[int], dict[str, float]] | None:
+        if len(line) > 256:
+            raise SafetyError("Single streamed G-code line exceeds 256 characters")
+        match = self._RASTER_MOTION.fullmatch(line)
+        if match is None:
+            return None
+        code, x, y, feed, power = match.groups()
+        if code == "0" and power is not None:
+            return None  # General parser rejects S on G0.
+        values = {"X": float(x), "Y": float(y), "F": float(feed)}
+        if power is not None:
+            values["S"] = float(power)
+        if not all(math.isfinite(value) for value in values.values()):
+            raise SafetyError("G-code values must be finite")
+        if values["F"] <= 0:
+            raise SafetyError("Feed rate must be positive")
+        maximum = self.settings.max_travel_feed_mm_min if code == "0" else self.settings.max_work_feed_mm_min
+        if values["F"] > maximum:
+            motion = "travel" if code == "0" else "work"
+            raise SafetyError(f"{motion.capitalize()} feed F{values['F']:g} exceeds the configured {motion} ceiling of {maximum:g} mm/min")
+        if "S" in values and not 0 <= values["S"] <= self.laser_settings.power_max:
+            raise SafetyError(f"S power must be between 0 and {self.laser_settings.power_max}")
+        return {int(code)}, values
 
     @property
     def _protocol(self) -> str:
@@ -407,8 +437,9 @@ class MachineService:
         line: str,
         *,
         commands: AirAssistCommands | None = None,
+        resolved: bool = False,
     ) -> str | None:
-        if commands is None:
+        if commands is None and not resolved:
             commands = self._resolved_air_assist_commands()
         if commands is None:
             if line.strip().startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
@@ -827,6 +858,8 @@ class MachineService:
         self._armed_until_monotonic = 0.0
         self._armed_program_digest: str | None = None
         self._lock = threading.RLock()
+        # One locally validated immutable program, never a persisted/client proof.
+        self._validated_program_cache: tuple[ValidatedProgram, ValidatedProgram] | None = None
         # Own each command/ack exchange, and allow a multi-command operation
         # to retain that ownership through its complete controller sequence.
         # Emergency stop intentionally bypasses this lock.
@@ -5159,11 +5192,15 @@ class MachineService:
                 "idle_responses": idle_responses,
             }
 
-    def _validate_stream_line(self, line: str) -> tuple[list[Any], set[int], set[int]]:
+    def _validate_stream_line(
+        self, line: str, *, commands: AirAssistCommands | None = None,
+        resolved: bool = False,
+    ) -> tuple[list[Any], set[int], set[int]]:
         if len(line) > 256:
             raise SafetyError("Single streamed G-code line exceeds 256 characters")
-        commands = self._resolved_air_assist_commands()
-        air_assist_kind = self._air_assist_command_kind(line, commands=commands)
+        if not resolved:
+            commands = self._resolved_air_assist_commands()
+        air_assist_kind = self._air_assist_command_kind(line, commands=commands, resolved=True)
         if (
             air_assist_kind is not None
             and commands is not None
@@ -5308,6 +5345,7 @@ class MachineService:
                 air_assist_kind = self._air_assist_command_kind(
                     instruction,
                     commands=air_assist_commands,
+                    resolved=True,
                 )
             except SafetyError as exc:
                 raise SafetyError(
@@ -5350,6 +5388,9 @@ class MachineService:
         last_line_is_m5 = False
 
         for index, line in enumerate(lines, start=1):
+            if index % 1024 == 0:
+                # Give status/STOP workers a turn during CPU-heavy validation.
+                time.sleep(0)
             if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
                 continue
             focus_mode = operation_focus_mode(line)
@@ -5359,21 +5400,29 @@ class MachineService:
                 selected_focus_mode = focus_mode
                 last_line_is_m5 = False
                 continue
-            words, g_codes, m_codes = self._validate_stream_line(line)
-            last_line_is_m5 = m_codes == {5}
-            values = {word.letter: word.value for word in words}
-            air_assist_kind = self._air_assist_command_kind(
-                line,
-                commands=air_assist_commands,
-            )
-            try:
-                self._check_line_safety(
-                    line,
-                    job_execution=True,
-                    preflight=True,
+            raster_motion = self._raster_motion_values(line)
+            if raster_motion is None:
+                words, g_codes, m_codes = self._validate_stream_line(
+                    line, commands=air_assist_commands, resolved=True,
                 )
-            except SafetyError as exc:
-                raise SafetyError(f"Line {index}: {exc}") from exc
+                values = {word.letter: word.value for word in words}
+                air_assist_kind = self._air_assist_command_kind(
+                    line, commands=air_assist_commands, resolved=True,
+                )
+            else:
+                g_codes, values = raster_motion
+                m_codes = set()
+                air_assist_kind = None
+            last_line_is_m5 = m_codes == {5}
+            # The strict stream parser above already checks feeds, power and
+            # syntax. Do not reparse each line through the manual/runtime path.
+            # Preflight needs static hardware gates, not live arming authority.
+            requests_motion = bool(g_codes.intersection({0, 1}))
+            requests_laser = bool(m_codes.intersection({3, 4}) or values.get("S", 0) > 0)
+            if requests_motion and self.settings.allow_motion is not True:
+                raise SafetyError(f"Line {index}: Motion commands are disabled in machine.allow_motion")
+            if (requests_motion or requests_laser or air_assist_kind is not None) and self.hardware_enabled is not True:
+                raise SafetyError(f"Line {index}: Hardware control is not enabled for this process")
 
             if g_codes == {21}:
                 seen_mm = True
@@ -5685,6 +5734,7 @@ class MachineService:
         guarded_polygon = self._resolve_guarded_output_polygon(
             guarded_output_polygon_mm
         )
+        initial_profile = self._program_safety_profile(guarded_polygon)
         lines, requires_laser_authorization = self._analyze_program(
             text,
             guarded_polygon,
@@ -5699,7 +5749,7 @@ class MachineService:
             lines.insert(0, "E3FOCUS " + self._laser_focus.job_plan["id"])
         canonical = "\n".join(lines).encode("utf-8")
         air_assist_commands = self._resolved_air_assist_commands()
-        return ValidatedProgram(
+        program = ValidatedProgram(
             lines=tuple(lines),
             digest=hashlib.sha256(canonical).hexdigest(),
             requires_laser_authorization=requires_laser_authorization,
@@ -5708,6 +5758,14 @@ class MachineService:
             air_assist_commands=air_assist_commands,
             guarded_output_polygon_mm=guarded_polygon,
         )
+        if program.safety_profile != initial_profile:
+            raise SafetyError("Machine safety settings changed during program validation")
+        self._remember_validated_program(program)
+        return program
+
+    def _remember_validated_program(self, program: ValidatedProgram) -> None:
+        with self._lock:
+            self._validated_program_cache = (program, replace(program))
 
     def _require_current_safety_profile(self, program: ValidatedProgram) -> None:
         self._require_validated_program_integrity(program)
@@ -5781,6 +5839,18 @@ class MachineService:
         ):
             raise SafetyError("Program authorization contains invalid safety metadata")
 
+        with self._lock:
+            cached = self._validated_program_cache
+        if cached is not None and program is cached[0]:
+            self._resolve_guarded_output_polygon(program.guarded_output_polygon_mm)
+            # Tuple/string contents cannot change in place. Keep a separate field
+            # snapshot so replacing even a frozen dataclass field is detected.
+            if (program != cached[1]
+                    or program.safety_profile != self._program_safety_profile(program.guarded_output_polygon_mm)
+                    or program.air_assist_commands != self._resolved_air_assist_commands()):
+                raise SafetyError("Program lines, digest, flags, air-assist mapping or machine safety settings changed after program preflight; validate the exact program again")
+            return
+
         lines, requires_laser_authorization = self._analyze_program(
             "\n".join(program.lines),
             program.guarded_output_polygon_mm,
@@ -5805,6 +5875,7 @@ class MachineService:
                 "air-assist mapping, or hardware gates changed after program preflight; validate the exact "
                 "program again"
             )
+        self._remember_validated_program(program)
 
     def start_validated_program(
         self,

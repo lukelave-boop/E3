@@ -842,6 +842,21 @@ asset labels persist a seven-day retirement grace for older packages. Incoming
 current packages have retirement cleared before promotion. Cleanup revalidates
 manifest/asset identity and remains best effort; see [UPDATES.md](UPDATES.md#package-retention).
 
+Large-job validation uses a strict fast path only for the generator's exact
+G0/G1 XY/F/S syntax; all other lines use the general guarded parser. Static
+configuration is checked around analysis, with line-specific limits and modal
+state checked throughout. MachineService retains at most one immutable locally
+validated program and a separate field snapshot. Reuse checks exact fields,
+current safety profile and output authority. PiJobService additionally reads
+and hashes the committed file and compares its bytes at START. The proof never
+crosses the wire or survives a process restart. Periodic validation yields let
+status workers run. Explicit START intent is revocable throughout inert
+preparation; temporary one-use authorization is created after READY. Legacy
+pre-armed uploads still expire. Only preparation/START RPC budgets scale with
+command count (130–900 seconds); status/STOP budgets do not change. Progress
+uses the local submission phase independently of machine polling freshness,
+without granting execution authority.
+
 PiJobStore publishes committed record observations under a separate short lock
 after durable writes. Pi machine/job status reads this bounded projection,
 independent of file syncing, hashing, and validation. Execution admission and

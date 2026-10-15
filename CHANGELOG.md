@@ -1,5 +1,16 @@
 # Changelog
 
+## Large-job preparation (2026-10-15)
+
+- Remove repeated command parsing/configuration reconstruction and reuse one
+  process-local immutable validation proof with current-policy and file checks.
+- Yield during validation for status workers; retain short status/STOP deadlines.
+- Begin temporary explicit-START authorization after inert Pi preparation,
+  preserving STOP/disarm/session revocation and legacy pre-armed expiry.
+- Scale bounded preparation RPC deadlines with job size.
+- Keep checking progress through delayed polls; never label transfer completion
+  or failed preparation as successful execution.
+
 ## Raster capacity and preview clarity (2026-10-15)
 
 - Raise the shared planner and machine-validator ceiling to 1,000,000 commands.

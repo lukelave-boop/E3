@@ -3279,7 +3279,7 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         submission = self._machine_status.get("job_submission")
         if (
             isinstance(submission, Mapping)
-            and project_machine_state(self._machine_status).submission_visible
+            and submission.get("phase") in {"uploading", "verifying", "starting", "failed"}
         ):
             # Local transfer progress is independent of delayed Pi job polls.
             # It never grants execution ownership or controller authority.
@@ -3290,6 +3290,10 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         completed = int(job.get("completed_lines", 0) or 0)
         progress = 0.0 if total <= 0 else max(0.0, min(completed / total, 1.0))
         phase = str(job.get("phase", "streaming" if running else "idle"))
+        if not running and job.get("error") and phase not in {"starting", "verifying", "stopped", "interrupted"}:
+            phase = "failed"
+        if running and phase == "streaming" and progress >= 1.0:
+            phase = "draining"
         received = job.get("received_size")
         expected = job.get("expected_size")
         upload_progress = (
@@ -3299,6 +3303,9 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             else None
         )
         uploading = phase in {"receiving", "uploading"}
+        if uploading and upload_progress == 1.0:
+            phase = "verifying"
+            uploading = False
         indeterminate = phase in {"verifying", "starting"} or (
             uploading and upload_progress is None
         )
@@ -3307,9 +3314,9 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             visible_progress = upload_progress if uploading else progress
             self.progress.setValue(int(round(visible_progress * 1000)))
         finishing_labels = {
-            "receiving": "Uploading job…",
-            "uploading": "Uploading job…",
-            "verifying": "Verifying job…",
+            "receiving": "Sending file…",
+            "uploading": "Sending file…",
+            "verifying": "File sent · checking on Pi · not ready yet",
             "prepared": "Ready on Pi",
             "starting": "Starting job…",
             "stopping": "Stopping on Pi",
@@ -3317,13 +3324,23 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             "homing": "Finishing · homing",
             "parking": "Finishing · parking",
             "releasing": "Finishing · release",
+            "failed": "Job failed",
+            "interrupted": "Job interrupted",
+            "stopped": "Job stopped",
+            "cancelled": "Job cancelled",
+            "idle": "Idle",
+            "completed": "Job complete",
+            "complete": "Job complete",
         }
         self._execution_format = finishing_labels.get(
             phase,
             f"Execution {progress * 100:.0f}%",
         )
         if uploading and upload_progress is not None:
-            self._execution_format = f"Uploading job {upload_progress * 100:.0f}%"
+            self._execution_format = f"Sending file · {min(99, int(upload_progress * 100))}% transferred"
+        if phase in {"failed", "interrupted", "stopped", "cancelled", "idle"}:
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(0)
         self._sync_execution_format()
         if running:
             execution_labels = {

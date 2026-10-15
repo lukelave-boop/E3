@@ -1,5 +1,31 @@
 # Current repository state
 
+## Large-job start and honest progress follow-up (2026-10-15)
+
+The reported 279,180-command/8,075,693-byte Pi submission required 212.24 s
+for verification and exceeded the 130 s client deadline. An isolated,
+unconnected validator using the exact recorded program now takes 18.59 s on
+the same Pi. Strict canonical raster parsing avoids duplicate parsing and
+per-line configuration reconstruction; other syntax retains the allowlist.
+Validation yields periodically for other Python workers. One locally validated
+immutable proof is reused only with unchanged fields and current safety policy.
+Pi START still reads/hashes the committed file and compares its exact bytes;
+restart loses the proof and requires full revalidation.
+
+Explicit START intent spans inert upload/verification, with the temporary
+one-use authorization created only after preparation. STOP/disarm/session
+changes invalidate it. Pre-armed legacy submissions retain expiry behavior.
+Preparation/START RPC budgets scale from 130 to at most 900 seconds; monitoring
+and STOP deadlines are unchanged. This is a fallback, not the speedup.
+Progress retains its local preparation stage even when machine polling fails,
+labels sent files as not ready while checking, and displays explicit failures.
+No physical execution or controller access has been performed for this fix.
+386 focused Windows Python 3.14 tests pass after the policy-drift diagnostic
+regression was corrected and its five related cases rerun. The prior focused
+Pi-owned loopback and air-assist tests also passed. Tests use simulated
+controllers and offscreen widgets. Repository Ruff and compileall pass.
+Frozen packaging and installation are in progress; no full-suite run is claimed.
+
 ## Raster capacity and preview work (2026-10-15)
 
 Isolated branch codex/raster-capacity starts from the currently selected Escape
@@ -19,11 +45,25 @@ were interrupted by local socketpair restrictions and temporary-directory ACLs;
 the complete focused run outside the sandbox passed. A dense checker stress
 check exposed an initial-render ownership regression from the new default;
 display toggles now update visibility without scheduling geometry, and the
-2,500-move deferred-ready regression test passes. Frozen build is pending.
-Pi installation, interactive GUI, camera, controller and physical engraving
-verification are pending.
+2,500-move deferred-ready regression test passes. Frozen version 0.7.195 at
+f8c4bd3a2c311682fcab52193df1068a7867a9f6 is selected by the permanent
+E3 DEV TEST pointer. Canonical packaging, exact packaged-source comparison,
+native DLL guard and isolated offscreen startup passed. The tests-only
+d619604 follow-up fixes shallow-checkout fixture handling without changing
+the frozen application source.
+The Pi passed 406 isolated focused tests in 861 seconds. With explicit operator
+approval and fresh disconnected/disarmed/idle checks, the two-file companion
+was installed at greenhouse-climate@192.168.5.18. Source hashes and protected
+configuration hashes matched; e3-hardware-node.service restarted active/running.
+No controller connection, motion or laser output was requested.
+Remaining tests were stopped at the user's request. Interactive GUI, camera,
+controller and physical engraving verification are pending. Very large jobs
+may still exceed the existing 130-second remote preparation request timeout
+or temporary START authorization lifetime; these were not extended in this
+change, and end-to-end large-job execution is not verified.
 The Pi companion is source-only and checks the recorded operation-focus
-predecessor before replacement. Compatibility CI and integration pending.
+predecessor before replacement. Complete compatibility CI and integration
+remain pending; the feature is not merged into main.
 
 ## Escape fix frozen DEV TEST handoff (2026-09-18)
 

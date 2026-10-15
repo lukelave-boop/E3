@@ -1,5 +1,14 @@
 # Safety requirements
 
+Large-job preparation remains inert on the Pi. An explicit START request may
+wait through upload and verification before creating its temporary one-use
+authorization; STOP, disarm, boot or controller-session changes revoke the
+pending request. Legacy pre-armed submissions still expire. Reused validation
+is process-local and bound to immutable command fields, current safety policy,
+and freshly checked committed bytes; it is not a client-supplied trust token.
+Neither the fast parser nor a longer preparation deadline grants output or
+weakens status/STOP deadlines. Physical large-job execution remains unverified.
+
 Saved honeycomb height is an explicit signed datum, not a clearance bound or
 flatness tolerance. Updating it is idle and disarmed, sends no motion, and
 invalidates workpiece/preview/job selection. Jobs require a new measurement and

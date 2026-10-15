@@ -2,6 +2,10 @@
 
 ## Larger raster jobs (2026-10-15)
 
+Follow-up implements faster authoritative Pi validation, exact in-process proof
+reuse, post-preparation temporary authorization and honest progress stages.
+Recorded-file offline timing is separate from physical engraving acceptance.
+
 Implemented: a shared 1,000,000-command ceiling and high-contrast raster detail.
 Image/sample/row limits and machine safety checks remain bounded. Matching Pi
 installation and physical throughput/engraving acceptance remain separate

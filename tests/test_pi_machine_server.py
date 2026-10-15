@@ -24,7 +24,7 @@ from laser_aligner.config import (
     PrecisionCaptureSettings,
     WorkArea,
 )
-from laser_aligner.errors import MachineError
+from laser_aligner.errors import MachineError, SafetyError
 from laser_aligner.machine import pi_job_store as store_module
 from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
@@ -58,7 +58,7 @@ from laser_aligner.machine.pi_job_service import (
     execution_policy_digest,
     execution_policy_mismatch_labels,
 )
-from laser_aligner.machine.pi_job_store import PiJobStore
+from laser_aligner.machine.pi_job_store import PiJobStore, PiJobStoreError
 from laser_aligner.machine.pi_machine_server import (
     ACTION_JOB_LATEST,
     ACTION_MACHINE_COMMAND,
@@ -1705,6 +1705,37 @@ def test_pi_restart_marks_persisted_running_job_interrupted_without_resume(
     finally:
         first.shutdown(stop_machine=False)
         restarted.shutdown(stop_machine=False)
+
+
+@pytest.mark.parametrize("change", [None, "file", "limits", "restart"])
+def test_prepared_program_reuses_local_proof_but_checks_disk_and_policy(tmp_path, monkeypatch, change):
+    machine = _machine(SimulatedTransport())
+    store = PiJobStore(tmp_path / "proof")
+    service = PiJobService(machine, store)
+    program = machine.preflight_program(_POWERED_PROGRAM)
+    payload = canonical_program_bytes(program)
+    job_id = str(uuid.uuid4())
+    service.begin_upload(job_id, "proof.gcode", len(payload), program.digest)
+    service.append_upload_chunk(job_id, 0, payload)
+    service.finalize_upload(job_id, **_service_binding(program))
+    record = store.get(job_id)
+    if change == "restart":
+        service._prepared_program = None
+        monkeypatch.setattr(service, "_validate_canonical_text", lambda *a: pytest.fail("restart must revalidate"))
+        with pytest.raises(pytest.fail.Exception, match="restart must revalidate"):
+            service._preflight_committed_program(record)
+    else:
+        monkeypatch.setattr(service, "_validate_canonical_text", lambda *a: pytest.fail("unnecessary full reparse"))
+        if change == "file":
+            (store.programs_dir / (job_id + ".gcode")).write_bytes(payload.replace(b"F500", b"F999"))
+        elif change == "limits":
+            machine.settings.max_work_feed_mm_min = 10
+        if change:
+            with pytest.raises((SafetyError, PiJobStoreError)):
+                service._preflight_committed_program(record)
+        else:
+            assert service._preflight_committed_program(record) == program
+    service.shutdown(stop_machine=False)
 
 
 @pytest.mark.parametrize("recovery", [

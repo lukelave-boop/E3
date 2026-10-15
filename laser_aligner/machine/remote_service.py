@@ -1830,16 +1830,7 @@ class RemoteMachineService:
     def _require_current_program(self, program: ValidatedProgram) -> None:
         if type(program) is not ValidatedProgram:
             raise SafetyError("Program authorization requires an exact preflight result")
-        fresh = self._policy.preflight_program(
-            "\n".join(program.lines),
-            guarded_output_polygon_mm=program.guarded_output_polygon_mm,
-        )
-        if fresh != program:
-            raise SafetyError(
-                "Program lines, digest, flags, machine bounds, offsets, feed ceilings, "
-                "or hardware gates changed after program preflight; validate the exact "
-                "program again"
-            )
+        self._policy._require_validated_program_integrity(program)
         if program.requires_laser_authorization:
             with self._state_lock:
                 self._require_workpiece_focus()
@@ -2676,9 +2667,18 @@ class RemoteMachineService:
             self._job_submission = None
         try:
             yield
-        finally:
+        except Exception as exc:
+            with self._state_lock:
+                if self._job_submission is not None:
+                    self._job_submission.update(
+                        phase="starting" if self._start_ownership_uncertain else "failed",
+                        error=str(exc)[:512],
+                    )
+            raise
+        else:
             with self._state_lock:
                 self._job_submission = None
+        finally:
             self._monitor_wake.set()
 
     def _submission_progress(self, job_id: str, **fields: Any) -> None:
@@ -2692,6 +2692,7 @@ class RemoteMachineService:
         name: str = "generated.gcode",
         *,
         _expected_stop_epoch: int | None = None,
+        _deferred_authorization: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         generation = (
             self._operation_stop_epoch()
@@ -2713,7 +2714,13 @@ class RemoteMachineService:
                 )
             if hashlib.sha256(canonical).hexdigest() != program.digest:
                 raise SafetyError("Canonical job bytes did not match the preflight digest")
-            authorization = self._consume_start_authorization(program)
+            authorization = (
+                self._consume_start_authorization(program)
+                if _deferred_authorization is None else None
+            )
+            # Validation remains bounded, but its budget scales with job size.
+            # This affects preparation/START only, never status or STOP deadlines.
+            preparation_timeout = max(_DEFAULT_RPC_TIMEOUT_SECONDS, min(900.0, len(program.lines) / 1000.0))
             job_id = str(uuid.uuid4())
             local_job_created_at = time.time()
             self._record_local_job_identity(job_id, local_job_created_at)
@@ -2723,6 +2730,7 @@ class RemoteMachineService:
             )
             binding = self._start_binding(program)
             with self._state_lock:
+                preparation_session = (self._node_boot_id, self._controller_session_generation)
                 cached_job = self._status_cache.get("job")
                 accepted_active = bool(
                     isinstance(cached_job, Mapping)
@@ -2809,6 +2817,7 @@ class RemoteMachineService:
                 finalize = self._rpc(
                     ACTION_JOB_FINALIZE,
                     {"job_id": job_id, **binding},
+                    timeout=preparation_timeout,
                 )
                 self._require_operation_current(generation)
                 self._commit_current_response(
@@ -2826,12 +2835,32 @@ class RemoteMachineService:
                 )
                 self._cache_job_record(self._response_mapping(finalize, "job"))
                 self._require_operation_current(generation)
-            except Exception:
+            except Exception as exc:
                 with self._state_lock:
                     self._upload_job_id = None
+                    self._status_cache["job"] = {
+                        "job_id": job_id, "name": validated_name,
+                        "state": "failed", "phase": "failed", "running": False,
+                        "ownership_accepted": False,
+                        "error": "Job preparation failed: " + str(exc)[:512],
+                    }
                 raise
 
             try:
+                if _deferred_authorization is not None:
+                    # Explicit START intent spans inert preparation. Create the
+                    # short-lived one-use grant only after the Pi is ready; STOP,
+                    # disarm and session changes must still revoke that intent.
+                    phrase, authorization_epoch = _deferred_authorization
+                    self._require_current_program(program)
+                    with self._stop_epoch_lock, self._state_lock:
+                        if self._stop_epoch != generation:
+                            raise MachineError("Start was cancelled by software STOP")
+                        if self._authorization_epoch != authorization_epoch:
+                            raise SafetyError("START authorization was revoked during preparation; the prepared Pi job remains inert")
+                        if preparation_session != (self._node_boot_id, self._controller_session_generation):
+                            raise SafetyError("Controller session changed during preparation; prepare the job again")
+                        authorization = (phrase, time.monotonic() + float(self.laser_settings.arm_timeout_seconds), authorization_epoch)
                 if material_surface_binding(program.lines) is not None:
                     self._require_material_surface_capability()
                     validate_program_binding(program.lines, self.material_surface_snapshot())
@@ -2855,7 +2884,7 @@ class RemoteMachineService:
             self._submission_progress(job_id, phase="starting")
             try:
                 self._require_operation_current(generation)
-                start = self._rpc(ACTION_JOB_START, start_payload)
+                start = self._rpc(ACTION_JOB_START, start_payload, timeout=preparation_timeout)
             except _RemoteRequestRejected as exc:
                 self._require_operation_current(generation)
                 with self._state_lock:
@@ -2929,14 +2958,27 @@ class RemoteMachineService:
         *,
         authorization_phrase: str | None = None,
     ) -> dict[str, Any]:
+        generation = self._operation_stop_epoch()
+        with self._state_lock:
+            self._authorization_epoch += 1
+            self._clear_arm_locked()
+            authorization_epoch = self._authorization_epoch
         self._require_current_program(program)
+        deferred = None
         if program.requires_laser_authorization:
             if authorization_phrase is None:
                 raise SafetyError(
                     "This powered program requires explicit START authorization"
                 )
-            self.arm_program(authorization_phrase, program)
-        return self.start_validated_program(program, name)
+            if type(authorization_phrase) is not str or authorization_phrase.strip() != self.ARM_PHRASE:
+                raise SafetyError("Arming phrase did not match")
+            if self.laser_lockout:
+                raise SafetyError("Laser output is locked out for this process")
+            deferred = (authorization_phrase.strip(), authorization_epoch)
+        return self.start_validated_program(
+            program, name, _expected_stop_epoch=generation,
+            _deferred_authorization=deferred,
+        )
 
     def start_job(self, text: str, name: str = "generated.gcode") -> dict[str, Any]:
         generation = self._operation_stop_epoch()

@@ -2,6 +2,11 @@
 
 ## Detailed raster previews
 
+Large-job preparation stays on the Pi, with optimized exact-command validation
+and reuse of its unchanged validated program at START. Sending, checking,
+starting, failure and completion have distinct progress labels; a sent file
+is not displayed as a completed job. Temporary arming follows preparation.
+
 Jobs can contain up to 1,000,000 streamed commands. Raster previews open in
 high-contrast engraving detail with laser-off travel and gaps hidden. Use the
 Display controls to show them or restore layer colors/power shading. Zoom in
