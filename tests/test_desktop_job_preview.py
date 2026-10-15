@@ -751,6 +751,37 @@ def test_unpowered_raster_preview_keeps_geometry_visible(
     qt_application.processEvents()
 
 
+def test_large_raster_display_defaults_do_not_preempt_initial_build(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    text = "\n".join([
+        "G21", "G90", "M5",
+        e3_metadata_line("layer", {"id": "raster", "mode": "raster"}),
+        "G0 X10 Y10 F2000", "M4 S100",
+        *(f"G1 X{10 + index % 2} Y10 F1000" for index in range(2500)),
+        "M5",
+    ])
+    plan = build_job_plan(text, power_max=1000)
+    dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "large.gcode", defer_render=True)
+    assert not dialog.canvas._building
+    assert not dialog.canvas._items
+    completed = QtTest.QSignalSpy(dialog.renderFinished)
+    dialog.show()
+    for _ in range(100):
+        qt_application.processEvents()
+        if dialog._render_completed:
+            break
+    assert dialog._render_completed
+    assert completed.count() == 1
+    assert dialog.run_button.isEnabled()
+    assert dialog.canvas._rendered_count == len(plan.moves)
+    assert all(item.isVisible() == (key[0] == "powered")
+               for key, item in dialog.canvas._items.items())
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
 def test_preview_escapes_rich_metadata_and_uses_warning_theme_contract(
     qt_application: QtWidgets.QApplication,
 ) -> None:

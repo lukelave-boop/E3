@@ -578,7 +578,11 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
     def set_show_travel(self, enabled: bool) -> None:
         self._show_travel = bool(enabled)
-        self.set_elapsed(self._elapsed)
+        # Display preferences must not start a timeline build before the
+        # deferred initial build, which owns the ready/progress signals.
+        self._update_item_visibility()
+        if not self._defer_render:
+            self._update_position()
 
     def set_layer_visible(self, layer_id: str, visible: bool) -> None:
         if visible:

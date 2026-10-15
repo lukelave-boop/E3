@@ -9,14 +9,17 @@ was already merged into main. Command capacity is raised from 250,000 to
 row, sample, asset, byte and hardware validation gates remain in place.
 Raster previews default to high-contrast powered detail; the laser-off display
 toggle now hides feed gaps as well as rapids, including active overlays.
-Verification: 596 focused Windows Python 3.14 tests passed, covering larger
+Verification: 597 focused Windows Python 3.14 tests passed, covering larger
 raster generation/indexing/validation, exact-cap acceptance, above-cap and
 unsafe-tail rejection, browser generation, machine guards, Pi protocol/store,
 planning goldens, preview widgets and the guarded companion installer. Repository
 Ruff and application compileall passed. The final preview was rendered offscreen
 and visually inspected with native Windows fonts. Initial sandbox test runs
 were interrupted by local socketpair restrictions and temporary-directory ACLs;
-the complete focused run outside the sandbox passed. Frozen build is pending.
+the complete focused run outside the sandbox passed. A dense checker stress
+check exposed an initial-render ownership regression from the new default;
+display toggles now update visibility without scheduling geometry, and the
+2,500-move deferred-ready regression test passes. Frozen build is pending.
 Pi installation, interactive GUI, camera, controller and physical engraving
 verification are pending.
 The Pi companion is source-only and checks the recorded operation-focus
