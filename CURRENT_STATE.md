@@ -1,19 +1,47 @@
 # Current repository state
 
-## Preview approach separation (2026-10-15)
+## Preview approach separation: E3 DEV TEST selected (2026-10-15)
 
-Desktop-only preview change: initial laser-off rapid approach to raster work is
-shown as a persistent red dashed line, excluded from the orange movement box.
-Later row/pass/layer transfers remain included. Full travel bounds still drive
-scene fitting and the exact JobPlan remains unchanged for execution and safety.
-Rotated/nonzero-offset, deferred/immediate and playback coverage added; focused
-Windows offscreen preview/layout checks passed 60 tests; Ruff and compileall
-passed. Playback now labels direction and uses amber/cyan for laser on/off.
-Offline barrel audit confirms 319 powered forward and 318 powered reverse rows;
-ranked timing/command findings are in docs/RASTER_PERFORMANCE.md. A new frozen
-build is in progress in an isolated checkout because the previous bundle has
-a locked OpenCV DLL; no operator process was stopped.
-No settings, calibration, Pi source or hardware operation is changed.
+E3 DEV TEST selects **Raster boundary and park approach**, version **0.7.216**,
+branch `codex/raster-overscan`, frozen revision
+`764f85d381bc76ace98720af51c64b87aaa73601`. Exact executable:
+`C:\Users\lukel\Documents\E3\.codex-worktrees\raster-preview-frozen\dist\E3\E3.exe`.
+The existing bundle had a locked OpenCV DLL; a fresh detached build checkout
+was created without stopping the operator's process. The canonical Windows
+builder produced the new executable. Its SHA-256 is
+`c9b2cc6cb59275b111d641d4e858642706a6fd00cb3b9eca7859813003566437`.
+The permanent pointer was updated through `packaging/set_dev_test_feature.py`.
+No production launcher, machine settings, calibration, or Pi software was changed.
+
+Desktop preview draws the initial laser-off approach as a persistent red dashed
+line and excludes it from the orange movement box. Row/pass/layer transfers after
+that approach remain included. Full travel extents still drive scene fitting and
+safety validation; the immutable JobPlan and executable output are unchanged.
+The head marker is amber for laser-on motion and cyan for laser-off; the playback
+status names the direction and explicitly identifies LASER ON. This is preview
+state from the planned program, not live laser telemetry.
+
+Windows offscreen preview/layout checks passed **60 tests in 6.44 s**; focused
+raster continuity/focus/overscan checks passed **45 tests in 7.14 s**. Ruff and
+compileall passed. An offscreen render of the saved barrel job confirmed the
+separate approach and compact orange box. Frozen verification matched all 185
+application modules, startup entry, six resources and default configuration to
+the exact commit. Isolated hidden native-Windows startup passed in **15.121 s**,
+with a nonexistent serial port, camera disabled and motion disabled. All 35
+protected local settings/calibration hashes and shared QSettings remained
+unchanged. No live controller connection, movement or laser output occurred.
+
+The offline barrel audit confirms **319 powered forward / 318 powered reverse
+rows**: no one-way firing defect. The existing per-segment acceleration estimate
+reports 103.92 minutes versus an ideal distance/feed lower bound of 19.03 minutes;
+neither is a measured physical runtime. Command volume is 180,135 commands /
+5,490,419 bytes; stop-and-wait controller throughput remains unmeasured. Ranked
+findings and limits are in `docs/RASTER_PERFORMANCE.md`. No speculative motion,
+laser-control, retry or throughput optimization was made.
+
+Compatibility CI for the exact build is run **38801385074**; final status pending.
+This feature branch remains separate from main for operator acceptance. The
+selected frozen checkout must remain available while its pointer is active.
 
 ## Pi raster companion and verified X clearance applied (2026-10-15)
 
