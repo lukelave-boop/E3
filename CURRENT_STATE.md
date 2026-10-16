@@ -72,6 +72,25 @@ preview/acceptance/worker tests, pass with installed Python 3.14/Qt 6.11.2.
 Repository Ruff, compilation and whitespace checks pass. These local results
 do not replace the pending Qt 6.12 compatibility run.
 
+Both first-attempt desktop suites for `eb73f67` completed on Qt 6.12 without
+the native crash, including the new ownership regression. Each passed 8,663
+tests with 69 skips and one controller-test failure: the status-diversion
+scenario exhausted its 20 ms command budget, while the duplicate-ACK scenario
+quarantined at the post-terminal deadline before classifying the third frame.
+Those two queries now use a one-second test budget, retaining their exact
+payload/error, state and quarantine assertions. Shared fixture defaults,
+missing/late-ACK tests and every production deadline remain unchanged.
+The manual core run passed 7,100 tests/169 skips; the PR core run passed 7,099
+with the same skips and one PowerShell helper process timeout. Its bounded
+test budget is now 60 seconds with timestamped stderr phases and captured
+timeout diagnostics; the original slow phase is unknown. No retries or skips
+were added. Both POSIX runs passed 1,502/two skips, both lint runs passed,
+and all four actual package identity checks passed. These failed attempts
+remain recorded; the test corrections require fresh complete validation.
+The focused correction run passes all 146 controller-session tests and nine
+real Inno/helper tests with installed Python 3.14 dependencies. Independent
+review, Ruff, compilation and whitespace checks pass.
+
 Review also found that Linux updater restart inherited the previous build's
 state overrides. Both platforms now prepare a fresh update-process environment,
 preserving the genuine user profile while removing prior per-launch state,

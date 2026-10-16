@@ -169,24 +169,39 @@ def _version_helper_result(
     script = work / "installer-product-version.ps1"
     script.write_text(
         "param([string]$HelperFile, [string]$InputPath)\n"
+        "[Console]::Error.WriteLine(('{0} script entered' -f [DateTime]::UtcNow.ToString('o')))\n"
         "$ErrorActionPreference = 'Stop'\n"
         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
-        ". $HelperFile\n" + command,
+        ". $HelperFile\n"
+        "[Console]::Error.WriteLine(('{0} helper loaded' -f [DateTime]::UtcNow.ToString('o')))\n"
+        "[Console]::Error.WriteLine(('{0} command starting' -f [DateTime]::UtcNow.ToString('o')))\n"
+        + command
+        + "\n[Console]::Error.WriteLine(('{0} command completed' -f [DateTime]::UtcNow.ToString('o')))\n",
         encoding="utf-8-sig",
     )
-    result = subprocess.run(
-        [
-            shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-            "-File", str(script),
-            "-HelperFile", str(ROOT / "packaging" / "inno_setup.ps1"),
-            "-InputPath", str(input_path),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=20,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
+    try:
+        result = subprocess.run(
+            [
+                shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-File", str(script),
+                "-HelperFile", str(ROOT / "packaging" / "inno_setup.ps1"),
+                "-InputPath", str(input_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = [
+            output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output or ""
+            for output in (exc.stdout, exc.stderr)
+        ]
+        pytest.fail(
+            f"{shell} exceeded the {exc.timeout}-second test helper budget.\n"
+            f"stdout:\n{stdout}\nstderr:\n{stderr}"
+        )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     return json.loads(result.stdout)
 

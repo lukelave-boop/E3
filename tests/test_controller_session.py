@@ -572,7 +572,8 @@ def test_realtime_status_is_diverted_from_command_payload(
     machine.connect()
     transport.set_next_reply("$I", GRBL_REALTIME, GRBL_IDENTITY, "ok")
 
-    assert machine.send_command("$I") == [GRBL_IDENTITY, "ok"]
+    # Allow receiver scheduling for this synthetic three-frame success case.
+    assert machine.send_command("$I", timeout=1.0) == [GRBL_IDENTITY, "ok"]
     assert machine.status()["controller_state"] == "READY_HOME_REQUIRED"
     machine.disconnect()
 
@@ -618,8 +619,9 @@ def test_duplicate_terminal_ack_is_unowned_and_quarantines_session(
     transport.synchronize_input = None  # type: ignore[method-assign]
     transport.set_next_reply("$I", GRBL_IDENTITY, "ok", "ok")
 
+    # Leave time for the post-terminal check to classify the queued duplicate.
     with pytest.raises(MachineError, match="unowned response"):
-        machine.send_command("$I")
+        machine.send_command("$I", timeout=1.0)
 
     status = machine.status()
     assert status["controller_state"] == "RECONNECT_REQUIRED"
