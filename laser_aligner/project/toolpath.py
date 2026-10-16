@@ -104,6 +104,7 @@ from .raster_asset import (
     read_raster_asset_payload,
     verify_raster_asset_identities,
 )
+from .raster_scan import project_scan_angle, scan_cos_sin
 
 if TYPE_CHECKING:
     from ..calibration.support import HoneycombCoordinateFrame
@@ -1064,8 +1065,10 @@ def _place_paths(
 def _place_raster_rows(
     rows: Iterable[RasterRow],
     coordinate_frame: HoneycombCoordinateFrame | None,
+    *,
+    scan_angle_deg: float | None = None,
 ) -> list[RasterRow]:
-    return [
+    placed = [
         RasterRow(
             points=_place_points(row.points, coordinate_frame),
             lead_distance_mm=row.lead_distance_mm,
@@ -1074,6 +1077,24 @@ def _place_raster_rows(
         )
         for row in rows
     ]
+    if scan_angle_deg is not None:
+        angle = scan_angle_deg % 180.0
+        fixed_axis = 1 if angle == 0.0 else 0 if angle == 90.0 else None
+        if fixed_axis is not None:
+            # The inverse scan rotation followed by placement can leave tiny
+            # roundoff differences along a cardinal row. Near a .001 mm output
+            # rounding boundary these would become real perpendicular steps.
+            # Canonicalize before all placed/controller bounds checks, and never
+            # conceal a row that actually has a different direction.
+            for row in placed:
+                coordinate = row.points[0, fixed_axis]
+                arrays = [row.points, *(span.points for span in row.spans)]
+                coordinates = np.concatenate([points[:, fixed_axis] for points in arrays])
+                if not np.allclose(coordinates, coordinate, rtol=0, atol=1e-8):
+                    raise SafetyError("Placed raster row does not match its machine scan angle")
+                for points in arrays:
+                    points[:, fixed_axis] = coordinate
+    return placed
 
 
 def _length(points: np.ndarray) -> float:
@@ -1804,6 +1825,7 @@ def _scanline_rows(
     layer: OperationLayer,
     *,
     outlines: list[Polyline] | tuple[Polyline, ...] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> list[RasterRow]:
     outlines = object_polylines(item) if outlines is None else list(outlines)
     if not outlines or any(not path.closed for path in outlines):
@@ -1811,7 +1833,7 @@ def _scanline_rows(
             f"{layer.mode.value.title()} output requires closed vector geometry: "
             f"{item.name}"
         )
-    to_scan, from_scan = _scan_matrices(layer.scan_angle_deg)
+    to_scan, from_scan = _scan_matrices(project_scan_angle(layer, coordinate_frame))
     polygons = [path.points @ to_scan.T for path in outlines]
     all_points = np.vstack(polygons)
     y_min = float(all_points[:, 1].min())
@@ -1891,9 +1913,7 @@ def _scanline_paths(
 
 
 def _scan_matrices(angle_degrees: float) -> tuple[np.ndarray, np.ndarray]:
-    angle = math.radians(angle_degrees)
-    cosine = math.cos(angle)
-    sine = math.sin(angle)
+    cosine, sine = scan_cos_sin(angle_degrees)
     machine_to_scan = np.array(
         [[cosine, sine], [-sine, cosine]],
         dtype=np.float64,
@@ -1906,6 +1926,7 @@ def _vector_scan_budget(
     layer: OperationLayer,
     *,
     outlines: list[Polyline] | tuple[Polyline, ...] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> tuple[int, int]:
     outlines = object_polylines(item) if outlines is None else list(outlines)
     if not outlines or any(not path.closed for path in outlines):
@@ -1913,7 +1934,7 @@ def _vector_scan_budget(
             f"{layer.mode.value.title()} output requires closed vector geometry: "
             f"{item.name}"
         )
-    to_scan, _from_scan = _scan_matrices(layer.scan_angle_deg)
+    to_scan, _from_scan = _scan_matrices(project_scan_angle(layer, coordinate_frame))
     polygons = [path.points @ to_scan.T for path in outlines]
     all_points = np.vstack(polygons)
     y_min = float(all_points[:, 1].min())
@@ -1934,8 +1955,10 @@ def _vector_scan_budget(
 def _image_scan_budget(
     item: SceneObject,
     layer: OperationLayer,
+    *,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> tuple[int, int]:
-    machine_to_scan, _scan_to_machine = _scan_matrices(layer.scan_angle_deg)
+    machine_to_scan, _scan_to_machine = _scan_matrices(project_scan_angle(layer, coordinate_frame))
     corners = np.asarray(item.transform.corners(), dtype=np.float64)
     scan_corners = corners @ machine_to_scan.T
     extent = scan_corners.max(axis=0) - scan_corners.min(axis=0)
@@ -1995,6 +2018,7 @@ def _preflight_raster_budget(
     controller_power_max: int,
     *,
     prepared_object_paths: dict[str, tuple[Polyline, ...]] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> dict[str, RasterSource]:
     """Reject aggregate raster work before constructing row/span geometry."""
 
@@ -2032,7 +2056,7 @@ def _preflight_raster_budget(
         powered = layer.controller_power(controller_power_max) > 0
         overscan_commands = 2 if layer.overscan_percent > 0 else 0
         if item.kind == ObjectKind.IMAGE:
-            row_count, column_count = _image_scan_budget(item, layer)
+            row_count, column_count = _image_scan_budget(item, layer, coordinate_frame=coordinate_frame)
             aggregate_samples += row_count * column_count
             # Image tone is known only after bounded decode. Account for the
             # unavoidable row stream here; exact run commands are capped while
@@ -2043,6 +2067,7 @@ def _preflight_raster_budget(
                 item,
                 layer,
                 outlines=_prepared_object_polylines(item, prepared_object_paths),
+                coordinate_frame=coordinate_frame,
             )
             edge_tests = row_count * edge_count
             aggregate_edge_tests += edge_tests
@@ -2312,11 +2337,12 @@ def _image_raster_rows(
     powered: bool,
     command_budget: int,
     raster_sources: dict[str, RasterSource],
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> tuple[list[RasterRow], RasterAssetIdentity]:
     import cv2
 
     asset = Path(str(item.geometry.get("asset", ""))).expanduser()
-    machine_to_scan, scan_to_machine = _scan_matrices(layer.scan_angle_deg)
+    machine_to_scan, scan_to_machine = _scan_matrices(project_scan_angle(layer, coordinate_frame))
     image_corners = _transform_points(
         np.array(
             [
@@ -2505,6 +2531,7 @@ def _raster_rows(
     command_budget: int,
     raster_sources: dict[str, RasterSource],
     prepared_object_paths: dict[str, tuple[Polyline, ...]] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> tuple[list[RasterRow], tuple[RasterAssetIdentity, ...], int]:
     rows: list[RasterRow] = []
     assets: list[RasterAssetIdentity] = []
@@ -2517,6 +2544,7 @@ def _raster_rows(
                 powered=powered,
                 command_budget=command_budget - estimated_commands,
                 raster_sources=raster_sources,
+                coordinate_frame=coordinate_frame,
             )
             assets.append(identity)
         else:
@@ -2524,6 +2552,7 @@ def _raster_rows(
                 item,
                 layer,
                 outlines=_prepared_object_polylines(item, prepared_object_paths),
+                coordinate_frame=coordinate_frame,
             )
         rows.extend(item_rows)
         estimated_commands += sum(
@@ -2856,15 +2885,16 @@ def _generate_project_gcode(
         )
     )
     _raise_if_toolpath_cancelled()
+    local_work_area, execution_work_area, coordinate_frame_signature = (
+        _coordinate_context(document, coordinate_frame, machine_work_area)
+    )
     raster_sources = _preflight_raster_budget(
         document,
         controller_power_max,
         prepared_object_paths=prepared_object_paths,
+        coordinate_frame=coordinate_frame,
     )
     _raise_if_toolpath_cancelled()
-    local_work_area, execution_work_area, coordinate_frame_signature = (
-        _coordinate_context(document, coordinate_frame, machine_work_area)
-    )
     guarded_polygon = (
         None
         if guarded_output_polygon_mm is None
@@ -3018,6 +3048,7 @@ def _generate_project_gcode(
                 ),
                 raster_sources=raster_sources,
                 prepared_object_paths=prepared_object_paths,
+                coordinate_frame=coordinate_frame,
             )
             raster_command_estimate += layer_raster_commands
             if expanded_raster_travel:
@@ -3050,7 +3081,9 @@ def _generate_project_gcode(
                         "a separately configured verified machine.raster_travel_envelope; "
                         "no travel limit is inferred from the surface or historical coordinates."
                     ) from exc
-            placed_rows = _place_raster_rows(design_rows, coordinate_frame)
+            placed_rows = _place_raster_rows(
+                design_rows, coordinate_frame, scan_angle_deg=layer.scan_angle_deg,
+            )
             design_paths = [span for row in placed_rows for span in row.spans]
             design_motion_paths = _raster_motion_paths(placed_rows, layer.overscan_percent)
             checked_design = design_paths if expanded_raster_travel else design_motion_paths

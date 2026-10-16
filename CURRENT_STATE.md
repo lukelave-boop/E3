@@ -1,5 +1,34 @@
 # Current repository state
 
+## Machine-axis raster generation (2026-10-16)
+
+Branch `codex/machine-x-raster` builds on integration revision `6d078f3`,
+including the installed surface-travel source and upload/pause/Start work.
+Fresh desktop raster generation interprets scan angle relative to machine X;
+0 degrees produces constant-Y sweeps while image/vector artwork retains the
+calibrated honeycomb placement. Explicit nonzero raster angles remain selectable.
+Fill stays project-relative. Persisted settings/schema and already prepared or
+running programs are unchanged. The browser single-SVG pipeline is unaffected.
+
+A shared angle resolver feeds exact image/vector sampling, aggregate limits,
+and advisory preflight. Exact cardinal trigonometry retains boundary rows;
+placed cardinal rows share one perpendicular coordinate to avoid output-rounding
+micro-steps. Real direction mismatches reject. Local, placed, spot-corrected,
+verified-surface and travel-envelope checks remain authoritative, as do laser-off
+runout and existing machine execution gates.
+
+Local Windows Python 3.14 verification: 174 toolpath/machine-axis tests and
+118 advisory-preflight tests pass. The raster/surface/continuity/golden/power
+run passes 276 checks, with its one historical-angle fixture adjusted explicitly
+and verified in the subsequent 105-check surface/desktop/preflight run. The
+latter includes offscreen widget checks; no interactive GUI or physical motion,
+camera, controller, laser or Pi test occurred. Repository Ruff and application
+compileall pass. Independent static review found no actionable issues.
+
+Exact-revision compatibility CI, saved-project offline generation, and a new
+isolated frozen build are pending. No active configuration, calibration, Pi
+software, running application or current job has been changed.
+
 ## Integration context (2026-10-16)
 
 Draft integration PR: https://github.com/lukelave-boop/E3/pull/46.

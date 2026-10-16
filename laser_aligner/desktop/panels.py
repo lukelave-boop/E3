@@ -224,7 +224,10 @@ class LayerPanel(QtWidgets.QWidget):
         self.angle_spin.setRange(-180.0, 180.0)
         self.angle_spin.setDecimals(1)
         self.angle_spin.setSuffix("°")
-        self.angle_spin.setToolTip("Fill/raster scan angle")
+        self.angle_spin.setToolTip(
+            "Raster: angle from machine X; 0° scans horizontally while artwork "
+            "stays aligned to the calibrated honeycomb. Fill: angle from project X."
+        )
         self.overscan_spin = NumericDoubleSpinBox()
         self.overscan_spin.setRange(0.0, 100.0)
         self.overscan_spin.setDecimals(1)
@@ -3706,6 +3709,10 @@ class MaterialPanel(QtWidgets.QWidget):
         self.scan_angle_spin.setRange(-360.0, 360.0)
         self.scan_angle_spin.setDecimals(1)
         self.scan_angle_spin.setSuffix("\N{DEGREE SIGN}")
+        self.scan_angle_spin.setToolTip(
+            "Raster: angle from machine X; 0° scans horizontally while artwork "
+            "stays aligned to the calibrated honeycomb. Fill: angle from project X."
+        )
         self.overscan_spin = NumericDoubleSpinBox()
         self.overscan_spin.setRange(0.0, 100.0)
         self.overscan_spin.setDecimals(2)

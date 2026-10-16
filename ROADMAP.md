@@ -1,5 +1,14 @@
 # Roadmap
 
+## Machine-axis raster scans (2026-10-16)
+
+Implemented in source: desktop raster angles are relative to machine X, so the
+default 0° produces horizontal machine sweeps while the artwork retains its
+calibrated honeycomb placement. Explicit nonzero raster angles remain available;
+fill angles retain the project frame. Prepared/running programs are immutable.
+See [current state](CURRENT_STATE.md) for verification; physical scan direction
+and engraving acceptance require a later operator test.
+
 ## Confirmed surface travel (2026-10-16)
 
 Implemented in source: exact calibrated surface authority alongside

@@ -144,7 +144,10 @@ def test_reported_limiting_row_keeps_exact_powered_extent_above_y210(tmp_path, m
     local_row = ((102.95055108359132, 186.18852476780188),
                  (102.25055108359133, 186.18852476780188))
     patch_rows(monkeypatch, [local_row])
-    document = image_document(tmp_path, speed=6000)
+    # Reproduce the historical oblique row by explicitly requesting its
+    # machine angle; the new default is machine-horizontal.
+    historical_angle = math.degrees(math.atan2(*reversed(CURRENT_FRAME.x_axis_machine)))
+    document = image_document(tmp_path, speed=6000, scan_angle=historical_angle)
     row = RasterRow(np.asarray(local_row), [Polyline(np.asarray(local_row))], "limiting row")
     toolpath._prepare_raster_clearance([row], document.layers[0], LaserSettings())
     motion = toolpath._place_points(toolpath._raster_motion_points(row.points, 2.5, row.lead_distance_mm), CURRENT_FRAME)
