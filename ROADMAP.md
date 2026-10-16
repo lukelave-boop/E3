@@ -1,5 +1,12 @@
 # Roadmap
 
+## Viewer transparency for alignment (2026-10-16)
+
+Implemented: per-object temporary transparency in the main desktop viewer, with
+multi-selection, mixed values and Reset all. Selection outlines remain usable
+at full transparency. Engraving and saved project data are unchanged. See
+[current state](CURRENT_STATE.md) for verification and operator-test status.
+
 ## Machine-axis raster scans (2026-10-16)
 
 Implemented in source: desktop raster angles are relative to machine X, so the

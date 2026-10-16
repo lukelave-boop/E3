@@ -1,5 +1,23 @@
 # E3 native desktop v1 foundation
 
+## Align with object transparency
+
+Select one or more objects, then use **Transparency** above the main viewer.
+Drag the slider or enter a percentage: **0%** is fully visible and **100%** hides
+the artwork. Selection outlines and transform handles remain visible, and fully
+transparent objects can still be selected. This works for images, vectors,
+groups and selected locked objects. The camera's opacity is independent.
+
+Each object keeps its value through deselection and ordinary edits for the open
+project. Selecting objects with different values shows **Mixed**; changing the
+control assigns the chosen percentage to all selected objects. **Reset all**
+restores every object's transparency to 0%, including deselected objects.
+Layer visibility still controls whether an object is shown.
+
+Transparency is an alignment aid only. It does not change image pixels, project
+data, undo history, laser power, generated paths or the exact-job Preview.
+Values reset when a different project is opened and are not saved in `.e3laser`.
+
 ## Engraving image workspace
 
 **Objects → Image → Edit image for engraving…** opens local exclusion/restore,
