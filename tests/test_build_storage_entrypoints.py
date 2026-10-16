@@ -183,6 +183,11 @@ foreach ($argument in $Arguments) {
 foreach ($key in @('E3BundleRoot', 'E3SeedRoot', 'E3InstallerOutputDir')) {
     if (-not $defines.ContainsKey($key)) { throw "Missing managed compiler definition: $key" }
     $path = [IO.Path]::GetFullPath($defines[$key])
+    if ($key -eq 'E3InstallerOutputDir') {
+        if (-not $path.StartsWith('\\?\')) { throw 'Installer output must use the compiler extended-path form' }
+        if ($path.StartsWith('\\?\UNC\')) { $path = '\\' + $path.Substring(8) }
+        else { $path = $path.Substring(4) }
+    }
     $prefix = [IO.Path]::GetFullPath($env:STORAGE_TEST_OUTPUT) + [IO.Path]::DirectorySeparatorChar
     if (-not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Synthetic compiler refuses output outside leased directory: $path"
@@ -294,13 +299,34 @@ if ($true) {
             [Parameter(Mandatory=$true, ParameterSetName='LiteralPath')][string[]]$LiteralPath,
             [Microsoft.PowerShell.Commands.TestPathType]$PathType
         )
-        if ($Path.Count -eq 1 -and $Path[0] -like '*Inno Setup 6*ISCC.exe') {
-            return ($Path[0] -eq $env:STORAGE_TEST_COMPILER_COMMAND -and $env:STORAGE_TEST_NO_COMPILER -ne '1')
+        $testedPath = @(if ($PSCmdlet.ParameterSetName -eq 'LiteralPath') { $LiteralPath } else { $Path })
+        if ($testedPath.Count -eq 1 -and $testedPath[0] -like '*Inno Setup 7*ISCC.exe') {
+            return ($testedPath[0] -eq $env:STORAGE_TEST_COMPILER_COMMAND -and $env:STORAGE_TEST_NO_COMPILER -ne '1')
         }
         Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
     }
+    function Get-Item {
+        [CmdletBinding()]
+        param([Parameter(Position=0)][string]$LiteralPath, [switch]$Force)
+        if ($LiteralPath -eq $env:STORAGE_TEST_COMPILER_COMMAND) {
+            return [pscustomobject]@{
+                FullName = $LiteralPath
+                VersionInfo = [pscustomobject]@{
+                    ProductName = if ($env:STORAGE_TEST_WRONG_COMPILER -eq '1') { 'Other tool' } else { 'Inno Setup' }
+                    FileDescription = 'Inno Setup Command-Line Compiler'
+                }
+            }
+        }
+        Microsoft.PowerShell.Management\Get-Item @PSBoundParameters
+    }
     Set-Item -Path ('Function:' + $env:STORAGE_TEST_COMPILER_COMMAND) -Value {
         param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+        if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '/?') {
+            $major = if ($env:STORAGE_TEST_COMPILER_MAJOR) { $env:STORAGE_TEST_COMPILER_MAJOR } else { '7' }
+            "Inno Setup $major Command-Line Compiler"
+            $global:LASTEXITCODE = 0
+            return
+        }
         & $env:STORAGE_TEST_COMPILER @Arguments
         $global:LASTEXITCODE = $LASTEXITCODE
     }
@@ -364,14 +390,14 @@ def entrypoint_fixture(tmp_path: Path):
     # inherited casings before selecting the fixture-only compiler directory.
     env = {
         **{name: value for name, value in os.environ.items()
-           if name.casefold() != "programfiles(x86)"},
+           if name.casefold() not in {"programfiles(x86)", "e3_inno_compiler"}},
         "STORAGE_TEST_LOG": str(log),
         "STORAGE_TEST_STATE": str(tmp_path / "private-storage-state.json"),
         "STORAGE_TEST_PYTHON": sys.executable,
         "STORAGE_TEST_SHIM": str(shim),
         "STORAGE_TEST_PAYLOAD_STUB": str(payload),
         "STORAGE_TEST_COMPILER": str(compiler),
-        "STORAGE_TEST_COMPILER_COMMAND": str(tmp_path / "programs" / "Inno Setup 6" / "ISCC.exe"),
+        "STORAGE_TEST_COMPILER_COMMAND": str(tmp_path / "programs" / "Inno Setup 7" / "ISCC.exe"),
         "STORAGE_TEST_OUTPUT": str(root / ".e3-builds" / "synthetic-build"),
         "STORAGE_TEST_ENV_STUB": str(environment_stub),
         "STORAGE_TEST_ENV_LOG": str(tmp_path / "environment.jsonl"),
@@ -744,12 +770,16 @@ def test_whole_builder_restores_initially_unset_environment(
         assert any(item["stage"] == "compiler" for item in observed)
 
 
-@pytest.mark.parametrize("missing", ["PREFLIGHT", "COMPILER", "SANITIZER"])
+@pytest.mark.parametrize("missing", ["PREFLIGHT", "COMPILER", "OLD_COMPILER", "UNKNOWN_COMPILER", "WRONG_COMPILER", "SANITIZER"])
 def test_missing_installed_tools_refuse_without_lease_or_installation(entrypoint_fixture, missing: str) -> None:
     root, log, env, run = entrypoint_fixture
     enable_synthetic_managed_build(env)
     if missing == "COMPILER":
         env["STORAGE_TEST_NO_COMPILER"] = "1"
+    elif missing == "WRONG_COMPILER":
+        env["STORAGE_TEST_WRONG_COMPILER"] = "1"
+    elif missing in {"OLD_COMPILER", "UNKNOWN_COMPILER"}:
+        env["STORAGE_TEST_COMPILER_MAJOR"] = "6" if missing == "OLD_COMPILER" else "0"
     else:
         env[f"STORAGE_TEST_FAIL_{missing}"] = "1"
     snapshot = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
@@ -859,3 +889,31 @@ def test_storage_guard_entrypoints_parse_without_execution(tmp_path: Path, name:
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("via_environment", [False, True])
+def test_explicit_portable_inno_seven_is_used(entrypoint_fixture, via_environment: bool) -> None:
+    root, log, env, run = entrypoint_fixture
+    enable_synthetic_managed_build(env)
+    compiler = str(root.parent / "portable tools with spaces" / "Inno Setup 7" / "ISCC.exe")
+    env["STORAGE_TEST_COMPILER_COMMAND"] = compiler
+    arguments = ["-Revision", "abcdef"]
+    if via_environment:
+        env["E3_INNO_COMPILER"] = compiler
+    else:
+        arguments += ["-InnoCompiler", compiler]
+    result = run("build_windows.ps1", *arguments)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any(call[0] == "compiler" for call in calls(log))
+    assert calls(log)[-1][:2] == ["storage", "complete"]
+
+
+def test_missing_explicit_compiler_does_not_fall_back_or_reserve_storage(entrypoint_fixture) -> None:
+    root, log, env, run = entrypoint_fixture
+    enable_synthetic_managed_build(env)
+    missing = root.parent / "missing portable compiler" / "ISCC.exe"
+    result = run("build_windows.ps1", "-Revision", "abcdef", "-InnoCompiler", str(missing))
+    assert result.returncode != 0
+    assert "Inno Setup 7 or newer" in result.stderr
+    assert not any(call[0] in {"storage", "compiler"} for call in calls(log))
+    assert not (root / ".e3-builds").exists()

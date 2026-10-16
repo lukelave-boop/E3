@@ -1,5 +1,43 @@
 # Current repository state
 
+## Windows installer long paths — verified (2026-10-16)
+
+[PR #52](https://github.com/lukelave-boop/E3/pull/52) repairs Windows packaging
+with Inno Setup 7+ preflight and explicit portable compiler support. Inno 6.7.3
+reproduction confirmed both failure opening a 269-character source and silent
+omission beneath long directories. Inno 7 handles source paths; compiler output
+paths receive the explicit Windows extended prefix without changing canonical
+storage identities. Windows PowerShell 5.1 help-output handling is covered too.
+
+The separate dependency helper pins official Inno 7.1.0 by SHA-256 and valid
+publisher signature, then checks the signed compiler's engine version. Builders
+still consume existing dependencies and preserve the storage admission policy.
+
+Complete [packaging CI 38942917965](https://github.com/lukelave-boop/E3/actions/runs/38942917965)
+passed **17 focused checks** and built **E3 0.7.297** in 7m53s. The exact build
+revision is `1fa87be27ce025297561bb6acaf8212d97a8d572` (PR merge ref), whose source
+tree matches verified branch head `239feed6a7d8fe08e4b89e7dc48978559e53259c`.
+The [installer artifact](https://github.com/lukelave-boop/E3/actions/runs/38942917965/artifacts/12063499803)
+contains E3-Setup.exe and build-info.json and expires October 23. Archive SHA-256:
+`e8dda14360cdd4d6e70dc9750794f203b1f1dd4542922bcb47bbfc642b6368b3`.
+
+Full [compatibility CI 38942917930](https://github.com/lukelave-boop/E3/actions/runs/38942917930)
+passes: Windows Python 3.12 desktop **8,541 passed / 69 skipped**, Windows Python
+3.10 core **6,985 passed / 164 skipped**, POSIX **1,502 passed / 2 skipped**, and
+repository Ruff. Local Windows also passed **51 builder/storage-entrypoint tests**,
+six real compiler/path checks, ten dependency/workflow checks, Ruff and compileall.
+An actual Windows PowerShell 5.1.26100.9711 probe selected the compiler, retained
+ErrorActionPreference and compiled four fixtures into a 321-character output path
+with exact manifest hashes. Hosted tests include that regression plus long source
+filenames/directories, spaces, Unicode, missing-payload rejection and drive/UNC paths.
+
+The implementation incorporates cleaned-image tracing from main `b1c6c4b`.
+The later main `af0fc78` update and final evidence edits affect CURRENT_STATE.md
+only; application, packaging, workflows and tests remain identical to the fully
+verified revision. This repair did not change DEV TEST selection, any existing
+artifact or lease, or machine behavior. The generated installer was not installed
+or run; no physical camera, controller or laser verification is claimed.
+
 ## Cleaned-image tracing correction — integrated and DEV TEST selected (2026-10-16)
 
 PR #51 merged as `b1c6c4b67a847dd0850acd2f16e15599ea2ce9d9`; the completed

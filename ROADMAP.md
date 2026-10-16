@@ -1,5 +1,12 @@
 # Roadmap
 
+## Windows installer long paths (2026-10-16)
+
+Implemented: Inno Setup 7+ compiler preflight, explicit portable compiler support,
+verified CI dependency preparation, long-path payload completeness regressions,
+and a complete installer build on packaging PRs. Installation and interactive
+update handoff remain separate verification levels. See [dated evidence](CURRENT_STATE.md).
+
 ## Cleaned-image tracing (2026-10-16)
 
 Implemented: automatic outlines use the current cleaned grayscale image. Both

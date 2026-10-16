@@ -12,6 +12,7 @@ param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$')]
     [string]$OutputBaseFilename = "E3-Setup",
     [string]$RetentionRegistry = '',
+    [string]$InnoCompiler = $env:E3_INNO_COMPILER,
     [switch]$RequireFreshOutputs,
     [switch]$EphemeralCI,
     [switch]$PassThru
@@ -53,17 +54,8 @@ if (-not [string]::IsNullOrWhiteSpace($MachineRegistryPath)) {
 }
 . (Join-Path $PSScriptRoot "build_storage_gate.ps1")
 Assert-E3BuildDependencies -Python $python -Modules @('PyInstaller', 'PySide6')
-$innoCandidates = @(
-    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-    "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
-    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-)
-$iscc = $innoCandidates |
-    Where-Object { Test-Path $_ } |
-    Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($iscc)) {
-    throw "Inno Setup 6 must already be installed in Program Files or LocalAppData\Programs. Install it explicitly before retrying; this build does not run winget or Chocolatey."
-}
+. (Join-Path $PSScriptRoot "inno_setup.ps1")
+$iscc = Get-E3InnoCompiler -ExplicitPath $InnoCompiler
 $preflightBytecode = [Environment]::GetEnvironmentVariable('PYTHONDONTWRITEBYTECODE', 'Process')
 try {
     $env:PYTHONDONTWRITEBYTECODE = '1'
@@ -251,7 +243,7 @@ $defines = @(
     "/DOutputBaseFilename=$OutputBaseFilename",
     "/DE3BundleRoot=$bundleRoot",
     "/DE3SeedRoot=$seedRoot",
-    "/DE3InstallerOutputDir=$installerRoot"
+    "/DE3InstallerOutputDir=$(ConvertTo-E3InnoPath -Path $installerRoot)"
 )
 if ($MachineSeed) {
     $defines += "/DMachineSeed=1"

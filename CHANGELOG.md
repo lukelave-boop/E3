@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - Windows installer long paths (2026-10-16)
+
+- Require Inno Setup 7+ before reserving build storage, fixing failures and possible
+  payload omissions with deeply nested Windows dependency paths; pass long output
+  paths in Windows extended form without relocating build artifacts.
+- Accept an existing portable compiler via `-InnoCompiler` or `E3_INNO_COMPILER`;
+  keep dependency preparation separate from the canonical builder.
+- Pin and verify Inno Setup 7.1.0 in CI, check compiled long-path payload manifests,
+  and retain a full Windows installer from packaging PR validation for seven days.
+
 ## Unreleased - cleaned-image tracing (2026-10-16)
 
 - Trace the cleaned grayscale preview instead of the original source, so removed

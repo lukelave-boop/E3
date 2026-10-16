@@ -1,5 +1,17 @@
 # Architecture
 
+Windows installer tooling selects and identifies Inno Setup 7 or newer before
+build admission. Its native long-path support preserves deeply nested PySide/Qt
+payloads without relocating the source or changing storage policy. Long compiler
+output directories receive an extended-path prefix only at the compiler call;
+storage ownership and returned artifact paths keep their canonical form. An explicit
+portable compiler path takes precedence over installed-tool discovery. Separate
+CI dependency preparation pins Inno 7.1.0 by SHA-256 and Authenticode publisher;
+the canonical builder consumes existing tools only. Real compiler regressions
+include this repository's installer script and verify the exact input list,
+sizes and SHA-256 hashes through its output manifest. Packaging PR validation
+builds a complete installer without installing or publishing it.
+
 Desktop visual affordances live in `desktop/theme.py` and packaged
 `desktop/assets/control-*.svg` indicators. Shared navigation stays in
 `desktop/controls.py`; the main shell, operation labels and image-editor workflow
