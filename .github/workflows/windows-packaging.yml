@@ -1,0 +1,86 @@
+name: Windows packaging validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/windows-packaging.yml
+      - .github/workflows/publish-development-update.yml
+      - packaging/**
+      - pyproject.toml
+      - requirements*.txt
+      - tests/test_windows_installer_long_paths.py
+      - tests/test_windows_packaging_workflow.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install build and focused-test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[desktop]" pyinstaller pytest
+      - name: Prepare verified Inno Setup 7.1.0
+        shell: pwsh
+        run: |
+          $compiler = & .\packaging\install_inno_setup_ci.ps1
+          "E3_TEST_INNO_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Exercise real Inno Setup long-path regression
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe -m pytest -q tests/test_windows_installer_long_paths.py tests/test_windows_packaging_workflow.py
+      - name: Build complete Windows installer
+        id: package
+        shell: pwsh
+        run: |
+          $results = & .\packaging\build_windows.ps1 `
+            -EphemeralCI `
+            -InnoCompiler $env:E3_INNO_COMPILER `
+            -Revision "$env:GITHUB_SHA" `
+            -Channel development `
+            -Repository "$env:GITHUB_REPOSITORY" `
+            -ReleaseTag e3-development `
+            -OutputBaseFilename E3-Setup `
+            -PassThru | ForEach-Object {
+              if ($_.PSObject.Properties['Kind'] -and $_.Kind -eq 'E3WindowsBuild') { $_ }
+              else { Write-Host $_ }
+            }
+          $builds = @($results)
+          if ($builds.Count -ne 1) { throw 'Expected one canonical Windows build result.' }
+          $build = $builds[0]
+          $metadata = Join-Path $build.OutputRoot 'build-info.json'
+          if (-not (Test-Path -LiteralPath $build.Installer -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $metadata -PathType Leaf)) {
+            throw 'Canonical build did not return its installer and build metadata.'
+          }
+          "installer=$($build.Installer)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "metadata=$metadata" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e3-windows-installer-${{ github.sha }}
+          path: |
+            ${{ steps.package.outputs.installer }}
+            ${{ steps.package.outputs.metadata }}
+          if-no-files-found: error
+          retention-days: 7

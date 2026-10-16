@@ -1093,6 +1093,12 @@ The installed frozen PyInstaller E3 to visible Inno
 Setup handoff still requires package-level verification in a disposable
 interactive Windows environment.
 
+Windows installer builds require **Inno Setup 7 or newer** for long Qt dependency
+paths. Install it explicitly or select an existing portable compiler with
+`-InnoCompiler` / `E3_INNO_COMPILER`. Old or missing compilers fail before storage
+admission. Packaging PRs also build a complete installer on Windows CI and retain
+it for seven days; see [build prerequisites](docs/LOCAL_ARTIFACT_RETENTION.md#dependencies-and-temporary-files).
+
 The Windows build sanitizes foreign native-library directories from its
 PyInstaller environment and rejects known root-level ICU/OpenSSL collisions in
 the finished bundle. If a frozen dependency still fails before Qt can start, E3

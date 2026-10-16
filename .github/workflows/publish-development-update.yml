@@ -57,14 +57,15 @@ jobs:
           python -m venv .venv
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
           .\.venv\Scripts\python.exe -m pip install -e ".[desktop]" pyinstaller
-      - name: Install Inno Setup
+      - name: Prepare verified Inno Setup 7.1.0
         shell: pwsh
-        run: choco install innosetup -y --no-progress
+        run: .\packaging\install_inno_setup_ci.ps1
       - name: Build Windows update installer
         shell: pwsh
         run: |
           .\packaging\build_windows.ps1 `
             -EphemeralCI `
+            -InnoCompiler $env:E3_INNO_COMPILER `
             -Revision "${{ github.sha }}" `
             -Channel "$env:E3_UPDATE_CHANNEL" `
             -Repository "${{ github.repository }}" `

@@ -1,5 +1,32 @@
 # Current repository state
 
+## Windows installer long-path repair (2026-10-16, in progress)
+
+The UI follow-up changes packaging only: Inno Setup 7+ preflight and an explicit
+portable compiler path replace Inno 6 discovery. Reproduction with installed
+Inno 6.7.3 confirmed failure opening a 269-character source and silent omission
+when the parent directory exceeds MAX_PATH. Relative paths do not repair either
+case; an extended-path prefix is rejected by that compiler. Inno 7 supplies
+native long-path handling for source files. Real compiler checks also established
+that long OutputDir values require an explicit extended-path prefix; the builder
+now applies it only to the compiler argument, preserving storage identities.
+
+The separate CI helper pins official Inno 7.1.0, verifies SHA-256 and publisher,
+and prepares a portable compiler. The builder still never installs dependencies.
+Real compiler tests include the repository installer and check every manifest
+file, byte size and SHA-256, including deep directories, long filenames, spaces,
+Unicode, long output paths and missing-payload refusal. Packaging PR CI now runs
+a complete canonical Windows installer build and retains it for seven days.
+Local Windows verification with portable Inno 7.1.0 passes all six real compiler
+and path-conversion regressions. Ten dependency-preparation/workflow tests,
+repository Ruff, compileall and independent review also pass. Complete installer
+and Windows compatibility CI results are pending before integration.
+
+The selected UI bundle and permanent DEV TEST pointer remain unchanged. Existing
+local failed reservations and artifacts are preserved; full installer validation
+uses genuine hosted Windows CI with the existing bounded ephemeral admission.
+No E3 installer, application, camera, controller or laser is launched by these checks.
+
 ## Desktop UI clarity — integrated and DEV TEST selected (2026-10-16)
 
 Permanent **E3 DEV TEST** selects **Desktop UI clarity**, version **0.7.283**,

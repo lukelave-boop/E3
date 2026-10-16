@@ -67,11 +67,30 @@ not participate in leases; never run them concurrently in the same checkout.
 ## Dependencies and temporary files
 
 Local commands use already installed PyInstaller, E3 desktop dependencies and
-Inno Setup 6. They do not run `pip install`, upgrade packages, invoke `winget` or
+Inno Setup 7 or newer. They do not run `pip install`, upgrade packages, invoke `winget` or
 install Chocolatey packages. Read-only module and compiler checks fail before a
 lease if required tools are absent, with an explicit setup instruction.
 Preparing or changing those dependencies is a separate action. The source
 `.venv` is not adopted as managed build output or charged to the managed pool.
+
+The builder identifies the compiler and rejects Inno 6 before reserving storage.
+Inno 6 can fail while opening a long file name or silently omit files beneath a
+long directory; shortening one checkout path does not address both cases.
+[Inno 7 supports extended-length paths natively](https://jrsoftware.org/files/is7-whatsnew.htm).
+Select an existing portable compiler with `-InnoCompiler 'C:\tools\Inno Setup 7\ISCC.exe'`
+or `E3_INNO_COMPILER`; an explicit invalid path never falls back silently.
+Installed discovery checks the normal Program Files and per-user Programs
+locations. Long installer output paths are converted to the extended Windows form only in
+the compiler argument; stored paths and ownership checks are unchanged. No global
+Windows path policy is changed.
+
+CI explicitly prepares the pinned Inno Setup 7.1.0 portable compiler with
+`packaging/install_inno_setup_ci.ps1`, verifying its official SHA-256 and
+Authenticode publisher before extraction, and the extracted compiler version.
+For separate local dependency preparation, this helper requires explicit
+`-AllowLocal -Destination <new-absolute-directory>` and preserves existing
+folders. It returns the compiler path. It does not change E3's storage accounting,
+install E3, or select a DEV TEST build.
 
 After admission and verification, child processes inherit `TEMP`, `TMP` and
 `TMPDIR` under the leased `temp` directory. PyInstaller, pip, Python bytecode and
@@ -98,6 +117,13 @@ and calibration stay in their normal per-user locations. The Home installer
 command prints the actual new installer path, including managed output paths.
 
 ## Hosted CI
+
+The Windows packaging validation workflow builds on packaging pull requests and
+manual dispatch. It runs real compiler regressions with file and directory paths
+over 260 characters, spaces, Unicode, long output paths and a missing-payload
+rejection. A compiler manifest must match every input file, size and SHA-256.
+It then runs the canonical complete build and uploads its installer and metadata
+for seven days without installing or publishing them.
 
 The publication workflow explicitly passes `-EphemeralCI` on Windows and
 `--ephemeral-ci` to the Linux script. The guard verifies hosted-runner and
