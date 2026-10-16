@@ -18,7 +18,11 @@ file, byte size and SHA-256, including deep directories, long filenames, spaces,
 Unicode, long output paths and missing-payload refusal. Packaging PR CI now runs
 a complete canonical Windows installer build and retains it for seven days.
 Local Windows verification with portable Inno 7.1.0 passes all six real compiler
-and path-conversion regressions. Ten dependency-preparation/workflow tests,
+and path-conversion regressions. A separate Windows PowerShell 5.1.26100.9711
+probe also selects the actual compiler, preserves ErrorActionPreference and
+compiles all four fixture files into a 321-character output path with exact
+manifest hashes. Its native stderr compatibility fix has a dedicated regression.
+Ten dependency-preparation/workflow tests,
 repository Ruff, compileall and independent review also pass. Complete installer
 and Windows compatibility CI results are pending before integration.
 

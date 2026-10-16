@@ -215,3 +215,41 @@ def test_compiler_output_helper_preserves_directory_identity(
     tmp_path: Path, normal: str, extended: str
 ) -> None:
     assert str(_compiler_output_path(tmp_path, normal)) == extended
+
+
+def test_windows_powershell51_discovers_compiler_and_preserves_error_policy(
+    inno_compiler: Path, tmp_path: Path
+) -> None:
+    shell = shutil.which("powershell.exe")
+    if shell is None:
+        pytest.skip("Windows PowerShell 5.1 is not installed")
+    script = tmp_path / "powershell51-compiler-discovery.ps1"
+    script.write_text(
+        "param([string]$HelperFile, [string]$CompilerPath)\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+        ". $HelperFile\n"
+        "$selected = Get-E3InnoCompiler -ExplicitPath $CompilerPath\n"
+        "@{Compiler=$selected; ErrorPolicy=[string]$ErrorActionPreference; "
+        "Major=$PSVersionTable.PSVersion.Major; Minor=$PSVersionTable.PSVersion.Minor} "
+        "| ConvertTo-Json -Compress\n",
+        encoding="utf-8-sig",
+    )
+    result = subprocess.run(
+        [
+            shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(script),
+            "-HelperFile", str(ROOT / "packaging" / "inno_setup.ps1"),
+            "-CompilerPath", str(inno_compiler),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    evidence = json.loads(result.stdout)
+    assert (evidence["Major"], evidence["Minor"]) == (5, 1)
+    assert _source_key(evidence["Compiler"]) == _source_key(str(inno_compiler))
+    assert evidence["ErrorPolicy"] == "Stop"

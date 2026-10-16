@@ -20,8 +20,17 @@ function Get-E3InnoCompiler {
             $info.FileDescription -ne 'Inno Setup Command-Line Compiler') { continue }
         # Official ISCC releases have zeroed PE numeric versions. Query the
         # identified compiler itself; /? is read-only in both Inno 6 and 7.
-        $banner = (& $compiler.FullName '/?' 2>&1 | Out-String)
-        if ($LASTEXITCODE -eq 0 -and
+        $previousErrorPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell 5.1 turns redirected native help text on stderr
+            # into ErrorRecords. Inspect the exit code without terminating on it.
+            $ErrorActionPreference = 'Continue'
+            $banner = (& $compiler.FullName '/?' 2>&1 | Out-String)
+            $compilerExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorPreference
+        }
+        if ($compilerExitCode -eq 0 -and
             $banner -match '(?m)^Inno Setup (\d+) Command-Line Compiler' -and
             [int]$Matches[1] -ge 7) {
             return $compiler.FullName
