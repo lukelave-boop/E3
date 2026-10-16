@@ -5426,9 +5426,11 @@ class MachineService:
             if self.settings.protocol == "marlin":
                 raise SafetyError("Raster travel envelopes require GRBL with verified zero XY work offsets; Marlin is not supported")
             envelope = require_verified_raster_travel(self.settings.raster_travel_envelope)
-            if (raster_boundary.travel_envelope_digest != envelope.digest
-                    or raster_boundary.travel_bounds_mm != envelope.bounds_mm):
-                raise SafetyError("Raster travel configuration or physical verification changed after preparation; generate the job again")
+            raster_boundary.require_matches_envelope(
+                envelope,
+                (float(self.laser_settings.spot_offset_x_mm),
+                 float(self.laser_settings.spot_offset_y_mm)),
+            )
             for point in raster_boundary.engraving_polygon_mm:
                 allowed = (
                     convex_polygon_contains_normalized(point, guarded_polygon)
@@ -5588,10 +5590,16 @@ class MachineService:
                     )
                 )
                 if raster_boundary is not None:
-                    raster_boundary.require_travel_point((new_x, new_y), label=f"Line {index}")
-                    # The preceding endpoint already passed this same immutable
-                    # convex envelope. Together with this endpoint it proves the
-                    # full segment, including white gaps and row transfers.
+                    if raster_boundary.travel_surface_polygon_mm is None:
+                        # The preceding endpoint (or initial park) already
+                        # passed this same immutable convex rectangle.
+                        raster_boundary.require_travel_point((new_x, new_y), label=f"Line {index}")
+                    else:
+                        # The rectangle/surface union need not be convex. Check
+                        # the complete segment, including the planned approach.
+                        start = ((x, y) if x is not None and y is not None else
+                                 (float(self.settings.photo_x), float(self.settings.photo_y)))
+                        raster_boundary.require_travel_segment(start, (new_x, new_y), label=f"Line {index}")
                     if laser_on:
                         if x is None or y is None:
                             raise SafetyError("Powered raster movement requires an established start position")
@@ -6205,7 +6213,8 @@ class MachineService:
             controller_session = self._require_session()
             self._require_program_stream_window(program, controller_session)
             lines = list(program.lines)
-            raster_boundary = self._program_proof(program).focus.raster_boundary
+            focus_metadata = self._program_proof(program).focus
+            raster_boundary = focus_metadata.raster_boundary
             if (
                 requires_motion
                 and self.settings.backend == "serial"
@@ -6237,6 +6246,12 @@ class MachineService:
                             raise SafetyError("Raster Start requires an idle current carriage position")
                         current_xy = tuple(snapshot["mpos_mm"][:2])
                     raster_boundary.require_travel_point(current_xy, label="Actual initial carriage transfer")
+                    if focus_metadata.first_move is None:
+                        raise SafetyError("Raster Start requires a validated first carriage move")
+                    raster_boundary.require_travel_segment(
+                        current_xy, focus_metadata.first_move,
+                        label="Actual initial carriage transfer",
+                    )
             if raster_boundary is not None and not self._uses_grbl_coordinate_state():
                 raise SafetyError("Raster travel envelopes require a GRBL controller with verified zero XY work offsets")
             if (

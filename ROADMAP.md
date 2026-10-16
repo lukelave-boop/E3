@@ -1,5 +1,16 @@
 # Roadmap
 
+## Confirmed surface travel (2026-10-16)
+
+Implemented in source: exact calibrated surface authority alongside
+the existing carriage rectangle, complete segment checks, contained transfer
+routing, calibration/offset invalidation, matching Pi capability and a proposal-only
+configuration helper. Full 191 x 191 image coverage with contained runout and the
+reported high-Y raster are covered offline. The source candidate record preceded
+paired installation; see [current state](CURRENT_STATE.md) for the supplied
+installation context and dated evidence. This integration changes no active limits
+and establishes no new physical qualification.
+
 Compressed upload and repeated-geometry/stream-size optimizations are implemented.
 Inert upload timing is verified: 58.922 to 6.346 seconds for the same 22 MB job.
 Preparation removes unchanged desktop duplicate preflight and

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - confirmed calibrated surface travel (2026-10-16)
+
+- Allow an explicitly recorded calibrated surface to qualify carriage travel
+  alongside the unchanged independently verified rectangle.
+- Bind the record to calibration and laser offset; validate complete segments
+  and route laser-off transfers through verified overlap when necessary.
+- Preserve powered image samples, legacy profile/directive formats and outside
+  runout rejection. Require matching Pi capability and local record.
+- Add a proposal-only helper with source hashes; no configuration is applied.
+
 ## Unreleased — remove repeated Start validation (2026-10-15)
 
 - Reuse desktop preflight when focus attachment leaves the exact program

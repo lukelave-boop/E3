@@ -69,7 +69,9 @@ def program_metadata(lines) -> FocusProgramMetadata:
     modes = {operation_focus_mode(line) for line in lines} - {None}
     boundary = program_raster_boundary(lines)
     first_move = None
-    if token is not None:
+    # Raster Start also needs the actual initial segment without a focus token.
+    # Preserve a zero-length first move: it may be a required approach waypoint.
+    if token is not None or boundary is not None:
         from ..gcode.preview import parse_words
         for line in islice(lines, 1, None):
             if line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX,
@@ -100,8 +102,9 @@ def selected_plan(machine, program, *, _metadata: FocusProgramMetadata | None = 
     # A first-move endpoint check alone cannot validate travel from the measured spot.
     if metadata.first_move is not None:
         if metadata.raster_boundary is not None:
-            metadata.raster_boundary.require_travel_point(tuple(plan["xy"]), label="Measured-focus transfer start")
-            metadata.raster_boundary.require_travel_point(metadata.first_move, label="Measured-focus transfer end")
+            metadata.raster_boundary.require_travel_segment(
+                tuple(plan["xy"]), metadata.first_move, label="Measured-focus transfer",
+            )
         else:
             bounds = FocusXYBounds(machine.settings.work_area, program.guarded_output_polygon_mm)
             if not bounds.contains_segment(tuple(plan["xy"]), metadata.first_move):

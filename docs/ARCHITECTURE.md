@@ -17,9 +17,11 @@ arming are checked independently; committed Pi bytes are still read and hashed.
 
 Within one program analysis, successful powered endpoint proofs can cover an
 identical later endpoint under the same fixed polygons and physical spot. Each
-new travel endpoint is checked; its preceding endpoint already passed the same
-immutable convex envelope. Power transitions still require a powered start-point
-proof. The canonical raster parser uses scalar values and a bounded decimal
+new travel endpoint is checked; rectangle-only motion can reuse its preceding
+endpoint proof under the same immutable convex envelope. Surface-authorized
+motion still checks every complete segment against the exact verified union.
+Power transitions still require a powered start-point proof. The canonical
+raster parser uses scalar values and a bounded decimal
 grammar; other syntax retains the general allowlist. These shared service changes
 cover both execution pipelines without changing their generated program bytes.
 
@@ -44,6 +46,16 @@ run-up/run-out and row transfers. Full travel extents still drive fitting and
 safety validation; generated motion, power, calibration and settings are unchanged.
 
 ## Raster engraving and carriage domains
+
+An optional `VerifiedSurfaceTravel` adds the exact calibrated surface, translated
+by the recorded beam-to-carriage offset, to the independently verified rectangle.
+Schema 2 binds the surface and envelope digests; schema 1 bytes remain unchanged.
+The combined domain can be non-convex, so segment validation covers its complete
+parameter interval. Laser-off planning may route through a rounded waypoint in
+the regions' intersection. Route selection uses emitted coordinates while keeping
+the actual initial position exact; final serialized validation remains required.
+The Pi advertises `pi-raster-surface-travel-v2` and independently matches the local
+record. No axis-aligned bounding box or convex hull gains travel authority.
 
 `raster_safety.py` owns Qt/HTTP-independent typed travel evidence and the strict
 `E3RASTER` program directive. Its convex polygon is the current calibrated

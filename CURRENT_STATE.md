@@ -20,7 +20,50 @@ Saving schema 6 is allowed; older binaries are not required to open schema 6.
 Main's exact-commit compatibility gate, gated release publisher and preview
 metadata contract remain authoritative.
 
+## Historical confirmed surface-travel candidate record (2026-10-16)
+
+This source-branch checkpoint predates the supplied paired-installation context
+above. It preserves that candidate's software verification and pending work;
+it does not establish verification of this integration or new physical acceptance.
+
+Isolated branch `codex/verified-surface-travel` is based on selected upload/pause
+source `21273d01` and incorporates the later Start-validation optimizations
+from upstream `99544e44`. Combined source passes 476 focused safety, geometry,
+planner, validation-proof, remote-preflight and installer tests plus seven
+offscreen desktop calibration/execution-binding checks. Repository Ruff,
+compileall and independent integration review passed. At this checkpoint, broader
+machine checks and frozen packaging were in progress; earlier timings below
+belong to their stated revisions.
+The recorded 191 x 191 surface reaches machine Y229.7643,
+while the separate old carriage rectangle ends at Y210. Operator confirmation
+of the whole surface is represented by an exact calibration/offset-bound polygon,
+combined with the unchanged old rectangle. It does not authorize the bounding
+rectangle's unverified corners or outside runout.
+
+Geometry, planner, Start Here, measured-focus and Pi validation use complete
+segments. Laser-off transfers may route through a verified intersection waypoint;
+powered samples remain unchanged. Old schemas retain their format and digest.
+The new Pi capability and matching local record are mandatory for surface jobs.
+`scripts/prepare_surface_travel_record.py` creates a separate proposal with source
+hashes and prior-envelope digest; it never applies settings.
+
+Before incorporating `99544e44`, offline Windows checks passed 363 integrated
+geometry/planner/project/profile, proposal and runtime/focus tests, plus 97
+simulated Pi server/E2E/focus checks.
+Three additional rounding-route regressions pass in the final 25-test planner run.
+The frozen saved barrel job reproduces the old Y224.436
+failure and generates with the proposed surface record at unchanged placement.
+Full 191 x 191 synthetic images with contained runout retain all powered samples.
+Rotated full-bleed edges can still reject if G-code rounding crosses the exact
+powered boundary; no powered clipping or tolerance expansion was introduced.
+Final runtime/regression counts are recorded in the task handoff. No physical
+test, active profile change, build selection, Pi installation or deployment was
+performed at this checkpoint. The candidate was not yet installed; matching
+desktop/Pi review and configuration application were still pending.
+
 ## Remove redundant validation work (2026-10-15)
+
+This section records upstream `99544e44` results before surface-travel integration.
 
 The operator requested a fix and E3 DEV TEST build without interrupting the
 running job. Desktop remote preflight now reuses its exact result when attaching

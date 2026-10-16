@@ -17,14 +17,24 @@ entered as a honeycomb-local coordinate.
 
 Positive output remains inside the calibrated surface and the existing guarded
 output authority. The existing head/controller output check is retained too.
-Laser-off run-up, run-out, gaps and transfers may leave the surface only within
-an independently configured, verified carriage rectangle. No path is clamped,
-no limit is inferred from the camera image, and no setting is enlarged silently.
+An explicit operator-confirmed surface-travel record can authorize carriage
+movement over the entire calibrated surface. Its exact transformed polygon,
+translated by the negative laser spot offset, is combined with the independently
+verified carriage rectangle. Laser-off run-up, run-out, gaps and transfers may
+leave that surface polygon only within the rectangle. The union is not replaced
+with its enclosing rectangle. No path is clamped, no travel authority is inferred
+from the camera image alone, and no setting is enlarged silently.
+
+A 191 x 191 mm surface is measured in local coordinates. Its upper edge need
+not be machine Y191: the saved origin and rotation are applied first. A saved
+machine limit Y210 can therefore cut through a confirmed usable surface. The
+surface-travel record resolves this disagreement without inventing clearance
+beside that surface or changing the existing rectangle's Y limit.
 
 ## Explicit physical travel record
 
-`machine.raster_travel_envelope` defaults to `null`. When present it is an object
-with exactly these fields:
+`machine.raster_travel_envelope` defaults to `null`. Its original required
+fields remain:
 
 | Field | Required value |
 | --- | --- |
@@ -46,6 +56,56 @@ require renewed verification. Duplication of a saved machine clears this record.
 Changing any envelope value or evidence invalidates prepared jobs through its
 immutable digest. No existing user settings are populated by this feature.
 
+The optional `surface` field is a separate physical confirmation for the current
+calibrated surface, with exactly these fields:
+
+| Field | Required value |
+| --- | --- |
+| `beam_polygon_mm` | Four exact machine-space beam corners from the saved rigid coordinate frame's `(0,0)`, `(width,0)`, `(width,height)`, `(0,height)` |
+| `spot_offset_mm` | The current laser `[x,y]` spot offset; carriage polygon equals beam polygon minus this offset |
+| `coordinate_frame_digest` | SHA-256 provenance digest of the current saved rigid coordinate frame |
+| `verified` | Exact JSON boolean; only `true` permits surface travel |
+| `confirmed_at` | Operator confirmation date, exactly `YYYY-MM-DD` |
+| `evidence` | Nonempty operator physical-clearance statement, at most 2048 characters |
+
+This confirmation concerns the head and cables over the entire surface under
+the recorded controller, firmware and configuration. A visual calibration is
+not physical-clearance evidence. The existing rectangle and its evidence stay
+unchanged. Changing the surface, its provenance, the spot offset or its
+confirmation invalidates prepared work; a different calibration cannot silently
+inherit the record. A cloned machine has no inherited travel verification.
+
+### Prepare a proposal without applying settings
+
+`scripts/prepare_surface_travel_record.py` reads explicitly selected files and
+creates a new JSON proposal. It never connects to hardware, performs a physical
+test, starts the application or modifies a machine/calibration file. The
+operator's confirmation date and evidence are mandatory; the tool does not
+supply them. Example invocation from the source checkout:
+
+```powershell
+python scripts/prepare_surface_travel_record.py `
+  --machine-registry "C:\review-input\machines.json" `
+  --support "C:\review-input\1920x1080-manual-focus-010\honeycomb_support.json" `
+  --bed-calibration "C:\review-input\1920x1080-manual-focus-010\bed_calibration.json" `
+  --confirmed-at "<operator-confirmation-date: YYYY-MM-DD>" `
+  --evidence "<operator's physical surface and head-clearance confirmation>" `
+  --output "C:\review-output\surface-travel-proposal.json"
+```
+
+The active saved machine is selected by default; `--machine-id` selects another
+saved machine explicitly. Support and bed files must share the selected
+calibration-profile directory name, including when reviewing staged copies.
+The helper checks four-corner evidence, bed creation-time binding and camera
+profile provenance. It records SHA-256 hashes for all three inputs, machine and
+profile IDs, the expected prior envelope digest, and the proposed complete
+envelope. Existing output files and input paths cannot be overwritten.
+
+The result is marked `PROPOSAL_NOT_APPLIED`. A separately authorized activation
+must recheck the source hashes and prior digest and install the exact same
+reviewed record on matching Desktop and Pi runtimes. Preparing a proposal does
+not establish current camera, controller, firmware or physical-machine state.
+
 The coordinate convention currently supports GRBL. Existing Home, zero active
 G54–G59 XY/G92 offset checks, unchanged-offset verification, hardware process
 authority and `machine.allow_motion` remain mandatory. Marlin execution of the
@@ -55,9 +115,11 @@ the initial approach. A readback does not grant homing authority.
 
 ## Exact-program enforcement
 
-Prepared jobs contain one canonical `E3RASTER` application directive. It records
-the four machine-space **beam** surface corners, the machine-space **carriage**
-travel bounds and SHA-256 of the complete physical travel record. It is part of
+Prepared jobs contain one canonical `E3RASTER` application directive. Schema 1
+records the four machine-space **beam** surface corners, the machine-space
+**carriage** rectangle and SHA-256 of the complete physical travel record.
+Schema 2 additionally records the exact verified **carriage** surface polygon
+and the surface-record digest. It is part of
 the immutable program digest and is never sent to the controller. Start Here
 retains that directive. It must occur before any motion/laser enable and cannot
 replace the final standalone M5. Unknown, duplicate or malformed directives are
@@ -69,9 +131,13 @@ authority, even if a particular image uses only its middle. This conservative
 whole-surface gate may require correcting the configured/calibrated authority
 before generation or execution; fitting powered pixels alone cannot widen it.
 
-All G0/G1 endpoints and their previous endpoints are checked against the convex
-travel rectangle. This covers every straight segment, including row reversals,
-white gaps, mixed-layer transfers, and the actual initial approach. Positive
+Every G0/G1 straight segment must fit wholly inside the applicable travel
+authority: the rectangle for schema 1, or the exact rectangle/polygon union for
+schema 2. Endpoint checks alone cannot establish containment in this potentially
+nonconvex union. A transfer whose endpoints are valid but whose middle crosses
+an unverified gap is rejected. Generated laser-off transfers may route through
+the rectangle/polygon overlap; every resulting segment is validated. This covers
+row reversals, white gaps, mixed-layer transfers and the actual initial approach. Positive
 M3/M4 checks the current beam position. Positive G1 checks both segment ends,
 including an inline S transition from zero to positive power. This prevents a
 laser-off point outside the surface from starting a powered return into it.
@@ -85,14 +151,31 @@ powered sample would consume the run-up and restart the head from rest; the
 runtime avoids that sequence. A failed or stopped descent cannot continue into
 the row. CUT focus behavior is unchanged.
 
-The Pi companion must advertise `pi-raster-travel-envelope-v1`. It independently
+The Pi companion must advertise `pi-raster-travel-envelope-v1` for the original
+contract and `pi-raster-surface-travel-v2` for surface-authorized travel. It independently
 validates canonical uploaded bytes and its locally configured travel evidence at
 FINALIZE and START. Desktop/Pi records must match exactly. Older companions are
 rejected before new raster jobs are uploaded. With no configured envelope,
 legacy programs retain their restrictive output bounds and existing 25-field
 wire-policy identity. Configuring an envelope extends that identity and requires
 a matching companion even for ordinary jobs. An old program is never silently
-granted expanded travel by the mere presence of the new setting.
+granted expanded travel by the mere presence of the new setting. Existing
+envelopes without a surface retain their original serialized fields and digest,
+schema-1 behavior and capability requirement. Existing `.e3laser` project
+schemas are unchanged. Schema-2 programs require matching surface-aware
+Desktop/Pi code and records; an older runtime must reject them.
+
+### Full-size images and outside-surface runout
+
+The confirmed surface can be used at its full dimensions. A full-size image
+with white borders can generate its engraving and runout entirely within the
+verified union. A full-bleed pattern or an angled scan may require laser-off
+runout beyond both the surface polygon and the independent rectangle. That
+motion is still rejected: full-surface confirmation does not prove external
+runout clearance. The planner keeps every powered sample and the required
+lead distance; it does not crop powered coverage or truncate overscan to make
+a job pass. Additional external travel needs separate physical evidence, or
+process/scan settings whose complete path fits the existing verified geometry.
 
 Deployment requires matched full desktop and Pi companion/source revisions.
 Historical CPU-cooling, Z-control, thickness/operation-focus, capacity, large-job

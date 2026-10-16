@@ -11,9 +11,11 @@ facts. Changed text receives full preflight; current policy, material, focus,
 session and arming authority are rechecked independently of cached metadata.
 Powered endpoint proofs are local to one analysis and include the physical spot;
 laser-off travel does not establish a powered proof. Reusing a preceding travel
-endpoint retains the complete convex-segment check. The canonical parser's
-256-character decimal grammar guarantees finite parsed magnitudes; other syntax
-and computed coordinates retain their existing finite and bounds checks.
+endpoint is valid for the convex rectangle fast path; schema-2 surface travel
+still checks every complete segment against the exact verified union. The
+canonical parser's 256-character decimal grammar guarantees finite parsed
+magnitudes; other syntax and computed coordinates retain their existing finite
+and bounds checks.
 
 Pause / Resume is a job-continuation feature, not an emergency stop or a
 safety-rated control. It requires a GRBL handshake, observed laser mode and verified
@@ -35,22 +37,35 @@ recorded; see [command streaming](docs/COMMAND_STREAMING.md).
 ## Separate raster engraving and carriage travel
 
 New desktop raster programs require an explicit verified machine carriage
-travel envelope. Laser-off motion may leave the calibrated engraving surface
-only under that independent authority; it does not enlarge powered output.
+travel envelope. An optional separately confirmed surface record authorizes
+the exact calibrated surface in carriage coordinates, accounting for the laser
+spot offset. Travel may use the union of that polygon and the unchanged verified
+carriage rectangle. It must not use the union's enclosing rectangle. Laser-off
+motion outside the surface remains limited to the independent rectangle;
+surface confirmation does not establish external overscan clearance or enlarge powered output.
 Positive output remains inside the exact calibrated surface and the configured
 output authority with beam/head offset checks. Every straight serialized segment,
-including row transfers and initial approach, is travel-bounded. Positive mode
+including row transfers and initial approach, must be wholly contained in the
+verified union. Valid endpoints alone are insufficient when the union is
+nonconvex. Generated laser-off transfers may route through its verified overlap;
+each resulting segment remains checked. Positive mode
 changes and inline power words are checked at the segment start as well as end.
 
 The `E3RASTER` directive is immutable application data intercepted before the
 controller; local and Pi guards reject missing, unverified or mismatched travel.
+Surface records require schema 2 and the matching `pi-raster-surface-travel-v2`
+capability. They bind exact surface corners, calibration provenance and spot
+offset; changes invalidate prepared jobs. Records without a surface preserve
+their original schema-1 behavior and digest. Existing project schemas are unchanged.
 Homing, zero-work-offset checks, motion permission, temporary arming, standalone
 M5 bracketing and stop/disconnect/failure cleanup remain required. Old programs
 without this directive retain the stricter original output-boundary checks.
 
-Travel evidence is a recorded operator physical test, not an automatic hardware
-qualification. Historical X travel and provisional Y235 are insufficient for a
-current whole carriage envelope. Do not load wider settings until the current
+Travel evidence is recorded operator physical verification, not an automatic
+hardware qualification. The proposal helper writes only a new review artifact;
+it does not apply settings or perform a physical test. Historical X travel and
+provisional Y235 are insufficient for a current whole carriage envelope. Do not
+load wider settings until the current
 controller, firmware, coordinate reference, configuration and entire cable/fixture
 path have been physically verified. The acceleration model is only a planning
 estimate; validate adequate run-up/run-out at intended speeds. These controls
