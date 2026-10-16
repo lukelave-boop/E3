@@ -13,11 +13,13 @@ param(
     [string]$OutputBaseFilename = "E3-Setup",
     [string]$RetentionRegistry = '',
     [switch]$RequireFreshOutputs,
-    [switch]$EphemeralCI
+    [switch]$EphemeralCI,
+    [switch]$PassThru
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$sourceRoot = $repoRoot
 function Assert-FreshBuildPath {
     param([string]$Path, [switch]$AllowExistingLeaf)
     $current = [IO.Path]::GetFullPath($Path)
@@ -39,24 +41,34 @@ function Assert-FreshBuildPath {
         $current = $parent.FullName
     }
 }
-if ($RequireFreshOutputs) {
-    if ($MachineSeed) {
-        throw "Fresh-output retention builds do not support private machine seeds"
-    }
-    foreach ($relative in @("build\E3", "dist\E3", "installer-dist", "packaging\machine-seed", "build-info.json", "E3.spec")) {
-        Assert-FreshBuildPath -Path (Join-Path $repoRoot $relative)
-    }
-}
-Set-Location $repoRoot
-$python = ".\.venv\Scripts\python.exe"
+Set-Location $sourceRoot
+$python = Join-Path $sourceRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path $python)) {
     $python = (Get-Command python -ErrorAction Stop).Source
+}
+$ConfigPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ConfigPath)
+$CalibrationProfile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CalibrationProfile)
+if (-not [string]::IsNullOrWhiteSpace($MachineRegistryPath)) {
+    $MachineRegistryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($MachineRegistryPath)
 }
 . (Join-Path $PSScriptRoot "build_storage_gate.ps1")
 $storageMode = if ($MachineSeed -or $Channel -eq "home") { "private" } else { "windows" }
 $storageLease = Start-E3BuildStorage -Python $python -Worktree $repoRoot `
     -Mode $storageMode -InstallerName $OutputBaseFilename `
     -RetentionRegistry $RetentionRegistry -EphemeralCI:$EphemeralCI
+$outputRoot = [IO.Path]::GetFullPath([string]$storageLease.output_root)
+$bundleRoot = Join-Path $outputRoot 'dist\E3'
+$installerRoot = Join-Path $outputRoot 'installer-dist'
+$seedRoot = Join-Path $outputRoot 'packaging\machine-seed'
+$cacheRoot = Join-Path $outputRoot 'build\pyinstaller-cache'
+if ($outputRoot -ne $sourceRoot) {
+    Write-Host "Preserving previous output; building in managed directory: $outputRoot"
+}
+if ($RequireFreshOutputs) {
+    foreach ($relative in @('build\E3', 'build\pyinstaller-cache', 'dist\E3', 'installer-dist', 'packaging\machine-seed', 'build-info.json', 'E3.spec')) {
+        Assert-FreshBuildPath -Path (Join-Path $outputRoot $relative)
+    }
+}
 if ([string]::IsNullOrWhiteSpace($Revision)) {
     $Revision = (git rev-parse HEAD).Trim()
 }
@@ -65,6 +77,7 @@ if ([string]::IsNullOrWhiteSpace($Revision)) {
 }
 
 $originalPath = $env:PATH
+$originalPyInstallerConfig = $env:PYINSTALLER_CONFIG_DIR
 $sanitizedPath = & $python .\packaging\windows_build_guard.py `
     sanitize-path `
     --system-root $env:WINDIR
@@ -90,23 +103,24 @@ try {
     if ([string]::IsNullOrWhiteSpace($version)) {
         throw "Could not determine the E3 application version"
     }
-    $buildInfo = Join-Path $repoRoot "build-info.json"
-    $seedRoot = Join-Path $PSScriptRoot "machine-seed"
+    $buildInfo = Join-Path $outputRoot "build-info.json"
     # Dependencies can take time. Refresh protection and ownership immediately
     # before replacing this build's exact previously generated outputs.
     Confirm-E3BuildReplacement -Python $python -Lease $storageLease
     if ($RequireFreshOutputs) {
-        foreach ($relative in @("build\E3", "dist\E3", "installer-dist", "packaging\machine-seed", "build-info.json", "E3.spec")) {
-            Assert-FreshBuildPath -Path (Join-Path $repoRoot $relative)
+        foreach ($relative in @("build\E3", "build\pyinstaller-cache", "dist\E3", "installer-dist", "packaging\machine-seed", "build-info.json", "E3.spec")) {
+            Assert-FreshBuildPath -Path (Join-Path $outputRoot $relative)
         }
     } else {
-        foreach ($relative in @("build\E3", "dist\E3", "installer-dist\$OutputBaseFilename.exe", "packaging\machine-seed", "build-info.json", "E3.spec")) {
-            $target = [IO.Path]::GetFullPath((Join-Path $repoRoot $relative))
+        foreach ($relative in @("build\E3", "build\pyinstaller-cache", "dist\E3", "installer-dist\$OutputBaseFilename.exe", "packaging\machine-seed", "build-info.json", "E3.spec")) {
+            $target = [IO.Path]::GetFullPath((Join-Path $outputRoot $relative))
             if (Test-Path -LiteralPath $target) {
                 Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
             }
         }
     }
+    New-Item -Path $cacheRoot -ItemType Directory -ErrorAction Stop | Out-Null
+    $env:PYINSTALLER_CONFIG_DIR = $cacheRoot
     & $python .\packaging\write_build_info.py `
         --output $buildInfo `
         --revision $Revision `
@@ -120,7 +134,7 @@ try {
 
     if ($RequireFreshOutputs) {
         foreach ($relative in @("build\E3", "dist\E3", "installer-dist", "E3.spec")) {
-            Assert-FreshBuildPath -Path (Join-Path $repoRoot $relative)
+            Assert-FreshBuildPath -Path (Join-Path $outputRoot $relative)
         }
     }
 
@@ -130,6 +144,10 @@ try {
         --windowed `
         --onedir `
         --name E3 `
+        --paths $sourceRoot `
+        --distpath (Join-Path $outputRoot 'dist') `
+        --workpath (Join-Path $outputRoot 'build') `
+        --specpath $outputRoot `
         --collect-all laser_aligner `
         --collect-all cv2 `
         --collect-all PySide6 `
@@ -140,32 +158,33 @@ try {
 
     & $python .\packaging\windows_build_guard.py `
         validate-bundle `
-        --internal-root .\dist\E3\_internal
+        --internal-root (Join-Path $bundleRoot '_internal')
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller collected conflicting foreign runtime DLLs"
     }
 }
 finally {
     $env:PATH = $originalPath
+    $env:PYINSTALLER_CONFIG_DIR = $originalPyInstallerConfig
 }
 
 if ($RequireFreshOutputs) {
-    $bundleInfo = Join-Path $repoRoot "dist\E3\build-info.json"
-    $bundleConfig = Join-Path $repoRoot "dist\E3\config"
+    $bundleInfo = Join-Path $bundleRoot "build-info.json"
+    $bundleConfig = Join-Path $bundleRoot "config"
     Assert-FreshBuildPath -Path $bundleInfo
     [IO.File]::Copy($buildInfo, $bundleInfo, $false)
     Assert-FreshBuildPath -Path $bundleConfig
     New-Item -Path $bundleConfig -ItemType Directory -ErrorAction Stop | Out-Null
     $defaultConfig = Join-Path $bundleConfig "default.json"
     Assert-FreshBuildPath -Path $defaultConfig
-    [IO.File]::Copy((Join-Path $repoRoot "config\default.json"), $defaultConfig, $false)
+    [IO.File]::Copy((Join-Path $sourceRoot "config\default.json"), $defaultConfig, $false)
 } else {
-    Copy-Item $buildInfo .\dist\E3\build-info.json -Force
-    New-Item .\dist\E3\config -ItemType Directory -Force | Out-Null
-    Copy-Item .\config\default.json .\dist\E3\config\default.json -Force
+    Copy-Item -LiteralPath $buildInfo -Destination (Join-Path $bundleRoot 'build-info.json') -Force
+    $bundleConfig = Join-Path $bundleRoot 'config'
+    New-Item -Path $bundleConfig -ItemType Directory -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'config\default.json') -Destination (Join-Path $bundleConfig 'default.json') -Force
 }
 
-$seedRoot = Join-Path $PSScriptRoot "machine-seed"
 if ($RequireFreshOutputs) {
     Assert-FreshBuildPath -Path $seedRoot
 }
@@ -254,13 +273,16 @@ if ([string]::IsNullOrWhiteSpace($iscc)) {
 
 $defines = @(
     "/DMyAppVersion=$version",
-    "/DOutputBaseFilename=$OutputBaseFilename"
+    "/DOutputBaseFilename=$OutputBaseFilename",
+    "/DE3BundleRoot=$bundleRoot",
+    "/DE3SeedRoot=$seedRoot",
+    "/DE3InstallerOutputDir=$installerRoot"
 )
 if ($MachineSeed) {
     $defines += "/DMachineSeed=1"
 }
 if ($RequireFreshOutputs) {
-    Assert-FreshBuildPath -Path (Join-Path $repoRoot "installer-dist")
+    Assert-FreshBuildPath -Path $installerRoot
 }
 & $iscc @defines .\packaging\E3-installer.iss
 if ($LASTEXITCODE -ne 0) {
@@ -270,4 +292,15 @@ Complete-E3BuildStorage -Python $python -Lease $storageLease
 
 Write-Host ""
 Write-Host "E3 Windows installer complete:"
-Write-Host (Resolve-Path ".\installer-dist\$OutputBaseFilename.exe")
+$installerPath = (Resolve-Path -LiteralPath (Join-Path $installerRoot "$OutputBaseFilename.exe")).Path
+Write-Host $installerPath
+if ($PassThru) {
+    [pscustomobject]@{
+        Kind = 'E3WindowsBuild'
+        SourceRoot = $sourceRoot
+        OutputRoot = $outputRoot
+        Executable = Join-Path $bundleRoot 'E3.exe'
+        Installer = $installerPath
+        Version = $version
+    }
+}

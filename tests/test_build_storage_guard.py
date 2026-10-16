@@ -63,7 +63,7 @@ def test_successful_build_owns_exact_outputs_and_allows_unchanged_rebuild(enviro
     assert lease["baseline_bytes"] == 0
     assert lease["ceiling_bytes"] == guard.GROWTH_HEADROOM_BYTES
     state = json.loads(environment["state_path"].read_text())
-    assert len(state["owned_outputs"]) == 5
+    assert len(state["owned_outputs"]) == 6  # Includes the destination-local PyInstaller cache.
     assert len(state["leases"]) == 1
 
 
@@ -170,7 +170,7 @@ def test_selected_and_unknown_named_runtime_helpers_are_protected(environment, m
     environment["build_id"] = "second"
     helper = environment["worktree"] / "dist" / "E3" / "_internal" / "QtWebEngineProcess.exe"
     monkeypatch.setattr(guard, "inspect_build_processes", lambda: [guard.BuildProcess(999999, 1, helper, "")])
-    with pytest.raises(guard.StorageGuardError, match="another process"):
+    with pytest.raises(guard.StorageGuardError, match="selected, running or pinned"):
         guard.begin_build(**environment)
 
 

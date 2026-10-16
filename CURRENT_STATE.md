@@ -12,13 +12,26 @@ intermediate uploaded packages have seven-day retention.
 
 Ordinary explicit builds may replace only their own previously successful,
 unchanged generated outputs. Selected, running and pinned output trees are
-protected, including supporting runtime files. Unknown legacy or modified
-outputs refuse replacement and require review. Private outputs use metadata-only
-ownership and capacity accounting; secret payloads never enter the prunable
-registry. Failed builds retain their lease; no automatic pruning is enabled.
+protected, including supporting runtime files. Windows, private and launcher
+builds preserve legacy, changed and protected outputs by automatically choosing
+a fresh `.e3-builds/<mode>-<build-id>` output directory. They keep source inputs
+in the checkout, contain generated files and cache in the chosen output root,
+and print exact resulting paths. Launcher selection stays unchanged. Inspection
+and capacity errors still stop the build; Linux retains strict output checks.
+Private outputs use metadata-only ownership and capacity accounting; secret
+payloads never enter the prunable registry. Failed builds retain their lease;
+no automatic pruning is enabled.
 
-Verification uses focused synthetic-file and stub-command tests, Python static
-checks and PowerShell parsing. No real packaging, dependency installation,
+First-time initialization is available through an explicit-root metadata-only
+inventory helper. It refuses incomplete or changing inventories and creates
+empty ownership/lease collections; legacy outputs are never adopted. Successful
+managed destinations are reused only for the same source, mode and installer
+after identity, ownership and protection checks.
+
+Verification: 164 focused synthetic-file and stub-command tests passed; the two
+sandbox-skipped hardlink/junction cases passed in a separate fixture-only run.
+Affected Python Ruff, compileall, diff checks and PowerShell parsing passed.
+No real packaging, dependency installation,
 launcher change, hardware connection or physical qualification was performed.
 This entry documents source behavior; deployment to active checkouts and the
 separately approved one-time cleanup must be recorded independently. See

@@ -370,11 +370,14 @@ def wrapper_fixture(tmp_path: Path):
     shutil.copyfile(ROOT / "packaging" / "build_with_retention.ps1", packaging / "build_with_retention.ps1")
     (packaging / "artifact_retention.py").write_text(WRAPPER_CORE_STUB, encoding="utf-8")
     (packaging / "build_windows.ps1").write_text(
-        "param($Channel, $OutputBaseFilename, $Revision, [switch]$RequireFreshOutputs)\n"
+        "param($Channel, $OutputBaseFilename, $Revision, [switch]$RequireFreshOutputs, [switch]$PassThru, $RetentionRegistry)\n"
         "Set-Location (Join-Path $PSScriptRoot '..')\n"
         "if (-not $RequireFreshOutputs) { throw 'fresh mode missing' }\n"
         "Add-Content -LiteralPath $env:RETENTION_TEST_LOG -Value '\"BUILD\"'\n"
-        "if ($env:RETENTION_TEST_FAIL_BUILD -eq '1') { throw 'synthetic build failure' }\n",
+        "if ($env:RETENTION_TEST_FAIL_BUILD -eq '1') { throw 'synthetic build failure' }\n"
+        "[pscustomobject]@{ Kind='E3WindowsBuild'; OutputRoot=(Get-Location).Path; "
+        "Executable=(Join-Path (Get-Location) 'dist/E3/E3.exe'); "
+        "Installer=(Join-Path (Get-Location) ('installer-dist/' + $OutputBaseFilename + '.exe')) }\n",
         encoding="utf-8",
     )
     log = tmp_path / "calls.jsonl"
@@ -483,6 +486,13 @@ def test_canonical_fresh_mode_stops_before_dependency_install(tmp_path: Path, re
     (root / "packaging").mkdir(parents=True)
     builder = root / "packaging" / "build_windows.ps1"
     shutil.copyfile(ROOT / "packaging" / "build_windows.ps1", builder)
+    shutil.copyfile(ROOT / "packaging" / "build_storage_gate.ps1", root / "packaging" / "build_storage_gate.ps1")
+    (root / "packaging" / "build_storage_guard.py").write_text(
+        "import json, sys\n"
+        "root = sys.argv[sys.argv.index('--worktree') + 1]\n"
+        "print(json.dumps({'source_root': root, 'output_root': root}))\n",
+        encoding="utf-8",
+    )
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("preserve this synthetic output", encoding="utf-8")

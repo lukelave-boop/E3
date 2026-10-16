@@ -71,6 +71,7 @@ Write-Host "This installer contains the household bridge credential." -Foregroun
 Write-Host "Do not publish it as a public GitHub release artifact." -ForegroundColor Yellow
 Write-Host ""
 
+$buildResult = $null
 & (Join-Path $PSScriptRoot "build_windows.ps1") `
     -MachineSeed `
     -ConfigPath $configPath `
@@ -78,12 +79,22 @@ Write-Host ""
     -MachineRegistryPath $machinesPath `
     -BridgeToken $token `
     -Channel "home" `
-    -OutputBaseFilename $OutputBaseFilename
+    -OutputBaseFilename $OutputBaseFilename `
+    -PassThru | ForEach-Object {
+        if ($_.PSObject.Properties.Name -contains 'Kind' -and $_.Kind -eq 'E3WindowsBuild') {
+            $buildResult = $_
+        } else {
+            Write-Host $_
+        }
+    }
 
 if ($LASTEXITCODE -ne 0) {
     throw "The preconfigured E3 home installer build failed"
 }
+if ($null -eq $buildResult) {
+    throw 'The guarded build did not return its exact installer path.'
+}
 
 Write-Host ""
 Write-Host "Private home installer complete:" -ForegroundColor Green
-Write-Host (Resolve-Path ".\installer-dist\$OutputBaseFilename.exe")
+Write-Host $buildResult.Installer

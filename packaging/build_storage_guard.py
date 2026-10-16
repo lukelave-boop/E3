@@ -133,11 +133,11 @@ def output_paths(worktree: Path, mode: str, installer_name: str = "E3-Setup") ->
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", installer_name) or installer_name.split(".")[0].upper() in reserved:
         raise StorageGuardError("installer name must be a plain non-device filename stem")
     if mode in {"windows", "private"}:
-        names = ["build/E3", "dist/E3", f"installer-dist/{installer_name}.exe", "build-info.json", "E3.spec"]
+        names = ["build/E3", "build/pyinstaller-cache", "dist/E3", f"installer-dist/{installer_name}.exe", "build-info.json", "E3.spec"]
         if mode == "private":
             names.append("packaging/machine-seed")
     elif mode == "launcher":
-        names = ["build/dev-test-launcher", "build/dev-test-launcher-spec", "launcher-dist/E3 DEV TEST.exe"]
+        names = ["build/dev-test-launcher", "build/dev-test-launcher-spec", "build/pyinstaller-cache", "launcher-dist/E3 DEV TEST.exe"]
     elif mode == "linux":
         names = ["build/E3", "dist/E3", "AppDir", "E3-x86_64.AppImage", "build-info.json", "E3.spec"]
     else:
@@ -147,7 +147,7 @@ def output_paths(worktree: Path, mode: str, installer_name: str = "E3-Setup") ->
 
 def _census_paths(root: Path) -> list[Path]:
     return [root / name for name in (
-        "dist", "installer-dist", "launcher-dist", "build", ".venv",
+        "dist", "installer-dist", "launcher-dist", "build", ".venv", ".e3-builds",
         "AppDir", "E3-x86_64.AppImage", "appimagetool-x86_64.AppImage",
         "build-info.json", "E3.spec", "packaging/machine-seed",
     )]
@@ -357,10 +357,17 @@ def _protection_paths(state: dict[str, Any], lease: dict[str, Any]) -> list[Path
             if process.pid in ignored_process_ids:
                 continue
             normalized_root = lease["worktree"].replace("/", "\\").casefold()
-            if process.executable and retention._within(process.executable, Path(lease["worktree"])):
-                raise StorageGuardError(f"another process is using this checkout (PID {process.pid})")
-            if normalized_root in process.command_line.replace("/", "\\").casefold():
-                raise StorageGuardError(f"another process is using this checkout (PID {process.pid})")
+            command = process.command_line.replace("/", "\\").casefold()
+            # Frozen runtime helpers protect their own output trees. A separate
+            # destination can coexist with those processes, while shared venv
+            # use and another builder still serialize access to source inputs.
+            uses_venv = process.executable and retention._within(process.executable, Path(lease["worktree"]) / ".venv")
+            is_builder = any(marker in command for marker in (
+                "-m pyinstaller", "build_windows.ps1", "build_home_installer.ps1",
+                "build_dev_test_launcher.ps1", "build_with_retention.ps1",
+            ))
+            if uses_venv or (is_builder and normalized_root in command):
+                raise StorageGuardError(f"another process is using shared build inputs (PID {process.pid})")
             if process.executable:
                 protected.append(process.executable)
     for registry_name in state["retention_registries"]:
@@ -382,9 +389,87 @@ def _protection_paths(state: dict[str, Any], lease: dict[str, Any]) -> list[Path
     return protected
 
 
+def _output_root(lease: dict[str, Any]) -> Path:
+    return retention._path(lease.get("output_root", lease["worktree"]))
+
+
+def _root_identities(path: Path) -> list[dict[str, Any]]:
+    retention._check_ancestors(path)
+    return [{"path": str(parent), "identity": list(retention._identity(retention._stat(parent)))}
+            for parent in [*reversed(path.parents), path]]
+
+
+def _verify_output_root(lease: dict[str, Any]) -> None:
+    path = _output_root(lease)
+    expected = lease.get("output_root_identities")
+    if expected is not None and _root_identities(path) != expected:
+        raise StorageGuardError("build output directory or an ancestor was replaced")
+
+
+def _destination_conflict(state: dict[str, Any], lease: dict[str, Any], protected: Sequence[Path]) -> bool:
+    """Metadata-only choice; unknown/changed/protected outputs are preserved."""
+    root = _output_root(lease)
+    if lease["mode"] == "windows" and os.path.lexists(root / "packaging" / "machine-seed"):
+        return True
+    for path in output_paths(root, lease["mode"], lease["installer_name"]):
+        _existing_chain(path)
+        if any(retention._overlaps(path, target) for target in protected):
+            return True
+        owners = [item for item in state["owned_outputs"] if item["snapshot"]["path"] == str(path)]
+        if not os.path.lexists(path):
+            if any(item["snapshot"]["present"] for item in owners):
+                return True
+            continue
+        if len(owners) != 1 or owners[0]["mode"] != lease["mode"]:
+            return True
+        rows, size = _metadata(path)
+        prior = owners[0]["snapshot"]
+        if retention._digest(rows) != prior.get("metadata_fingerprint") or size != prior.get("logical_bytes"):
+            return True
+    return False
+
+
+def _managed_destination(source: Path, mode: str, build_id: str) -> Path:
+    retention._check_id(build_id)
+    path = source / ".e3-builds" / f"{mode}-{build_id}"
+    _existing_chain(path)
+    if os.path.lexists(path):
+        raise StorageGuardError("fresh managed output destination already exists")
+    return path
+
+
+def _reusable_destination(state: dict[str, Any], lease: dict[str, Any], protected: Sequence[Path]) -> Path | None:
+    """Reuse only a completed destination whose identity and ownership survive."""
+    source = Path(lease["worktree"])
+    candidates = {}
+    for item in state["owned_outputs"]:
+        if (
+            item.get("source_root") != str(source) or item.get("mode") != lease["mode"]
+            or item.get("installer_name") != lease["installer_name"] or not item.get("managed_output")
+        ):
+            continue
+        destination = retention._path(item["output_root"])
+        if destination.parent != source / ".e3-builds" or not destination.name.startswith(lease["mode"] + "-"):
+            raise StorageGuardError("stored managed destination is outside its source container")
+        retention._check_id(destination.name[len(lease["mode"]) + 1:])
+        candidates[str(destination)] = item
+    for item in sorted(candidates.values(), key=lambda entry: entry["completed_at"], reverse=True):
+        destination = retention._path(item["output_root"])
+        _existing_chain(destination)
+        if not destination.exists() or not item.get("output_root_identities"):
+            continue
+        if _root_identities(destination) != item["output_root_identities"]:
+            continue
+        proposed = {**lease, "output_root": str(destination)}
+        if not _destination_conflict(state, proposed, protected):
+            return destination
+    return None
+
+
 def _verify_replacements(state: dict[str, Any], lease: dict[str, Any]) -> None:
+    _verify_output_root(lease)
     protected = _protection_paths(state, lease)
-    root = retention._path(lease["worktree"])
+    root = _output_root(lease)
     if lease["mode"] == "windows" and os.path.lexists(root / "packaging" / "machine-seed"):
         raise StorageGuardError("public packaging cannot remove private machine-seed residue")
     for before in lease["before"]:
@@ -431,6 +516,7 @@ def begin_build(
     roots: Sequence[Path] = (), launcher_pointers: Sequence[Path] | None = None,
     retention_registry: Path | None = None, installer_name: str = "E3-Setup",
     reserve_bytes: int = DEFAULT_RESERVATION_BYTES, ephemeral_ci: bool = False,
+    managed_outputs: bool = False,
 ) -> dict[str, Any]:
     worktree = retention._path(worktree)
     retention._check_ancestors(worktree)
@@ -440,8 +526,7 @@ def begin_build(
         raise StorageGuardError("build reservation must be a positive integer")
     state_path = _state_location(worktree, state_path, ephemeral_ci)
     discovered = {worktree, *discover_roots(worktree), *(retention._path(root) for root in roots)}
-    paths = output_paths(worktree, mode, installer_name)
-    if any(retention._overlaps(state_path, path) for path in paths):
+    if any(retention._overlaps(state_path, path) for path in output_paths(worktree, mode, installer_name)):
         raise StorageGuardError("state cannot overlap a packaging output")
     if launcher_pointers is None:
         launcher_pointers = [] if ephemeral_ci else [Path.home() / "Documents" / "E3 Dev Test" / "current-feature.json"]
@@ -451,8 +536,10 @@ def begin_build(
         "mode": mode, "installer_name": installer_name, "reserved_bytes": reserve_bytes,
         "started_at": _now(), "ephemeral": ephemeral_ci, "retention_registry": str(registry),
         "launcher_pointers": [str(retention._path(pointer)) for pointer in launcher_pointers],
+        "output_root": str(worktree), "managed_output": False,
         "before": [],
     }
+    create_destination = False
     with _locked_state(state_path) as holder:
         state = holder["state"]
         if state is None:
@@ -472,6 +559,24 @@ def begin_build(
             raise StorageGuardError("too many census roots")
         if any(item["id"] == build_id or retention._overlaps(Path(item["worktree"]), worktree) for item in state["leases"]):
             raise StorageGuardError("a failed or active build already holds this checkout or build ID")
+        if managed_outputs and not ephemeral_ci:
+            if mode not in {"windows", "private", "launcher"}:
+                raise StorageGuardError("managed output destinations currently support Windows builders only")
+            protected = _protection_paths(state, lease)
+            if _destination_conflict(state, lease, protected):
+                destination = _reusable_destination(state, lease, protected)
+                if destination is None:
+                    destination = _managed_destination(worktree, mode, build_id)
+                    create_destination = True
+                lease["output_root"] = str(destination)
+                lease["managed_output"] = True
+                if not create_destination:
+                    lease["output_root_identities"] = _root_identities(destination)
+        paths = output_paths(_output_root(lease), mode, installer_name)
+        if any(retention._overlaps(state_path, path) for path in paths):
+            raise StorageGuardError("state cannot overlap a packaging output")
+        if lease["managed_output"] and retention._within(state_path, _output_root(lease)):
+            raise StorageGuardError("state cannot be stored inside a managed build destination")
         for path in paths:
             _existing_chain(path)
             if os.path.lexists(path):
@@ -484,7 +589,17 @@ def begin_build(
         _verify_replacements(state, lease)
         report = _admission(state, lease, already_reserved=False)
         state["leases"].append(lease)
-    return {"state": str(state_path), "build_id": build_id, "token": lease["token"], **report}
+        if create_destination:
+            destination = _output_root(lease)
+            _existing_chain(destination)
+            if not destination.parent.exists():
+                destination.parent.mkdir()
+            retention._check_ancestors(destination.parent)
+            destination.mkdir()  # Exclusive leaf creation under the admission lock.
+        lease["output_root_identities"] = _root_identities(_output_root(lease))
+    return {"state": str(state_path), "build_id": build_id, "token": lease["token"],
+            "source_root": str(worktree), "output_root": lease["output_root"],
+            "managed_output": lease["managed_output"], **report}
 
 
 def _owned_lease(state: dict[str, Any], build_id: str, token: str, owner_pid: int) -> dict[str, Any]:
@@ -517,19 +632,25 @@ def complete_build(*, state_path: Path, build_id: str, token: str, owner_pid: in
         if state is None:
             raise StorageGuardError("build admission state disappeared")
         lease = _owned_lease(state, build_id, token, owner_pid)
+        _verify_output_root(lease)
         if "verified_at" not in lease:
             raise StorageGuardError("build never passed the immediately-before-replacement verification")
-        if lease["mode"] == "windows" and os.path.lexists(Path(lease["worktree"]) / "packaging" / "machine-seed"):
+        if lease["mode"] == "windows" and os.path.lexists(_output_root(lease) / "packaging" / "machine-seed"):
             raise StorageGuardError("public build unexpectedly produced private machine-seed material")
         snapshots = [
             _snapshot(Path(before["path"]), private=lease["mode"] == "private", allow_posix_links=lease["ephemeral"] and os.name != "nt")
             for before in lease["before"]
         ]
-        if not all(snapshot["present"] or snapshot["path"] == str(Path(lease["worktree"]) / "packaging" / "machine-seed") for snapshot in snapshots):
+        if not all(snapshot["present"] or snapshot["path"] == str(_output_root(lease) / "packaging" / "machine-seed") for snapshot in snapshots):
             raise StorageGuardError("successful build is missing an expected generated output")
         paths = {snapshot["path"] for snapshot in snapshots}
         state["owned_outputs"] = [item for item in state["owned_outputs"] if item["snapshot"]["path"] not in paths]
-        state["owned_outputs"].extend({"build_id": build_id, "mode": lease["mode"], "completed_at": _now(), "snapshot": snapshot} for snapshot in snapshots)
+        state["owned_outputs"].extend({
+            "build_id": build_id, "mode": lease["mode"], "completed_at": _now(), "snapshot": snapshot,
+            "source_root": lease["worktree"], "output_root": str(_output_root(lease)),
+            "managed_output": lease.get("managed_output", False), "installer_name": lease["installer_name"],
+            "output_root_identities": lease.get("output_root_identities"),
+        } for snapshot in snapshots)
         state["leases"].remove(lease)
         measured, census = _measure([Path(root) for root in state["roots"]], ephemeral=lease["ephemeral"])
         ceiling = state["baseline_bytes"] + GROWTH_HEADROOM_BYTES
@@ -551,6 +672,7 @@ def _parser() -> argparse.ArgumentParser:
     begin.add_argument("--installer-name", default="E3-Setup")
     begin.add_argument("--reserve-bytes", type=int, default=DEFAULT_RESERVATION_BYTES)
     begin.add_argument("--ephemeral-ci", action="store_true")
+    begin.add_argument("--managed-outputs", action="store_true")
     for name in ("verify", "complete"):
         command = commands.add_parser(name)
         command.add_argument("--state", type=Path, required=True)
@@ -568,7 +690,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 worktree=args.worktree, mode=args.mode, build_id=args.build_id, owner_pid=args.pid,
                 state_path=args.state, roots=args.root, launcher_pointers=args.launcher_pointer,
                 retention_registry=args.retention_registry, installer_name=args.installer_name,
-                reserve_bytes=args.reserve_bytes, ephemeral_ci=args.ephemeral_ci,
+                reserve_bytes=args.reserve_bytes, ephemeral_ci=args.ephemeral_ci, managed_outputs=args.managed_outputs,
             )
         else:
             operation = verify_build if args.command == "verify" else complete_build

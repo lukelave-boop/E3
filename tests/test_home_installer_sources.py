@@ -24,7 +24,8 @@ def test_home_installer_seeds_exact_household_machine_state() -> None:
 
     assert "MachineRegistryPath" in builder
     assert '"data\\machines.json"' in builder
-    assert 'machine-seed\\data\\machines.json' in installer
+    assert '{#E3SeedRoot}\\data\\machines.json' in installer
+    assert '#define E3SeedRoot "machine-seed"' in installer
     assert "onlyifdoesntexist" in installer
     assert "build_home_installer.ps1" in batch
 
@@ -34,7 +35,7 @@ def _machine_seed_manifest() -> list[tuple[str, str, set[str]]]:
     entries: list[tuple[str, str, set[str]]] = []
     in_files = False
     for raw_line in installer.splitlines():
-        line = raw_line.strip()
+        line = raw_line.strip().replace("{#E3SeedRoot}", "machine-seed")
         if line == "[Files]":
             in_files = True
             continue

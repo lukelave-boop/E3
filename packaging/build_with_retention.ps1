@@ -125,26 +125,40 @@ try {
         OutputBaseFilename = $OutputBaseFilename
         RequireFreshOutputs = $true
         RetentionRegistry = $RegistryPath
+        PassThru = $true
     }
     if (-not [string]::IsNullOrWhiteSpace($Revision)) {
         $buildParameters.Revision = $Revision
     }
-    & $builder @buildParameters
+    $buildResult = $null
+    & $builder @buildParameters | ForEach-Object {
+        if ($_.PSObject.Properties.Name -contains 'Kind' -and $_.Kind -eq 'E3WindowsBuild') {
+            $buildResult = $_
+        } else {
+            Write-Host $_
+        }
+    }
     if (-not $?) { throw 'The Windows build did not complete successfully.' }
+    if ($null -eq $buildResult) { throw 'The guarded builder did not return its actual output paths.' }
 
-    $null = Invoke-RetentionJson -Arguments @(
-        'register', '--registry', $RegistryPath, '--worktree', $repoRoot,
-        '--build-id', $BuildId,
-        '--bundle', (Join-Path $repoRoot 'dist\E3'),
-        '--installer', (Join-Path $repoRoot "installer-dist\$OutputBaseFilename.exe"),
-        '--scratch', (Join-Path $repoRoot 'build\E3')
-    )
+    if ([IO.Path]::GetFullPath([string]$buildResult.OutputRoot) -eq $repoRoot) {
+        $null = Invoke-RetentionJson -Arguments @(
+            'register', '--registry', $RegistryPath, '--worktree', $repoRoot,
+            '--build-id', $BuildId,
+            '--bundle', (Split-Path -Parent ([string]$buildResult.Executable)),
+            '--installer', [string]$buildResult.Installer,
+            '--scratch', (Join-Path $repoRoot 'build\E3')
+        )
+    } else {
+        Write-Host "Managed output is recorded by the shared storage guard: $($buildResult.OutputRoot)"
+        Write-Host 'Legacy-path cleanup registration was skipped; no source-checkout output was registered in its place.'
+    }
     $buildSucceeded = $true
 } finally {
     Set-Location $originalLocation
 }
 if ($buildSucceeded) {
-    Write-Host "Registered completed build $BuildId. No artifacts were deleted or launchers changed."
+    Write-Host "Completed build $BuildId at $($buildResult.OutputRoot). No launcher was changed."
     $finalPlan = Invoke-RetentionJson -Arguments $planArguments
     $finalPlan | ConvertTo-Json -Depth 100
 }
