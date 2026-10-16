@@ -8,6 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
+from shiboken6 import isValid
 
 from laser_aligner.desktop.controls import InspectorTabs, NumericDoubleSpinBox, NumericSpinBox
 from laser_aligner.desktop.theme import apply_dark_theme
@@ -26,19 +27,48 @@ def app(application):
     old_widgets = set(application.topLevelWidgets())
     apply_dark_theme(application)
     yield application
-    for widget in set(application.topLevelWidgets()) - old_widgets:
-        widget.close()
-        widget.deleteLater()
-    application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    _destroy_owned_widgets(application, set(application.topLevelWidgets()) - old_widgets)
     if old_filter is None:
         event_filter = application.property("e3ConfirmationButtonColorFilter")
         application.removeEventFilter(event_filter)
         application.setProperty("e3ConfirmationButtonColorFilter", None)
         event_filter.deleteLater()
-        application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        application.sendPostedEvents(event_filter, QtCore.QEvent.Type.DeferredDelete)
     application.setPalette(old_palette)
     application.setStyleSheet(old_sheet)
     application.processEvents()
+
+
+def _destroy_owned_widgets(application, widgets):
+    # Popups are top-level widgets too, but their parent widget owns deletion.
+    # Compute the roots before deleting any parent and invalidating its children.
+    roots = []
+    for widget in widgets:
+        parent = widget.parent()
+        while parent is not None and parent not in widgets:
+            parent = parent.parent()
+        if parent is None:
+            roots.append(widget)
+    for widget in roots:
+        if isValid(widget):
+            widget.close()
+            widget.deleteLater()
+            application.sendPostedEvents(widget, QtCore.QEvent.Type.DeferredDelete)
+
+
+def test_theme_cleanup_does_not_deliver_unrelated_deferred_deletion(app):
+    unrelated = QtCore.QObject()
+    host = QtWidgets.QWidget()
+    popup = QtWidgets.QMenu(host)
+    unrelated.deleteLater()
+    try:
+        _destroy_owned_widgets(app, {host, popup})
+        assert not isValid(host)
+        assert not isValid(popup)
+        assert isValid(unrelated)
+    finally:
+        if isValid(unrelated):
+            app.sendPostedEvents(unrelated, QtCore.QEvent.Type.DeferredDelete)
 
 
 def _pixels(widget, rect):

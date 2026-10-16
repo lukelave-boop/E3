@@ -29,6 +29,18 @@ pytest and exact-revision Windows compatibility CI are pending. Frozen packaging
 DEV TEST selection, interactive operator acceptance and main integration are not
 yet claimed. No physical camera/controller/laser test or Pi update occurred.
 
+The first broad local run was interrupted after a native Qt access violation in
+new navigation-test cleanup and additional failures; no full-suite pass is claimed.
+New UI tests now flush deferred deletion only for their owned widgets, with
+regressions proving other queued objects are not consumed. Ordered focused runs
+pass 87 control/navigation tests, 70 layout/navigation tests and 60 editor/control
+tests (overlapping). This removes a cleanup hazard but does not prove the crash's
+sole cause. A fresh complete desktop run and final-head compatibility CI are pending.
+The initial canonical packaging attempt stopped before admission because a
+relevant process lacked inspectable metadata. Read-only inspection found transient
+Python children belonging to tests; no process was terminated or guard bypassed.
+Packaging will be retried after the process-heavy local suite has stopped.
+
 ## Machine-axis raster generation (2026-10-16)
 
 Branch `codex/machine-x-raster` retains the integrated surface-travel and

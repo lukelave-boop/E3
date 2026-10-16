@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop navigation tests")
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 from laser_aligner.core import CoreRuntime
 from laser_aligner.desktop.controls import PanelScrollArea
@@ -38,8 +39,6 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
     application.setFont(original_font)
     if font_id >= 0:
         QtGui.QFontDatabase.removeApplicationFont(font_id)
-    application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
-    application.processEvents()
 
 
 def _flush(application: QtWidgets.QApplication) -> None:
@@ -50,8 +49,24 @@ def _flush(application: QtWidgets.QApplication) -> None:
 def _dispose(application: QtWidgets.QApplication, widget: QtWidgets.QWidget) -> None:
     widget.close()
     widget.deleteLater()
-    application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
-    application.processEvents()
+    # Other modules own their pending deletions and fixture lifetimes.
+    # Deliver only this owned widget's event while its Python references are live.
+    application.sendPostedEvents(widget, QtCore.QEvent.Type.DeferredDelete)
+    assert not isValid(widget)
+
+
+def test_cleanup_deletes_only_the_owned_widget(qt_application):
+    unrelated = QtCore.QObject()
+    owned = QtWidgets.QWidget()
+    child = QtWidgets.QWidget(owned)
+    unrelated.deleteLater()
+    try:
+        _dispose(qt_application, owned)
+        assert not isValid(child)
+        assert isValid(unrelated)
+    finally:
+        if isValid(unrelated):
+            qt_application.sendPostedEvents(unrelated, QtCore.QEvent.Type.DeferredDelete)
 
 
 def test_labeled_layer_actions_preserve_selection_and_request_signals(qt_application):

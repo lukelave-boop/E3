@@ -484,8 +484,8 @@ def test_closing_and_deleting_during_trace_releases_worker_source_safely(app, so
 def _dispose_editor(dialog, app):
     dialog.reject()
     dialog.deleteLater()
-    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
-    app.processEvents()
+    # Other test modules may own unrelated queued widget deletions.
+    app.sendPostedEvents(dialog, QtCore.QEvent.Type.DeferredDelete)
 
 
 def test_visible_tools_follow_workflow_and_show_only_relevant_controls(app, source):
@@ -585,7 +585,7 @@ def test_preview_feedback_and_optional_vector_controls_do_not_commit_implicitly(
 
 
 def test_workflow_is_scrollable_and_apply_remains_visible_in_small_window(app, source):
-    from laser_aligner.desktop.theme import apply_dark_theme
+    from laser_aligner.desktop.theme import DARK_STYLESHEET
 
     _, payload, _ = source
     old_sheet, old_palette, old_font = app.styleSheet(), app.palette(), app.font()
@@ -595,7 +595,9 @@ def test_workflow_is_scrollable_and_apply_remains_visible_in_small_window(app, s
         font_id = QtGui.QFontDatabase.addApplicationFont(font_path)
     dialog = None
     try:
-        apply_dark_theme(app)
+        # Layout coverage needs the stylesheet, not the application-wide
+        # confirmation event filter installed by apply_dark_theme.
+        app.setStyleSheet(DARK_STYLESHEET)
         app.setFont(QtGui.QFont("Segoe UI", 9))
         dialog = ImageEditorDialog(payload, {}, 64, 48)
         dialog.resize(900, 640)
