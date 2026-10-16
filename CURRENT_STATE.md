@@ -1,5 +1,82 @@
 # Current repository state
 
+## Desktop UI clarity (2026-10-16)
+
+Runtime revision `81125cb2f61497d2d93e2b72715bc7a7837a3102` incorporates main
+through `8c336dd`, including selected-object transparency, machine-axis raster,
+surface travel and upload/pause/Start behavior. Work used an isolated checkout;
+the unrelated shared working-tree changes were preserved.
+
+The desktop has packaged visible dropdown/stepper indicators, clearer hover,
+focus and selected states, a matching dark native palette and a Panels menu
+exposing every inspector. Drawing and job actions show names. Cuts labels its
+selectors, layer actions, job inclusion and canvas visibility. Units,
+transparency percentages and trace-slider values accommodate the visible arrows
+at normal and enlarged font sizes.
+
+The engraving editor groups Clean image, Outline and Cut path. Named exclusive
+tools, Exclude/Restore choices, contextual controls/instructions and explicit
+preview/draft feedback replace unlabeled dropdowns and a long form. Source pixels,
+image processing, persistence/schema, machine services, execution gates and the
+browser SVG pipeline retain their behavior. See [UI guide](docs/DESKTOP_UI.md)
+for design references and [editor guide](docs/ENGRAVING_IMAGE_EDITOR.md) for actions.
+
+Local Windows Python 3.14 verification passed the complete desktop selection:
+**1,616 tests in 173.90 seconds**, four workers, at `85a1114`. The following final
+trace-field sizing change passed **11** focused checks (the wrapper's **18**
+child theme checks plus ten raster-vectorization dialog checks). Navigation's
+layout/interaction assertions also run in a fresh Qt process. An ordered
+93-check shared-Qt group passes. Repository Ruff, application compileall and
+whitespace checks pass. Counts of focused groups overlap.
+
+Initial broad runs exposed a native Qt cleanup crash and expensive global
+restyling of retained widgets. New tests now delete only their own widgets,
+style only their owned dialogs, and isolate global theme/font probes in bounded
+child processes; the subsequent complete desktop run above passes. This does
+not establish the sole cause of the original native crash.
+
+Actual source simulator renders were inspected at 900x680, 1080x780 and 1600x900,
+with compact image-editor checks and enlarged text. Settings/data were isolated,
+camera autostart was off, motion disabled and hardware_enabled=False. These are
+automated offscreen widget checks; interactive operator acceptance and real
+camera/controller/laser tests remain unperformed. No Pi update occurred.
+
+The user explicitly approved recovery of this task's verified-empty failed
+reservation `windows-53d8a8f697e5425eb10a20167b300e99`. The guarded one-off
+recovery backed up the accounting file, rechecked empty outputs, identities and
+exited owner, and removed only that reservation. Every other state field and
+artifact was preserved; no files were deleted. Evidence and the backup are in
+the isolated checkout's ignored `build/` directory. The canonical build now
+runs from the short-path checkout `C:\Users\lukel\.codex\worktrees\ui\E3`
+on exact source `ba488ec9fcce4b547464aff0ad563d8823e142ca`, with runtime source
+unchanged from `81125cb`. DEV TEST still selects the previous transparency build
+until frozen verification and validated pointer selection complete.
+
+Compatibility CI [38926805559](https://github.com/lukelave-boop/E3/actions/runs/38926805559)
+passed Windows Python 3.10 core (6,941 passed / 160 skipped), POSIX
+(1,502 passed / 2 skipped), and Ruff. Windows Python 3.12 completed with
+8,492 passed / 65 skipped and one narrow-layout assertion failure.
+Independent real-font reproduction showed that all secondary hints fit
+at 9pt (714 pixels needed in a 900-pixel window), while 13pt requires
+934 pixels and correctly hides them. This was a test font assumption,
+not stale layout or clipped controls. The regression now specifies its
+enlarged per-window font, retains every assertion, and the isolated
+navigation probe covers both 9pt and 13pt. The focused layout group passes
+12 collected checks, including all ten isolated navigation assertions. The
+original narrow-reset case also passes with the inherited dark 9pt theme;
+its explicit startup wait and normal status-layout refresh remove fixture
+timing assumptions. Runtime source is unchanged.
+
+The subsequent complete [CI 38929737660](https://github.com/lukelave-boop/E3/actions/runs/38929737660)
+passed those UI checks and again passed core, POSIX and Ruff. Windows 3.12
+finished with 8,492 passed / 65 skipped and one pre-existing probe fixture
+failure: a two-millisecond wall-clock deadline expired during an otherwise
+ready fake response. That test now advances a simulated clock only for silent
+reads, retaining the production timeout and every safety assertion and adding
+explicit timeout/rejection evidence. All 75 probe/secondary-controller focused
+tests pass locally. No production controller code changed. Final compatibility
+verification is pending before main integration.
+
 ## Browser CI subprocess completion (2026-10-16)
 
 PR #47 merged as `fc9a0e369d7a9f05a1770b8f8b892205a7832300`. Its

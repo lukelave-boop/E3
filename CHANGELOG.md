@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - desktop UI clarity (2026-10-16)
+
+- Make dropdowns, numeric steppers, menu buttons, selected tabs and keyboard focus
+  visible throughout the desktop with packaged vector indicators.
+- Label drawing tools and Capture / Generate / Preview, and clarify layer actions,
+  operation selection, job inclusion and canvas visibility.
+- Reorganize the engraving image editor around a guided workflow, visible tool
+  choices, contextual editing instructions and explicit preview/apply feedback.
+- Preserve project/image processing and all machine execution behavior.
+
 ## Unreleased - selected-object transparency (2026-10-16)
 
 - Add a Transparency slider and percentage field above the main viewer for

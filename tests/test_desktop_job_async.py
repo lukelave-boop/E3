@@ -1968,6 +1968,17 @@ def test_narrow_layout_reset_keeps_stop_and_global_progress_in_bounds(
 ) -> None:
     window, errors, _notices = _window(tmp_path, monkeypatch)
     try:
+        _wait_until(
+            qt_application,
+            lambda: window.runtime.running and not window.controller.has_active_tasks,
+        )
+        # Exercise constrained status text consistently across Windows fonts.
+        # At the normal 9 pt size all details can legitimately fit at 900 px.
+        enlarged_font = QtGui.QFont(window.font())
+        enlarged_font.setPointSize(13)
+        window.setFont(enlarged_font)
+        window.setStyleSheet(window.styleSheet() + "\nQWidget { font-size: 13pt; }")
+        assert window.direct_edit_label.font().pointSize() == 13
         window.resize(900, 680)
         qt_application.processEvents()
         qt_application.processEvents()
@@ -1998,6 +2009,10 @@ def test_narrow_layout_reset_keeps_stop_and_global_progress_in_bounds(
                 "completed_lines": 25,
             }
         )
+        # Direct widget injection must also perform the main window's normal
+        # status-layout update before checking settled geometry.
+        window._update_status_bar_layout()
+        qt_application.processEvents()
         qt_application.processEvents()
         stop_top_left = window.runtime_strip.stop_button.mapTo(
             window,

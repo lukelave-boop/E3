@@ -141,6 +141,7 @@ class LayerPanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed,
         )
         self.layer_combo.setToolTip("Assign a cut/layer to the selected objects")
+        self.layer_combo.setAccessibleName("Operation layer")
         self.rename_button = QtWidgets.QPushButton("Rename…")
         self.rename_button.setToolTip("Rename this shared operation layer")
         self.color_button = QtWidgets.QPushButton("")
@@ -159,13 +160,24 @@ class LayerPanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        self.mode_combo.setAccessibleName("Operation type")
+        self.mode_combo.setToolTip("Choose how this layer is processed: line, fill or raster.")
         for mode in LayerMode:
             self.mode_combo.addItem(mode.value.title(), mode.value)
+        layer_label = QtWidgets.QLabel("Layer")
+        layer_label.setBuddy(self.layer_combo)
+        identity_row.addWidget(layer_label)
         identity_row.addWidget(self.color_button)
         identity_row.addWidget(self.layer_combo, 1)
         identity_row.addWidget(self.rename_button)
-        identity_row.addWidget(self.mode_combo)
         editor_layout.addLayout(identity_row)
+
+        operation_row = QtWidgets.QHBoxLayout()
+        operation_label = QtWidgets.QLabel("Operation")
+        operation_label.setBuddy(self.mode_combo)
+        operation_row.addWidget(operation_label)
+        operation_row.addWidget(self.mode_combo, 1)
+        editor_layout.addLayout(operation_row)
 
         settings_grid = QtWidgets.QGridLayout()
         settings_grid.setContentsMargins(0, 0, 0, 0)
@@ -275,16 +287,16 @@ class LayerPanel(QtWidgets.QWidget):
 
         action_row = QtWidgets.QHBoxLayout()
         action_row.setSpacing(4)
-        self.add_button = QtWidgets.QPushButton("+")
+        self.add_button = QtWidgets.QPushButton("Add")
         self.add_button.setToolTip("Add operation")
         self.add_button.setAccessibleName("Add operation")
-        self.remove_button = QtWidgets.QPushButton("−")
+        self.remove_button = QtWidgets.QPushButton("Remove")
         self.remove_button.setToolTip("Remove selected operation")
         self.remove_button.setAccessibleName("Remove selected operation")
-        self.up_button = QtWidgets.QPushButton("↑")
+        self.up_button = QtWidgets.QPushButton("Up")
         self.up_button.setToolTip("Move selected operation up")
         self.up_button.setAccessibleName("Move selected operation up")
-        self.down_button = QtWidgets.QPushButton("↓")
+        self.down_button = QtWidgets.QPushButton("Down")
         self.down_button.setToolTip("Move selected operation down")
         self.down_button.setAccessibleName("Move selected operation down")
         for button in (
@@ -293,16 +305,18 @@ class LayerPanel(QtWidgets.QWidget):
             self.up_button,
             self.down_button,
         ):
-            button.setFixedWidth(30)
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
             action_row.addWidget(button)
-        self.output_check = QtWidgets.QCheckBox("Output")
+        self.output_check = QtWidgets.QCheckBox("Include in job")
         self.output_check.setToolTip("Include this operation when generating a job.")
-        self.visible_check = QtWidgets.QCheckBox("Show")
+        self.visible_check = QtWidgets.QCheckBox("Show on canvas")
         self.visible_check.setToolTip("Show this operation in the workspace.")
-        action_row.addStretch(1)
-        action_row.addWidget(self.output_check)
-        action_row.addWidget(self.visible_check)
         editor_layout.addLayout(action_row)
+        editor_layout.addWidget(self.output_check)
+        editor_layout.addWidget(self.visible_check)
         self.mode_notice = _muted("")
         self.mode_notice.setObjectName("warningLabel")
         self.mode_notice.hide()

@@ -6,6 +6,27 @@ from .qt import require_qt
 QtCore, QtGui, QtWidgets = require_qt()
 
 
+class _TransparencySpinBox(NumericSpinBox):
+    """Reserve the actual themed editor width for a value or mixed selection."""
+
+    def sizeHint(self) -> QtCore.QSize:
+        size = super().sizeHint()
+        option = QtWidgets.QStyleOptionSpinBox()
+        self.initStyleOption(option)
+        option.rect = QtCore.QRect(0, 0, size.width(), size.height())
+        editor = self.style().subControlRect(
+            QtWidgets.QStyle.ComplexControl.CC_SpinBox,
+            option, QtWidgets.QStyle.SubControl.SC_SpinBoxEditField, self,
+        )
+        metrics = self.lineEdit().fontMetrics()
+        text_width = max(metrics.horizontalAdvance("100%"), metrics.horizontalAdvance("Mixed"))
+        size.setWidth(size.width() - editor.width() + text_width + 6)
+        return size
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return self.sizeHint()
+
+
 class SelectionTransparencyBar(QtWidgets.QWidget):
     """View-only alignment controls, independent of document editing."""
 
@@ -34,12 +55,14 @@ class SelectionTransparencyBar(QtWidgets.QWidget):
         self.slider.setAccessibleName("Selected object transparency")
         layout.addWidget(self.slider, 1)
 
-        self.spin = NumericSpinBox()
+        self.spin = _TransparencySpinBox()
         self.spin.setRange(0, 100)
         self.spin.setSuffix("%")
         self.spin.setKeyboardTracking(False)
         self.spin.setAccessibleName("Selected object transparency percent")
-        self.spin.setFixedWidth(70)
+        self.spin.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed
+        )
         label.setBuddy(self.spin)
         layout.addWidget(self.spin)
 

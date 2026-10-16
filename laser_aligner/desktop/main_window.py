@@ -889,9 +889,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tools.setObjectName("drawingToolbar")
         tools.setOrientation(QtCore.Qt.Orientation.Vertical)
         tools.setIconSize(QtCore.QSize(22, 22))
-        tools.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
-        tools.setMinimumWidth(40)
-        tools.setMaximumWidth(44)
+        tools.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        tools.setMinimumWidth(112)
+        tools.setMaximumWidth(132)
+        tool_labels = {
+            "select_tool": "Select", "line": "Line", "rectangle": "Rectangle",
+            "polygon": "Polygon", "ellipse": "Ellipse", "text": "Text",
+            "grid_template_designer": "Grid", "trace_objects": "Trace",
+            "template_alignment": "Align", "fit": "Fit bed",
+            "fit_selection": "Fit selected", "zoom_in": "Zoom in",
+            "zoom_out": "Zoom out", "snap": "Snap",
+            "precision_placement": "Precise",
+        }
+        for key, label in tool_labels.items():
+            self.actions[key].setIconText(label)
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, tools)
 
         for key in ("select_tool", "line", "rectangle", "polygon", "ellipse", "text"):
@@ -912,7 +923,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         snap_button.setPopupMode(
             QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup
         )
-        snap_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        snap_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         snap_menu = QtWidgets.QMenu(snap_button)
         snap_group = QtGui.QActionGroup(snap_menu)
         snap_group.setExclusive(True)
@@ -984,7 +995,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         job_toolbar = self.addToolBar("Job")
         job_toolbar.setObjectName("jobToolbar")
         job_toolbar.setIconSize(QtCore.QSize(20, 20))
-        job_toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        job_toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.actions["refresh_camera"].setIconText("Capture")
+        self.actions["generate"].setIconText("Generate")
+        self.actions["preview_job"].setIconText("Preview")
         job_toolbar.addAction(self.actions["refresh_camera"])
         job_toolbar.addSeparator()
         for key in ("generate", "preview_job"):

@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop controls now have visible dropdown arrows and number steppers, stronger
+hover/focus/selection states, and named drawing and job tools. The Cuts panel
+labels operation selection and distinguishes **Include in job** from **Show on
+canvas**. The engraving editor groups its workflow and exposes named editing
+tools with contextual help. See [desktop UI guide](docs/DESKTOP_UI.md).
+
 The main viewer has a **Transparency** slider and percentage field for selected
 objects. Fade images or vectors to align them with the bed and other artwork;
 **Reset all** restores every object's normal appearance. This is a temporary

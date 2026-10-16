@@ -1,5 +1,10 @@
 # E3 native desktop v1 foundation
 
+The current desktop clarity pass supersedes the historical icon-only rail below:
+drawing tools and Capture / Generate / Preview show names, the Cuts editor labels
+its selectors and distinguishes job inclusion from canvas visibility, and dropdowns
+and number steppers have visible indicators. See [current UI guide](DESKTOP_UI.md).
+
 ## Align with object transparency
 
 Select one or more objects, then use **Transparency** above the main viewer.

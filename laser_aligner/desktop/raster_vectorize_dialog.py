@@ -218,7 +218,7 @@ def _slider_row(
     spin = NumericSpinBox()
     spin.setRange(minimum, maximum)
     spin.setValue(value)
-    spin.setMaximumWidth(78)
+    spin.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
     slider.valueChanged.connect(spin.setValue)
     spin.valueChanged.connect(slider.setValue)
     layout.addWidget(slider, 1)
