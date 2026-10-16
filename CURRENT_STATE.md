@@ -1,22 +1,69 @@
 # Current repository state
 
-## DEV TEST startup compatibility - in verification (2026-10-16)
+## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)
 
-Selecting the latest UI build exposed a Windows Python 3.12 startup defect in
-DEV TEST identity setup: `ctypes.wintypes.HRESULT` is unavailable there (and on
-Python 3.13). Both application and launcher now declare the Win32 result as
-`ctypes.c_long`, preserving signed HRESULT checking and existing error types.
-The permanent launcher executable is unchanged. Focused Windows Python 3.12
-and 3.14 validation passes all 40 identity/launcher tests, including real
-shell32 calls in isolated child processes and signed native failure results.
-Application compileall passes. A fresh canonical Windows build and full
-compatibility CI are in progress; no new build has been selected yet.
+Permanent **E3 DEV TEST** now selects **Desktop UI and cleaned-image tracing**,
+version **0.7.300**, exact frozen revision
+`d154784fadf9ab6b4a2e157724d584d926017697`, from `codex/dev-test-startup`.
+Target:
+`C:\Users\lukel\.codex\worktrees\desktop-ui-polish\E3\.e3-builds\windows-windows-9f3bfbb0ce8c44a79be1c11b40ba0e2f\dist\E3\E3.exe`.
+The atomic pointer script and launcher-validator readback pass. The permanent
+launcher executable and Desktop shortcut have unchanged SHA-256 hashes; their
+previous pointer is backed up in the worktree's ignored `build/` directory.
+Reopen the permanent launcher to try the new UI and cleaned-image tracing.
+
+Selecting the latest CI installer exposed a Windows Python 3.12 startup defect:
+`ctypes.wintypes.HRESULT` is unavailable there (and on Python 3.13). Both app and
+launcher now use the signed Windows `ctypes.c_long` result declaration, retaining
+the existing error handling. No permanent launcher rebuild was needed.
+Windows Python 3.12 and 3.14 each pass all **40 focused identity/launcher tests**;
+Python 3.10 passes four real native API/signature probes. Tests cover isolated
+shell32 identity assignment/readback and signed failure results. Ruff, application
+compileall and whitespace checks pass. Full
+[compatibility CI 38946664841](https://github.com/lukelave-boop/E3/actions/runs/38946664841)
+passes: Windows Python 3.12 desktop **8,545 passed / 69 skipped**, Windows Python
+3.10 core **6,989 / 164**, POSIX **1,502 / 2**, and repository Ruff. The first
+Windows desktop attempt had one unchanged controller timing assertion fail with
+the fail-closed quiet-boundary diagnostic instead of the expected unowned-response
+diagnostic. Five focused reruns and the unchanged full CI retry pass; a separate
+exhausted-deadline probe confirms transport closure and reconnect-required
+quarantine. No controller code or rejection assertion was changed.
+
+[PR #53](https://github.com/lukelave-boop/E3/pull/53) merged as
+`1661f50c7628b7bfdf41c419e66b6cfbd22dc074`; its tree exactly matches the verified
+build source. The final handoff record changes this document only. The completed
+feature branch is retired while the detached worktree and selected frozen bundle
+remain available to the permanent launcher.
+
+The canonical Windows builder produced the Python 3.14.4 / Qt 6.11.2 app and
+successfully compiled its installer with Inno Setup 7.1.0. All **194 frozen
+application modules**, the entrypoint and **ten resources** match the committed
+revision. Archived controls rendered offscreen using bundled native Qt and passed
+ten indicator-state checks and inspector navigation; the render was visually
+reviewed. This is frozen-code, native-import and offscreen-widget verification,
+not canonical EXE startup, interactive operator or hardware acceptance. No user
+QSettings or physical camera/controller services were opened by those checks.
+
+The installer contains exactly all **4,193 bundle files / 860,104,916 bytes**, with
+every path and size matching the bundle, including **282-character source paths**.
+Its complete compressed-payload integrity test passes. It was neither installed
+nor executed. Installer SHA-256:
+`cae087f6d403bb624cf67017fe4a4a9819f49b8a0b81c78d235156c3cb1ab69b`.
+EXE SHA-256:
+`f6cd776cf1c7bd71d6789b9e039cdecf68e4dc08b54571c83b4128655b6e8d16`.
 
 Explicit user-approved recovery removed only the two exited UI/tracing build
-reservations (37ab0dd... and 6790c59...), retaining all 8,423 files and the
-current launcher selection. The exact prior state is backed up under
+reservations (37ab0dd... and 6790c59...), retaining all 8,423 files and the then
+current launcher selection. The exact prior accounting state is backed up under
 `E3 Build Storage/state-before-ui-trc-reservation-recovery-472e2949669d8e8d.json`.
-All retained files still count toward the unchanged eight-GiB budget.
+The new build's final accounting step refused to finalize after detecting changed
+metadata in the older trc container, so the canonical command exited unsuccessfully after
+successful installer compilation. Its new two-GiB reservation remains retained;
+no further recovery or deletion was performed. Twelve later trc snapshots and
+full pool inventories were stable, and the old tree fingerprint still matches
+its earlier review; the transient writer/cause is unverified. Actual managed
+usage is 5,583,915,600 bytes plus 2,147,483,648 reserved, within the unchanged
+eight-GiB cap. Independent payload and launcher validation passed as above.
 
 ## Windows installer long paths — verified (2026-10-16)
 
@@ -56,7 +103,7 @@ verified revision. This repair did not change DEV TEST selection, any existing
 artifact or lease, or machine behavior. The generated installer was not installed
 or run; no physical camera, controller or laser verification is claimed.
 
-## Cleaned-image tracing correction — integrated and DEV TEST selected (2026-10-16)
+## Cleaned-image tracing correction - integrated; previous DEV TEST selection (2026-10-16)
 
 PR #51 merged as `b1c6c4b67a847dd0850acd2f16e15599ea2ce9d9`; the completed
 `codex/cleaned-image-trace` branch was deleted locally and remotely.
@@ -81,7 +128,7 @@ passes: Windows Python 3.12 desktop **8,522 passed / 65 skipped**, Windows Pytho
 3.10 core **6,966 passed / 160 skipped**, POSIX **1,502 passed / 2 skipped**, and
 repository Ruff.
 
-Permanent **E3 DEV TEST** now selects **Cleaned-image tracing**, version
+The previous **E3 DEV TEST** selection was **Cleaned-image tracing**, version
 **0.7.292**, exact frozen revision `c5cb9d5b16f740c087aac58894307c6ac508c65b`,
 built from `codex/cleaned-image-trace`. Target:
 `C:\Users\lukel\.codex\worktrees\trc\E3\.e3-builds\windows-windows-6790c59473ef45a68fb9f546a10af998\dist\E3\E3.exe`.
