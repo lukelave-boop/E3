@@ -1,5 +1,8 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop updates show the package size before download, then downloaded/total bytes,
+percentage and current transfer speed. See [updates](docs/UPDATES.md).
+
 Image-editor automatic outlines use the current cleaned image, including background
 cleanup and local edits. Both outline previews preserve thin pixel features without
 retracing their edges. See the [image editor guide](docs/ENGRAVING_IMAGE_EDITOR.md).

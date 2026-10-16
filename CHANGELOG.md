@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - update download progress (2026-10-16)
+
+- Replace the download spinner with percentage, downloaded/total size and current
+  speed; show package size before download and a separate verification status.
+- Read available network data promptly so slow links report progress without
+  waiting for a full megabyte. Size and SHA-256 rejection remain mandatory.
+
 ## Unreleased - Windows installer long paths (2026-10-16)
 
 - Require Inno Setup 7+ before reserving build storage, fixing failures and possible
