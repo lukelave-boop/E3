@@ -1,5 +1,25 @@
 # Current repository state
 
+## Streaming fix merged into main (2026-10-15)
+
+At the operator's explicit request, [PR #45](https://github.com/lukelave-boop/E3/pull/45)
+was merged into main at `b240c59111944479a0c0f4fb578d26e3595b3cab`.
+The exact PR head `1dd7f172e6eae9191de9095d1a2a112068664f2a` passed all four
+[Compatibility CI checks](https://github.com/lukelave-boop/E3/actions/runs/38831982371)
+before merging. Both local and remote `codex/steady-raster-streaming` branches
+were deleted after verifying the full history is in main. The detached checkout
+and ignored verification evidence were preserved; the clean local main checkout
+was fast-forwarded. Unrelated working trees and DEV TEST selection were preserved.
+
+The merge started [main CI](https://github.com/lukelave-boop/E3/actions/runs/38833778102)
+and [gated development publication](https://github.com/lukelave-boop/E3/actions/runs/38833778104).
+Those post-merge results and publication are not yet verified by this record.
+This documentation-only follow-up does not trigger a second publication.
+The previously installed Pi companion remains the tested runtime. Physical
+steady-speed, laser output and Stop acceptance remain unverified; merge approval
+does not constitute physical qualification. No hardware action occurred during
+this integration step.
+
 ## Detailed-path command streaming fix (2026-10-15)
 
 The video slowdown is consistent with command starvation: the saved raster
@@ -66,10 +86,10 @@ The existing Windows image-editor DEV TEST selection remains active
 No replacement Windows executable is required. Serial bandwidth and
 controller acceleration can still constrain F6000 on dense patterns; steady
 physical speed at every setting is not yet verified.
-The isolated `codex/steady-raster-streaming` branch and
-[PR #45](https://github.com/lukelave-boop/E3/pull/45) remain active for the supervised
-operator test before main integration/publication. The unrelated shared working
-tree was preserved; no production release or Windows launcher change was made.
+The implementation was prepared on `codex/steady-raster-streaming` and
+[PR #45](https://github.com/lukelave-boop/E3/pull/45), then merged at the operator's
+request as recorded above. The unrelated shared working tree was preserved;
+installation itself made no production-release or Windows-launcher change.
 
 ## Development 0.7.220 published and verified (2026-10-15)
 
