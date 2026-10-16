@@ -21,6 +21,12 @@ The retained 729,269-line / 22,099,480-byte job gives identical validated output
 against installed revision 21273d0. Paired local Windows validation means are
 10.037 to 7.175 seconds (28.5% less elapsed time; CPU 9.969 to 7.148 seconds).
 Machine load affects these timings; this is not a live Pi or total Start result.
+A subsequent complete-preflight comparison includes new metadata extraction and
+canonical hashing: two-pair means are 9.042 to 6.090 seconds (32.7% less), with
+identical complete ValidatedProgram results. Ten unchanged integrity checks per
+sample average 39.60 to 2.45 ms per check (about 16x faster). This offline run
+uses an unconnected machine with no live focus plan and failing stubs for transport,
+connection, commands, arming and execution; it is not a real Start measurement.
 1,800 implementation differential cases and 1,200 independent review cases
 match prior acceptance and exact rejection messages. The independent review's
 124 focused tests pass with no remaining actionable findings. Combined focused
@@ -29,10 +35,30 @@ cleanup test that expects admission after a policy mutation; the new metadata
 check correctly rejects earlier. The adjusted late-mutation cleanup test passes,
 and explicit early-admission rejection coverage is added. The twelve-file
 companion is pinned to exact installed 21273d0; four installer tests pass.
-Compatibility CI and a fresh frozen build are being prepared.
+The final 16 metadata-proof tests pass, including early policy mutation rejection;
+repository Ruff and compileall pass. Compatibility CI 38846925424 passes at
+exact revision 99544e44ae0e50f37101fba4053a584d3b723942: Windows 3.12 desktop
+7,875 passed / 65 skipped, Windows 3.10 core 6,358 passed / 157 skipped, POSIX
+serial/controller recovery 656 passed, and Ruff. No rerun was required.
 No Pi access, service restart, controller action or live benchmark was performed
 for this change. The existing job and its open Windows bundle remain untouched;
 the matching companion will remain staged until an idle installation is possible.
+
+Frozen Windows version 0.7.239 is built in the separate managed checkout
+C:\Users\lukel\.codex\worktrees\job-validation-build\E3 from exact revision
+99544e44ae0e50f37101fba4053a584d3b723942. All 191 application modules and three
+resources match that commit. Isolated offscreen startup passes with a synthetic
+saved profile, nonexistent serial port, camera off, motion disabled and production
+QSettings writes denied by the sandbox. No interactive camera/controller test
+was performed. Matching companion e3-pi-job-pause-26c8c6b8 passes local read-only
+inspection against all twelve exact predecessor files: service.py and job_focus.py
+need updates, ten are already current. It has not been copied to or installed on
+the Pi. Canonical Windows installer packaging completes successfully. The permanent
+E3 DEV TEST pointer now selects this exact EXE through packaging/set_dev_test_feature.py;
+the permanent launcher, shortcut, production E3 and running application were not
+replaced or restarted. Operator testing and real Pi timing must follow idle
+companion installation; physical pause/laser-off/continuation remain unverified.
+The feature branch remains isolated pending that operator qualification.
 
 ## Remaining Start-delay diagnosis (2026-10-15)
 

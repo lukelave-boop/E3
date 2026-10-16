@@ -1,5 +1,30 @@
 # Raster pipeline performance review — 2026-10-15
 
+## Later Start preparation fix (2026-10-15)
+
+Revision 99544e4 removes the unchanged-text duplicate remote preflight identified
+below, reuses immutable directive facts after exact-program integrity checks, and
+reduces repeated endpoint checks and scalar parser allocations. Changed text
+still receives full validation, and current policy, material/focus/session state,
+arming, committed-byte integrity and bounds remain authoritative.
+
+The retained 729,269-line / 22,099,480-byte job matches the prior 21273d0 validator
+output exactly. Two local Windows samples per implementation average 10.037 to
+7.175 seconds, or 28.5% less validation time. Machine load varied between samples;
+these are not Pi or total Start measurements. The matching companion is staged
+without touching the running Pi job. Earlier measurements and ranked findings
+below describe their stated historical revisions; duplicate remote preflight is
+now addressed, while raster-generation caching remains future work.
+
+A separate full-preflight comparison includes metadata extraction and canonical
+hashing. Two paired samples average 9.042 seconds for 21273d0 versus 6.090 seconds
+for 99544e4 (32.7% less), with identical complete `ValidatedProgram` results.
+Unchanged integrity checks average 39.60 versus 2.45 ms per check, approximately
+16x faster. This offline Windows run uses no connection or live focus plan;
+transport, command, arming and execution entry points are failing stubs. It does
+not measure real Pi verification, focus positioning or first output. Local ignored
+evidence is `build/full-preflight-benchmark.json` and `build/profile_full_preflight.py`.
+
 ## Follow-up: bidirectional output and controller cost (2026-10-15)
 
 Offline regeneration of the latest saved 80 x 75.779674 mm barrel image, cleanup
