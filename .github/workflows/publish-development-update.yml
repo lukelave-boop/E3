@@ -71,10 +71,24 @@ jobs:
             -Repository "${{ github.repository }}" `
             -ReleaseTag "$env:E3_RELEASE_TAG" `
             -OutputBaseFilename "E3-Setup"
+      - name: Verify Windows package identity
+        shell: pwsh
+        run: |
+          . .\packaging\inno_setup.ps1
+          $installerVersion = Get-E3InstallerProductVersion -InstallerPath installer-dist/E3-Setup.exe -Verbose
+          .\.venv\Scripts\python.exe packaging/verify_release_metadata.py `
+            --revision "$env:GITHUB_SHA" --channel "$env:E3_UPDATE_CHANNEL" `
+            --build-info windows-x86_64 build-info.json `
+            --build-info windows-x86_64 dist/E3/build-info.json `
+            --installer-version "$installerVersion"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows package identity verification failed.' }
+          Copy-Item -LiteralPath dist/E3/build-info.json -Destination installer-dist/build-info-windows.json
       - uses: actions/upload-artifact@v7
         with:
           name: e3-windows-update
-          path: installer-dist/E3-Setup.exe
+          path: |
+            installer-dist/E3-Setup.exe
+            installer-dist/build-info-windows.json
           if-no-files-found: error
           retention-days: 7
 
@@ -100,10 +114,20 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash ./packaging/build_linux_appimage.sh --ephemeral-ci
+      - name: Verify embedded Linux package identity
+        run: |
+          ./E3-x86_64.AppImage --appimage-extract usr/bin/E3/build-info.json
+          .venv/bin/python packaging/verify_release_metadata.py \
+            --revision "$GITHUB_SHA" --channel "$E3_UPDATE_CHANNEL" \
+            --build-info linux-x86_64 build-info.json \
+            --build-info linux-x86_64 squashfs-root/usr/bin/E3/build-info.json
+          cp squashfs-root/usr/bin/E3/build-info.json build-info-linux.json
       - uses: actions/upload-artifact@v7
         with:
           name: e3-linux-update
-          path: E3-x86_64.AppImage
+          path: |
+            E3-x86_64.AppImage
+            build-info-linux.json
           if-no-files-found: error
           retention-days: 7
 
@@ -140,6 +164,25 @@ jobs:
             --release-tag "$E3_RELEASE_TAG" \
             --windows "release/E3-Setup-${short_sha}.exe" \
             --linux "release/E3-${short_sha}-x86_64.AppImage"
+          python packaging/verify_release_metadata.py \
+            --revision "$GITHUB_SHA" --channel "$E3_UPDATE_CHANNEL" \
+            --build-info windows-x86_64 release/build-info-windows.json \
+            --build-info linux-x86_64 release/build-info-linux.json \
+            --manifest "release/update-manifest-${short_sha}-${publication_id}.json"
+      - name: Establish immutable release baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short_sha="${GITHUB_SHA:0:12}"
+          publication_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python packaging/ensure_release_baseline.py \
+            --repository "${{ github.repository }}" \
+            --revision "$GITHUB_SHA" --channel "$E3_UPDATE_CHANNEL" \
+            --windows-build-info release/build-info-windows.json \
+            --linux-build-info release/build-info-linux.json \
+            --windows "release/E3-Setup-${short_sha}.exe" \
+            --linux "release/E3-${short_sha}-x86_64.AppImage" \
+            --manifest "release/update-manifest-${short_sha}-${publication_id}.json"
       - name: Publish verified development update
         id: publish
         env:

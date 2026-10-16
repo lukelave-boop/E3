@@ -160,6 +160,52 @@ def _source_key(source: str) -> str:
     return os.path.normcase(os.path.abspath(source))
 
 
+def _version_helper_result(
+    work: Path, input_path: Path, command: str, shell_name: str = "pwsh"
+) -> object:
+    shell = shutil.which(shell_name)
+    if shell is None:
+        pytest.skip(f"{shell_name} is not installed")
+    script = work / "installer-product-version.ps1"
+    script.write_text(
+        "param([string]$HelperFile, [string]$InputPath)\n"
+        "[Console]::Error.WriteLine(('{0} script entered' -f [DateTime]::UtcNow.ToString('o')))\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+        ". $HelperFile\n"
+        "[Console]::Error.WriteLine(('{0} helper loaded' -f [DateTime]::UtcNow.ToString('o')))\n"
+        "[Console]::Error.WriteLine(('{0} command starting' -f [DateTime]::UtcNow.ToString('o')))\n"
+        + command
+        + "\n[Console]::Error.WriteLine(('{0} command completed' -f [DateTime]::UtcNow.ToString('o')))\n",
+        encoding="utf-8-sig",
+    )
+    try:
+        result = subprocess.run(
+            [
+                shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-File", str(script),
+                "-HelperFile", str(ROOT / "packaging" / "inno_setup.ps1"),
+                "-InputPath", str(input_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = [
+            output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output or ""
+            for output in (exc.stdout, exc.stderr)
+        ]
+        pytest.fail(
+            f"{shell} exceeded the {exc.timeout}-second test helper budget.\n"
+            f"stdout:\n{stdout}\nstderr:\n{stderr}"
+        )
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    return json.loads(result.stdout)
+
+
 @pytest.mark.parametrize("long_output", [False, True], ids=["normal-output", "long-output"])
 def test_repository_installer_preserves_every_long_path_payload(
     inno_compiler: Path, tmp_path: Path, long_output: bool
@@ -180,6 +226,26 @@ def test_repository_installer_preserves_every_long_path_payload(
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     executable = output / "E3-Synthetic-Path-Test.exe"
     assert executable.is_file() and executable.stat().st_size > 0
+    version = _version_helper_result(
+        tmp_path, executable,
+        "Set-Location -LiteralPath ([IO.Path]::GetDirectoryName($InputPath))\n"
+        "$relative = [IO.Path]::GetFileName($InputPath)\n"
+        "$records = @(Get-E3InstallerProductVersion -InstallerPath $relative -Verbose 4>&1)\n"
+        "$readPath = ConvertTo-E3InnoPath -Path $InputPath\n"
+        "$raw = [Diagnostics.FileVersionInfo]::GetVersionInfo($readPath).ProductVersion\n"
+        "@{Raw=$raw; Values=@($records | Where-Object {$_ -is [string]}); "
+        "ProcessDirectory=[Environment]::CurrentDirectory; ShellLocation=[string](Get-Location); "
+        "Verbose=@($records | Where-Object {$_ -is [Management.Automation.VerboseRecord]} "
+        "| ForEach-Object {$_.Message})} | ConvertTo-Json -Compress\n",
+    )
+    assert version["Raw"] == "0.0.1" + " " * 45
+    assert version["Values"] == ["0.0.1"]
+    assert _source_key(version["ProcessDirectory"]) != _source_key(version["ShellLocation"])
+    assert len(version["Verbose"]) == 1
+    diagnostic = version["Verbose"][0]
+    assert f'raw={json.dumps(version["Raw"])}' in diagnostic
+    assert "length=50" in diagnostic
+    assert "codepoints=[" + ",".join(str(ord(char)) for char in version["Raw"]) + "]" in diagnostic
     manifest = output / "payload-manifest.tsv"
     rows = list(csv.DictReader(io.StringIO(manifest.read_text(encoding="utf-8-sig")), delimiter="\t"))
     actual = {_source_key(row["SourceFilename"]): row for row in rows}
@@ -190,6 +256,36 @@ def test_repository_installer_preserves_every_long_path_payload(
         assert actual[source]["SHA256Sum"].casefold() == hashlib.sha256(content).hexdigest()
         assert int(actual[source]["OriginalSize"]) == len(content)
     # Compilation and manifest reads are the endpoint: never execute this setup.
+
+
+@pytest.mark.parametrize("shell_name", ["pwsh", "powershell"])
+def test_product_version_conversion_removes_only_trailing_ascii_spaces(
+    tmp_path: Path, shell_name: str
+) -> None:
+    cases = [
+        ("0.0.1" + " " * 45, "0.0.1"),
+        ("0.0.1", "0.0.1"),
+        (" 0.0.1 ", " 0.0.1"),
+        ("0.0.1\t ", "0.0.1\t"),
+        ("0.0.1\n ", "0.0.1\n"),
+        ("0.0.1\r\n ", "0.0.1\r\n"),
+        ("0.0.1\u00a0 ", "0.0.1\u00a0"),
+        ("0.0.1.0 ", "0.0.1.0"),
+        ("0.0.2 ", "0.0.2"),
+        ("0. 0.1 ", "0. 0.1"),
+        (" " * 50, ""),
+        ("", ""),
+    ]
+    values = tmp_path / "product-versions.json"
+    values.write_text(json.dumps([raw for raw, _ in cases]), encoding="utf-8")
+    actual = _version_helper_result(
+        tmp_path, values,
+        "$values = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8 | ConvertFrom-Json\n"
+        "@($values | ForEach-Object {ConvertFrom-E3InnoProductVersion -ProductVersion $_}) "
+        "| ConvertTo-Json -Compress\n",
+        shell_name,
+    )
+    assert actual == [normalized for _, normalized in cases]
 
 
 def test_repository_installer_rejects_missing_payload(inno_compiler: Path, tmp_path: Path) -> None:

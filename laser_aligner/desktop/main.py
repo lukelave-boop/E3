@@ -150,10 +150,13 @@ def main(argv: list[str] | None = None) -> int:
 
     config = arguments.config
     explicit_config = config is not None
-    if config is None:
-        config = resolve_launch_profile().config_path
+    from ..state_scope import prepare_runtime_state
 
     try:
+        prepare_runtime_state(config)
+        if config is None:
+            config = resolve_launch_profile().config_path
+
         def configure_bridge_token() -> None:
             token = read_bridge_token()
             if token:
@@ -197,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     runtime, open_first_run_machine_setup = prepared
 
     window = E3MainWindow(runtime)
+    from ..state_scope import record_runtime_startup
+
+    record_runtime_startup()
     watchdog_armed = False
 
     def arm_watchdog_once(deadline: float) -> None:

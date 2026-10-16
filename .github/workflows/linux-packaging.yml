@@ -1,0 +1,59 @@
+name: Linux package identity validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/linux-packaging.yml
+      - .github/workflows/publish-development-update.yml
+      - packaging/**
+      - laser_aligner/versioning.py
+      - pyproject.toml
+      - requirements*.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install build dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[desktop]"
+      - name: Build Linux AppImage
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash ./packaging/build_linux_appimage.sh --ephemeral-ci
+      - name: Verify embedded package identity without starting E3
+        run: |
+          ./E3-x86_64.AppImage --appimage-extract usr/bin/E3/build-info.json
+          .venv/bin/python packaging/verify_release_metadata.py \
+            --revision "$GITHUB_SHA" --channel development \
+            --build-info linux-x86_64 build-info.json \
+            --build-info linux-x86_64 squashfs-root/usr/bin/E3/build-info.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e3-linux-package-${{ github.sha }}
+          path: |
+            E3-x86_64.AppImage
+            squashfs-root/usr/bin/E3/build-info.json
+          if-no-files-found: error
+          retention-days: 7

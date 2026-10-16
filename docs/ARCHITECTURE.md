@@ -1,5 +1,10 @@
 # Architecture
 
+Release packaging verifies a shared version and exact revision against the
+Windows installer product version, both platform bundles' metadata and the
+update manifest before the publisher can switch the offered update. The Linux
+package check extracts metadata without starting the application.
+
 Manifest checks use a 75-second UI deadline and the same active-dialog identity
 rule, so stale workers cannot offer an update after cancellation or timeout.
 Update downloads retain the controller-owned background-task lifecycle but use
@@ -21,6 +26,70 @@ The UI-neutral downloader reports byte counts after writing each available chunk
 A locked counter transfers worker progress to a 250 ms GUI timer, which renders
 percentage and a rolling three-second byte rate without queuing one Qt event per
 chunk. Completion still requires exact size, SHA-256 and atomic cache promotion.
+
+## Desktop version state
+
+Automatic update handoffs on both platforms restore the genuine user profile
+and remove the launching build's state/config/credential/build overrides. The
+new installed process chooses its own version scope; it cannot inherit the
+previous process's `E3_USER_STATE_DIR` through this handoff.
+
+`state_scope.py` is a Qt/HTTP-neutral, launch-time snapshot boundary. Importing
+the module does not migrate state. The desktop establishes its scope before
+configuration loading; `deployment.resolve_launch_profile()` uses the same
+preparation boundary. The packaged entry selects the scope before its first
+bridge-credential read, preserving explicit process overrides without caching
+a credential from another version. `storage.platform_user_data_dir()` identifies the original
+native root, while `default_user_data_dir()` honors the selected
+`E3_USER_STATE_DIR`. Normal packaged desktop state is keyed by version and exact
+revision; source desktop state is keyed by checkout path. The browser's direct
+configuration-loading path remains explicit and does not silently migrate state.
+
+`prepare_state_scope()` copies a seed into a temporary sibling, verifies ordinary
+source-file stability, writes `state-scope.json`, and publishes the directory
+atomically. Existing complete scopes are reused without refreshing their state.
+Calibration, registry and configuration-sidecar payloads remain unchanged;
+only copied application data-directory paths are rebased. External configured
+data is copied under `imported-data/`; SQLite uses a consistent backup. Links,
+incomplete scopes and failed imports reject rather than writing the seed.
+Download caches and nested scopes are not copied.
+
+Installed builds publish `last-successful.json` only after main-window
+construction. A new, strictly higher numeric version may clone that successful
+scope once. Existing scopes bypass this selection; reopening an older build
+cannot replace the newer pointer. Older/unorderable first launches and distinct
+same-version revisions retain the legacy seed policy, never an implicit downgrade
+of newer settings. Explicit configuration overrides preserve their chosen config
+and machine-data path while scoping auxiliary storage separately.
+
+`dev_test_launcher.py` prepares private version/revision state before executing
+even an older frozen E3. Test scopes live under `state/<version>-<revision>/`
+beside the permanent launcher; the actual application state is in its
+`local/E3 Positioning System/` child. Its child environment also redirects Windows
+profile directories so pre-existing file-backed storage defaults remain isolated.
+The launcher supplies private `E3_BUILD_INFO` metadata with unchanged version and
+revision, a `dev-test` channel and an empty `manifest_url`. This disables historical
+test-build updaters whose child installers would inherit redirected profiles;
+neither the selected binary nor its adjacent build metadata is rewritten.
+`prepare_test_state()` serializes source selection, snapshot and publication of
+`state/last-prepared-test.json`. Only a strictly higher numeric test version
+inherits that source. Existing exact scopes are reused; unseen older/equal or
+unorderable versions use the regular seed. The pointer records preparation before
+child startup, not application or physical acceptance, and cannot regress when
+an older version runs.
+`desktop/preferences.py` stores new window/trace QSettings in version-local INI
+files and imports the original registry read-only once. Old frozen binaries still
+use their original Qt registry UI-preference keys. Material and autosave migration
+cannot fall back to writing or deleting another version's files.
+
+This boundary changes persistence ownership, not either G-code pipeline or
+machine authorization. Strict settings, calibration and project schema checks
+remain in their existing modules. Shared user-selected project files remain a
+separate persistence domain. Pi protocol errors affect their remote services;
+they do not authorize local startup to discard settings or change hardware.
+See [updates and recovery](UPDATES.md#independent-version-state).
+
+## Windows packaging
 
 Windows installer tooling selects and identifies Inno Setup 7 or newer before
 build admission. Its native long-path support preserves deeply nested PySide/Qt

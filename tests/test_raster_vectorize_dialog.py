@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 import threading
 import time
@@ -15,6 +16,9 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from shiboken6 import isValid, ownedByPython
+
+from laser_aligner.desktop import raster_vectorize_dialog as raster_dialog_module
 from laser_aligner.desktop.qt import require_qt
 from laser_aligner.desktop.raster_vectorize_dialog import (
     _LIVE_PREVIEW_TASKS,
@@ -148,6 +152,62 @@ def _overlay_sample(dialog: RasterVectorizationDialog) -> QtGui.QColor:
         int(round(target.left() + target.width() * 0.2)),
         int(round(target.top() + target.height() * 0.5)),
     )
+
+
+def test_dialog_owns_groups_adopted_through_nested_layouts(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups: list[QtWidgets.QGroupBox] = []
+    original_image_group = raster_dialog_module._image_group
+
+    def image_group(*args: Any, **kwargs: Any) -> Any:
+        group, preview = original_image_group(*args, **kwargs)
+        groups.append(group)
+        return group, preview
+
+    def capture_group(factory: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            group = factory(*args, **kwargs)
+            groups.append(group)
+            return group
+
+        return wrapped
+
+    monkeypatch.setattr(raster_dialog_module, "_image_group", image_group)
+    for method in ("_build_detection_group", "_build_output_group"):
+        monkeypatch.setattr(
+            RasterVectorizationDialog,
+            method,
+            capture_group(getattr(RasterVectorizationDialog, method)),
+        )
+
+    dialog = RasterVectorizationDialog(
+        _payload(tmp_path / "ownership.png"), 25.0, 20.0, debounce_ms=5_000
+    )
+    expected_titles = {
+        "Original raster", "Foreground mask", "Vector overlay",
+        "Detection and geometry", "Contours and source",
+    }
+    try:
+        # Retain wrappers until the ownership assertion so a broken binding
+        # fails safely. Hierarchy queries can themselves repair ownership.
+        assert len(groups) == 5
+        assert [ownedByPython(group) for group in groups] == [False] * 5
+        assert all(group.parentWidget() is dialog for group in groups)
+        assert {group.title() for group in groups} == expected_titles
+
+        groups.clear()
+        gc.collect()
+        surviving_groups = dialog.findChildren(QtWidgets.QGroupBox)
+        assert len(surviving_groups) == 5
+        assert all(isValid(group) for group in surviving_groups)
+        assert {group.title() for group in surviving_groups} == expected_titles
+    finally:
+        # No show/event loop starts a preview; destroy only this dialog while
+        # captured wrappers still protect any failed ownership assertion.
+        _close_dialog(dialog, qt_application)
 
 
 def test_dialog_previews_controls_stats_and_acceptance_contract(

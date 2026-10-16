@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 integration (2026-10-16)
+
+- Combine the download progress and independent version-state changes below
+  with the existing UI, startup identity and Windows installer corrections.
+- Preserve main's newer bounded and cancellable updater operations, including
+  rejection of late completions, while integrating version-state isolation.
+- Advance the source version baseline to `v0.8.0`; keep older frozen builds'
+  embedded identities and forward reading of historical project formats.
+- Start Linux updates with a fresh per-version state selection, preserving the
+  previous build's settings rather than inheriting its process overrides.
+- Reject release publication when the Windows installer, platform package
+  metadata and update manifest disagree on version or exact revision.
+- Parent raster-dialog layouts before adding their controls, avoiding the
+  documented PySide 6.12.0 nested-widget ownership regression.
+
 ## Unreleased - updater stall recovery (2026-10-16)
 
 - Bound manifest checks to 75 seconds, add Cancel check, and reject late offers.
@@ -11,17 +26,38 @@
   byte-count, elapsed-time and failure diagnostics in the update cache.
 - Preserve mandatory exact-size/SHA-256 verification and normal installer handoff.
 
-## Unreleased - DEV TEST startup compatibility (2026-10-16)
-
-- Fix DEV TEST taskbar identity initialization on Windows Python 3.10 through 3.13
-  by using the signed Windows HRESULT declaration in both launcher and app.
-
 ## Unreleased - update download progress (2026-10-16)
 
 - Replace the download spinner with percentage, downloaded/total size and current
   speed; show package size before download and a separate verification status.
 - Read available network data promptly so slow links report progress without
   waiting for a full megabyte. Size and SHA-256 rejection remain mandatory.
+
+## Unreleased - independent desktop version state (2026-10-16)
+
+- Give each installed version/revision and source checkout an independent initial
+  copy of settings, calibration, material recipes and recovery data; reuse that
+  copy when reopening the version.
+- Seed a newer installed version from the previous successful installed version
+  without migrating the older copy; publish the pointer after window construction.
+- Isolate existing frozen DEV TEST builds through the permanent launcher before
+  they start, retaining the selected executable and production installation.
+- Keep test state beside the permanent launcher and disable its child E3 updater
+  through private metadata, preserving the original binary's version/revision.
+- Carry saved test settings forward to strictly newer test versions while exact
+  older test scopes remain independent; record preparation separately from success.
+- Read bridge credentials from the selected version state before packaged startup,
+  while retaining intentional process-level credential overrides.
+- Store new window/trace preferences in version-local INI files, importing legacy
+  Qt preferences read-only; older frozen UI registry preferences remain shared.
+- Preserve strict machine settings and project schema validation. Restore the
+  reported 0.7.153 installation with verified compatible configuration backups;
+  its original executable opens with existing settings and calibration preserved.
+
+## Unreleased - DEV TEST startup compatibility (2026-10-16)
+
+- Fix DEV TEST taskbar identity initialization on Windows Python 3.10 through 3.13
+  by using the signed Windows HRESULT declaration in both launcher and app.
 
 ## Unreleased - Windows installer long paths (2026-10-16)
 

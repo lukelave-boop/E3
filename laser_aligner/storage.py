@@ -34,6 +34,21 @@ def strict_json_loads(text: str) -> Any:
 def default_user_data_dir() -> Path:
     """Return the writable per-user data root for E3 on Windows and Linux."""
 
+    override = os.environ.get("E3_USER_STATE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return platform_user_data_dir()
+
+
+def state_is_isolated() -> bool:
+    return os.environ.get("E3_STATE_ISOLATED") == "1" or bool(
+        os.environ.get("E3_USER_STATE_DIR", "").strip()
+    )
+
+
+def platform_user_data_dir() -> Path:
+    """The original state location, used only as an import source by new builds."""
+
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if base:

@@ -138,16 +138,68 @@ def slow_server(monkeypatch):
 
 
 def test_real_socket_trickle_expires_despite_regular_bytes(slow_server, tmp_path):
-    events = []
     started = time.monotonic()
     with pytest.raises(updates.UpdateError, match="time limit"):
         updates.download_update(
             slow_server, destination_dir=tmp_path, timeout=0.2, max_duration=0.3,
-            progress=lambda n, t: events.append(n),
         )
-    assert events and events[0] < slow_server.size
     assert time.monotonic() - started < 2.0
     assert not (tmp_path / slow_server.name).exists()
+
+
+def test_real_socket_reports_progress_before_remaining_body(monkeypatch, tmp_path):
+    body = b"abcdefgh"
+    progress_seen = threading.Event()
+    release_body = threading.Event()
+    events = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body[:1])
+                self.wfile.flush()
+                # The remaining body is withheld until the downloader reports
+                # the first byte. A buffered whole-body read cannot pass.
+                if release_body.wait(10) and progress_seen.is_set():
+                    self.wfile.write(body[1:])
+                    self.wfile.flush()
+            except OSError:
+                pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    url = f"http://127.0.0.1:{server.server_port}/setup.exe"
+    monkeypatch.setattr(updates, "_request", lambda _: updates.urllib.request.Request(url))
+
+    def report(received, total):
+        events.append((received, total))
+        if received == 1:
+            progress_seen.set()
+            release_body.set()
+
+    try:
+        result = updates.download_update(
+            asset(body), destination_dir=tmp_path, timeout=15, max_duration=30,
+            progress=report,
+        )
+        assert progress_seen.is_set()
+        assert events[0] == (1, len(body))
+        assert events[-1] == (len(body), len(body))
+        assert result.read_bytes() == body
+        assert not list(tmp_path.glob("*.part"))
+    finally:
+        release_body.set()
+        server.shutdown()
+        server.server_close()
+        worker.join(5)
+    assert not worker.is_alive()
 
 
 @pytest.fixture

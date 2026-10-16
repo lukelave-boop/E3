@@ -18,6 +18,7 @@ from ..storage import (
     _publish_temp_if_absent,
     default_user_data_dir,
     legacy_user_data_dir,
+    state_is_isolated,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,8 @@ def _migrate_database(source: Path, destination: Path) -> bool:
 
 def _default_database_path() -> Path:
     preferred = (default_user_data_dir() / "materials.sqlite").expanduser().resolve()
+    if state_is_isolated():
+        return preferred
     legacy = (legacy_user_data_dir() / "materials.sqlite").expanduser().resolve()
     if preferred == legacy or preferred.exists() or not legacy.is_file():
         return preferred

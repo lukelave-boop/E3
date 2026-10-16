@@ -149,6 +149,7 @@ def _run_node(node: str, harness: str, *, timeout: float = 20) -> subprocess.Com
             stderr.seek(0)
             raise AssertionError(
                 f"Node browser harness exceeded {timeout}s after {elapsed:.3f}s; "
+                f"runtime={node!r}; "
                 f"PID={process.pid}; return code before termination={before_termination!r}; "
                 f"after cleanup={process.returncode!r}; cleanup={cleanup}\n"
                 f"stdout:\n{stdout.read()}\nstderr:\n{stderr.read()}"
@@ -177,7 +178,8 @@ def _reap_node(process: subprocess.Popen) -> str:
 
 
 def test_browser_rejects_delayed_results_after_replacing_placement_capture(node_binary):
-    result = _run_node(node_binary, _harness())
+    # Allow bounded Node startup/scheduling time for the complete behavior scenario.
+    result = _run_node(node_binary, _harness(), timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.splitlines() == [_COMPLETED], result.stdout + result.stderr
 

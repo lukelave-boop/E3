@@ -7,6 +7,7 @@ on:
       - .github/workflows/windows-packaging.yml
       - .github/workflows/publish-development-update.yml
       - packaging/**
+      - laser_aligner/versioning.py
       - pyproject.toml
       - requirements*.txt
       - tests/test_windows_installer_long_paths.py
@@ -74,6 +75,15 @@ jobs:
               -not (Test-Path -LiteralPath $metadata -PathType Leaf)) {
             throw 'Canonical build did not return its installer and build metadata.'
           }
+          $embeddedMetadata = Join-Path (Split-Path -Parent $build.Executable) 'build-info.json'
+          . .\packaging\inno_setup.ps1
+          $installerVersion = Get-E3InstallerProductVersion -InstallerPath $build.Installer -Verbose
+          .\.venv\Scripts\python.exe packaging/verify_release_metadata.py `
+            --revision "$env:GITHUB_SHA" --channel development `
+            --build-info windows-x86_64 "$metadata" `
+            --build-info windows-x86_64 "$embeddedMetadata" `
+            --installer-version "$installerVersion"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows package identity verification failed.' }
           "installer=$($build.Installer)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "metadata=$metadata" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@v7

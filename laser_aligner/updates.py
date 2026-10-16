@@ -386,12 +386,50 @@ def _path_entry_is_in_windows_bundle(entry: str, bundle_root: str) -> bool:
         return False
 
 
-def _windows_installer_environment() -> dict[str, str]:
+def _update_process_environment() -> dict[str, str]:
+    """Start an installed update independently of the launching build's state.
+
+    Preserve the genuine user profile and unrelated caller settings, restoring
+    profile locations saved by the DEV TEST launcher when needed. Per-launch
+    E3 config/state, bridge credentials and build metadata paths do not cross
+    an automatic update handoff, even when supplied explicitly by the caller.
+    The new build selects its own installed state from that genuine profile.
+    """
     environment = os.environ.copy()
+    original_text = environment.get("E3_STATE_ORIGINAL_ENV", "")
+    if original_text:
+        try:
+            original = strict_json_loads(original_text)
+        except (ValueError, TypeError) as exc:
+            raise UpdateError("Cannot restore the update process's original user environment") from exc
+        allowed = {"LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_DATA_HOME"}
+        if not isinstance(original, dict) or set(original) != allowed or any(
+            value is not None and not isinstance(value, str) for value in original.values()
+        ):
+            raise UpdateError("Cannot restore the update process's original user environment")
+        for key, value in original.items():
+            for existing in tuple(environment):
+                if existing.casefold() == key.casefold():
+                    environment.pop(existing)
+            if value is not None:
+                environment[key] = value
     for key in tuple(environment):
         normalized = key.casefold()
-        if normalized == "e3_dev_test" or normalized.startswith("e3_dev_test_"):
+        if (
+            normalized == "e3_dev_test"
+            or normalized.startswith(("e3_dev_test_", "e3_state_"))
+            or normalized in {
+                "e3_user_state_dir", "e3_config_path", "e3_bridge_token_file",
+                "e3_bridge_token", "laser_aligner_config",
+                "e3_build_info",
+            }
+        ):
             environment.pop(key, None)
+    return environment
+
+
+def _windows_installer_environment() -> dict[str, str]:
+    environment = _update_process_environment()
     bundle_value = getattr(sys, "_MEIPASS", None)
     if bundle_value is None:
         return environment
@@ -597,6 +635,7 @@ def _replace_running_appimage(downloaded: Path, current: Path) -> Path:
 def _launch_linux_appimage(path: Path) -> None:
     if not path.name.lower().endswith(".appimage"):
         raise UpdateError("Linux update package must be an AppImage")
+    environment = _update_process_environment()
     current_value = os.environ.get("APPIMAGE", "").strip()
     launch_path = path
     if current_value:
@@ -605,7 +644,9 @@ def _launch_linux_appimage(path: Path) -> None:
         mode = path.stat().st_mode
         path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     try:
-        subprocess.Popen([str(launch_path)], close_fds=True, start_new_session=True)
+        subprocess.Popen(
+            [str(launch_path)], env=environment, close_fds=True, start_new_session=True,
+        )
     except OSError as exc:
         raise UpdateError(f"Could not start the updated AppImage: {exc}") from exc
 

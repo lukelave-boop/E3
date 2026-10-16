@@ -1,5 +1,13 @@
 # Roadmap
 
+## 0.8.0 integration (2026-10-16)
+
+Prepared: confirmed download progress and version-state work combined with main's
+UI/startup/installer fixes, its newer bounded/cancellable updater operations,
+a 0.8 version baseline, update restart isolation and cross-platform package identity
+checks. Fresh compatibility checks for the combined head, package builds, merge
+and publication verification are tracked in [current state](CURRENT_STATE.md).
+
 ## Updater stall recovery (2026-10-16)
 
 Implemented: bounded/cancellable manifest checks and download dialogs,
@@ -12,6 +20,19 @@ cause; a slow-trickle timeout defect is reproduced offline. See CURRENT_STATE.md
 
 Implemented: manifest-sized progress, downloaded/total bytes and a recent transfer
 rate, followed by an explicit verification status. See [verification](CURRENT_STATE.md).
+
+## Independent desktop version state (2026-10-16)
+
+Implemented: one-time state copies per installed version/revision and source
+checkout, a prior-successful installed-state pointer, forward inheritance from
+prepared test scopes, private DEV TEST file state and disabled test-launch
+updates. The permanent launcher is installed and frozen-launcher isolation is
+verified. Regular 0.7.153 was restored from exact compatible backups and its
+unchanged installed EXE opens interactively with saved settings and calibration.
+Source verification and final integration are tracked in
+[current state](CURRENT_STATE.md). New source uses private Qt preference files;
+older frozen Qt UI preferences remain shared. Project-format compatibility is
+separate from application state. No physical machine qualification is implied.
 
 ## Windows installer long paths (2026-10-16)
 

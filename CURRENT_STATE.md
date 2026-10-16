@@ -1,6 +1,203 @@
 # Current repository state
 
+## 0.8.0 integration candidate (2026-10-16)
+
+The confirmed three-chat scope combines update download progress `986525a` and
+version-state isolation `7ec26b6` with the earlier main `718e931` (which already
+contains the UI, startup identity and installer corrections). The isolated
+`codex/release-0-8-0` candidate preserves both source histories and all historical
+documentation. The user has now explicitly authorized this integration, upload,
+merge and existing main-triggered publication; the earlier progress-branch push
+denial recorded below is historical. PR54 browser diagnostics remains excluded.
+
+Concurrent main update [PR #57](https://github.com/lukelave-boop/E3/pull/57)
+merged at 20:36:06 UTC as `50b279809ed8171ebdaafbea2c3e9a2cf6990a89`.
+The candidate incorporates that main revision and preserves its newer bounded,
+cancellable updater operations and rejection of late completions alongside the
+0.8.0 version-state isolation. Checks on prior candidate `8929f5a` do not validate
+this combined tree. Fresh full Windows and POSIX compatibility checks, independent
+review, and real package identity checks are required on the final combined head
+before merge. The final `v0.8.0` tag, packages and update manifest must identify
+the same final main revision.
+
+Combined-tree focused verification reports 179 passed and one Windows symlink-
+permission skip. The loopback check was initially denied by sandbox networking;
+the unchanged check passed its single approved retry with loopback access. These
+focused results do not replace fresh full compatibility and package validation
+on the final combined head.
+
+Candidate `6483322` passed the PR compatibility run `38964812658` and all
+four Windows/Linux package-identity checks. Its manual exact-head compatibility
+run `38964835132` failed one desktop real-socket test: the expected 300 ms
+expiry occurred before any progress callback. These results remain distinct;
+the green PR result does not override the failing exact-head run.
+
+The deadline test now checks its unchanged 200 ms socket timeout, 300 ms total
+budget, expected time-limit error, original two-second bound and absent output.
+A separate real-socket handshake withholds the body after one byte until a
+progress callback releases it. This tests early progress without requiring
+connection startup and diagnostic file I/O inside 300 ms. A runtime-only
+negative control replacing `HTTPResponse.read1` with buffered `read` fails the
+new test after ten seconds because the incomplete body cannot verify.
+No production deadline, updater behavior or accepted error was changed.
+
+Cloud recovery reconstructs this test correction after the original local
+executor disconnected before commit/push. The cloud candidate also preserves
+documentation-only main `5447c09` / PR #58 and its verified PR #57 publication
+record below. Linux/Python 3.12.14 with PySide 6.12 passes 102 focused updater,
+version and state tests with two Windows-boundary skips, plus 173 updater and
+release-metadata/publisher tests. The focused runs overlap and are not a full
+compatibility pass. Independent review, repository Ruff, compilation,
+dependency integrity and whitespace checks pass. Fresh final-head Windows
+compatibility and Windows/Linux package validation remain required.
+
+The release automation now establishes the immutable `v0.8.0` baseline in the
+existing content-write publication job after compatibility and package identity
+checks, before channel publication. It verifies the exact main revision, complete
+Git ancestry, both packages and staged manifest, then creates only an absent tag
+and reads it back. Existing tags are never moved or deleted; later versions must
+match the baseline-derived commit count. First bootstrap requires unambiguous
+prior-series publication evidence, so an absent tag after a successful 0.8
+publication fails closed instead of resetting the version sequence. Repository
+and updater destination checks bind the inputs to this same release channel.
+No new credential, workflow permission, hardware behavior or deployment is added.
+The final focused baseline/release/publisher/metadata/version run passes 362
+tests. An additional raster-dialog/version/package-boundary run passes 49 tests
+with nine expected Windows-only skips. These selections overlap earlier checks.
+A read-only live-service preflight verifies the current 0.7.308 stable manifest
+and its published predecessor `50b2798` against the bootstrap guard. Present
+local baseline tags must agree with the remote peeled commit, including when
+divergent ancestors would coincidentally produce the same version count.
+Independent review, repository Ruff, compilation and whitespace checks pass;
+final remote compatibility and package validation remain required.
+The existing POSIX compatibility selection also passes locally: 1,481 passed
+and 23 skips in 192.10 seconds. Twenty-one skips require PowerShell unavailable
+in this cloud environment; two cover Windows-only junction/redirector behavior.
+This does not substitute for the hosted POSIX run with its full installed tools.
+
+The source series advances to 0.8, with immutable `v0.8.0` intended for the exact
+final main release revision. Untagged preparation and that final tagged revision
+both resolve to 0.8.0; subsequent commits increment the patch. Frozen older builds
+continue to report their own embedded metadata. Packaging checks compare the
+Windows installer product version and bundle metadata, the Linux AppImage's
+extracted metadata, and the final manifest against the expected version and exact
+revision. Both package validation workflows run without starting E3 or publishing.
+The publisher retains its full compatibility gate and verified manifest switch.
+
+The three PR55 autosave failures were reproduced in the original test order.
+The packaged-entry test failed to own environment variables that were initially
+absent, leaking its temporary state scope into subsequent tests. Correcting that
+test's environment lifetime changes the ordered result from 2 passed/3 failed
+to 7 passed; focused persistence/startup coverage reports 112 passed/1 Windows
+symlink-permission skip. Production migration guards and original autosave
+assertions are unchanged. Version/identity/updater rollover coverage reports
+41 passed. These are focused local Python 3.14 results, not full compatibility.
+The combined focused integration run then passed 234 tests with the same one
+symlink skip; download progress, all historical project fixtures and the unchanged
+raster-dialog module passed another 43 tests. Repository Ruff, application and
+changed-test compilation, and whitespace checks passed. The initial package-test
+attempt hit sandbox temporary-directory setup errors; an explicit writable
+workspace base directory resolved those setup errors without test changes.
+
+The first remote candidate `e250d65` ran both PR and manual exact-head checks.
+Both POSIX runs passed 1,502 tests with two skips; both Linux AppImages compiled
+and passed their embedded 0.8.0/revision checks. Both Windows core runs reported
+7,093 passed, 169 skipped and one failure: the setup runbook still named 0.7.x.
+That applicability label is now 0.8.x. Both Windows installers compiled, but
+the new identity gate rejected Inno Setup's fixed-width ProductVersion padding.
+Read-only inspection of an existing Inno 7.1 installer and the compiler source
+confirmed trailing ASCII spaces; the shared PE reader removes only that padding
+and logs the raw value. JSON identity checks stay strict. These failed attempts
+remain recorded; fresh full CI and package checks are required for the correction.
+Both first desktop runs on Python 3.12/Qt 6.12 completed with 8,656 passed,
+69 skipped and only the same runbook assertion; neither reproduced the earlier
+native crash. No failed run was retried or cancelled to obtain these results.
+The correction passes 71 focused metadata/gate/runbook checks and nine real
+Inno/helper checks, including relative and long PE paths and both PowerShell
+versions. Independent review, Ruff, compilation and whitespace checks pass.
+
+Corrected candidate `063a6b5` passed both real Windows and Linux package checks,
+both Windows core runs (7,100 passed/169 skipped), both POSIX runs (1,502
+passed/two skipped) and lint. Its PR desktop run passed 8,663 tests with 69
+skips, but its manual exact-head run reproduced the native raster-dialog crash
+(8,662 passed/69 skipped/one failed). This remains a blocking result, despite
+the passing PR run; neither attempt was retried or cancelled.
+
+Investigation identified the documented PySide 6.12.0 nested-layout ownership
+regression [PYSIDE-3479](https://github.com/qtproject/pyside-pyside-setup/commit/34adf9a2b0229f7f314de49347a7647485c647c8).
+The raster dialog used the affected populate-then-attach construction pattern.
+Its two empty inner layouts now attach to the dialog's outer layout before
+adding their groups, avoiding that faulty ownership-transfer path. Regression
+coverage inspects original group wrappers before any hierarchy query can repair
+ownership. This source-level match does not by itself prove the native crash's
+cause; fresh complete Qt 6.12 CI and package validation remain required. No
+dependency pin, worker retry, assertion removal or test skip is introduced.
+All 11 dialog tests, including the ownership regression and ten unchanged
+preview/acceptance/worker tests, pass with installed Python 3.14/Qt 6.11.2.
+Repository Ruff, compilation and whitespace checks pass. These local results
+do not replace the pending Qt 6.12 compatibility run.
+
+Both first-attempt desktop suites for `eb73f67` completed on Qt 6.12 without
+the native crash, including the new ownership regression. Each passed 8,663
+tests with 69 skips and one controller-test failure: the status-diversion
+scenario exhausted its 20 ms command budget, while the duplicate-ACK scenario
+quarantined at the post-terminal deadline before classifying the third frame.
+Those two queries now use a one-second test budget, retaining their exact
+payload/error, state and quarantine assertions. Shared fixture defaults,
+missing/late-ACK tests and every production deadline remain unchanged.
+The manual core run passed 7,100 tests/169 skips; the PR core run passed 7,099
+with the same skips and one PowerShell helper process timeout. Its bounded
+test budget is now 60 seconds with timestamped stderr phases and captured
+timeout diagnostics; the original slow phase is unknown. No retries or skips
+were added. Both POSIX runs passed 1,502/two skips, both lint runs passed,
+and all four actual package identity checks passed. These failed attempts
+remain recorded; the test corrections require fresh complete validation.
+The focused correction run passes all 146 controller-session tests and nine
+real Inno/helper tests with installed Python 3.14 dependencies. Independent
+review, Ruff, compilation and whitespace checks pass.
+These controller-query and PowerShell budgets are test scheduling allowances;
+they do not relax production controller deadlines, package identity checks or
+controller safety assertions. PR #57 separately corrects product updater
+operations with bounded and cancellable behavior. Two Qt 6.12 runs without the
+native crash do not establish its cause or prove an intermittent fault eliminated.
+
+Candidate `8929f5a` passed its complete manual compatibility run: Windows core
+7,100 passed/169 skipped, desktop 8,664 passed/69 skipped, POSIX 1,502 passed/two
+skipped, and lint. All four real package checks passed. Its PR core, POSIX and
+lint checks passed, but the desktop run had one browser-placement harness
+timeout (8,663 passed/69 skipped). Node remained alive after 20.047 seconds;
+file-backed stdout/stderr were empty, including the first JavaScript startup
+marker. The runtime version and slow phase are unknown. That positive scenario
+now has a bounded 60-second process allowance, retaining natural zero exit,
+exact completion and all behavior assertions. The helper's default 20 seconds
+and deliberate hang/negative tests remain unchanged. This is not a proven
+Node hang repair and changes no browser product code. Neither full desktop
+run had a native Qt failure. All these results precede the PR #57 reconciliation
+and do not validate the new combined tree.
+All six browser-harness checks pass locally with Python 3.14/Node 24.19,
+including the unchanged real 20-second hung-child rejection and cleanup.
+Independent review, Ruff, compilation and whitespace checks pass.
+
+Review also found that Linux updater restart inherited the previous build's
+state overrides. Both platforms now prepare a fresh update-process environment,
+preserving the genuine user profile while removing prior per-launch state,
+config, credential and build overrides before the new version selects its scope.
+
+The pre-existing native raster-dialog crash seen on Windows Python 3.12/Qt 6.12
+has not been reproduced with installed Python 3.14/Qt 6.11.2 dependencies:
+10 original dialog tests and a separate 50-lifecycle probe passed. No proven
+native-crash repair, retry policy, assertion weakening or test skip was added.
+Exact candidate CI, package builds, independent final review, main merge, tag
+and publication verification remain pending. Historical project schema 1-5
+fixtures remain intact. No installed app, launcher selection, calibration,
+hardware or Pi deployment was changed by this integration.
+
 ## Updater stall recovery - published as 0.7.308 (2026-10-16)
+
+This is the verified PR #57 baseline, recorded by documentation-only PR #58
+at main `5447c0927f65a1832ecb6d1cf2c6d89bc2f3c03e`. It supersedes the earlier
+source-only checkpoint; combined 0.8.0 candidate validation remains separate
+and is tracked above.
 
 PR #57 is merged into main at 50b2798 after compatibility and packaging passed.
 The repair starts from main 718e931 and includes existing progress change 986525a
@@ -82,6 +279,111 @@ from the checkout root with python -m scripts.reproduce_update_trickle so an
 editable installation from another worktree cannot shadow the corrected source.
 
 
+## Update download progress (2026-10-16)
+
+Isolated branch codex/update-download-progress replaces the desktop download
+spinner with manifest-sized progress, downloaded/total bytes, percentage and a
+rolling three-second transfer speed. The offer shows total size before download.
+Available-data reads report slow transfers promptly; speed falls to zero during
+a stall. A full bar says verification/saving is pending, never that an unchecked
+package is ready. Exact size/SHA-256 rejection and installer handoff are preserved.
+
+Windows Python 3.14 focused updater coverage passes 51 tests, including actual
+offscreen Qt dialog construction, worker reporting, large byte counts, rate/stall
+rendering, success/failure cleanup, corrupt/truncated/oversize rejection and
+existing installer handoff. Repository Ruff, application compileall and visual inspection of the offscreen
+dialog with the installed Segoe UI font pass. No interactive GUI, frozen installer,
+real network
+download or hardware verification is claimed. Compatibility CI/integration pending.
+Automatic approval review blocked the GitHub push because uploading repository
+source/documentation to origin requires explicit user authorization. No push,
+remote CI, main merge, publication or installed application replacement occurred.
+Existing shared checkout changes and other branches remain untouched.
+
+## Regular E3 0.7.153 restored; launcher isolation installed (2026-10-16)
+
+Regular E3 opens again at its existing version **0.7.153**, revision
+`bc86c8912ef2919ca5f5938153539cbab2ba2580`. The installed executable and adjacent
+build metadata are unchanged. Recovery restored only `config/network-local.json`
+and `data/machines.json` from their verified `before-x-clearance-20261015.bak`
+files. The only semantic differences were four added
+`machine.raster_travel_envelope` fields that the old version cannot parse.
+The selected machine, every supported machine/laser/camera setting and all
+calibration files were preserved. Newer raster-travel evidence remains in the
+separate test state.
+
+The repair backed up all **245 non-cache regular-state files** under
+`C:\Users\lukel\Documents\E3 Dev Test\recovery-backups\20261016T184144549918Z-regular-0.7.153`.
+Its `recovery-report.json` confirms that only those two files changed during the
+transaction and all other regular state was unchanged. Installed EXE SHA-256:
+`a28bf86ef5a272a92840d35f10782a2985a58bdb047664fefcf7ed1acb86fd54`.
+Build-info SHA-256:
+`693b561408653df73408e3cec16d891c0ed7679a6a7024061423bd5bad58ebf6`.
+
+The actual installed EXE was then launched interactively. Its main workspace
+displayed version 0.7.153 / build bc86c891 with the existing Ender 3 Tailscale
+profile. Camera status was ONLINE with a rendered bed image; the Pi was reachable
+in VIEW ONLY. No controller connection, Home, arming or job action was requested.
+The application was left open. A subsequent inventory check confirmed unchanged
+configuration, registry, calibration and binary hashes. Normal startup rewrote
+the SQLite materials file, but a read-only logical comparison found all 14
+material rows (13 built-ins and one custom), all 13 seed-history entries, the
+sequence record, schema and indexes unchanged. These are interactive startup
+and remote-view observations, not physical motion, laser or calibration-accuracy
+qualification. No Pi software or firmware was changed.
+
+Modern settings and calibration were copied and verified under the permanent
+launcher's `state/` directory for 0.7.292, revision
+`c5cb9d5b16f740c087aac58894307c6ac508c65b`. The existing selected 0.7.300 scope,
+revision `d154784fadf9ab6b4a2e157724d584d926017697`, inherits that copy. Neither
+selected feature executable was rebuilt or upgraded by this repair.
+Each actual state root is `state/<version>-<revision>/local/E3 Positioning System/`
+beside the permanent launcher. Installed future runtime scopes remain under
+the native LocalAppData root.
+
+The repaired **E3 DEV TEST** launcher is installed at its existing permanent
+path. Its SHA-256 is
+`1a0150044c72eed8ac36563b4be2f631930db3d258bb8453c0fd2222198c3da4`;
+the previous launcher is preserved under
+`C:\Users\lukel\Documents\E3 Dev Test\launcher-backups\20261016T184135650812Z`.
+An actual frozen-launcher run against a harmless C# probe verified private child
+profile/config paths, copied calibration, unchanged source state and private
+build metadata with an empty update-manifest URL. The selected application's
+original binary and metadata remain intact. Evidence is in the original
+checkout's ignored `build/regular-e3-repair/frozen-launcher-smoke-01/result.json`.
+
+Exact 0.7.153 source also passed three real Qt offscreen window scenarios:
+an unreachable Pi, an incompatible `E3MACHINE/999` response and a missing
+Pi-owned-job capability. Each runtime stayed RUNNING with controller controls
+disabled; rectangle create/undo/redo/save/reload worked and all calibration
+loaded. Original copied config/data hashes were unchanged. Fake RPC/camera
+responses, connection blockers, hardware-disabled operation, laser lockout and
+owned test INI preferences kept these checks isolated; zero network connections
+were attempted. This is separate exact-source/offscreen evidence, not a claim
+that the installed binary was exercised against those three Pi failures.
+Report: `build/legacy-pi-probe-436e754037264aa7a3ee32b07819acac/result.json` in
+this isolated worktree. Eleven recovery-helper acceptance/rejection/rollback
+tests, helper Ruff and compilation also pass.
+
+Source now implements one-time state copies per desktop build/source checkout,
+a successful-installed-state pointer, private new Qt preferences and scoped
+credential loading before packaged startup. The launcher's separate
+`last-prepared-test.json` carries settings only to strictly newer numeric test
+versions after a complete snapshot, before the child starts. It records
+preparation, not application or physical-test success; exact older scopes remain
+independent. Existing frozen Qt window/trace registry preferences remain shared.
+User-selected project documents retain their versioned schema behavior, and
+explicit deployment overrides remain explicit.
+
+The complete local Windows Python 3.14 run (`pytest -q -n 4`) passes
+**8,590 tests / 44 skipped** in 715.40 seconds. Collection preceded the two new
+packaged-entry tests; the separate entry/deployment/state run passes **23 tests /
+1 Windows permission skip**, covering the final credential-ordering change and
+explicit process overrides. Repository Ruff, compileall and whitespace checks
+pass on the final source. Full Windows Python 3.10/3.12 compatibility CI and
+source integration remain pending at this local checkpoint. Live recovery,
+permanent-launcher installation and interactive regular-EXE startup are complete.
+
 ## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)
 
 Permanent **E3 DEV TEST** now selects **Desktop UI and cleaned-image tracing**,
@@ -146,27 +448,6 @@ full pool inventories were stable, and the old tree fingerprint still matches
 its earlier review; the transient writer/cause is unverified. Actual managed
 usage is 5,583,915,600 bytes plus 2,147,483,648 reserved, within the unchanged
 eight-GiB cap. Independent payload and launcher validation passed as above.
-
-## Update download progress (2026-10-16)
-
-Isolated branch codex/update-download-progress replaces the desktop download
-spinner with manifest-sized progress, downloaded/total bytes, percentage and a
-rolling three-second transfer speed. The offer shows total size before download.
-Available-data reads report slow transfers promptly; speed falls to zero during
-a stall. A full bar says verification/saving is pending, never that an unchecked
-package is ready. Exact size/SHA-256 rejection and installer handoff are preserved.
-
-Windows Python 3.14 focused updater coverage passes 51 tests, including actual
-offscreen Qt dialog construction, worker reporting, large byte counts, rate/stall
-rendering, success/failure cleanup, corrupt/truncated/oversize rejection and
-existing installer handoff. Repository Ruff, application compileall and visual inspection of the offscreen
-dialog with the installed Segoe UI font pass. No interactive GUI, frozen installer,
-real network
-download or hardware verification is claimed. Compatibility CI/integration pending.
-Automatic approval review blocked the GitHub push because uploading repository
-source/documentation to origin requires explicit user authorization. No push,
-remote CI, main merge, publication or installed application replacement occurred.
-Existing shared checkout changes and other branches remain untouched.
 
 ## Windows installer long paths — verified (2026-10-16)
 
