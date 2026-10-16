@@ -1,47 +1,47 @@
 # Current repository state
 
-## Windows installer long-path repair (2026-10-16, in progress)
+## Windows installer long paths — verified (2026-10-16)
 
-The UI follow-up changes packaging only: Inno Setup 7+ preflight and an explicit
-portable compiler path replace Inno 6 discovery. Reproduction with installed
-Inno 6.7.3 confirmed failure opening a 269-character source and silent omission
-when the parent directory exceeds MAX_PATH. Relative paths do not repair either
-case; an extended-path prefix is rejected by that compiler. Inno 7 supplies
-native long-path handling for source files. Real compiler checks also established
-that long OutputDir values require an explicit extended-path prefix; the builder
-now applies it only to the compiler argument, preserving storage identities.
+[PR #52](https://github.com/lukelave-boop/E3/pull/52) repairs Windows packaging
+with Inno Setup 7+ preflight and explicit portable compiler support. Inno 6.7.3
+reproduction confirmed both failure opening a 269-character source and silent
+omission beneath long directories. Inno 7 handles source paths; compiler output
+paths receive the explicit Windows extended prefix without changing canonical
+storage identities. Windows PowerShell 5.1 help-output handling is covered too.
 
-The separate CI helper pins official Inno 7.1.0, verifies SHA-256 and publisher,
-and prepares a portable compiler. The builder still never installs dependencies.
-Real compiler tests include the repository installer and check every manifest
-file, byte size and SHA-256, including deep directories, long filenames, spaces,
-Unicode, long output paths and missing-payload refusal. Packaging PR CI now runs
-a complete canonical Windows installer build and retains it for seven days.
-Local Windows verification with portable Inno 7.1.0 passes all six real compiler
-and path-conversion regressions. A separate Windows PowerShell 5.1.26100.9711
-probe also selects the actual compiler, preserves ErrorActionPreference and
-compiles all four fixture files into a 321-character output path with exact
-manifest hashes. Its native stderr compatibility fix has a dedicated regression.
-All 51 local builder/storage-entrypoint tests pass, along with ten dependency/
-workflow tests, repository Ruff, compileall and independent review. Hosted
-[packaging CI 38941548566](https://github.com/lukelave-boop/E3/actions/runs/38941548566)
-passed all 17 focused checks and produced the complete **0.7.294** installer at
-PR merge revision `5ec29308f9bb56e2cb9ff96e038946d70d639e46` in 8m18s. Its
-[installer artifact](https://github.com/lukelave-boop/E3/actions/runs/38941548566/artifacts/12063253852)
-expires October 23. This proves the original installer failure is repaired.
+The separate dependency helper pins official Inno 7.1.0 by SHA-256 and valid
+publisher signature, then checks the signed compiler's engine version. Builders
+still consume existing dependencies and preserve the storage admission policy.
 
-The branch then incorporated newer main `b1c6c4b` and its cleaned-image tracing
-feature, preserving both documentation records. Complete installer and Windows
-compatibility CI are being repeated on that combined revision before integration.
+Complete [packaging CI 38942917965](https://github.com/lukelave-boop/E3/actions/runs/38942917965)
+passed **17 focused checks** and built **E3 0.7.297** in 7m53s. The exact build
+revision is `1fa87be27ce025297561bb6acaf8212d97a8d572` (PR merge ref), whose source
+tree matches verified branch head `239feed6a7d8fe08e4b89e7dc48978559e53259c`.
+The [installer artifact](https://github.com/lukelave-boop/E3/actions/runs/38942917965/artifacts/12063499803)
+contains E3-Setup.exe and build-info.json and expires October 23. Archive SHA-256:
+`e8dda14360cdd4d6e70dc9750794f203b1f1dd4542922bcb47bbfc642b6368b3`.
 
-The selected UI bundle and permanent DEV TEST pointer remain unchanged. Existing
-local failed reservations and artifacts are preserved; full installer validation
-uses genuine hosted Windows CI with the existing bounded ephemeral admission.
-No E3 installer, application, camera, controller or laser is launched by these checks.
+Full [compatibility CI 38942917930](https://github.com/lukelave-boop/E3/actions/runs/38942917930)
+passes: Windows Python 3.12 desktop **8,541 passed / 69 skipped**, Windows Python
+3.10 core **6,985 passed / 164 skipped**, POSIX **1,502 passed / 2 skipped**, and
+repository Ruff. Local Windows also passed **51 builder/storage-entrypoint tests**,
+six real compiler/path checks, ten dependency/workflow checks, Ruff and compileall.
+An actual Windows PowerShell 5.1.26100.9711 probe selected the compiler, retained
+ErrorActionPreference and compiled four fixtures into a 321-character output path
+with exact manifest hashes. Hosted tests include that regression plus long source
+filenames/directories, spaces, Unicode, missing-payload rejection and drive/UNC paths.
 
-## Cleaned-image tracing correction (2026-10-16)
+The implementation incorporates cleaned-image tracing from main `b1c6c4b`.
+The later main `af0fc78` update and final evidence edits affect CURRENT_STATE.md
+only; application, packaging, workflows and tests remain identical to the fully
+verified revision. This repair did not change DEV TEST selection, any existing
+artifact or lease, or machine behavior. The generated installer was not installed
+or run; no physical camera, controller or laser verification is claimed.
 
-Isolated branch codex/cleaned-image-trace starts from integrated main 3070d56.
+## Cleaned-image tracing correction — integrated and DEV TEST selected (2026-10-16)
+
+PR #51 merged as `b1c6c4b67a847dd0850acd2f16e15599ea2ce9d9`; the completed
+`codex/cleaned-image-trace` branch was deleted locally and remotely.
 Automatic preview snapshots the current cleaned grayscale image rather than the
 original source. Both outline modes use bounded subpixel mask boundaries, preserving
 diagonal foreground connectivity without retracing thin pixel features. Existing
@@ -56,14 +56,52 @@ linked vectors and raster integration. Repository Ruff, application compileall
 and whitespace checks pass. Both actual offscreen preview buttons on the unchanged
 operator JPEG produce valid two-contour / 1,790-segment outlines (barrel and
 remaining shadow) with unchanged native topology validation. Preview does not
-accept the candidate or modify source bytes. Frozen build and compatibility CI
-are pending. Read-only packaging preflight reports the eight-GiB pool blocked
-by 2.50 GiB of measured files plus three old two-GiB reservations.
-No interactive operator or physical hardware acceptance is claimed.
+accept the candidate or modify source bytes.
 
-## Desktop UI clarity — integrated and DEV TEST selected (2026-10-16)
+Full [compatibility CI 38939968958](https://github.com/lukelave-boop/E3/actions/runs/38939968958)
+passes: Windows Python 3.12 desktop **8,522 passed / 65 skipped**, Windows Python
+3.10 core **6,966 passed / 160 skipped**, POSIX **1,502 passed / 2 skipped**, and
+repository Ruff.
 
-Permanent **E3 DEV TEST** selects **Desktop UI clarity**, version **0.7.283**,
+Permanent **E3 DEV TEST** now selects **Cleaned-image tracing**, version
+**0.7.292**, exact frozen revision `c5cb9d5b16f740c087aac58894307c6ac508c65b`,
+built from `codex/cleaned-image-trace`. Target:
+`C:\Users\lukel\.codex\worktrees\trc\E3\.e3-builds\windows-windows-6790c59473ef45a68fb9f546a10af998\dist\E3\E3.exe`.
+The canonical Windows builder used Python 3.14.4, PyInstaller 6.22.3 and Qt 6.11.2.
+All **194 frozen application modules**, entrypoint and **ten resources** match
+the committed revision. The actual EXE passed an isolated offscreen startup:
+native Qt Widgets loaded, no traceback or startup-error log, camera autostart
+off, motion disabled, and no hardware-enabled process. Atomic pointer update and
+launcher-validator readback pass. Save work, close the older application, and
+reopen the permanent launcher; no image replacement or re-import is needed.
+Source editor renders were visually reviewed. No interactive operator, real
+camera, controller or laser acceptance is claimed. Evidence is in the retained
+source/build worktrees' ignored `build/` directories. Inno Setup again failed
+at the bundled Qt `objects-RelWithDebInfo` path-length limit. No installer is
+claimed; the independently verified app bundle is selected. Its files and build
+reservation remain retained and counted. EXE SHA-256:
+`6ff2cb1fb7e1f10651ae26a08a30cd6adce15fe74b15b9c420b070c76d20f1e1`.
+
+The first packaging attempt used ambient Python 3.13.15 and produced a rejected
+EXE: actual startup exposed the existing `ctypes.wintypes.HRESULT` compatibility
+gap in `identity.py`. Inno Setup also hit a bundled Qt path-length limit. That
+EXE was never selected. Rebuilding the unchanged source in the shorter `trc`
+checkout with the established Python 3.14 environment passed startup; this does
+not establish support for Python 3.13 frozen startup.
+
+With explicit user approval, identity-checked recovery released only the two
+stale two-GiB reservations for completed machine-axis raster and transparency
+builds, after verifying their owner processes had exited. The rejected attempt's
+own exited build reservation was subsequently released with the same checks.
+All artifacts remain and count toward measured usage; no files were deleted.
+Accounting backups are `state.before-cleaned-trace-recovery.json` and
+`state.before-rejected-trace-build-recovery.json` under
+`C:\Users\lukel\AppData\Local\E3 Build Storage`. The running older E3 application,
+its reservation, permanent launcher and shortcut, and production E3 were preserved.
+
+## Desktop UI clarity — integrated, previous DEV TEST selection (2026-10-16)
+
+The previous **E3 DEV TEST** selection was **Desktop UI clarity**, version **0.7.283**,
 exact frozen revision `ba488ec9fcce4b547464aff0ad563d8823e142ca`, built from
 `codex/desktop-ui-polish`. Target:
 `C:\Users\lukel\.codex\worktrees\ui\E3\.e3-builds\windows-windows-37ab0dd160f6487b9e35d537fc13d104\dist\E3\E3.exe`.
