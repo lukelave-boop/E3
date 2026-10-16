@@ -15,10 +15,23 @@ from ..updates import (
     download_update,
     launch_downloaded_update,
     record_download_problem,
+    record_update_check_problem,
 )
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
+_CHECK_MAX_SECONDS = 75.0  # Four 15-second network waits plus bounded retry delays.
+
+
+def _record_problem(callback: Any, *args: Any) -> None:
+    # Diagnostics must not replace a network stall with a GUI-thread filesystem
+    # wait. This best-effort writer owns no Qt or machine state.
+    try:
+        Thread(
+            target=callback, args=args, name="E3 update diagnostics", daemon=True,
+        ).start()
+    except RuntimeError:
+        pass  # Best-effort logging must never prevent UI recovery.
 
 
 def _download_size(size: float) -> str:
@@ -208,14 +221,51 @@ def _begin_check(window: QtWidgets.QMainWindow, action: QtGui.QAction) -> None:
         )
         return
     action.setEnabled(False)
-    _progress_dialog(window, "Checking GitHub for an E3 update…")
-    window.controller.run_background(
-        lambda: check_for_update(build),
-        on_success=lambda result: _check_complete(window, action, result),
-        on_failure=lambda message: _show_failure(window, action, message),
-        label="Check for E3 updates",
-        show_busy=False,
-    )
+    dialog = _progress_dialog(window, "Checking GitHub for an E3 update…")
+    dialog.setCancelButtonText("Cancel check")
+    started = time.monotonic()
+    timer = QtCore.QTimer(dialog)
+    timer.setSingleShot(True)
+
+    def active() -> bool:
+        return getattr(window, "_e3_update_progress", None) is dialog
+
+    def failure(message: str) -> None:
+        if active():
+            timer.stop()
+            _record_problem(record_update_check_problem, message)
+            _show_failure(window, action, message)
+
+    def expired() -> None:
+        failure("The update check exceeded 75 seconds. Check your connection and retry.")
+
+    def success(result: UpdateCheckResult) -> None:
+        if active():
+            timer.stop()
+            if time.monotonic() - started >= _CHECK_MAX_SECONDS:
+                expired()
+            else:
+                _check_complete(window, action, result)
+
+    def cancel() -> None:
+        if active():
+            timer.stop()
+            _close_progress(window)
+            action.setEnabled(True)
+
+    dialog.canceled.connect(cancel)
+    timer.timeout.connect(expired)
+    timer.start(max(1, int(_CHECK_MAX_SECONDS * 1000)))
+    try:
+        window.controller.run_background(
+            lambda: check_for_update(build),
+            on_success=success,
+            on_failure=failure,
+            label="Check for E3 updates",
+            show_busy=False,
+        )
+    except Exception as exc:
+        failure(str(exc))
 
 
 def _check_complete(
@@ -274,15 +324,7 @@ def _begin_download(
 
     def failure(message: str) -> None:
         if active():
-            # Diagnostics must not replace a network stall with a GUI-thread
-            # filesystem wait. This best-effort writer owns no Qt or machine state.
-            try:
-                Thread(
-                    target=record_download_problem, args=(result.asset, message),
-                    name="E3 update diagnostics", daemon=True,
-                ).start()
-            except RuntimeError:
-                pass  # Best-effort logging must never prevent UI recovery.
+            _record_problem(record_download_problem, result.asset, message)
             _show_failure(window, action, message)
 
     def success(path: Path) -> None:

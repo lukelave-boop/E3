@@ -1,5 +1,7 @@
 # Architecture
 
+Manifest checks use a 75-second UI deadline and the same active-dialog identity
+rule, so stale workers cannot offer an update after cancellation or timeout.
 Update downloads retain the controller-owned background-task lifecycle but use
 an independent UI timer to bound the visible operation. No progress for 45 seconds
 or 15 minutes overall cancels that attempt and restores the update action.

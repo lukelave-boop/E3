@@ -1,5 +1,6 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Update checks can be cancelled and are limited to 75 seconds.
 Stalled update attempts now return control after 45 seconds without progress,
 with Cancel download, a 15-minute total limit, and local diagnostic records.
 Retry through Help > Check for Updates; every package still requires exact

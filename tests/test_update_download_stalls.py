@@ -387,3 +387,61 @@ def test_actual_controller_worker_delivers_download_result(ui, monkeypatch, tmp_
         app.processEvents()
         module._close_progress(window)
         window.deleteLater()
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "cancel", "late_result", "success", "failure"])
+def test_update_check_is_bounded_and_old_results_cannot_change_retry(ui, monkeypatch, outcome):
+    module, app = ui
+    window = module.QtWidgets.QMainWindow()
+    action = module.QtGui.QAction(window)
+    pending = []
+    errors = []
+    offers = []
+    clock = [time.monotonic()]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module, "_CHECK_MAX_SECONDS", 0.03)
+    monkeypatch.setattr(module, "load_build_info", lambda: SimpleNamespace(manifest_url="https://example.com/manifest"))
+    monkeypatch.setattr(module.QtWidgets.QMessageBox, "critical", lambda *a: errors.append(a[-1]))
+    def complete(w, a, result):
+        module._close_progress(w)
+        a.setEnabled(True)
+        offers.append(result)
+    monkeypatch.setattr(module, "_check_complete", complete)
+    window.controller = SimpleNamespace(run_background=lambda work, **kw: pending.append(kw))
+    try:
+        module._begin_check(window, action)
+        dialog = window._e3_update_progress
+        assert not action.isEnabled()
+        if outcome == "timeout":
+            for _ in range(100):
+                app.processEvents()
+                if errors:
+                    break
+                time.sleep(0.005)
+            assert errors and "exceeded" in errors[0]
+        elif outcome == "cancel":
+            next(b for b in dialog.findChildren(module.QtWidgets.QPushButton)
+                 if b.text() == "Cancel check").click()
+        elif outcome == "late_result":
+            clock[0] += 1
+            pending[0]["on_success"]("expired offer")
+            assert errors and not offers
+        elif outcome == "success":
+            pending[0]["on_success"]("current offer")
+            assert offers == ["current offer"] and not errors
+        else:
+            pending[0]["on_failure"]("manifest unavailable")
+            assert errors == ["The update operation could not be completed.\n\nmanifest unavailable"]
+        assert window._e3_update_progress is None and action.isEnabled()
+        count = len(errors)
+        module._begin_check(window, action)
+        current = window._e3_update_progress
+        pending[0]["on_success"]("stale offer")
+        pending[0]["on_failure"]("stale error")
+        assert window._e3_update_progress is current
+        assert len(errors) == count
+        assert "stale offer" not in offers
+    finally:
+        module._close_progress(window)
+        window.deleteLater()
+        app.processEvents()

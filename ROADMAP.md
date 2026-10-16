@@ -2,7 +2,8 @@
 
 ## Updater stall recovery (2026-10-16)
 
-Implemented: an independent desktop watchdog, cooperative cancellation, bounded
+Implemented: bounded/cancellable manifest checks and download dialogs,
+an independent desktop watchdog, cooperative cancellation, bounded
 transfer duration, attempt-owned partial files and persistent failure evidence.
 Historical ten-minute stalls are not retrospectively attributed to a network
 cause; a slow-trickle timeout defect is reproduced offline. See CURRENT_STATE.md.

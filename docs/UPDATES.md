@@ -146,6 +146,11 @@ need a fresh update check if its old package has since been removed.
 
 ## Download stalls and diagnostics
 
+The initial manifest check has Cancel check and a 75-second GUI deadline,
+including queue time and manifest retries. Results from a cancelled or timed-out
+check cannot open an outdated update offer. Check failures are recorded in
+`update-manifest.last-failure.json`.
+
 The download dialog has a Cancel download button. A GUI timer ends an attempt
 with an explicit error after 45 seconds without received-byte progress or 15
 minutes overall, including time queued or waiting for a server response. A

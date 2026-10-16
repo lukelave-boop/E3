@@ -248,10 +248,18 @@ def check_for_update(build: BuildInfo) -> UpdateCheckResult:
 
 def record_download_problem(asset: UpdateAsset, message: str) -> None:
     """Retain UI watchdog evidence even if the network worker never returns."""
+    _record_update_problem(asset.name, message)
+
+
+def record_update_check_problem(message: str) -> None:
+    _record_update_problem("update-manifest", message)
+
+
+def _record_update_problem(name: str, message: str) -> None:
     try:
-        path = update_cache_dir() / f"{asset.name}.last-failure.json"
+        path = update_cache_dir() / f"{name}.last-failure.json"
         path.write_text(json.dumps({
-            "package": asset.name, "error": message,
+            "package": name, "error": message,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }, indent=2) + "\n", encoding="utf-8")
     except OSError:

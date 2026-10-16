@@ -2,6 +2,8 @@
 
 ## Unreleased - updater stall recovery (2026-10-16)
 
+- Bound manifest checks to 75 seconds, add Cancel check, and reject late offers.
+
 - End the update dialog after 45 seconds without progress or 15 minutes overall,
   even if its worker is waiting for a connection or response headers.
 - Add Cancel download and ignore late results from cancelled or timed-out work.

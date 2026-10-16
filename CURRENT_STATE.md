@@ -17,7 +17,9 @@ delivers no progress until all 32 test bytes finish at 1.579 seconds (1.583 tota
 There is no overall deadline, independent dialog watchdog or cancellation in
 that installed updater. This establishes a reproducible mechanism for a
 long-lived downloading dialog, not proof of the original network condition;
-those attempts lack download-stage logs. No lost worker completion is reproduced.
+those attempts lack download-stage logs. No lost worker completion is reproduced. The manifest check has the same
+unbounded response-read exposure; its UI now has a 75-second deadline, Cancel
+check, and stale-result rejection, including while queued behind another task.
 
 The corrected source combines the existing available-data progress reads with
 a 45-second no-progress GUI watchdog, a 15-minute overall bound, Cancel download,
@@ -32,7 +34,7 @@ Per-attempt .download.json records retain phase/byte counts/time/outcome, while
 The desktop update pipeline is the only affected product behavior; project,
 browser, machine, motion, arming and laser paths are unchanged.
 
-Windows Python 3.14 focused verification passes 93 tests including 19 new stall,
+Windows Python 3.14 focused verification passes 98 tests including 24 new stall,
 cancellation, overlap and actual queued Qt-worker checks, existing installer
 handoff, and controller-task shutdown. The initial sandbox run passed 66 checks
 and failed the loopback test because Windows sandbox networking forbids its
@@ -49,6 +51,13 @@ acceptance and blocked diagnostic writes: deadlines are rechecked before
 acceptance, and failure-log writes never run on the GUI thread. Offscreen visual
 inspection with the installed Segoe UI font passes. No installed bundle, permanent launcher selection,
 configuration or hardware was modified by this repair.
+
+A canonical local build attempt was refused before admission because managed
+container trc/E3/.e3-builds changed metadata during inventory; no guard was
+bypassed and no cleanup was performed. Hosted packaging at intermediate
+3166c7c passed (run 38959853245); the final manifest-check correction requires
+a fresh package. Current compatibility/package checks are tracked on PR #57.
+
 
 ## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)
 
