@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
+from collections import deque
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from ..deployment import load_build_info
@@ -13,6 +16,73 @@ from ..updates import (
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+
+def _download_size(size: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1000 or unit == "TB":
+            return f"{size:.1f} {unit}"
+        size /= 1000
+    raise AssertionError("unreachable")
+
+
+class _DownloadProgress(QtWidgets.QProgressDialog):
+    """Poll bounded worker state; widgets and speed sampling stay on the UI thread."""
+
+    def __init__(self, window: QtWidgets.QMainWindow, name: str, size: int) -> None:
+        super().__init__("", "", 0, 1000, window)
+        self._name = name
+        self._size = size
+        self._received = 0
+        self._lock = Lock()
+        self._samples: deque[tuple[float, int]] = deque([(time.monotonic(), 0)])
+        self.setWindowTitle("E3 Update")
+        self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        self.setCancelButton(None)
+        self.setMinimumDuration(0)
+        self.setAutoClose(False)
+        self.setAutoReset(False)
+        self.setMinimumWidth(480)
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(250)
+        self._timer.timeout.connect(self._refresh)
+        self._refresh()
+        self._timer.start()
+
+    def report(self, received: int, total: int) -> None:
+        # Called by the download worker: never touch Qt objects here.
+        with self._lock:
+            self._received = received
+
+    def _refresh(self) -> None:
+        with self._lock:
+            received = self._received
+        now = time.monotonic()
+        self._samples.append((now, received))
+        while len(self._samples) > 2 and self._samples[1][0] <= now - 3.0:
+            self._samples.popleft()
+        start, previous = self._samples[0]
+        speed = (received - previous) / (now - start) if now > start else 0.0
+        value = min(1000, received * 1000 // self._size)
+        # setValue on a modal QProgressDialog can process events. Set text first.
+        if received == self._size:
+            label = (
+                f"Download complete: {_download_size(self._size)} · 100%\n"
+                "Verifying update and saving package…"
+            )
+        else:
+            label = (
+                f"Downloading {self._name}\n"
+                f"{_download_size(received)} / {_download_size(self._size)}"
+                f" · {received * 100 // self._size}%\n"
+                f"{_download_size(speed)}/s"
+            )
+        self.setLabelText(label)
+        self.setValue(value)
+
+    def closeEvent(self, event: Any) -> None:
+        self._timer.stop()
+        super().closeEvent(event)
 
 
 def _menu_title(menu: Any) -> str:
@@ -149,6 +219,7 @@ def _check_complete(
     message.setInformativeText(
         f"Installed build: {result.current.short_revision}\n"
         f"Channel: {result.current.channel}\n\n"
+        f"Download size: {_download_size(result.asset.size)}\n\n"
         "The update replaces application files only. Your machine configuration, "
         "bridge credential, camera calibration, bed mapping, templates, materials, "
         "and projects remain in the separate E3 user-data folder."
@@ -169,9 +240,11 @@ def _begin_download(
     result: UpdateCheckResult,
 ) -> None:
     action.setEnabled(False)
-    _progress_dialog(window, f"Downloading and verifying {result.asset.name}…")
+    dialog = _DownloadProgress(window, result.asset.name, result.asset.size)
+    window._e3_update_progress = dialog  # type: ignore[attr-defined]
+    dialog.show()
     window.controller.run_background(
-        lambda: download_update(result.asset),
+        lambda: download_update(result.asset, progress=dialog.report),
         on_success=lambda path: _download_complete(window, action, path),
         on_failure=lambda message: _show_failure(window, action, message),
         label="Download E3 update",

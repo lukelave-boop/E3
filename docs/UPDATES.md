@@ -22,6 +22,13 @@ calibration, templates, materials, projects, and captures are not overwritten.
 
 ## Update channel
 
+The update offer shows the exact package size from the manifest. During the
+download, a determinate bar shows percentage alongside downloaded/total bytes
+and current speed (decimal KB/MB/GB per second, averaged over roughly three
+seconds). The display refreshes four times per second and the speed falls to
+zero if data stops arriving. At 100%, the dialog explicitly reports verification
+and saving; installation is offered only after size and SHA-256 checks pass.
+
 Updater-enabled builds contain `build-info.json`, including the Git revision,
 channel, and manifest URL. **Help > Check for Updates…** downloads the channel
 manifest, selects the current platform, and verifies exact size and SHA-256

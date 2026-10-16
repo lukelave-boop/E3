@@ -24,7 +24,7 @@ from .deployment import BuildInfo, runtime_platform_key, update_cache_dir
 from .storage import strict_json_loads
 
 _MAX_MANIFEST_BYTES = 1_048_576
-_DOWNLOAD_CHUNK_BYTES = 1_048_576
+_DOWNLOAD_CHUNK_BYTES = 65_536
 _MANIFEST_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -260,7 +260,9 @@ def download_update(
         with urllib.request.urlopen(_request(asset.url), timeout=timeout) as response:
             with temporary.open("wb") as handle:
                 while True:
-                    chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
+                    # HTTPResponse.read1 returns available data without waiting
+                    # for a full chunk, keeping progress live on slow links.
+                    chunk = response.read1(_DOWNLOAD_CHUNK_BYTES)
                     if not chunk:
                         break
                     received += len(chunk)

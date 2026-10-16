@@ -65,6 +65,27 @@ its earlier review; the transient writer/cause is unverified. Actual managed
 usage is 5,583,915,600 bytes plus 2,147,483,648 reserved, within the unchanged
 eight-GiB cap. Independent payload and launcher validation passed as above.
 
+## Update download progress (2026-10-16)
+
+Isolated branch codex/update-download-progress replaces the desktop download
+spinner with manifest-sized progress, downloaded/total bytes, percentage and a
+rolling three-second transfer speed. The offer shows total size before download.
+Available-data reads report slow transfers promptly; speed falls to zero during
+a stall. A full bar says verification/saving is pending, never that an unchecked
+package is ready. Exact size/SHA-256 rejection and installer handoff are preserved.
+
+Windows Python 3.14 focused updater coverage passes 51 tests, including actual
+offscreen Qt dialog construction, worker reporting, large byte counts, rate/stall
+rendering, success/failure cleanup, corrupt/truncated/oversize rejection and
+existing installer handoff. Repository Ruff, application compileall and visual inspection of the offscreen
+dialog with the installed Segoe UI font pass. No interactive GUI, frozen installer,
+real network
+download or hardware verification is claimed. Compatibility CI/integration pending.
+Automatic approval review blocked the GitHub push because uploading repository
+source/documentation to origin requires explicit user authorization. No push,
+remote CI, main merge, publication or installed application replacement occurred.
+Existing shared checkout changes and other branches remain untouched.
+
 ## Windows installer long paths — verified (2026-10-16)
 
 [PR #52](https://github.com/lukelave-boop/E3/pull/52) repairs Windows packaging
