@@ -161,6 +161,9 @@ def test_modal_replay_matches_every_original_move_across_detailed_bidirectional_
             if power is not None:
                 command += " S" + power
             wire = compactor.encode(command)
+            # The preparation fast path relies on source bytes being an upper
+            # bound, including modal changes, absent S words and stream resets.
+            assert len(wire.encode("ascii")) <= len(command.encode("ascii"))
             originals.append(command)
             wires.append(wire)
             for line, state in ((command, original_state), (wire, wire_state)):

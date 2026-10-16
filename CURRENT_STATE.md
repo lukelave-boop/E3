@@ -3,7 +3,13 @@
 ## Confirmed calibrated surface travel candidate (2026-10-16)
 
 Isolated branch `codex/verified-surface-travel` is based on selected upload/pause
-source `21273d01`. The recorded 191 x 191 surface reaches machine Y229.7643,
+source `21273d01` and incorporates the later Start-validation optimizations
+from upstream `99544e44`. Combined source passes 476 focused safety, geometry,
+planner, validation-proof, remote-preflight and installer tests plus seven
+offscreen desktop calibration/execution-binding checks. Repository Ruff,
+compileall and independent integration review pass. Broader machine checks and
+frozen packaging are in progress; earlier timings below belong to their stated revisions.
+The recorded 191 x 191 surface reaches machine Y229.7643,
 while the separate old carriage rectangle ends at Y210. Operator confirmation
 of the whole surface is represented by an exact calibration/offset-bound polygon,
 combined with the unchanged old rectangle. It does not authorize the bounding
@@ -16,8 +22,9 @@ The new Pi capability and matching local record are mandatory for surface jobs.
 `scripts/prepare_surface_travel_record.py` creates a separate proposal with source
 hashes and prior-envelope digest; it never applies settings.
 
-Offline Windows checks include 363 integrated geometry/planner/project/profile,
-proposal and runtime/focus tests, plus 97 simulated Pi server/E2E/focus checks.
+Before incorporating `99544e44`, offline Windows checks passed 363 integrated
+geometry/planner/project/profile, proposal and runtime/focus tests, plus 97
+simulated Pi server/E2E/focus checks.
 Three additional rounding-route regressions pass in the final 25-test planner run.
 The frozen saved barrel job reproduces the old Y224.436
 failure and generates with the proposed surface record at unchanged placement.
@@ -28,6 +35,70 @@ Final runtime/regression counts are recorded in the task handoff. No physical
 test, active profile change, build selection, Pi installation or deployment was
 performed. This candidate is not installed; matching desktop/Pi review and
 configuration application remain pending.
+
+## Remove redundant validation work (2026-10-15)
+
+This section records upstream `99544e44` results before surface-travel integration.
+
+The operator requested a fix and E3 DEV TEST build without interrupting the
+running job. Desktop remote preflight now reuses its exact result when attaching
+focus does not change the source. Changed focus-prefixed programs still receive
+full validation. An immutable program proof stores parsed focus, operation,
+raster and material facts; current policy, session, material measurement, focus
+selection/targets, capabilities and arming checks remain live. Cache misses,
+changed fields/line identity and changed policy still require validation or fail.
+Snapshot publication and eviction races have explicit rejection tests.
+
+Within one full validation, only successfully checked identical endpoints are
+reused. Initial approach, power transitions, physical spot offsets, travel and
+powered geometry remain guarded. The exact bounded decimal raster grammar uses
+scalar parsing; other syntax retains the complete allowlist and finite checks.
+Pi Start still rereads/hashes the committed canonical bytes before execution.
+
+The retained 729,269-line / 22,099,480-byte job gives identical validated output
+against installed revision 21273d0. Paired local Windows validation means are
+10.037 to 7.175 seconds (28.5% less elapsed time; CPU 9.969 to 7.148 seconds).
+Machine load affects these timings; this is not a live Pi or total Start result.
+1,800 implementation differential cases and 1,200 independent review cases
+match prior acceptance and exact rejection messages. The independent review's
+124 focused tests pass with no remaining actionable findings. Combined focused
+verification passes 502 tests. Core/stream checks pass 284 and expose one older
+cleanup test that expects admission after a policy mutation; the new metadata
+check correctly rejects earlier. The adjusted late-mutation cleanup test passes,
+and explicit early-admission rejection coverage is added. The twelve-file
+companion is pinned to exact installed 21273d0; four installer tests pass.
+Compatibility CI and a fresh frozen build are being prepared.
+No Pi access, service restart, controller action or live benchmark was performed
+for this change. The existing job and its open Windows bundle remain untouched;
+the matching companion will remain staged until an idle installation is possible.
+
+## Remaining Start-delay diagnosis (2026-10-15)
+
+Read-only authenticated status for the operator's subsequent running job
+7ebb0aa5-e01e-4579-ab3d-92ebd869226b reports 399,777 lines / 12,148,801 bytes,
+verification_seconds=43.805338 and start_latency_seconds=7.287502. Record creation
+to prepared is 47.571357 seconds, leaving approximately 3.766 seconds for upload
+and timing-boundary overhead. Creation to local started_at is 55.168391 seconds.
+The job was observed streaming with Pause available; this is software status,
+not physical pause/laser-off verification. No controller actions were requested.
+
+The verification timer covers finalize lock acquisition, uploaded-file hashing,
+full preflight, canonical-byte comparison and durable commit. Source audit and
+an offline profile identify substantial per-command parser, powered-endpoint and
+travel-bound computation. The retained older 729,269-line job performs 45.98
+million Python calls; uninstrumented local validation is 5.17 seconds wall/CPU.
+Instrumented shares are about 29% validator loop, 26% raster parser, 20% powered
+endpoint checks; 2.17 million polygon and 1.45 million travel-point calls occur.
+These local older-job profile shares are not a live Pi CPU breakdown.
+
+Start reuses prepared full validation, but still rereads/hashes canonical bytes
+and repeatedly scans immutable material/focus/raster metadata. Windows remote
+preflight also validates the complete program twice, before and after attaching
+focus. That desktop stage was not timed for this job; the filename timestamp is
+generation/preview time, not a Start-click timestamp. started_at precedes worker
+clearance/approach/focus moves, so it is not first laser output. Further Pi journal
+reads timed out; exact CPU/storage/lock and hardware-preparation shares remain
+unmeasured. No runtime changes or new feature build were made in this diagnosis.
 
 ## Faster upload and preparation follow-up (2026-10-15)
 
@@ -43,10 +114,56 @@ size check now proves already-fitting ASCII source lines without full compaction
 long eligible source still takes the exact stateful scan. On the operator's exact
 file, offline original/new validation was 12.505/6.704 seconds with identical
 validated output, and the first stream check was 3.818/0.045 seconds. These are
-local timings; live Pi upload measurement was deferred when E3 reconnected.
+local preparation timings; the live upload measurement below was performed after
+the operator subsequently disconnected and closed E3.
 Focused protocol/store/server/remote tests: 194 passed; codec/remote: 92 passed;
-stream/geometry/codec: 145 passed. Final checks, updated build and installation
-are pending. The installer now includes eleven files, pinned to installed e649a22.
+stream/geometry/codec: 145 passed. The combined run passed 488 checks and exposed
+one stale installer fixture; the corrected installer checks pass (2), and the
+modal replay/source-byte upper-bound checks pass (76). Ruff and compileall pass.
+The installer now includes eleven files, pinned to installed e649a22.
+
+Initial compatibility CI 38842586933 passes Windows 3.10 core (6,250 tests),
+POSIX serial/session (656 tests), and lint. Windows 3.12 passes 7,765 tests but
+reports a browser Node subprocess timeout and a retained-Z reconnect assertion.
+Their focused files pass all 25 checks; four-worker coverage alongside compression
+and polygon checks passes all 59. The reconnect test now reports its checkpoint
+and retention status on failure (focused check passes). The unchanged-revision
+rerun passes: Windows 3.12 desktop 7,767 passed / 65 skipped. Full compatibility
+CI is green; neither affected runtime path was changed here.
+
+Frozen Windows 0.7.235 uses exact revision
+21273d01cb9409b9aea0733c57f0387f387a720a in the separate managed build checkout
+C:\Users\lukel\.codex\worktrees\job-upload-build\E3. All 191 packaged application
+modules and three resources match that commit. Isolated offscreen startup with
+a synthetic saved profile passes; no interactive camera/controller test was run.
+The permanent E3 DEV TEST pointer selects this exact EXE via the validated atomic
+pointer script. Canonical Windows installer packaging also completes successfully.
+The first rebuild was interrupted after it removed unlocked support files from
+the still-open older bundle. Its original EXE was retained, missing dependencies
+were restored only after comparison with retained dependency contents, and its
+original committed resources/metadata were restored. The original bundle also
+passes isolated offscreen startup with its unchanged EXE hash. Future rebuilds
+must use a separate output checkout while an operator has a bundle open.
+
+Companion e3-pi-job-pause-459a399c is installed after the operator disconnected
+and closed E3. Repeated authenticated preflight confirmed disconnected, disarmed,
+idle, unowned state with no attached clients. Six source files were updated with
+backups, five were already current; all eleven were verified after installation.
+The service restarted and advertises both pause and compressed-upload support.
+Configuration and service drop-in hashes were unchanged.
+
+Real Windows-to-Pi Tailscale upload benchmark, same 22,099,480-byte job and
+updated node: forced legacy raw transfer took 58.922 seconds / 338 chunks;
+negotiated compressed transfer took 6.346 seconds / 22 chunks (9.29x faster,
+89.2% less elapsed time). Base64 payload fell from 29,466,872 to 4,708,120 bytes.
+Timing includes job.begin, compression and durable chunk acknowledgements;
+neither upload was finalized, armed or started. Both temporary jobs were deleted.
+The controller remained disconnected and disarmed throughout both benchmarks,
+with no motion requested. A subsequent final read-only check observed a new
+client reconnect (READY_HOME_REQUIRED, disarmed, no active job); it was left alone.
+This verifies real upload performance, not total Start latency or physical
+pause/continuation, which remain unverified. Permanent E3 DEV TEST still selects
+the exact matching 0.7.235 Windows build listed above.
 
 ## Pause / resume feature verification (2026-10-15)
 

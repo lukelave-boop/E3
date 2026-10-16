@@ -68,10 +68,11 @@ from .controller_session import (
 from .focus_bounds import FocusXYBounds
 from .grbl_stream import GrblStreamCompactor, canonical_linear_move, parse_stream_window
 from .io_diagnostics import thread_snapshot
+from .job_focus import FocusProgramMetadata, preserve_through_park, program_binding, retain_after_job, selected_plan
 from .job_focus import binding_id as focus_binding_id
 from .job_focus import check_context as check_job_focus_context
 from .job_focus import move as move_job_focus
-from .job_focus import preserve_through_park, program_binding, retain_after_job, selected_plan
+from .job_focus import program_metadata as focus_program_metadata
 from .job_focus import selection_snapshot as focus_selection_snapshot
 from .job_pause import JobPause
 from .laser_focus import LaserFocus, validate_setup_evidence
@@ -356,6 +357,14 @@ class ValidatedProgram:
     guarded_output_polygon_mm: ConvexPolygon | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _ProgramProof:
+    program: ValidatedProgram
+    snapshot: ValidatedProgram
+    focus: FocusProgramMetadata
+    material_lines: tuple[str, ...]
+
+
 class MachineService:
     ARM_PHRASE = "ENABLE LASER CONTROL"
     # Exact generator form only. All other syntax uses the general allowlist.
@@ -365,7 +374,7 @@ class MachineService:
         re.ASCII,
     )
 
-    def _raster_motion_values(self, line: str) -> tuple[set[int], dict[str, float]] | None:
+    def _raster_motion_values(self, line: str) -> tuple[int, float, float, float | None] | None:
         if len(line) > 256:
             raise SafetyError("Single streamed G-code line exceeds 256 characters")
         match = self._RASTER_MOTION.fullmatch(line)
@@ -374,20 +383,24 @@ class MachineService:
         code, x, y, feed, power = match.groups()
         if code == "0" and power is not None:
             return None  # General parser rejects S on G0.
-        values = {"X": float(x), "Y": float(y), "F": float(feed)}
-        if power is not None:
-            values["S"] = float(power)
-        if not all(math.isfinite(value) for value in values.values()):
-            raise SafetyError("G-code values must be finite")
-        if values["F"] <= 0:
+        x_value, y_value, feed_value = float(x), float(y), float(feed)
+        power_value = None if power is None else float(power)
+        # The complete line is at most 256 ASCII characters and this exact
+        # decimal grammar has no exponent. Every parsed magnitude is therefore
+        # below 1e256, far below float overflow. Other numeric spellings retain
+        # the general parser's explicit finite checks; derived spots are still
+        # checked by the powered/travel predicates.
+        if feed_value <= 0:
             raise SafetyError("Feed rate must be positive")
         maximum = self.settings.max_travel_feed_mm_min if code == "0" else self.settings.max_work_feed_mm_min
-        if values["F"] > maximum:
+        if feed_value > maximum:
             motion = "travel" if code == "0" else "work"
-            raise SafetyError(f"{motion.capitalize()} feed F{values['F']:g} exceeds the configured {motion} ceiling of {maximum:g} mm/min")
-        if "S" in values and not 0 <= values["S"] <= self.laser_settings.power_max:
+            raise SafetyError(f"{motion.capitalize()} feed F{feed_value:g} exceeds the configured {motion} ceiling of {maximum:g} mm/min")
+        if power_value is not None and not 0 <= power_value <= self.laser_settings.power_max:
             raise SafetyError(f"S power must be between 0 and {self.laser_settings.power_max}")
-        return {int(code)}, values
+        # The common raster form needs no per-command word dictionary or code
+        # sets. All other spellings still pass through the complete allowlist.
+        return (0 if code == "0" else 1), x_value, y_value, power_value
 
     @property
     def _protocol(self) -> str:
@@ -870,7 +883,7 @@ class MachineService:
         self._armed_program_digest: str | None = None
         self._lock = threading.RLock()
         # One locally validated immutable program, never a persisted/client proof.
-        self._validated_program_cache: tuple[ValidatedProgram, ValidatedProgram] | None = None
+        self._validated_program_cache: _ProgramProof | None = None
         # Own each command/ack exchange, and allow a multi-command operation
         # to retain that ownership through its complete controller sequence.
         # Emergency stop intentionally bypasses this lock.
@@ -2642,8 +2655,7 @@ class MachineService:
         # so disarm can issue M5 and cancel this attempt while it is validating.
         self._require_current_safety_profile(program)
         with self._command_lock:
-            if material_surface_binding(program.lines) is not None:
-                validate_program_binding(program.lines, self.material_surface_snapshot())
+            self._require_current_material_surface(program)
             return self.arm(
                 phrase,
                 program_digest=program.digest,
@@ -5373,14 +5385,15 @@ class MachineService:
         lines: list[str] = []
         for raw_line_number, raw_line in enumerate(text.splitlines(), start=1):
             instruction = raw_line.strip()
-            raster_directive = parse_raster_boundary(instruction)
-            if raster_directive is not None:
-                lines.append(raster_directive.directive)
-                continue
-            if instruction.startswith(MATERIAL_SURFACE_PREFIX):
-                parse_material_surface(instruction)
-                lines.append(instruction)
-                continue
+            if instruction.startswith("E3"):
+                raster_directive = parse_raster_boundary(instruction)
+                if raster_directive is not None:
+                    lines.append(raster_directive.directive)
+                    continue
+                if instruction.startswith(MATERIAL_SURFACE_PREFIX):
+                    parse_material_surface(instruction)
+                    lines.append(instruction)
+                    continue
             try:
                 air_assist_kind = self._air_assist_command_kind(
                     instruction,
@@ -5435,15 +5448,25 @@ class MachineService:
                            if raster_boundary is not None else None)
         guarded_contains = (prepared_convex_polygon_contains(guarded_polygon)
                             if guarded_polygon is not None else None)
+        last_powered_point: tuple[float, float, float, float] | None = None
 
         def require_powered_point(px: float, py: float, line_number: int) -> None:
+            nonlocal last_powered_point
             assert raster_boundary is not None
             spot = (px + float(self.laser_settings.spot_offset_x_mm),
                     py + float(self.laser_settings.spot_offset_y_mm))
+            point_key = (px, py, *spot)
+            # Only reuse a successful proof under the two fixed polygons in
+            # this analysis. Include the physical spot so changed offsets cannot
+            # reuse it; the mutable legacy work-area predicate is never cached.
+            if guarded_contains is not None and point_key == last_powered_point:
+                return
             assert raster_contains is not None
             if not raster_contains(spot):
                 raster_boundary.require_powered_point(spot, label=f"Line {line_number}")
             for point, kind in (((px, py), "controller"), (spot, "physical beam")):
+                if kind == "physical beam" and spot == (px, py):
+                    continue  # The identical guarded point just passed.
                 allowed = (
                     guarded_contains(point)
                     if guarded_contains is not None
@@ -5451,6 +5474,7 @@ class MachineService:
                 )
                 if not allowed:
                     raise SafetyError(f"Line {line_number}: powered {kind} point lies outside the configured guarded output authority")
+            last_powered_point = point_key
 
         has_operation_focus = any(operation_focus_mode(line) is not None for line in lines)
         selected_focus_mode = None
@@ -5472,71 +5496,81 @@ class MachineService:
         last_line_is_m5 = False
 
         for index, line in enumerate(lines, start=1):
-            if parse_raster_boundary(line) is not None:
-                if position_established or requires_laser_authorization:
-                    raise SafetyError("E3RASTER boundary must occur before any motion or laser enable")
-                last_line_is_m5 = False
-                continue
+            # Application metadata cannot begin with a G/M command. Avoid
+            # probing every raster move through three separate directive parsers.
+            application_line = line.startswith("E3")
+            if application_line:
+                if parse_raster_boundary(line) is not None:
+                    if position_established or requires_laser_authorization:
+                        raise SafetyError("E3RASTER boundary must occur before any motion or laser enable")
+                    last_line_is_m5 = False
+                    continue
             if index % 1024 == 0:
                 # Give status/STOP workers a turn during CPU-heavy validation.
                 time.sleep(0)
-            if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
-                continue
-            focus_mode = operation_focus_mode(line)
-            if focus_mode is not None:
-                if not (seen_mm and seen_absolute and seen_initial_m5 and last_line_is_m5) or laser_on:
-                    raise SafetyError("Operation focus requires G21, G90 and an immediately preceding M5")
-                selected_focus_mode = focus_mode
-                last_line_is_m5 = False
-                continue
+            if application_line:
+                if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
+                    continue
+                focus_mode = operation_focus_mode(line)
+                if focus_mode is not None:
+                    if not (seen_mm and seen_absolute and seen_initial_m5 and last_line_is_m5) or laser_on:
+                        raise SafetyError("Operation focus requires G21, G90 and an immediately preceding M5")
+                    selected_focus_mode = focus_mode
+                    last_line_is_m5 = False
+                    continue
             raster_motion = self._raster_motion_values(line)
             if raster_motion is None:
                 words, g_codes, m_codes = self._validate_stream_line(
                     line, commands=air_assist_commands, resolved=True,
                 )
                 values = {word.letter: word.value for word in words}
+                g_code = next(iter(g_codes), None)
+                m_code = next(iter(m_codes), None)
+                motion_x, motion_y, power = values.get("X"), values.get("Y"), values.get("S")
                 air_assist_kind = self._air_assist_command_kind(
                     line, commands=air_assist_commands, resolved=True,
                 )
             else:
-                g_codes, values = raster_motion
-                m_codes = set()
+                g_code, motion_x, motion_y, power = raster_motion
+                m_code = None
                 air_assist_kind = None
-            last_line_is_m5 = m_codes == {5}
+            last_line_is_m5 = m_code == 5
             # The strict stream parser above already checks feeds, power and
             # syntax. Do not reparse each line through the manual/runtime path.
             # Preflight needs static hardware gates, not live arming authority.
-            requests_motion = bool(g_codes.intersection({0, 1}))
-            requests_laser = bool(m_codes.intersection({3, 4}) or values.get("S", 0) > 0)
+            requests_motion = g_code in (0, 1)
+            requests_laser = m_code in (3, 4) or (power is not None and power > 0)
             if requests_motion and self.settings.allow_motion is not True:
                 raise SafetyError(f"Line {index}: Motion commands are disabled in machine.allow_motion")
             if (requests_motion or requests_laser or air_assist_kind is not None) and self.hardware_enabled is not True:
                 raise SafetyError(f"Line {index}: Hardware control is not enabled for this process")
 
-            if g_codes == {21}:
+            if g_code == 21:
                 seen_mm = True
-            elif g_codes == {90}:
+            elif g_code == 90:
                 seen_absolute = True
-            elif g_codes in ({0}, {1}):
+            elif requests_motion:
                 if not seen_mm or not seen_absolute:
                     raise SafetyError(f"Line {index}: G21 and G90 must appear before motion")
                 if not seen_initial_m5:
                     raise SafetyError(f"Line {index}: M5 must appear before the first motion")
-                if "S" in values:
-                    if g_codes != {1} or last_m_code not in {3, 4}:
+                if power is not None:
+                    if g_code != 1 or last_m_code not in {3, 4}:
                         raise SafetyError(
                             f"Line {index}: inline S is allowed only on G1 after M3/M4"
                         )
                     requires_laser_authorization = True
-                    laser_on = values["S"] > 0
+                    laser_on = power > 0
                 if x is None or y is None:
-                    if "X" not in values or "Y" not in values:
+                    if motion_x is None or motion_y is None:
                         raise SafetyError(f"Line {index}: the first move must establish both X and Y")
-                new_x = values.get("X", x)
-                new_y = values.get("Y", y)
+                new_x = x if motion_x is None else motion_x
+                new_y = y if motion_y is None else motion_y
                 assert new_x is not None and new_y is not None
                 has_xy_displacement = (
-                    x is not None
+                    air_assist_on
+                    and laser_on
+                    and x is not None
                     and y is not None
                     and math.hypot(new_x - x, new_y - y)
                     > _NONZERO_OUTPUT_MOTION_EPSILON_MM
@@ -5556,11 +5590,16 @@ class MachineService:
                     )
                 )
                 if raster_boundary is not None:
-                    # The rectangle/surface union need not be convex. Validate
-                    # the full segment, including the planned initial approach.
-                    start = ((x, y) if x is not None and y is not None else
-                             (float(self.settings.photo_x), float(self.settings.photo_y)))
-                    raster_boundary.require_travel_segment(start, (new_x, new_y), label=f"Line {index}")
+                    if raster_boundary.travel_surface_polygon_mm is None:
+                        # The preceding endpoint (or initial park) already
+                        # passed this same immutable convex rectangle.
+                        raster_boundary.require_travel_point((new_x, new_y), label=f"Line {index}")
+                    else:
+                        # The rectangle/surface union need not be convex. Check
+                        # the complete segment, including the planned approach.
+                        start = ((x, y) if x is not None and y is not None else
+                                 (float(self.settings.photo_x), float(self.settings.photo_y)))
+                        raster_boundary.require_travel_segment(start, (new_x, new_y), label=f"Line {index}")
                     if laser_on:
                         if x is None or y is None:
                             raise SafetyError("Powered raster movement requires an established start position")
@@ -5571,37 +5610,38 @@ class MachineService:
                         f"Line {index}: G-code point X{new_x:.3f} Y{new_y:.3f} "
                         "lies outside the configured guarded output authority"
                     )
-                spot_x = new_x + float(self.laser_settings.spot_offset_x_mm)
-                spot_y = new_y + float(self.laser_settings.spot_offset_y_mm)
-                spot_allowed = raster_boundary is not None or (
-                    convex_polygon_contains_normalized(
-                        (spot_x, spot_y), guarded_polygon
+                if raster_boundary is None:
+                    spot_x = new_x + float(self.laser_settings.spot_offset_x_mm)
+                    spot_y = new_y + float(self.laser_settings.spot_offset_y_mm)
+                    spot_allowed = (
+                        convex_polygon_contains_normalized(
+                            (spot_x, spot_y), guarded_polygon
+                        )
+                        if guarded_polygon is not None
+                        else self.settings.work_area.contains(
+                            spot_x,
+                            spot_y,
+                            self.laser_settings.boundary_margin_mm,
+                        )
                     )
-                    if guarded_polygon is not None
-                    else self.settings.work_area.contains(
-                        spot_x,
-                        spot_y,
-                        self.laser_settings.boundary_margin_mm,
-                    )
-                )
-                if raster_boundary is None and not spot_allowed:
-                    raise SafetyError(
-                        f"Line {index}: physical laser spot X{spot_x:.3f} "
-                        f"Y{spot_y:.3f} lies outside the configured guarded output authority"
-                    )
-                if g_codes == {0} and laser_on:
+                    if not spot_allowed:
+                        raise SafetyError(
+                            f"Line {index}: physical laser spot X{spot_x:.3f} "
+                            f"Y{spot_y:.3f} lies outside the configured guarded output authority"
+                        )
+                if g_code == 0 and laser_on:
                     raise SafetyError(f"Line {index}: rapid G0 motion is blocked while the laser is enabled")
                 x, y = new_x, new_y
                 position_established = True
                 if (
-                    g_codes == {1}
+                    g_code == 1
                     and has_xy_displacement
                     and laser_on
                     and air_assist_on
                 ):
                     air_interval_had_powered_motion = True
 
-            if m_codes in ({3}, {4}):
+            if m_code in (3, 4):
                 if has_operation_focus and selected_focus_mode is None:
                     raise SafetyError("Select operation focus before laser enable")
                 if not seen_mm or not seen_absolute or not seen_initial_m5:
@@ -5612,12 +5652,13 @@ class MachineService:
                         "is required before laser enable"
                     )
                 requires_laser_authorization = True
-                laser_on = values["S"] > 0
+                assert power is not None
+                laser_on = power > 0
                 if raster_boundary is not None and laser_on:
                     assert x is not None and y is not None
                     require_powered_point(x, y, index)
-                last_m_code = next(iter(m_codes))
-            elif m_codes == {5}:
+                last_m_code = m_code
+            elif m_code == 5:
                 laser_on = False
                 seen_initial_m5 = True
                 last_m_code = 5
@@ -5878,14 +5919,40 @@ class MachineService:
         self._remember_validated_program(program)
         return program
 
-    def _remember_validated_program(self, program: ValidatedProgram) -> None:
+    def _remember_validated_program(
+        self, program: ValidatedProgram, *, _snapshot: ValidatedProgram | None = None,
+    ) -> _ProgramProof:
+        snapshot = replace(program) if _snapshot is None else _snapshot
+        focus = focus_program_metadata(snapshot.lines)
+        material = material_surface_binding(snapshot.lines)
+        # Full-program parsers above reject misplaced/duplicate directives.
+        # Rechecking current material uses only its immutable validated prefix.
+        material_lines = snapshot.lines[:2] if material is not None else ()
+        if not self._same_program_snapshot(program, snapshot):
+            raise SafetyError("Program changed while recording its validation proof")
+        proof = _ProgramProof(program, snapshot, focus, material_lines)
         with self._lock:
-            self._validated_program_cache = (program, replace(program))
+            self._validated_program_cache = proof
+        return proof
+
+    @staticmethod
+    def _same_program_snapshot(program: ValidatedProgram, snapshot: ValidatedProgram) -> bool:
+        return (program.lines is snapshot.lines and program == snapshot
+                and all(type(getattr(program, name)) is type(getattr(snapshot, name))
+                        for name in ValidatedProgram.__dataclass_fields__))
+
+    def _program_proof(self, program: ValidatedProgram) -> _ProgramProof:
+        # Return the proof actually checked, even if another preflight replaces
+        # the single-entry cache before this caller uses its immutable facts.
+        return self._require_validated_program_integrity(program)
+
+    def _require_current_material_surface(self, program: ValidatedProgram) -> None:
+        proof = self._program_proof(program)
+        if proof.material_lines:
+            validate_program_binding(proof.material_lines, self.material_surface_snapshot())
 
     def _require_current_safety_profile(self, program: ValidatedProgram) -> None:
-        self._require_validated_program_integrity(program)
-        if material_surface_binding(program.lines) is not None:
-            validate_program_binding(program.lines, self.material_surface_snapshot())
+        self._require_current_material_surface(program)
 
     def setup_evidence_snapshot(self) -> dict[str, Any] | None:
         """Read retained setup provenance without a controller query or motion grant."""
@@ -5930,67 +5997,69 @@ class MachineService:
             except (KeyError, TypeError, ValueError) as exc:
                 raise SafetyError("Selected material surface metadata is invalid; measure the workpiece again") from exc
 
-    def _require_validated_program_integrity(self, program: ValidatedProgram) -> None:
+    def _require_validated_program_integrity(self, program: ValidatedProgram) -> _ProgramProof:
         if type(program) is not ValidatedProgram:
             raise SafetyError("Program authorization requires an exact preflight result")
-        if type(program.lines) is not tuple or any(
-            type(line) is not str for line in program.lines
-        ):
+        snapshot = replace(program)
+        if type(snapshot.lines) is not tuple:
             raise SafetyError("Program authorization contains invalid line data")
-        if type(program.digest) is not str:
+        if type(snapshot.digest) is not str:
             raise SafetyError("Program authorization contains an invalid digest")
         if (
-            type(program.requires_laser_authorization) is not bool
-            or type(program.requires_motion) is not bool
-            or type(program.safety_profile) is not tuple
+            type(snapshot.requires_laser_authorization) is not bool
+            or type(snapshot.requires_motion) is not bool
+            or type(snapshot.safety_profile) is not tuple
             or (
-                program.air_assist_commands is not None
-                and type(program.air_assist_commands) is not AirAssistCommands
+                snapshot.air_assist_commands is not None
+                and type(snapshot.air_assist_commands) is not AirAssistCommands
             )
             or (
-                program.guarded_output_polygon_mm is not None
-                and type(program.guarded_output_polygon_mm) is not tuple
+                snapshot.guarded_output_polygon_mm is not None
+                and type(snapshot.guarded_output_polygon_mm) is not tuple
             )
         ):
             raise SafetyError("Program authorization contains invalid safety metadata")
 
         with self._lock:
             cached = self._validated_program_cache
-        if cached is not None and program is cached[0]:
-            self._resolve_guarded_output_polygon(program.guarded_output_polygon_mm)
+        if cached is not None and program is cached.program:
+            self._resolve_guarded_output_polygon(snapshot.guarded_output_polygon_mm)
             # Tuple/string contents cannot change in place. Keep a separate field
             # snapshot so replacing even a frozen dataclass field is detected.
-            if (program != cached[1]
-                    or program.safety_profile != self._program_safety_profile(program.guarded_output_polygon_mm)
-                    or program.air_assist_commands != self._resolved_air_assist_commands()):
+            if (not self._same_program_snapshot(snapshot, cached.snapshot)
+                    or snapshot.safety_profile != self._program_safety_profile(snapshot.guarded_output_polygon_mm)
+                    or snapshot.air_assist_commands != self._resolved_air_assist_commands()
+                    or not self._same_program_snapshot(program, snapshot)):
                 raise SafetyError("Program lines, digest, flags, air-assist mapping or machine safety settings changed after program preflight; validate the exact program again")
-            return
+            return cached
 
+        if any(type(line) is not str for line in snapshot.lines):
+            raise SafetyError("Program authorization contains invalid line data")
         lines, requires_laser_authorization = self._analyze_program(
-            "\n".join(program.lines),
-            program.guarded_output_polygon_mm,
+            "\n".join(snapshot.lines),
+            snapshot.guarded_output_polygon_mm,
         )
         canonical_lines = tuple(lines)
         canonical_digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
         requires_motion = any(_program_line_contains_motion(line) for line in lines)
         current_profile = self._program_safety_profile(
-            program.guarded_output_polygon_mm
+            snapshot.guarded_output_polygon_mm
         )
         current_air_assist_commands = self._resolved_air_assist_commands()
         if (
-            program.lines != canonical_lines
-            or program.digest != canonical_digest
-            or program.requires_laser_authorization is not requires_laser_authorization
-            or program.requires_motion is not requires_motion
-            or program.safety_profile != current_profile
-            or program.air_assist_commands != current_air_assist_commands
+            snapshot.lines != canonical_lines
+            or snapshot.digest != canonical_digest
+            or snapshot.requires_laser_authorization is not requires_laser_authorization
+            or snapshot.requires_motion is not requires_motion
+            or snapshot.safety_profile != current_profile
+            or snapshot.air_assist_commands != current_air_assist_commands
         ):
             raise SafetyError(
                 "Program lines, digest, flags, machine bounds, offsets, feed ceilings, "
                 "air-assist mapping, or hardware gates changed after program preflight; validate the exact "
                 "program again"
             )
-        self._remember_validated_program(program)
+        return self._remember_validated_program(program, _snapshot=snapshot)
 
     def start_validated_program(
         self,
@@ -6144,7 +6213,8 @@ class MachineService:
             controller_session = self._require_session()
             self._require_program_stream_window(program, controller_session)
             lines = list(program.lines)
-            raster_boundary = program_raster_boundary(lines)
+            focus_metadata = self._program_proof(program).focus
+            raster_boundary = focus_metadata.raster_boundary
             if (
                 requires_motion
                 and self.settings.backend == "serial"
@@ -6176,17 +6246,12 @@ class MachineService:
                             raise SafetyError("Raster Start requires an idle current carriage position")
                         current_xy = tuple(snapshot["mpos_mm"][:2])
                     raster_boundary.require_travel_point(current_xy, label="Actual initial carriage transfer")
-                    for line in lines:
-                        if line.startswith((RASTER_BOUNDARY_PREFIX, AIR_ASSIST_DIRECTIVE_PREFIX,
-                                            MATERIAL_SURFACE_PREFIX, OPERATION_FOCUS_PREFIX, "E3FOCUS")):
-                            continue
-                        words = {word.letter: word.value for word in parse_words(line)}
-                        if words.get("G") in (0, 1):
-                            raster_boundary.require_travel_segment(
-                                current_xy, (words["X"], words["Y"]),
-                                label="Actual initial carriage transfer",
-                            )
-                            break
+                    if focus_metadata.first_move is None:
+                        raise SafetyError("Raster Start requires a validated first carriage move")
+                    raster_boundary.require_travel_segment(
+                        current_xy, focus_metadata.first_move,
+                        label="Actual initial carriage transfer",
+                    )
             if raster_boundary is not None and not self._uses_grbl_coordinate_state():
                 raise SafetyError("Raster travel envelopes require a GRBL controller with verified zero XY work offsets")
             if (
@@ -6695,9 +6760,10 @@ class MachineService:
         return index
 
     def _selected_job_focus(self, program):
-        if material_surface_binding(program.lines) is not None:
-            validate_program_binding(program.lines, self.material_surface_snapshot())
-        return selected_plan(self, program)
+        proof = self._program_proof(program)
+        if proof.material_lines:
+            validate_program_binding(proof.material_lines, self.material_surface_snapshot())
+        return selected_plan(self, proof.snapshot, _metadata=proof.focus)
 
     def _move_job_focus(self, context, *, clearance, focus_mode="CUT"):
         return move_job_focus(self, context, clearance=clearance, focus_mode=focus_mode)

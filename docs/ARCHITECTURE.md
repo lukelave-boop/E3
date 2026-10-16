@@ -6,6 +6,25 @@ to `PiJobStore`; storage durability, finalization and MachineService ownership
 are unchanged. Pure geometry predicates prepare immutable polygon edges for
 whole-program validation. See [node transport](NETWORK_MACHINE.md).
 
+`RemoteMachineService` retains the first local preflight only when focus
+attachment leaves the text unchanged, after checking current policy and focus
+selection. Changed text still receives complete preflight. `MachineService`
+keeps immutable directive facts alongside its exact program snapshot, avoiding
+repeated scans for focus modes, raster bounds, first movement and material
+bindings. Reuse requires the same validated line tuple, field values/types and
+current safety profile. Current material, focus/session state and temporary
+arming are checked independently; committed Pi bytes are still read and hashed.
+
+Within one program analysis, successful powered endpoint proofs can cover an
+identical later endpoint under the same fixed polygons and physical spot. Each
+new travel endpoint is checked; rectangle-only motion can reuse its preceding
+endpoint proof under the same immutable convex envelope. Surface-authorized
+motion still checks every complete segment against the exact verified union.
+Power transitions still require a powered start-point proof. The canonical
+raster parser uses scalar values and a bounded decimal
+grammar; other syntax retains the general allowlist. These shared service changes
+cover both execution pipelines without changing their generated program bytes.
+
 MachineService owns continuous GRBL G1 streams. ControllerReceiver temporarily
 gives the job worker exclusive receive pumping with bounded FIFO byte credit;
 ordinary commands retain individual transactions and quiet fences. The pure

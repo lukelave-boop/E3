@@ -6,6 +6,14 @@ avoids unnecessary stream encoding passes. Exact bytes, bounds, arming and Start
 checks remain required. Older nodes retain the original upload path. See
 [job preparation](docs/NETWORK_MACHINE.md#faster-bounded-job-preparation).
 
+The next Start preparation update removes a second desktop preflight when focus
+attachment leaves the program unchanged, reuses validated immutable job metadata,
+and reduces repeated raster endpoint checks and parser allocations. Current
+policy, material, focus, session and arming checks still run. Offline validation
+of the retained 729,269-line job was about 28.5% faster; this is a local Windows
+measurement, not total Pi Start time. The matching companion update is pending;
+the currently running Pi job has not been interrupted.
+
 ## Pause and continue a job
 
 The desktop now supports **Pause / Resume** for compatible GRBL laser-mode
