@@ -3,9 +3,18 @@
 ## 0.8.0 integration (2026-10-16)
 
 Prepared: confirmed download progress and version-state work combined with main's
-UI/startup/installer fixes, a 0.8 version baseline, update restart isolation and
-cross-platform package identity checks. Exact-head compatibility, package builds,
-merge and publication verification are tracked in [current state](CURRENT_STATE.md).
+UI/startup/installer fixes, its newer bounded/cancellable updater operations,
+a 0.8 version baseline, update restart isolation and cross-platform package identity
+checks. Fresh compatibility checks for the combined head, package builds, merge
+and publication verification are tracked in [current state](CURRENT_STATE.md).
+
+## Updater stall recovery (2026-10-16)
+
+Implemented: bounded/cancellable manifest checks and download dialogs,
+an independent desktop watchdog, cooperative cancellation, bounded
+transfer duration, attempt-owned partial files and persistent failure evidence.
+Historical ten-minute stalls are not retrospectively attributed to a network
+cause; a slow-trickle timeout defect is reproduced offline. See CURRENT_STATE.md.
 
 ## Update download progress (2026-10-16)
 

@@ -243,6 +243,36 @@ The live manifest, release and tag remain intact. GitHub's automatic source
 archives are unaffected. An update dialog left open beyond the grace period may
 need a fresh update check if its old package has since been removed.
 
+## Download stalls and diagnostics
+
+The initial manifest check has Cancel check and a 75-second GUI deadline,
+including queue time and manifest retries. Results from a cancelled or timed-out
+check cannot open an outdated update offer. Check failures are recorded in
+`update-manifest.last-failure.json`.
+
+The download dialog has a Cancel download button. A GUI timer ends an attempt
+with an explicit error after 45 seconds without received-byte progress or 15
+minutes overall, including time queued or waiting for a server response. A
+healthy slow transfer displays bytes, speed and percentage. Use Help > Check for
+Updates to retry after a failure; retries start a fresh transfer and do not skip
+size or SHA-256 checks.
+
+A socket timeout alone is not a total download limit: regularly arriving small
+amounts of data can keep a large buffered read waiting indefinitely. E3 now
+uses available-data reads, checks a monotonic deadline, and accepts results only
+from the currently active dialog. Cancellation is cooperative; a blocked DNS,
+header or disk operation may finish later, but cannot present an install prompt
+or change a newer attempt's partial file. Network waits are capped at 45 seconds
+per blocking operation; the GUI watchdog remains independent of the worker.
+
+The update cache retains a uniquely named `.download.json` per started worker
+with package name, phase, byte counts, elapsed time and outcome/error. The GUI
+also saves `<package>.last-failure.json` when its watchdog or worker reports a
+failure, including when the worker has not returned. These files contain no
+bridge credentials or process environment and do not change package trust.
+Partial files are unique to each attempt and removed when that worker unwinds.
+Installer `.launch.json` and `.setup.log` diagnostics remain separate.
+
 ## Private initial installer
 
 Public update packages contain no Pi bridge secret and no machine calibration.

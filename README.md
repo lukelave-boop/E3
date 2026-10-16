@@ -1,8 +1,14 @@
 # Laser Camera Aligner / E3 Positioning System
 
-The 0.8 series combines desktop update progress and independent version state
-with the UI and installer improvements. See [versioning](docs/VERSIONING.md)
-and [current release verification](CURRENT_STATE.md).
+The 0.8 series combines desktop update progress, bounded and cancellable updates,
+and independent version state with the UI and installer improvements. See
+[versioning](docs/VERSIONING.md) and [current release verification](CURRENT_STATE.md).
+
+Update checks can be cancelled and are limited to 75 seconds.
+Stalled update attempts now return control after 45 seconds without progress,
+with Cancel download, a 15-minute total limit, and local diagnostic records.
+Retry through Help > Check for Updates; every package still requires exact
+size and SHA-256 verification.
 
 Desktop updates show the package size before download, then downloaded/total bytes,
 percentage and current transfer speed. See [updates](docs/UPDATES.md).

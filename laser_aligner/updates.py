@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import ntpath
 import os
 import re
@@ -10,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -25,6 +27,8 @@ from .storage import strict_json_loads
 
 _MAX_MANIFEST_BYTES = 1_048_576
 _DOWNLOAD_CHUNK_BYTES = 65_536
+DOWNLOAD_MAX_SECONDS = 15 * 60.0
+DOWNLOAD_STALL_SECONDS = 45.0
 _MANIFEST_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -242,27 +246,96 @@ def check_for_update(build: BuildInfo) -> UpdateCheckResult:
     )
 
 
+def record_download_problem(asset: UpdateAsset, message: str) -> None:
+    """Retain UI watchdog evidence even if the network worker never returns."""
+    _record_update_problem(asset.name, message)
+
+
+def record_update_check_problem(message: str) -> None:
+    _record_update_problem("update-manifest", message)
+
+
+def _record_update_problem(name: str, message: str) -> None:
+    try:
+        path = update_cache_dir() / f"{name}.last-failure.json"
+        path.write_text(json.dumps({
+            "package": name, "error": message,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        LOGGER.warning("Could not record update failure diagnostics")
+
+
 def download_update(
     asset: UpdateAsset,
     *,
     destination_dir: Path | None = None,
     timeout: float = 60.0,
     progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    max_duration: float = DOWNLOAD_MAX_SECONDS,
 ) -> Path:
+    if not math.isfinite(max_duration) or max_duration <= 0:
+        raise ValueError("Update download duration must be finite and positive")
     directory = destination_dir or update_cache_dir()
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / asset.name
-    temporary = destination.with_name(f".{destination.name}.part")
-    temporary.unlink(missing_ok=True)
+    # A cancelled request may still be unwinding a DNS/socket wait when Retry
+    # starts. Each attempt owns its partial and diagnostic files exclusively.
+    fd, name = tempfile.mkstemp(prefix=f".{asset.name}.", suffix=".part", dir=directory)
+    os.close(fd)
+    temporary = Path(name)
+    diagnostic = temporary.with_suffix(".download.json")
+    started = time.monotonic()
+    last_recorded = float("-inf")
+    phase = "connecting"
     digest = hashlib.sha256()
     received = 0
+
+    def record(stage: str, error: str | None = None) -> None:
+        nonlocal last_recorded, phase
+        previous_phase = phase
+        if stage not in {"failed", "cancelled"}:
+            phase = stage
+        elapsed = time.monotonic() - started
+        if stage == previous_phase == "downloading" and elapsed - last_recorded < 1.0:
+            return
+        last_recorded = elapsed
+        data = {
+            "package": asset.name, "stage": stage, "phase": phase, "received": received,
+            "expected": asset.size, "elapsed_seconds": round(elapsed, 3),
+            "updated_at": datetime.now(timezone.utc).isoformat(), "error": error,
+        }
+        # No signed redirect URLs, credentials or environment enter diagnostics.
+        try:
+            diagnostic.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        except OSError:
+            LOGGER.warning("Could not record update download diagnostics")
+
+    def check_deadline() -> None:
+        if cancelled is not None and cancelled():
+            raise UpdateError("Update download cancelled")
+        if time.monotonic() - started >= max_duration:
+            raise UpdateError(
+                "Update download exceeded its time limit. Check your connection "
+                "and use Check for Updates to retry."
+            )
+
+    record("connecting")
     try:
-        with urllib.request.urlopen(_request(asset.url), timeout=timeout) as response:
+        check_deadline()
+        with urllib.request.urlopen(
+            _request(asset.url), timeout=min(timeout, DOWNLOAD_STALL_SECONDS, max_duration),
+        ) as response:
+            check_deadline()
+            record("downloading")
             with temporary.open("wb") as handle:
                 while True:
+                    check_deadline()
                     # HTTPResponse.read1 returns available data without waiting
                     # for a full chunk, keeping progress live on slow links.
                     chunk = response.read1(_DOWNLOAD_CHUNK_BYTES)
+                    check_deadline()
                     if not chunk:
                         break
                     received += len(chunk)
@@ -272,27 +345,29 @@ def download_update(
                         )
                     digest.update(chunk)
                     handle.write(chunk)
+                    record("downloading")
                     if progress is not None:
                         progress(received, asset.size)
+                record("verifying")
                 handle.flush()
                 os.fsync(handle.fileno())
-    except UpdateError:
+        check_deadline()
+        if received != asset.size:
+            raise UpdateError(
+                f"Downloaded update size mismatch: expected {asset.size}, got {received}"
+            )
+        if digest.hexdigest() != asset.sha256:
+            raise UpdateError(
+                "Downloaded update failed SHA-256 verification and was discarded"
+            )
+        os.replace(temporary, destination)
+        record("verified")
+    except Exception as exc:
+        record("cancelled" if cancelled is not None and cancelled() else "failed", str(exc))
         temporary.unlink(missing_ok=True)
-        raise
-    except (OSError, urllib.error.URLError) as exc:
-        temporary.unlink(missing_ok=True)
+        if isinstance(exc, UpdateError):
+            raise
         raise UpdateError(f"Could not download update package: {exc}") from exc
-    if received != asset.size:
-        temporary.unlink(missing_ok=True)
-        raise UpdateError(
-            f"Downloaded update size mismatch: expected {asset.size}, got {received}"
-        )
-    if digest.hexdigest() != asset.sha256:
-        temporary.unlink(missing_ok=True)
-        raise UpdateError(
-            "Downloaded update failed SHA-256 verification and was discarded"
-        )
-    os.replace(temporary, destination)
     return destination
 
 

@@ -3,12 +3,28 @@
 ## 0.8.0 integration candidate (2026-10-16)
 
 The confirmed three-chat scope combines update download progress `986525a` and
-version-state isolation `7ec26b6` with current main `718e931` (which already
+version-state isolation `7ec26b6` with the earlier main `718e931` (which already
 contains the UI, startup identity and installer corrections). The isolated
 `codex/release-0-8-0` candidate preserves both source histories and all historical
 documentation. The user has now explicitly authorized this integration, upload,
 merge and existing main-triggered publication; the earlier progress-branch push
 denial recorded below is historical. PR54 browser diagnostics remains excluded.
+
+Concurrent main update [PR #57](https://github.com/lukelave-boop/E3/pull/57)
+merged at 20:36:06 UTC as `50b279809ed8171ebdaafbea2c3e9a2cf6990a89`.
+The candidate incorporates that main revision and preserves its newer bounded,
+cancellable updater operations and rejection of late completions alongside the
+0.8.0 version-state isolation. Checks on prior candidate `8929f5a` do not validate
+this combined tree. Fresh full Windows and POSIX compatibility checks, independent
+review, and real package identity checks are required on the final combined head
+before merge. The final `v0.8.0` tag, packages and update manifest must identify
+the same final main revision.
+
+Combined-tree focused verification reports 179 passed and one Windows symlink-
+permission skip. The loopback check was initially denied by sandbox networking;
+the unchanged check passed its single approved retry with loopback access. These
+focused results do not replace fresh full compatibility and package validation
+on the final combined head.
 
 The source series advances to 0.8, with immutable `v0.8.0` intended for the exact
 final main release revision. Untagged preparation and that final tagged revision
@@ -90,6 +106,11 @@ remain recorded; the test corrections require fresh complete validation.
 The focused correction run passes all 146 controller-session tests and nine
 real Inno/helper tests with installed Python 3.14 dependencies. Independent
 review, Ruff, compilation and whitespace checks pass.
+These controller-query and PowerShell budgets are test scheduling allowances;
+they do not relax production controller deadlines, package identity checks or
+controller safety assertions. PR #57 separately corrects product updater
+operations with bounded and cancellable behavior. Two Qt 6.12 runs without the
+native crash do not establish its cause or prove an intermittent fault eliminated.
 
 Review also found that Linux updater restart inherited the previous build's
 state overrides. Both platforms now prepare a fresh update-process environment,
@@ -104,6 +125,67 @@ Exact candidate CI, package builds, independent final review, main merge, tag
 and publication verification remain pending. Historical project schema 1-5
 fixtures remain intact. No installed app, launcher selection, calibration,
 hardware or Pi deployment was changed by this integration.
+
+## Updater stall recovery - reproduced and corrected in source (2026-10-16)
+
+The following is the source-validation checkpoint before PR #57 merged into
+main. Validation of the combined 0.8.0 candidate is tracked above.
+
+Isolated branch codex/updater-stall-recovery starts from main 718e931 and merges
+the existing progress change 986525a without replacing newer main behavior.
+The unchanged installed normal E3 0.7.153 had repeatedly remained at Downloading
+and verifying for ten minutes per the operator. Its retained older package
+partial is 63,963,136 / 220,077,007 bytes. A later real in-app retry fetched and
+verified 0.7.301 in about 29 seconds. That retry did not establish a repair;
+installation was not approved or performed in this investigation.
+
+A concrete timeout defect is reproduced against a loopback TCP server using
+the exact historical download_update function from bc86c8912ef2: bytes arriving
+every 50 ms keep a 200 ms socket timeout alive, and the 1 MiB buffered read
+delivers no progress until all 32 test bytes finish at 1.579 seconds (1.583 total).
+There is no overall deadline, independent dialog watchdog or cancellation in
+that installed updater. This establishes a reproducible mechanism for a
+long-lived downloading dialog, not proof of the original network condition;
+those attempts lack download-stage logs. No lost worker completion is reproduced. The manifest check has the same
+unbounded response-read exposure; its UI now has a 75-second deadline, Cancel
+check, and stale-result rejection, including while queued behind another task.
+
+The corrected source combines the existing available-data progress reads with
+a 45-second no-progress GUI watchdog, a 15-minute overall bound, Cancel download,
+cooperative worker cancellation, unique partial files and active-dialog callback
+checks. The same trickling server now delivers progress at 3 ms and expires at
+306 ms with a 300 ms test budget. A blocked connection/header worker cannot keep
+the dialog open, initiate a late install or delete a subsequent attempt's partial.
+Network/disk calls may unwind later; the UI does not wait for them before returning
+control. Size/SHA-256 acceptance and normal installer handoff remain mandatory.
+Per-attempt .download.json records retain phase/byte counts/time/outcome, while
+<package>.last-failure.json records GUI failures even if the worker is stuck.
+The desktop update pipeline is the only affected product behavior; project,
+browser, machine, motion, arming and laser paths are unchanged.
+
+Windows Python 3.14 focused verification passes 98 tests including 24 new stall,
+cancellation, overlap and actual queued Qt-worker checks, existing installer
+handoff, and controller-task shutdown. The initial sandbox run passed 66 checks
+and failed the loopback test because Windows sandbox networking forbids its
+socket; the unchanged test passes with loopback access. Repository Ruff,
+application compileall and whitespace checks pass. Real-network retrieval through
+the corrected downloader verifies all 220,121,914 bytes of public 0.7.301 with
+SHA-256 9ee5a6fe3e48e29b94d25cffdbebae3ac2ba5d102cf9d4bf60243d251681cecf
+in 33.491 seconds. The deterministic before/after script is
+scripts/reproduce_update_trickle.py; ignored measurements and downloads are under
+build/updater-stall-evidence. This is source/offscreen and real-network
+verification; frozen corrected GUI, compatibility CI, main integration and
+publication remain pending. Review also covers delayed timer delivery at result
+acceptance and blocked diagnostic writes: deadlines are rechecked before
+acceptance, and failure-log writes never run on the GUI thread. Offscreen visual
+inspection with the installed Segoe UI font passes. No installed bundle, permanent launcher selection,
+configuration or hardware was modified by this repair.
+
+A canonical local build attempt was refused before admission because managed
+container trc/E3/.e3-builds changed metadata during inventory; no guard was
+bypassed and no cleanup was performed. Hosted packaging at intermediate
+3166c7c passed (run 38959853245); the final manifest-check correction requires
+a fresh package. Current compatibility/package checks are tracked on PR #57.
 
 ## Update download progress (2026-10-16)
 

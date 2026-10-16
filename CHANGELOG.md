@@ -4,6 +4,8 @@
 
 - Combine the download progress and independent version-state changes below
   with the existing UI, startup identity and Windows installer corrections.
+- Preserve main's newer bounded and cancellable updater operations, including
+  rejection of late completions, while integrating version-state isolation.
 - Advance the source version baseline to `v0.8.0`; keep older frozen builds'
   embedded identities and forward reading of historical project formats.
 - Start Linux updates with a fresh per-version state selection, preserving the
@@ -12,6 +14,17 @@
   metadata and update manifest disagree on version or exact revision.
 - Parent raster-dialog layouts before adding their controls, avoiding the
   documented PySide 6.12.0 nested-widget ownership regression.
+
+## Unreleased - updater stall recovery (2026-10-16)
+
+- Bound manifest checks to 75 seconds, add Cancel check, and reject late offers.
+
+- End the update dialog after 45 seconds without progress or 15 minutes overall,
+  even if its worker is waiting for a connection or response headers.
+- Add Cancel download and ignore late results from cancelled or timed-out work.
+- Give overlapping retries separate partial files and preserve download-stage,
+  byte-count, elapsed-time and failure diagnostics in the update cache.
+- Preserve mandatory exact-size/SHA-256 verification and normal installer handoff.
 
 ## Unreleased - update download progress (2026-10-16)
 
