@@ -6,6 +6,15 @@ bytes enter the durable store; digest, whole-program validation and explicit Sta
 remain required. Prepared polygon edges and source-length stream bounds avoid
 repeated computation without changing output/travel tolerances or authority.
 
+Preparation may reuse only this process's exact validated immutable program
+facts. Changed text receives full preflight; current policy, material, focus,
+session and arming authority are rechecked independently of cached metadata.
+Powered endpoint proofs are local to one analysis and include the physical spot;
+laser-off travel does not establish a powered proof. Reusing a preceding travel
+endpoint retains the complete convex-segment check. The canonical parser's
+256-character decimal grammar guarantees finite parsed magnitudes; other syntax
+and computed coordinates retain their existing finite and bounds checks.
+
 Pause / Resume is a job-continuation feature, not an emergency stop or a
 safety-rated control. It requires a GRBL handshake, observed laser mode and verified
 motor holding. The app requests suspension and waits for controller status;

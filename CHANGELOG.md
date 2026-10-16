@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — remove repeated Start validation (2026-10-15)
+
+- Reuse desktop preflight when focus attachment leaves the exact program
+  unchanged; changed bytes still receive full validation.
+- Retain immutable focus/material/raster facts with the local program proof,
+  while rechecking current policy, material, focus, session and arming authority.
+- Reduce raster parser allocations and reuse successful endpoint proofs within
+  one analysis, preserving offsets, tolerances and power-transition checks.
+- Measure about 28.5% faster local validation of the retained 729,269-line job
+  with identical output. This is not a Pi or total Start benchmark. Matching Pi
+  installation remains pending; the running job was left untouched.
+
 ## Faster job upload and preparation (2026-10-15)
 
 - Negotiate bounded lossless compressed uploads, reducing the operator's 22 MB

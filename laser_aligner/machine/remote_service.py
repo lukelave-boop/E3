@@ -25,14 +25,11 @@ from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from ..operation_focus import CAPABILITY as OPERATION_FOCUS_CAPABILITY
-from ..operation_focus import mode as operation_focus_mode
 from ..operation_focus import validate_targets
 from ..raster_safety import CAPABILITY as RASTER_TRAVEL_CAPABILITY
-from ..raster_safety import program_raster_boundary
 from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
 from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
-from .job_focus import program_binding as job_focus_binding
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
@@ -42,7 +39,6 @@ from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import validate_control
 from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
-from .material_surface import program_binding as material_surface_binding
 from .material_surface import snapshot_from_plan, validate_program_binding
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
@@ -1830,15 +1826,25 @@ class RemoteMachineService:
         program = self._policy.preflight_program(
             text, guarded_output_polygon_mm=guarded_output_polygon_mm,
         )
+        focused_text = text
         if program.requires_laser_authorization:
             with self._state_lock:
                 self._require_workpiece_focus()
-                text = attach_job_focus(text, self._selected_job_focus)
-        result = self._policy.preflight_program(
-            text,
-            guarded_output_polygon_mm=guarded_output_polygon_mm,
-        )
-        if material_surface_binding(result.lines) is not None:
+                focused_text = attach_job_focus(text, self._selected_job_focus)
+        if focused_text == text:
+            # Reuse only this exact preflight. Existing focus bindings and
+            # unpowered jobs do not need the same full validation twice.
+            # Current settings and immutable fields still have to match.
+            self._policy._require_validated_program_integrity(program)
+            result = program
+        else:
+            # Adding a focus directive changes the authorized bytes. Keep the
+            # full validation, including material/focus cross-binding checks.
+            result = self._policy.preflight_program(
+                focused_text,
+                guarded_output_polygon_mm=guarded_output_polygon_mm,
+            )
+        if self._policy._program_proof(result).material_lines:
             self._require_material_surface_capability()
         self._require_operation_focus(result)
         self._require_raster_travel_capability(result)
@@ -1847,34 +1853,41 @@ class RemoteMachineService:
     def _require_current_program(self, program: ValidatedProgram) -> None:
         if type(program) is not ValidatedProgram:
             raise SafetyError("Program authorization requires an exact preflight result")
-        self._policy._require_validated_program_integrity(program)
+        proof = self._policy._program_proof(program)
         if program.requires_laser_authorization:
             with self._state_lock:
                 self._require_workpiece_focus()
-                token = job_focus_binding(program.lines)
+                token = proof.focus.token
                 if self._selected_job_focus is not None and token != self._selected_job_focus["id"]:
                     raise SafetyError("Workpiece focus changed after preflight; prepare the job again")
                 if token is not None and self._selected_job_focus is None:
                     raise SafetyError("Measured workpiece focus is no longer current; measure the workpiece again")
-        if material_surface_binding(program.lines) is not None:
+        if proof.material_lines:
             self._require_material_surface_capability()
-            validate_program_binding(program.lines, self.material_surface_snapshot())
+            validate_program_binding(proof.material_lines, self.material_surface_snapshot())
 
         self._require_operation_focus(program)
         self._require_raster_travel_capability(program)
 
     def _require_raster_travel_capability(self, program: ValidatedProgram) -> None:
-        if (program_raster_boundary(program.lines) is not None
+        if (self._policy._program_proof(program).focus.raster_boundary is not None
                 and RASTER_TRAVEL_CAPABILITY not in (self._node_capabilities or ())):
             raise SafetyError("Update the Pi companion and configure matching verified raster travel limits before preparing this job")
 
     def _require_operation_focus(self, program: ValidatedProgram) -> None:
-        if not any(operation_focus_mode(line) is not None for line in program.lines):
+        modes = self._policy._program_proof(program).focus.mode_lines
+        if not modes:
             return
         if OPERATION_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise SafetyError("Update the Pi companion before running raster jobs with 7 mm surface focus")
         with self._state_lock:
-            validate_targets(program.lines, self._selected_job_focus)
+            validate_targets(modes, self._selected_job_focus)
+
+    def _require_current_material_surface(self, program: ValidatedProgram) -> None:
+        material_lines = self._policy._program_proof(program).material_lines
+        if material_lines:
+            self._require_material_surface_capability()
+            validate_program_binding(material_lines, self.material_surface_snapshot())
 
     def _require_material_surface_capability(self) -> None:
         if MATERIAL_SURFACE_CAPABILITY not in (self._node_capabilities or ()):
@@ -2007,9 +2020,7 @@ class RemoteMachineService:
             with self._state_lock:
                 if self._authorization_epoch != authorization_epoch:
                     raise MachineError("Arming was cancelled by disarm")
-                if material_surface_binding(program.lines) is not None:
-                    self._require_material_surface_capability()
-                    validate_program_binding(program.lines, self.material_surface_snapshot())
+                self._require_current_material_surface(program)
                 self._armed_until = time.time() + timeout
                 self._armed_until_monotonic = time.monotonic() + timeout
                 self._armed_program_digest = program.digest
@@ -2889,9 +2900,7 @@ class RemoteMachineService:
                         if preparation_session != (self._node_boot_id, self._controller_session_generation):
                             raise SafetyError("Controller session changed during preparation; prepare the job again")
                         authorization = (phrase, time.monotonic() + float(self.laser_settings.arm_timeout_seconds), authorization_epoch)
-                if material_surface_binding(program.lines) is not None:
-                    self._require_material_surface_capability()
-                    validate_program_binding(program.lines, self.material_surface_snapshot())
+                self._require_current_material_surface(program)
                 authorization_phrase = self._authorization_phrase_for_start(
                     authorization
                 )

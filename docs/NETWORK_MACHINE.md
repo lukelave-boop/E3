@@ -13,16 +13,33 @@ On 2026-10-15, the same job over the real Windows-to-Pi Tailscale connection
 uploaded in 6.346 seconds compressed versus 58.922 seconds using the legacy raw
 path on the same updated node. Timing includes compression and durable chunk
 acknowledgements; both uploads remained unfinalized and were deleted without
-arming or execution. Total Pi validation/preparation and physical Start latency
-remain separate, unverified measurements.
+arming or execution. Upload timing is separate from validation and machine
+preparation; it does not measure first laser output.
 
 Decoded bytes retain original offsets, total-size limits, durable writes,
 idempotent exact-byte retry checks, SHA-256 finalization and full Pi validation.
 Truncated/concatenated/trailing streams, noncanonical base64 and expansion beyond
 1 MiB reject before storage. No upload authorizes motion; STOP/cancellation,
 session binding and explicit Start remain unchanged. Reserved STOP admission is
-unchanged. The companion includes storage and geometry dependencies as well as
-the complete pause implementation, pinned to installed revision e649a22.
+unchanged. The installed upload companion includes storage and geometry
+dependencies as well as the complete pause implementation.
+
+### Remove repeated preparation work
+
+A subsequent 399,777-line job reported 43.805 seconds in Pi verification and
+7.288 seconds in Start acceptance. The next update removes the desktop's second
+preflight when focus attachment leaves bytes unchanged, retains immutable
+directive facts with the local validation proof, and reduces parser allocations
+and repeated endpoint calculations. Current policy, material, focus, session and
+arming checks remain live; the Pi still verifies uploaded and committed bytes.
+
+On the retained older 729,269-line job, local Windows validation averaged
+10.037 seconds before and 7.175 seconds after, about 28.5% less time with identical
+output. System load affected individual runs; this does not predict total Pi
+Start time. The companion containing these preparation changes has not yet been
+installed. Its twelve source files include focus metadata support and are pinned
+to installed revision 21273d0. The running Pi job was left untouched; installation and new Pi timing
+must wait until the operator finishes and disconnects.
 
 ## LAN and Tailscale camera addresses
 

@@ -1,8 +1,12 @@
 # Roadmap
 
 Compressed upload and repeated-geometry/stream-size optimizations are implemented.
-Verify actual Pi transfer and preparation timing with the matched companion;
-physical pause/resume qualification remains separate from inert upload timing.
+Inert upload timing is verified: 58.922 to 6.346 seconds for the same 22 MB job.
+The next preparation update removes unchanged desktop duplicate preflight and
+repeated immutable metadata/endpoint checks. Local validator timing improves
+about 28.5%; install its matching companion when the running job is finished,
+then measure Pi verification and Start separately. Physical pause/resume
+qualification remains separate from transfer and software preparation timing.
 
 ## Job pause / resume
 
@@ -47,8 +51,9 @@ companion deployment and Windows compatibility CI remain release gates. No
 historical X-only travel record or provisional Y235 value qualifies a whole envelope.
 
 The measured performance follow-ups are ranked in
-[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md); raster caching and removal of
-the remote wrapper's unchanged-text duplicate preflight are separate future work.
+[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md). The remote wrapper's
+unchanged-text duplicate preflight is now removed; broader raster caching remains
+future work.
 ## Engraving image workspace
 
 First-stage implementation adds local reversible cleanup, foreground trace

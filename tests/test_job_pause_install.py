@@ -13,17 +13,26 @@ def test_pause_bundle_contains_complete_exact_sources_without_git(tmp_path, monk
     monkeypatch.setattr(packager.subprocess, "check_output", lambda *a, **kw: pytest.fail("Unexpected Git/network call"))
     bundle = packager.package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
-    assert len(manifest["files"]) == 11
+    assert len(manifest["files"]) == 12
     assert {entry["path"] for entry in manifest["files"]} == packager.PREVIOUS.keys()
+    assert "laser_aligner/machine/job_focus.py" in packager.PREVIOUS
+    assert manifest["predecessors"] == [{"revision": packager.PREVIOUS_REVISION,
+                                          "files": packager.PREVIOUS}]
     for entry in manifest["files"]:
         raw = (bundle / entry["path"]).read_bytes()
         assert raw == (packager.ROOT / entry["path"]).read_bytes().replace(b"\r\n", b"\n")
         assert hashlib.sha256(raw).hexdigest() == entry["sha256_lf"]
     assert b"$32=1" in (bundle / "TESTING.md").read_bytes()
-    assert "inactive" in (bundle / "INSTALL.md").read_text()
+    instructions = (bundle / "INSTALL.md").read_text()
+    assert "inactive" in instructions
+    assert "Twelve source files" in instructions
+    assert packager.PREVIOUS_REVISION in instructions
 
 
-def test_pause_installer_rejects_unknown_and_preserves_backups(tmp_path, monkeypatch):
+@pytest.mark.parametrize("changed_source", [
+    "laser_aligner/machine/service.py", "laser_aligner/machine/job_focus.py",
+])
+def test_pause_installer_rejects_unknown_and_preserves_backups(tmp_path, monkeypatch, changed_source):
     bundle = packager.package(tmp_path / "dist")
     spec = importlib.util.spec_from_file_location("pause_installer", bundle / "install_job_pause.py")
     installer = importlib.util.module_from_spec(spec)
@@ -43,12 +52,14 @@ def test_pause_installer_rejects_unknown_and_preserves_backups(tmp_path, monkeyp
     (bundle / "manifest.json").write_bytes(encoded)
     installer.MANIFEST_SHA256 = hashlib.sha256(encoded).hexdigest()
     monkeypatch.setattr(installer, "inactive", lambda: None)
-    bad = project / "laser_aligner/machine/service.py"
+    bad = project / changed_source
     bad.write_bytes(b"# unknown edits\n")
+    before = {name: (project / name).read_bytes() for name in originals}
     with pytest.raises(ValueError, match="unknown local changes"):
         installer.install(project, bundle=bundle, apply=True)
-    assert (project / "laser_aligner/machine/job_pause.py").read_bytes() == originals["laser_aligner/machine/job_pause.py"]
-    bad.write_bytes(originals["laser_aligner/machine/service.py"])
+    assert {name: (project / name).read_bytes() for name in originals} == before
+    assert not list(project.rglob("*.e3-backup-*.py"))
+    bad.write_bytes(originals[changed_source])
     assert not installer.install(project, bundle=bundle)["applied"]
     result = installer.install(project, bundle=bundle, apply=True)
     for item in result["files"]:
@@ -57,3 +68,24 @@ def test_pause_installer_rejects_unknown_and_preserves_backups(tmp_path, monkeyp
             source = Path(item["path"]).relative_to(project).as_posix()
             assert Path(item["backup"]).read_bytes() == originals[source]
     assert all(item["status"] == "already_current" for item in installer.install(project, bundle=bundle, apply=True)["files"])
+
+
+def test_pause_installer_requires_focus_dependency_before_any_write(tmp_path, monkeypatch):
+    bundle = packager.package(tmp_path / "dist")
+    spec = importlib.util.spec_from_file_location("pause_missing_focus_installer", bundle / "install_job_pause.py")
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    project = tmp_path / "project"
+    originals = {}
+    for name in packager.PREVIOUS:
+        if name == "laser_aligner/machine/job_focus.py":
+            continue
+        target = project / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        originals[name] = (bundle / name).read_bytes()
+        target.write_bytes(originals[name])
+    monkeypatch.setattr(installer, "inactive", lambda: pytest.fail("Missing dependency must reject during source inspection"))
+    with pytest.raises(ValueError, match=r"unknown local changes: laser_aligner/machine/job_focus.py"):
+        installer.install(project, bundle=bundle, apply=True)
+    assert {name: (project / name).read_bytes() for name in originals} == originals
+    assert not (project / "laser_aligner/machine/job_focus.py").exists()

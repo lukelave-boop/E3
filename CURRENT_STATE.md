@@ -1,5 +1,39 @@
 # Current repository state
 
+## Remove redundant validation work (2026-10-15)
+
+The operator requested a fix and E3 DEV TEST build without interrupting the
+running job. Desktop remote preflight now reuses its exact result when attaching
+focus does not change the source. Changed focus-prefixed programs still receive
+full validation. An immutable program proof stores parsed focus, operation,
+raster and material facts; current policy, session, material measurement, focus
+selection/targets, capabilities and arming checks remain live. Cache misses,
+changed fields/line identity and changed policy still require validation or fail.
+Snapshot publication and eviction races have explicit rejection tests.
+
+Within one full validation, only successfully checked identical endpoints are
+reused. Initial approach, power transitions, physical spot offsets, travel and
+powered geometry remain guarded. The exact bounded decimal raster grammar uses
+scalar parsing; other syntax retains the complete allowlist and finite checks.
+Pi Start still rereads/hashes the committed canonical bytes before execution.
+
+The retained 729,269-line / 22,099,480-byte job gives identical validated output
+against installed revision 21273d0. Paired local Windows validation means are
+10.037 to 7.175 seconds (28.5% less elapsed time; CPU 9.969 to 7.148 seconds).
+Machine load affects these timings; this is not a live Pi or total Start result.
+1,800 implementation differential cases and 1,200 independent review cases
+match prior acceptance and exact rejection messages. The independent review's
+124 focused tests pass with no remaining actionable findings. Combined focused
+verification passes 502 tests. Core/stream checks pass 284 and expose one older
+cleanup test that expects admission after a policy mutation; the new metadata
+check correctly rejects earlier. The adjusted late-mutation cleanup test passes,
+and explicit early-admission rejection coverage is added. The twelve-file
+companion is pinned to exact installed 21273d0; four installer tests pass.
+Compatibility CI and a fresh frozen build are being prepared.
+No Pi access, service restart, controller action or live benchmark was performed
+for this change. The existing job and its open Windows bundle remain untouched;
+the matching companion will remain staged until an idle installation is possible.
+
 ## Remaining Start-delay diagnosis (2026-10-15)
 
 Read-only authenticated status for the operator's subsequent running job
