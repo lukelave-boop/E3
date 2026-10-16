@@ -11274,3 +11274,41 @@ physical placement. No marker detector is implemented. See
 - **Historically verified** — recorded for an earlier commit or release.
 - **Physically verified** — exercised on identified real hardware with recorded
   configuration and results.
+
+## Browser CI timeout investigation - cause unresolved (2026-10-16)
+
+After PR #50, [compatibility CI 38942261224](https://github.com/lukelave-boop/E3/actions/runs/38942261224)
+failed on main `b1c6c4b67a847dd0850acd2f16e15599ea2ce9d9` in Windows Python
+3.10 job `117112558655`. The delayed-placement browser scenario exceeded the
+unchanged 20-second deadline (20.141 seconds observed). Node 22.23.3 emitted its
+start marker and remained alive until bounded cleanup killed and reaped it.
+This establishes child noncompletion, not a pipe-EOF wait alone; the existing
+output does not identify the stalled stage. PySide6 was absent in that job.
+
+The unchanged scenario passed 984 local Windows probe runs: 400 on Node 24.19.0
+with Python 3.10.20, and 584 on the official, checksum-verified Node 22.23.3 binary
+(424 with Python 3.10.20 and 160 with Python 3.12.13). The slowest was under
+0.108 seconds. Another 36 Node 22 runs with synchronous phase tracing completed
+and reached natural exit with no active resources. The scenario's five awaits
+resolve immediately in these probes; no real timer or network activity was
+observed. These local results do not establish a root cause or a full suite pass.
+The subsequent unchanged [main CI 38945218375](https://github.com/lukelave-boop/E3/actions/runs/38945218375)
+at `6fa43a6c6bd7ccf22a5a0fba37a87e66ed48701d` passed all four compatibility jobs.
+
+A test-only diagnostic candidate records synchronous stage, elapsed-time and
+CPU breadcrumbs around module loading, context construction, source reading,
+VM evaluation, each await, completion and natural exit. On Windows, the parent
+samples child CPU time before timeout cleanup. Diagnostic failure must not mask
+the original timeout. The candidate retains all 14 scenario assertions, explicit
+completion validation, natural-exit enforcement, the 20-second deadline and
+bounded cleanup. It adds no heartbeat, retry or forced successful exit.
+
+Focused Windows Python 3.14.4 / Node 22.23.3 verification passes all ten tests,
+including the real 20-second natural-exit rejection, native CPU sampling before
+termination, diagnostic fault injection and portable fallback. Node 24.19.0
+passes the other nine tests; its duplicate 20-second cleanup check was not rerun.
+Ruff, compileall and whitespace checks pass. Hosted candidate verification is
+pending; these diagnostics are not a claimed repair.
+
+No application code, machine configuration, calibration, launcher, deployment,
+hardware behavior or publication workflow is changed by this investigation.
