@@ -1,5 +1,10 @@
 # Architecture
 
+Release packaging verifies a shared version and exact revision against the
+Windows installer product version, both platform bundles' metadata and the
+update manifest before the publisher can switch the offered update. The Linux
+package check extracts metadata without starting the application.
+
 Desktop update progress uses the exact package size from the validated manifest.
 The UI-neutral downloader reports byte counts after writing each available chunk.
 A locked counter transfers worker progress to a 250 ms GUI timer, which renders
@@ -7,6 +12,11 @@ percentage and a rolling three-second byte rate without queuing one Qt event per
 chunk. Completion still requires exact size, SHA-256 and atomic cache promotion.
 
 ## Desktop version state
+
+Automatic update handoffs on both platforms restore the genuine user profile
+and remove the launching build's state/config/credential/build overrides. The
+new installed process chooses its own version scope; it cannot inherit the
+previous process's `E3_USER_STATE_DIR` through this handoff.
 
 `state_scope.py` is a Qt/HTTP-neutral, launch-time snapshot boundary. Importing
 the module does not migrate state. The desktop establishes its scope before

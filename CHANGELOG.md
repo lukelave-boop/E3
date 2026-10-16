@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 integration (2026-10-16)
+
+- Combine the download progress and independent version-state changes below
+  with the existing UI, startup identity and Windows installer corrections.
+- Advance the source version baseline to `v0.8.0`; keep older frozen builds'
+  embedded identities and forward reading of historical project formats.
+- Start Linux updates with a fresh per-version state selection, preserving the
+  previous build's settings rather than inheriting its process overrides.
+- Reject release publication when the Windows installer, platform package
+  metadata and update manifest disagree on version or exact revision.
+
 ## Unreleased - update download progress (2026-10-16)
 
 - Replace the download spinner with percentage, downloaded/total size and current

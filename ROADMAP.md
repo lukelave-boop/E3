@@ -1,5 +1,12 @@
 # Roadmap
 
+## 0.8.0 integration (2026-10-16)
+
+Prepared: confirmed download progress and version-state work combined with main's
+UI/startup/installer fixes, a 0.8 version baseline, update restart isolation and
+cross-platform package identity checks. Exact-head compatibility, package builds,
+merge and publication verification are tracked in [current state](CURRENT_STATE.md).
+
 ## Update download progress (2026-10-16)
 
 Implemented: manifest-sized progress, downloaded/total bytes and a recent transfer

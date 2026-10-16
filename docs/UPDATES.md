@@ -2,6 +2,11 @@
 
 E3 separates replaceable application files from persistent machine/user state.
 
+Release checks require the Windows installer product version, Windows and Linux
+bundle metadata, and update manifest to agree on version and exact revision.
+The package validation workflows build and inspect artifacts without starting
+E3. Publication remains gated on the full compatibility workflow.
+
 ## Persistent state
 
 The native per-user root holds initial machine state and version directories:
@@ -24,6 +29,12 @@ therefore replace application files only. Existing configuration, credentials,
 calibration, templates, materials, projects, and captures are not overwritten.
 
 ## Independent version state
+
+Automatic Windows and Linux update handoffs clear the current process's E3
+state, config, credential and build overrides and preserve the genuine user
+profile. The updated application then selects its own installed-version scope.
+This also clears caller-supplied per-launch E3 overrides for that automatic
+handoff; explicitly launching a build with overrides remains supported.
 
 An installed desktop build uses
 `state-scopes/installed/<version>-<revision>/` beneath the native per-user root.

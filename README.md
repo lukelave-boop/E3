@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The 0.8 series combines desktop update progress and independent version state
+with the UI and installer improvements. See [versioning](docs/VERSIONING.md)
+and [current release verification](CURRENT_STATE.md).
+
 Desktop updates show the package size before download, then downloaded/total bytes,
 percentage and current transfer speed. See [updates](docs/UPDATES.md).
 

@@ -12,9 +12,32 @@ import pytest
 from laser_aligner import deployment, state_scope, storage
 from laser_aligner.identity import REVISION_ENVIRONMENT_VARIABLE, VERSION_ENVIRONMENT_VARIABLE
 
+_ENTRY_ENVIRONMENT_KEYS = (
+    "E3_USER_STATE_DIR", "E3_CONFIG_PATH", "E3_STATE_ISOLATED", "E3_DEV_TEST",
+    "E3_BRIDGE_TOKEN", "E3_BRIDGE_TOKEN_FILE",
+    REVISION_ENVIRONMENT_VARIABLE, VERSION_ENVIRONMENT_VARIABLE,
+)
+
 
 @pytest.mark.parametrize("explicit_token", [None, "explicit-process-token"])
+@pytest.mark.parametrize("inherited_environment", [False, True])
 def test_packaged_relaunch_reads_its_scoped_token_before_legacy_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_token: str | None,
+    inherited_environment: bool,
+) -> None:
+    for key in _ENTRY_ENVIRONMENT_KEYS:
+        monkeypatch.setenv(key, f"inherited-{key}")
+        if not inherited_environment:
+            monkeypatch.delenv(key)
+    before = {key: os.environ.get(key) for key in _ENTRY_ENVIRONMENT_KEYS}
+
+    with monkeypatch.context() as launch_patch:
+        _assert_packaged_relaunch(tmp_path, launch_patch, explicit_token)
+
+    assert {key: os.environ.get(key) for key in _ENTRY_ENVIRONMENT_KEYS} == before
+
+
+def _assert_packaged_relaunch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_token: str | None,
 ) -> None:
     """Frozen startup must choose its independent state before token lookup."""
@@ -33,13 +56,10 @@ def test_packaged_relaunch_reads_its_scoped_token_before_legacy_changes(
     monkeypatch.setattr(state_scope, "legacy_user_data_dir", lambda: tmp_path / "absent")
     monkeypatch.setattr(state_scope, "_runtime_publication", None)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    environment_keys = (
-        "E3_USER_STATE_DIR", "E3_CONFIG_PATH", "E3_STATE_ISOLATED", "E3_DEV_TEST",
-        "E3_BRIDGE_TOKEN", "E3_BRIDGE_TOKEN_FILE",
-        REVISION_ENVIRONMENT_VARIABLE, VERSION_ENVIRONMENT_VARIABLE,
-    )
-    for key in environment_keys:
-        monkeypatch.delenv(key, raising=False)
+    for key in _ENTRY_ENVIRONMENT_KEYS:
+        # Register absent keys for undo before startup writes os.environ itself.
+        monkeypatch.setenv(key, "")
+        monkeypatch.delenv(key)
 
     state_scope.prepare_runtime_state()
     scoped_config = Path(os.environ["E3_CONFIG_PATH"])
@@ -47,7 +67,7 @@ def test_packaged_relaunch_reads_its_scoped_token_before_legacy_changes(
     scoped_token.write_text("this-installed-build-token", encoding="utf-8")
     token_file.write_text("changed-by-other-version", encoding="utf-8")
     before = {path: path.read_bytes() for path in (config, token_file, scoped_config, scoped_token)}
-    for key in environment_keys:
+    for key in _ENTRY_ENVIRONMENT_KEYS:
         monkeypatch.delenv(key, raising=False)
     if explicit_token is not None:
         monkeypatch.setenv("E3_BRIDGE_TOKEN", explicit_token)

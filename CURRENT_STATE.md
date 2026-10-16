@@ -1,5 +1,53 @@
 # Current repository state
 
+## 0.8.0 integration candidate (2026-10-16)
+
+The confirmed three-chat scope combines update download progress `986525a` and
+version-state isolation `7ec26b6` with current main `718e931` (which already
+contains the UI, startup identity and installer corrections). The isolated
+`codex/release-0-8-0` candidate preserves both source histories and all historical
+documentation. The user has now explicitly authorized this integration, upload,
+merge and existing main-triggered publication; the earlier progress-branch push
+denial recorded below is historical. PR54 browser diagnostics remains excluded.
+
+The source series advances to 0.8, with immutable `v0.8.0` intended for the exact
+final main release revision. Untagged preparation and that final tagged revision
+both resolve to 0.8.0; subsequent commits increment the patch. Frozen older builds
+continue to report their own embedded metadata. Packaging checks compare the
+Windows installer product version and bundle metadata, the Linux AppImage's
+extracted metadata, and the final manifest against the expected version and exact
+revision. Both package validation workflows run without starting E3 or publishing.
+The publisher retains its full compatibility gate and verified manifest switch.
+
+The three PR55 autosave failures were reproduced in the original test order.
+The packaged-entry test failed to own environment variables that were initially
+absent, leaking its temporary state scope into subsequent tests. Correcting that
+test's environment lifetime changes the ordered result from 2 passed/3 failed
+to 7 passed; focused persistence/startup coverage reports 112 passed/1 Windows
+symlink-permission skip. Production migration guards and original autosave
+assertions are unchanged. Version/identity/updater rollover coverage reports
+41 passed. These are focused local Python 3.14 results, not full compatibility.
+The combined focused integration run then passed 234 tests with the same one
+symlink skip; download progress, all historical project fixtures and the unchanged
+raster-dialog module passed another 43 tests. Repository Ruff, application and
+changed-test compilation, and whitespace checks passed. The initial package-test
+attempt hit sandbox temporary-directory setup errors; an explicit writable
+workspace base directory resolved those setup errors without test changes.
+
+Review also found that Linux updater restart inherited the previous build's
+state overrides. Both platforms now prepare a fresh update-process environment,
+preserving the genuine user profile while removing prior per-launch state,
+config, credential and build overrides before the new version selects its scope.
+
+The pre-existing native raster-dialog crash seen on Windows Python 3.12/Qt 6.12
+has not been reproduced with installed Python 3.14/Qt 6.11.2 dependencies:
+10 original dialog tests and a separate 50-lifecycle probe passed. No proven
+native-crash repair, retry policy, assertion weakening or test skip was added.
+Exact candidate CI, package builds, independent final review, main merge, tag
+and publication verification remain pending. Historical project schema 1-5
+fixtures remain intact. No installed app, launcher selection, calibration,
+hardware or Pi deployment was changed by this integration.
+
 ## Update download progress (2026-10-16)
 
 Isolated branch codex/update-download-progress replaces the desktop download
