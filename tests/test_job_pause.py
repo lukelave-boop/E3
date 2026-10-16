@@ -317,4 +317,3 @@ def test_pause_is_unavailable_during_secondary_focus(paused_machine):
     with pytest.raises(MachineError, match="focus"):
         request(machine)
     assert ("raw", b"\x84") not in transport.writes
-

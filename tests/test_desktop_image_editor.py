@@ -479,4 +479,3 @@ def test_closing_and_deleting_during_trace_releases_worker_source_safely(app, so
     assert dialog_ref() is None
     assert plane_ref() is None
     parent.close()
-

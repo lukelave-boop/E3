@@ -597,4 +597,3 @@ def test_guarded_resume_rechecks_authority_after_physical_write_lock(pty_stream)
     assert not select.select([master], [], [], 0.05)[0]
     serial.write_raw_guarded(b"\x84", lambda: None)
     assert read_exact(master, 1) == b"\x84"
-

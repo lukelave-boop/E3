@@ -926,4 +926,3 @@ class ImageEditorDialog(QtWidgets.QDialog):
     def _finish(self, *_args):
         self._closed = True
         self._invalidate_trace()
-
