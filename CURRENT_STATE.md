@@ -907,9 +907,35 @@ remote camera, preview/preflight, controller-state projection, raster generation
 command-cap acceptance/rejection and companion installation guards. Loopback
 camera cases were rerun outside the socket-restricted sandbox. These include
 offscreen widgets and simulated services, not interactive/physical testing.
-Affected Ruff and compilation checks pass. Frozen packaging and Pi companion
-installation are pending.
+Affected Ruff and compilation checks pass. Canonical Windows packaging and
+the Pi companion installation are complete.
 Full compatibility CI and integration into main remain pending.
+
+The existing operator camera was authenticated over Tailscale and its mapping
+identity sidecar enrolled. LAN-alias provenance checks pass with the same live
+identity; bed calibration, visual reference, registry and network configuration
+hashes are unchanged. This checks identity/provenance, not live LAN routing.
+The preview's missing-measurement banner was rendered and visually inspected.
+The v0.7.198 frozen bundle matches all 182 application modules and three
+resources at 8ce10c123114412dcb6c5be7ca53f6cca0b58bcc. Isolated offscreen startup
+passes with camera autostart and motion disabled. Canonical packaging, native
+DLL checks and installer creation passed. The permanent E3 DEV TEST pointer was
+updated atomically and read back, selecting Camera aliases and raster readiness
+v0.7.198 at C:\Users\lukel\Documents\E3\.codex-worktrees\camera-alias-build\dist\E3\E3.exe.
+The matching Pi companion is staged at
+/tmp/e3-pi-two-million-2bf54224, manifest SHA-256
+2bf542241c6986018e08135bda81c456ab4c5e7cc6c4efd8cefa60a29a779717.
+After the user confirmed E3 closed and the machine idle, fresh authenticated
+disconnected/disarmed/idle checks and no-client checks passed. The guarded
+installer updated only gcode/limits.py, backed it up, preserved configuration/
+focus/calibration/retained-Z hashes and restarted the hardware service. All
+three manifested source hashes and the two-million-command limit were read
+back. Authenticated Tailscale machine/camera access passed afterward: controller
+disconnected, disarmed, no running job; camera online with fresh 1920x1080
+manual-focus-10 frames. No controller connection, motion or laser was requested.
+Ignored evidence: build/pi-two-million-installed.log and
+build/pi-two-million-verified.log. Interactive operator and physical engraving
+verification remain pending; the source branch is pushed, not merged into main.
 
 ## Duplicate machine calibration choice (2026-10-15)
 
