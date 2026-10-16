@@ -228,7 +228,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.pause_button.setToolTip(
             "Continue this suspended job from its retained controller queue."
             if phase == "paused" else
-            "Suspend motion and laser output; wait for Paused confirmation. Air Assist remains on."
+            "Suspend motion and laser output; wait for Paused confirmation. "
+            "Separate Air Assist stays on; GRBL coolant follows firmware suspension."
             if pause.get("available") is True else
             "Pause requires the updated Pi companion, GRBL 1.1 with $32=1, and an active toolpath."
         )

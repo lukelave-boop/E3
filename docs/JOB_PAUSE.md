@@ -3,8 +3,10 @@
 During a supported toolpath, click **Pause**, wait for **JOB PAUSED**, then click
 **Resume** to continue from the controller's retained queue. No job lines are
 rewound, re-uploaded or skipped. Deceleration takes time; **Pausing…** is not a
-claim that motion or laser energy has stopped. Air Assist keeps its current
-state while paused. Keep the workpiece and axes stationary.
+claim that motion or laser energy has stopped. A separate Air Assist controller
+keeps its current state. Primary GRBL coolant follows firmware suspension and
+restoration, so its air output can stop while paused. Keep the workpiece and
+axes stationary.
 
 The matching Pi companion must advertise `pi-job-pause-v1`. Support requires
 a GRBL 1.1 identity, an observed `$32=1` laser-mode setting, a current homed

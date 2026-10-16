@@ -197,7 +197,8 @@ def test_pause_failure_cannot_resume(paused_machine, monkeypatch, fault):
     assert ("raw", b"!\x18") in transport.writes
 
 
-def test_stop_wins_when_resume_waits_for_physical_write(paused_machine):
+@pytest.mark.parametrize("revocation", ["stop", "receiver_fault"])
+def test_revocation_wins_when_resume_waits_for_physical_write(paused_machine, revocation):
     machine, transport = paused_machine()
     _, worker = _start(machine, _program(powered=True))
     transport.wait_for_motion(1)
@@ -214,7 +215,10 @@ def test_stop_wins_when_resume_waits_for_physical_write(paused_machine):
     thread = threading.Thread(target=resume)
     thread.start()
     assert transport.resume_entered.wait(2)
-    machine.request_stop(_recover=False)
+    if revocation == "stop":
+        machine.request_stop(_recover=False)
+    else:
+        machine._active_job_context.session.receiver._latch_failure("latched before retirement")
     transport.resume_release.set()
     thread.join(3)
     assert not thread.is_alive()

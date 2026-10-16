@@ -877,6 +877,8 @@ class MachineService:
         # This tiny gate orders software STOP after any in-flight job write.
         # It is never held while waiting for a controller acknowledgement.
         self._transport_write_lock = threading.RLock()
+        # Admission may wait for secondary ACKs; never block primary STOP cleanup.
+        self._job_pause_write_lock = threading.RLock()
         # STOP never waits for a secondary acknowledgement.  This gate spans
         # only the actual auxiliary serial write so STOP can order an already
         # authorized ON before its independently queued OFF cleanup.
@@ -6369,8 +6371,9 @@ class MachineService:
         context = self._active_job_context
         if context is None or not self._pause_supported(context):
             raise MachineError("Pause requires an active GRBL 1.1 job with reported $32=1")
-        # Same gate as job writes and phase changes; STOP remains independent.
-        with self._transport_write_lock:
+        # Serialize line admission, then primary writes; STOP uses neither
+        # the admission gate nor the secondary controller's ACK wait.
+        with self._job_pause_write_lock, self._transport_write_lock:
             self._require_pause_authority(context)
             if (expected_run_id is not None and expected_run_id != context.identity
                     or expected_pause_revision is not None and expected_pause_revision != context.pause.revision):
@@ -6382,6 +6385,7 @@ class MachineService:
                     # $32=1 prevents GRBL parking and makes restore start with motion.
                     # Do not inject M5 into the suspended planner or replay G-code.
                     def guard() -> None:
+                        self._raise_session_failure(context.session)
                         if (context.stop_event.is_set() or self._active_job_context is not context
                                 or not self._same_controller_session(self._session, context.session)
                                 or self.hardware_enabled is not True or self.settings.allow_motion is not True
@@ -6424,7 +6428,7 @@ class MachineService:
             raise MachineError("Controller job context is unavailable")
         while True:
             self._job_pause_checkpoint(context)
-            with self._transport_write_lock:
+            with self._job_pause_write_lock:
                 pause = getattr(context, "pause", None)
                 if pause is not None and pause.state != "running":
                     continue

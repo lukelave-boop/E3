@@ -187,7 +187,7 @@ without copying LightBurn branding or changing the E3 machine-control model:
    motion ready, job running, stopping, recovery, reconnect required, fault, and
    shutdown; stale Pi status becomes controller-state unknown rather than cached
    ONLINE. Connect/Reconnect, Disconnect, the
-   intentionally disabled Pause, and software STOP share its primary-control
+   session-bound Pause / Resume, and software STOP share its primary-control
    region. STOP remains enabled during ordinary background work. The strip
    stays inline when space permits, moves to its own toolbar row on narrower
    windows, and wraps status above controls when allocated less than 1100
