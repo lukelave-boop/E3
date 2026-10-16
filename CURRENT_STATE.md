@@ -2,83 +2,71 @@
 
 ## Desktop UI clarity (2026-10-16)
 
-Isolated branch `codex/desktop-ui-polish` incorporates integrated main `8c336dd`,
-preserving selected-object transparency, machine-axis raster, surface travel
-and prior upload/pause/Start work.
-The unrelated shared checkout is untouched. Shared desktop controls now have
-packaged visible dropdown/stepper indicators, stronger hover/focus/selected
-states, a matching dark native palette and a Panels menu exposing every inspector.
-Drawing and job actions show short names; Cuts labels its selectors, layer actions,
-job inclusion and canvas visibility. The units field accommodates its arrow.
+Runtime revision `81125cb2f61497d2d93e2b72715bc7a7837a3102` incorporates main
+through `8c336dd`, including selected-object transparency, machine-axis raster,
+surface travel and upload/pause/Start behavior. Work used an isolated checkout;
+the unrelated shared working-tree changes were preserved.
+
+The desktop has packaged visible dropdown/stepper indicators, clearer hover,
+focus and selected states, a matching dark native palette and a Panels menu
+exposing every inspector. Drawing and job actions show names. Cuts labels its
+selectors, layer actions, job inclusion and canvas visibility. Units,
+transparency percentages and trace-slider values accommodate the visible arrows
+at normal and enlarged font sizes.
 
 The engraving editor groups Clean image, Outline and Cut path. Named exclusive
-tool buttons, Exclude/Restore choices, contextual controls/instructions and explicit
-preview/draft feedback replace unlabeled tool dropdowns and a long undifferentiated
-form. Source pixels, image processing, persistence/schema, machine services,
-execution gates and the browser SVG pipeline are unchanged. See
-[UI guide](docs/DESKTOP_UI.md) for design references and
-[editor guide](docs/ENGRAVING_IMAGE_EDITOR.md) for actions.
+tools, Exclude/Restore choices, contextual controls/instructions and explicit
+preview/draft feedback replace unlabeled dropdowns and a long form. Source pixels,
+image processing, persistence/schema, machine services, execution gates and the
+browser SVG pipeline retain their behavior. See [UI guide](docs/DESKTOP_UI.md)
+for design references and [editor guide](docs/ENGRAVING_IMAGE_EDITOR.md) for actions.
 
-Initial Windows Python 3.14 offscreen verification: 82 general desktop tests,
-85 shared-control/confirmation/icon checks, 62 layout checks and 32 editor checks
-passed (overlapping groups). Eleven new indicator/menu checks also pass at both
-100% and 150% scale. Actual offscreen main-window and editor renders were inspected
-at large and compact sizes; source simulator windows use isolated settings/data,
-camera autostart off, motion disabled and hardware_enabled=False. Repository Ruff,
-application compileall and diff whitespace checks pass. Full local four-worker
-pytest and exact-revision Windows compatibility CI are pending. Frozen packaging,
-DEV TEST selection, interactive operator acceptance and main integration are not
-yet claimed. No physical camera/controller/laser test or Pi update occurred.
+Local Windows Python 3.14 verification passed the complete desktop selection:
+**1,616 tests in 173.90 seconds**, four workers, at `85a1114`. The following final
+trace-field sizing change passed **11** focused checks (the wrapper's **18**
+child theme checks plus ten raster-vectorization dialog checks). Navigation's
+layout/interaction assertions also run in a fresh Qt process. An ordered
+93-check shared-Qt group passes. Repository Ruff, application compileall and
+whitespace checks pass. Counts of focused groups overlap.
 
-The first broad local run was interrupted after a native Qt access violation in
-new navigation-test cleanup and additional failures; no full-suite pass is claimed.
-New UI tests now flush deferred deletion only for their owned widgets, with
-regressions proving other queued objects are not consumed. Ordered focused runs
-pass 87 control/navigation tests, 70 layout/navigation tests and 60 editor/control
-tests (overlapping). This removes a cleanup hazard but does not prove the crash's
-sole cause. A fresh complete desktop run and final-head compatibility CI are pending.
-The initial canonical packaging attempt stopped before admission because a
-relevant process lacked inspectable metadata. Read-only inspection found transient
-Python children belonging to tests; no process was terminated or guard bypassed.
-Packaging will be retried after the process-heavy local suite has stopped.
+Initial broad runs exposed a native Qt cleanup crash and expensive global
+restyling of retained widgets. New tests now delete only their own widgets,
+style only their owned dialogs, and isolate global theme/font probes in bounded
+child processes; the subsequent complete desktop run above passes. This does
+not establish the sole cause of the original native crash.
 
-The diagnostic desktop run reached 97% without a recorded failure but captured a
-60-second stack in application.setStyleSheet during new theme fixture setup.
-Repeated global restyling was repolishing widgets retained by preceding modules;
-the test eventually passed. The theme render/interaction assertions now run in a
-bounded fresh Python process with isolated Qt settings. All twelve probe checks
-pass; the collected wrapper passes, and an ordered 76-test control/navigation run
-passes. The runtime UI source is unchanged from `2e4ae9c`. Final CI is required.
-The failed packaging attempts also overlap another checkout's active managed
-build; a read-only guard check refused a changing container inventory. The empty
-failed lease is retained. A short-path build checkout is prepared at
-`C:\Users\lukel\.codex\worktrees\ui\E3` to avoid the known Inno path-length issue;
-no guard state, process protection or budget was bypassed.
+Actual source simulator renders were inspected at 900x680, 1080x780 and 1600x900,
+with compact image-editor checks and enlarged text. Settings/data were isolated,
+camera autostart was off, motion disabled and hardware_enabled=False. These are
+automated offscreen widget checks; interactive operator acceptance and real
+camera/controller/laser tests remain unperformed. No Pi update occurred.
 
-The combined branch incorporates selected-object transparency from main. Its
-percentage editor now measures the active theme and font so both 100% and Mixed
-remain readable at standard and enlarged text sizes. Fourteen isolated theme
-checks pass; the wrapper passes. The merged selection/navigation group passes
-35 checks. Final compatibility CI and complete desktop verification are pending.
+Packaging is blocked by the fixed eight-GiB managed pool: three failed leases
+reserve six GiB alongside about 1.67 GiB of files. This task's lease
+`windows-53d8a8f697e5425eb10a20167b300e99` has an empty output root, seven absent
+generated paths, matching ancestor identities and an exited owner. Read-only
+review and a backup/identity-checked one-off recovery are prepared under the
+isolated checkout's ignored `build/` directory. Recovery remains pending user
+approval; no lease, artifact, guard policy or DEV TEST pointer was changed.
+A short-path checkout at `C:\Users\lukel\.codex\worktrees\ui\E3` is prepared
+for the canonical build after recovery. The current DEV TEST selection still
+contains the previously verified transparency build recorded below.
 
-Packaging readiness currently refuses the fixed eight-GiB managed budget:
-three retained failed leases reserve six GiB alongside about 1.67 GiB of files.
-This task's failed lease windows-53d8a8f697e5425eb10a20167b300e99 has an empty
-output root, absent generated paths and an exited owner. Recovery review is
-prepared separately; no lease, artifact or existing DEV TEST selection is changed.
-
-The later complete desktop attempt reached 97% without recorded failures but
-was interrupted during slow shared-Qt layout testing. The new navigation checks
-also now run in a fresh application process, preserving all seven assertions;
-the collected wrapper passes. The editor compact-layout test styles only its
-own dialog; all 32 editor checks pass. These are test-isolation changes only.
-A new diagnostic complete desktop run and final-head CI are required.
-
-Final global-control review also found the trace-slider numeric fields
-clipped by a fixed 78-pixel cap. They now use font/style-aware Qt sizing;
-all 18 isolated theme/control checks and ten existing raster-vectorization
-dialog checks pass. The ordered shared-Qt regression group passes 93 checks.
-Runtime source is now frozen for final verification.
+Compatibility CI [38926805559](https://github.com/lukelave-boop/E3/actions/runs/38926805559)
+passed Windows Python 3.10 core (6,941 passed / 160 skipped), POSIX
+(1,502 passed / 2 skipped), and Ruff. Windows Python 3.12 completed with
+8,492 passed / 65 skipped and one narrow-layout assertion failure.
+Independent real-font reproduction showed that all secondary hints fit
+at 9pt (714 pixels needed in a 900-pixel window), while 13pt requires
+934 pixels and correctly hides them. This was a test font assumption,
+not stale layout or clipped controls. The regression now specifies its
+enlarged per-window font, retains every assertion, and the isolated
+navigation probe covers both 9pt and 13pt. The focused layout group passes
+12 collected checks, including all ten isolated navigation assertions. The
+original narrow-reset case also passes with the inherited dark 9pt theme;
+its explicit startup wait and normal status-layout refresh remove fixture
+timing assumptions. Runtime source is unchanged. Final compatibility
+verification is pending before main integration.
 
 ## Transparency DEV TEST handoff and integration (2026-10-16)
 

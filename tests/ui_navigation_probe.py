@@ -139,8 +139,11 @@ def test_layer_actions_and_selectors_fit_narrow_inspector(qt_application, width)
         _dispose(qt_application, scroll)
 
 
+@pytest.mark.parametrize("font_points", [9, 13])
 @pytest.mark.parametrize("size", [(900, 680), (1080, 780), (1600, 900)])
-def test_labeled_main_shell_keeps_canvas_and_stop_reachable(qt_application, tmp_path, monkeypatch, size):
+def test_labeled_main_shell_keeps_canvas_and_stop_reachable(
+    qt_application, tmp_path, monkeypatch, size, font_points,
+):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     payload = json.loads((Path(__file__).parents[1] / "config/default.json").read_text())
@@ -151,12 +154,13 @@ def test_labeled_main_shell_keeps_canvas_and_stop_reachable(qt_application, tmp_
     payload["machine"]["port"] = "COM_TEST"
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    original_font = qt_application.font()
-    qt_application.setFont(QtGui.QFont("Segoe UI", 13))
     # tests/conftest.py redirects even explicitly named native QSettings to temp INI files.
     assert QtCore.QSettings("E3", "E3 Positioning System").format() == QtCore.QSettings.Format.IniFormat
     window = E3MainWindow(CoreRuntime.from_config(path, hardware_enabled=False))
-    window.setStyleSheet(DARK_STYLESHEET + "\nQWidget { font-size: 13pt; }")
+    window.setFont(QtGui.QFont("Segoe UI", font_points))
+    window.setStyleSheet(
+        DARK_STYLESHEET + f"\nQWidget {{ font-size: {font_points}pt; }}"
+    )
     window.resize(*size)
     window.show()
     deadline = time.monotonic() + 10
@@ -195,6 +199,26 @@ def test_labeled_main_shell_keeps_canvas_and_stop_reachable(qt_application, tmp_
         assert stop.isEnabled()
         assert window.safety_toolbar.rect().contains(stop.mapTo(window.safety_toolbar, stop.rect().topLeft()))
         assert window.safety_toolbar.rect().contains(stop.mapTo(window.safety_toolbar, stop.rect().bottomRight()))
+        window.statusBar().clearMessage()
+        window.job_progress.set_job_status(
+            {"running": True, "total_lines": 100, "completed_lines": 25}
+        )
+        window._update_status_bar_layout()
+        _flush(qt_application)
+        status = window.statusBar()
+        progress = window.job_progress.progress
+        assert progress.width() >= progress.fontMetrics().horizontalAdvance(progress.format()) + 16
+        for control in (
+            window.direct_edit_label, window.cursor_label, window.selection_label,
+            window.job_progress, window.zoom_label, window.runtime_label,
+        ):
+            if control.isVisibleTo(window):
+                rectangle = QtCore.QRect(
+                    control.mapTo(status, QtCore.QPoint()), control.size(),
+                )
+                assert status.rect().contains(rectangle), control.objectName()
+                if isinstance(control, QtWidgets.QLabel):
+                    assert control.width() >= control.sizeHint().width(), control.text()
         assert window.centralWidget().width() >= 260
         assert window.centralWidget().height() >= 250
         assert window.runtime.settings.machine.allow_motion is False
@@ -206,4 +230,3 @@ def test_labeled_main_shell_keeps_canvas_and_stop_reachable(qt_application, tmp_
         window.controller.stop()
         window._closing = True
         _dispose(qt_application, window)
-        qt_application.setFont(original_font)
