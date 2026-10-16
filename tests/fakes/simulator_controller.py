@@ -14,6 +14,8 @@ class SimulatedController:
         self.absolute = True
         self.laser_on = False
         self.power = 0.0
+        self.motion_mode = 0
+        self.laser_mode = 0
         self.step_idle_delay_ms = 250
 
     def startup_lines(self) -> tuple[str, ...]:
@@ -30,6 +32,8 @@ class SimulatedController:
         if b"\x18" in data:
             self.laser_on = False
             self.power = 0.0
+            self.motion_mode = 0
+            self.laser_mode = 0
             responses.append("Grbl 1.1h ['$' for help] (simulated reset)")
         return tuple(responses)
 
@@ -65,6 +69,7 @@ class SimulatedController:
             self.y = 0.0
             self.laser_on = False
             self.power = 0.0
+            self.laser_mode = 0
             return ("ok",)
         if cleaned == "M115":
             return ("FIRMWARE_NAME:GRBL-SIMULATOR", "ok")
@@ -85,11 +90,15 @@ class SimulatedController:
         if "S" in values:
             self.power = values["S"]
         if m_codes.intersection({3, 4}):
-            self.laser_on = self.power > 0
+            self.laser_mode = 4 if 4 in m_codes else 3
         if 5 in m_codes:
-            self.laser_on = False
+            self.laser_mode = 0
             self.power = 0.0
+        self.laser_on = self.laser_mode in (3, 4) and self.power > 0
         if g_codes.intersection({0, 1}):
+            self.motion_mode = 1 if 1 in g_codes else 0
+        if (g_codes.intersection({0, 1})
+                or (not g_codes and self.motion_mode in (0, 1) and values.keys() & {"X", "Y"})):
             if "X" in values:
                 self.x = values["X"] if self.absolute else self.x + values["X"]
             if "Y" in values:

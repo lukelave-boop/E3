@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_workpiece_focus as packager
 from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 from scripts.package_workpiece_focus import (
     INSTALLED_FOCUS_REVISION,
@@ -20,6 +21,7 @@ from scripts.package_workpiece_focus import (
     SAVED_Z,
     package,
 )
+from tests.historical_companion import require_exact, selected_source
 
 CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
 
@@ -27,6 +29,12 @@ RECORDED_REMOTE_REVISION = "050498c0e31d7778c161688c9c232224aceb2717"
 REMOTE_SERVICE = "laser_aligner/machine/remote_service.py"
 PI_JOB_PROTOCOL = "laser_aligner/machine/pi_job_protocol.py"
 SETUP_MOTION = "laser_aligner/machine/setup_motion.py"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def historical_sources(tmp_path_factory):
+    with selected_source(packager, tmp_path_factory.mktemp("historical-workpiece-sources")) as tree:
+        yield tree
 
 
 def load_installer(bundle):
@@ -224,7 +232,8 @@ def source_snapshot(project):
 
 
 @pytest.mark.parametrize("baseline", PREDECESSORS)
-def test_exact_git_predecessor_upgrade_imports_without_hardware(tmp_path, monkeypatch, baseline):
+def test_exact_git_predecessor_upgrade_imports_without_hardware(tmp_path, monkeypatch, baseline, historical_sources):
+    require_exact(historical_sources)
     project = exact_predecessor_project(tmp_path, baseline)
     bundle = package(tmp_path / "dist")
     installer = load_installer(bundle)

@@ -11,12 +11,20 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_laser_focus as packager
 from scripts.package_laser_focus import PREVIOUS, PREVIOUS_REVISION, ROOT, package
 from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
+from tests.historical_companion import require_exact, selected_source
 
 CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
 
 CURRENT_FILES = {**PREVIOUS, **CURRENT_DEPENDENCIES}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def historical_sources(tmp_path_factory):
+    with selected_source(packager, tmp_path_factory.mktemp("historical-focus-sources")) as tree:
+        yield tree
 
 
 def test_packaged_guide_uses_its_own_installer_baseline_and_existing_install_link(tmp_path):
@@ -116,7 +124,8 @@ def test_unknown_existing_retention_module_rejects_before_any_update(kit):
     assert not list(project.rglob("*.e3-backup-*"))
 
 
-def test_package_applies_to_exact_main_predecessor_and_imports_without_hardware(tmp_path, monkeypatch):
+def test_package_applies_to_exact_main_predecessor_and_imports_without_hardware(tmp_path, monkeypatch, historical_sources):
+    require_exact(historical_sources)
     if shutil.which("git") is None or subprocess.run(
         ["git", "cat-file", "-e", PREVIOUS_REVISION], cwd=ROOT, capture_output=True,
     ).returncode:

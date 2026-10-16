@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_z_setup_speed as packager
 from scripts.package_laser_focus import PREVIOUS_REVISION as BASE_REVISION
 from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 from scripts.package_z_setup_speed import (
@@ -22,11 +23,18 @@ from scripts.package_z_setup_speed import (
     ROOT,
     package,
 )
+from tests.historical_companion import require_exact, selected_source
 
 CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
 
 SETUP_MOTION = "laser_aligner/machine/setup_motion.py"
 PRIORITY_PROTOCOL = "laser_aligner/machine/pi_job_protocol.py"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def historical_sources(tmp_path_factory):
+    with selected_source(packager, tmp_path_factory.mktemp("historical-setup-speed-sources")) as tree:
+        yield tree
 
 
 def load_installer(bundle):
@@ -180,7 +188,7 @@ def test_package_pins_complete_installed_baseline_and_exact_application_payload(
     assert all(path.startswith("laser_aligner/") for path in PREVIOUS)
     for entry in manifest["files"]:
         content = (bundle / entry["path"]).read_bytes()
-        assert content == (ROOT / entry["path"]).read_bytes().replace(b"\r\n", b"\n")
+        assert content == (packager.ROOT / entry["path"]).read_bytes().replace(b"\r\n", b"\n")
         assert hashlib.sha256(content).hexdigest() == entry["sha256_lf"]
     installer = load_installer(bundle)
     assert hashlib.sha256((bundle / "manifest.json").read_bytes()).hexdigest() == installer.MANIFEST_SHA256
@@ -200,7 +208,8 @@ def test_package_pins_complete_installed_baseline_and_exact_application_payload(
     assert "[INSTALL.md](INSTALL.md)" in (bundle / "README.md").read_text(encoding="utf-8")
 
 
-def test_exact_recorded_installed_upgrade_imports_without_hardware(tmp_path, monkeypatch):
+def test_exact_recorded_installed_upgrade_imports_without_hardware(tmp_path, monkeypatch, historical_sources):
+    require_exact(historical_sources)
     for revision in (BASE_REVISION, INSTALLED_REVISION):
         if shutil.which("git") is None or subprocess.run(
             ["git", "cat-file", "-e", revision], cwd=ROOT, capture_output=True,

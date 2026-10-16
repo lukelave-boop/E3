@@ -1,5 +1,76 @@
 # Current repository state
 
+## Detailed-path command streaming fix (2026-10-15)
+
+The video slowdown is consistent with command starvation: the saved raster
+contains 173,663 G1 moves at the same F6000, mostly 0.1 mm segments, while the
+previous sender imposed a 10 ms quiet interval and receive-thread handoff after
+each acknowledgement. Offline full-queue-timeout measurements reproduced only
+32.35-32.42 admitted moves/s. This is software evidence, not calibrated motion.
+
+Consecutive canonical G1 runs now use continuous receive ownership, lossless
+modal wire encoding, and bounded FIFO acknowledgement accounting. Only strict
+handshake OPT capacity evidence permits multiple outstanding commands; unknown
+capacity keeps one pending line. All other commands remain fences. Original
+immutable program validation and per-write safety checks remain authoritative;
+Stop/session/motion/hardware/authorization gates are checked again after input
+draining immediately before a physical write. Oversized stream lines reject
+before Start can arm, Home or move focus. See [command streaming](docs/COMMAND_STREAMING.md).
+
+Verification: 573 Windows start/focus/cancellation/stream tests pass;
+111 Pi ownership/failure/focus tests pass; 1,344 Linux controller/Pi/focus tests pass,
+including the new actual serial-backend PTY cases. Packaging regressions passed
+205 checks plus 48 focused checks and three explicit historical/shallow fixture
+checks. Repository Ruff and compileall pass. Tests use fake controllers or PTYs,
+not physical controllers or laser output. Desktop coverage is automated/offscreen;
+no interactive GUI or camera test was performed for this fix.
+
+The initial local full run produced 7,562 passed, 38 skipped and 25 failed.
+Failures exposed stale compact-wire test expectations and premature size-check
+ordering; fixtures now preserve canonical program bytes while asserting actual
+wire bytes, and the original focus/STOP/disarm guard precedence is restored.
+Three unrelated local failures were changing Git-derived identity during the
+run and a loaded watchdog timing check; all six diagnostic checks passed on
+rerun without changing product timeouts. Initial CI also exposed one shallow
+historical-fixture assertion, now split from exact implementation verification.
+The corrected runtime revision `34902b8` passed
+[Compatibility CI 38830190975](https://github.com/lukelave-boop/E3/actions/runs/38830190975):
+Windows 3.12 desktop **7,562 passed, 64 skipped** (752.93 s), Windows 3.10 core
+**6,086 passed, 151 skipped** (388.79 s), POSIX controller/session **652 passed**
+(107.43 s), and repository Ruff. The additional local Linux gate passed all
+1,344 checks in 145.74 s against that committed runtime.
+
+The immediate-ACK benchmark at the earlier 2f58d9c candidate measured median
+8,212 moves/s with unknown capacity and 7,078 moves/s with advertised capacity
+for 100 moves, versus 32.36 moves/s previously. Synthetic motion bytes fell from
+2,100 to 590 without changing endpoints/feed. These are software-admission and
+synthetic encoding measurements, not physical speed or actual-job compression.
+
+The exact `34902b8` Pi companion `e3-pi-command-streaming-d2f71570` is installed.
+Immediately before applying, authenticated state proved disconnected, unarmed,
+idle and unowned; all predecessor hashes matched. The installer validated the
+whole payload, applied with the service inactive, and retained both predecessor
+files as verified backups. Imports passed on Pi Python 3.13.5. The restarted
+service is active; fresh authenticated status remains disconnected, unarmed and
+idle, with no control owner. All three installed hashes match the manifest, and
+a subsequent dry run reports every file already current.
+
+All 23 configuration/calibration/support-file hashes are unchanged. The separate
+24th runtime file, the one-use Z-retention checkpoint, received its expected new
+session claim on restart with `clean: false` and `snapshot: null`; no old position
+authority was restored. No firmware, baud, feed, power or sampling changes were
+made. Physical motion, laser output and Stop qualification remain unverified.
+
+The existing Windows image-editor DEV TEST selection remains active
+(0.7.211, ca6af327); network execution now uses the updated Pi companion.
+No replacement Windows executable is required. Serial bandwidth and
+controller acceleration can still constrain F6000 on dense patterns; steady
+physical speed at every setting is not yet verified.
+The isolated `codex/steady-raster-streaming` branch and
+[PR #45](https://github.com/lukelave-boop/E3/pull/45) remain active for the supervised
+operator test before main integration/publication. The unrelated shared working
+tree was preserved; no production release or Windows launcher change was made.
+
 ## Development 0.7.220 published and verified (2026-10-15)
 
 [PR #44](https://github.com/lukelave-boop/E3/pull/44) was merged into main at

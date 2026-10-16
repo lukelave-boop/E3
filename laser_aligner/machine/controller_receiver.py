@@ -7,6 +7,7 @@ An ambiguous exchange must therefore retire the entire session, never retry it.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import deque
@@ -41,6 +42,11 @@ class ControllerReceiver:
         self._ingress_waiters = 0
         self._pending: deque[str] = deque()
         self._transaction: int | None = None
+        self._stream: int | None = None
+        self._stream_pending: deque[tuple[int, int]] = deque()
+        self._stream_ready: deque[tuple[int, int, str]] = deque()
+        self._stream_bytes = 0
+        self._stream_last_sequence = 0
         self._fault: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -59,6 +65,10 @@ class ControllerReceiver:
             result["ownership"] = {
                 "transaction": self._transaction, "pending_lines": len(self._pending),
                 "ingress_waiters": self._ingress_waiters, "fault": self._fault,
+                "stream": self._stream,
+                "stream_pending": len(self._stream_pending),
+                "stream_ready": len(self._stream_ready),
+                "stream_bytes": self._stream_bytes,
             }
         finally:
             self._condition.release()
@@ -79,7 +89,7 @@ class ControllerReceiver:
     @property
     def has_transaction(self) -> bool:
         with self._condition:
-            return self._transaction is not None
+            return self._transaction is not None or self._stream is not None
 
     @property
     def failure(self) -> str | None:
@@ -162,6 +172,20 @@ class ControllerReceiver:
             if state in {"alarm", "sleep", "door", "hold"}:
                 raise MachineError(f"Controller state invalidated the session: {response}")
         with self._condition:
+            if self._stream is not None:
+                if kind is CommandResponseKind.ACKNOWLEDGEMENT:
+                    if not self._stream_pending:
+                        raise MachineError("Controller returned an unowned streaming acknowledgement")
+                    sequence, byte_count = self._stream_pending.popleft()
+                    # Retain credit until the stream consumer observes this ACK.
+                    self._stream_ready.append((sequence, byte_count, response))
+                    return
+                if kind is CommandResponseKind.ERROR:
+                    raise MachineError(f"Controller rejected a streaming command: {response}")
+                if kind is CommandResponseKind.PAYLOAD:
+                    raise MachineError(f"Controller returned unexpected streaming payload: {response!r}")
+                self._on_idle(response)
+                return
             if self._transaction is not None:
                 if len(self._pending) >= 512:
                     raise MachineError("Controller receive transaction exceeded its bounded queue")
@@ -183,7 +207,7 @@ class ControllerReceiver:
             with self._consumer_ingress():
                 self.raise_if_faulted()
                 with self._condition:
-                    if self._transaction is not None:
+                    if self._transaction is not None or self._stream is not None:
                         raise MachineError("Controller receive transaction already has an owner")
                 # Input queued before admission cannot acknowledge the new TX.
                 # Bound even a stream of benign diagnostics at this boundary.
@@ -225,9 +249,159 @@ class ControllerReceiver:
                 self._latch_failure(str(exc))
                 raise
 
+    def begin_stream(self, token: int) -> None:
+        """Transfer receive pumping to one bounded G1 stream owner.
+
+        The caller must keep motion, output and STOP authorization at every
+        physical write. This API only owns response ordering and byte credit.
+        Untagged GRBL ACKs cannot reveal a duplicate while other replies are
+        pending; excess ACKs and faults observed at admission/fences are fatal.
+        """
+        try:
+            with self._consumer_ingress():
+                self.raise_if_faulted()
+                if type(token) is not int or token < 1:
+                    raise MachineError("Controller stream token must be a positive integer")
+                with self._condition:
+                    if self._transaction is not None or self._stream is not None:
+                        raise MachineError("Controller receive transaction already has an owner")
+                self._drain_stream_input()
+                with self._condition:
+                    self.raise_if_faulted()
+                    self._stream = token
+                    self._stream_last_sequence = 0
+                    self._condition.notify_all()
+        except Exception as exc:
+            self._latch_failure(str(exc))
+            raise
+
+    @contextmanager
+    def _stream_ingress(self, token: int) -> Iterator[None]:
+        # The background receiver yields for the complete stream. Each API
+        # call owns ingress without holding the service physical-write lock
+        # across a blocking read. Failure callbacks remain outside this gate.
+        try:
+            with self._consumer_ingress():
+                self.raise_if_faulted()
+                with self._condition:
+                    if type(token) is not int or self._stream != token:
+                        raise MachineError("Controller receive stream ownership changed")
+                yield
+        except Exception as exc:
+            self._latch_failure(str(exc))
+            raise
+
+    def _drain_stream_input(self) -> bool:
+        """Classify queued bytes; report status traffic that resets quiet time."""
+        status_received = False
+        for _ in range(512):
+            self.raise_if_faulted()
+            response = self._read_transport(timeout=0.0)
+            if not response:
+                return status_received
+            self._dispatch(response)
+            status_received |= (
+                self._dialect.classify_command_response(response)
+                is CommandResponseKind.REALTIME_STATUS
+            )
+        raise MachineError("Controller stream input did not reach a bounded boundary")
+
+    def stream_write(
+        self, token: int, sequence: int, byte_count: int,
+        write: Callable[[], None], *, capacity: int = 127,
+    ) -> bool:
+        """Admit one complete line only when its exact wire bytes fit.
+
+        ``byte_count`` includes the line terminator. The caller binds it to the
+        exact bytes written. A failed or partial write retires this ownership;
+        no reservation can be reused or retried after that failure.
+        """
+        with self._stream_ingress(token):
+            if type(capacity) is not int or not 1 <= capacity <= 127:
+                raise MachineError("Controller stream capacity must be between 1 and 127 bytes")
+            if type(byte_count) is not int or not 1 <= byte_count <= capacity:
+                raise MachineError("Controller stream line exceeds its byte capacity")
+            if type(sequence) is not int or sequence <= self._stream_last_sequence:
+                raise MachineError("Controller stream sequence must increase")
+            self._drain_stream_input()
+            with self._condition:
+                self.raise_if_faulted()
+                if (self._stream_bytes + byte_count > capacity
+                        or len(self._stream_pending) + len(self._stream_ready) >= 16):
+                    return False
+                self._stream_pending.append((sequence, byte_count))
+                self._stream_bytes += byte_count
+                self._stream_last_sequence = sequence
+            write()
+            self.raise_if_faulted()
+            return True
+
+    def stream_read_ack(self, token: int, timeout: float) -> tuple[int, str] | None:
+        """Read and consume one FIFO ACK, releasing only its line's credit."""
+        with self._stream_ingress(token):
+            if not math.isfinite(timeout) or timeout < 0:
+                raise MachineError("Controller stream read timeout must be finite and nonnegative")
+            deadline = time.monotonic() + timeout
+            while True:
+                self._drain_stream_input()
+                with self._condition:
+                    self.raise_if_faulted()
+                    if self._stream_ready:
+                        sequence, byte_count, response = self._stream_ready.popleft()
+                        self._stream_bytes -= byte_count
+                        return sequence, response
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                response = self._read_transport(timeout=min(0.02, remaining))
+                if response:
+                    self._dispatch(response)
+
+    def finish_stream(self, token: int, *, quiet_interval: float, timeout: float) -> None:
+        """Fence an ACK-drained stream, then return RX to the idle worker.
+
+        ACK drain is not physical motion completion. The caller must still
+        execute its normal M5/motion barriers before any dependent operation.
+        """
+        with self._stream_ingress(token):
+            if (not math.isfinite(quiet_interval) or quiet_interval < 0
+                    or not math.isfinite(timeout) or timeout < quiet_interval):
+                raise MachineError("Controller stream fence requires a bounded quiet interval")
+            self._drain_stream_input()
+            with self._condition:
+                if self._stream_pending or self._stream_ready or self._stream_bytes:
+                    raise MachineError("Controller stream fence requires all acknowledgements consumed")
+            deadline = time.monotonic() + timeout
+            quiet_started = time.monotonic()
+            while True:
+                self.raise_if_faulted()
+                now = time.monotonic()
+                quiet_remaining = quiet_interval - (now - quiet_started)
+                if quiet_remaining <= 0:
+                    # Check the actual queue once more while admission remains
+                    # excluded; elapsed thread time alone proves no boundary.
+                    if not self._drain_stream_input():
+                        break
+                    quiet_started = time.monotonic()
+                    continue
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise MachineError("Controller stream ended without a quiet boundary")
+                response = self._read_transport(timeout=min(0.02, quiet_remaining, remaining))
+                if response:
+                    self._dispatch(response)
+                    if self._dialect.classify_command_response(response) is CommandResponseKind.REALTIME_STATUS:
+                        quiet_started = time.monotonic()
+            with self._condition:
+                self.raise_if_faulted()
+                self._stream = None
+                self._condition.notify_all()
+
     def read_line(self, timeout: float) -> str | None:
         deadline = time.monotonic() + max(0.0, timeout)
         with self._condition:
+            if self._stream is not None:
+                raise MachineError("Controller receive stream has exclusive ownership")
             while True:
                 self.raise_if_faulted()
                 if self._pending:
@@ -268,7 +442,7 @@ class ControllerReceiver:
             try:
                 self._progress.mark("condition_wait")
                 with self._condition:
-                    while self._ingress_waiters and not self._stop.is_set():
+                    while (self._ingress_waiters or self._stream is not None) and not self._stop.is_set() and self._fault is None:
                         self._progress.mark("consumer_priority_wait")
                         self._condition.wait()
                 self._progress.mark("ingress_wait")
@@ -276,6 +450,9 @@ class ControllerReceiver:
                     if self._stop.is_set():
                         return
                     self.raise_if_faulted()
+                    with self._condition:
+                        if self._stream is not None:
+                            continue
                     self._progress.mark("transport_read_wait")
                     response = self._read_transport(timeout=0.02)
                     self._progress.mark("transport_line" if response else "transport_empty")

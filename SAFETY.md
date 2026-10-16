@@ -1,5 +1,14 @@
 # Safety requirements
 
+Continuous GRBL G1 streaming retains per-write motion, process, arming, focus
+and session checks against original validated commands. Pending bytes and
+acknowledgements are bounded; unknown receive capacity permits one outstanding
+line. Non-motion/control commands fence the stream. Stop/disarm/disconnect and
+faults retain priority abort/M5/close attempts, exact-session quarantine and no
+automatic replay. Lossless wire encoding grants no new authority. Controller
+bandwidth and physical speed remain unverified until an operator test is
+recorded; see [command streaming](docs/COMMAND_STREAMING.md).
+
 ## Separate raster engraving and carriage travel
 
 New desktop raster programs require an explicit verified machine carriage
