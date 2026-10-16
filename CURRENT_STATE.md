@@ -14,7 +14,8 @@ size check now proves already-fitting ASCII source lines without full compaction
 long eligible source still takes the exact stateful scan. On the operator's exact
 file, offline original/new validation was 12.505/6.704 seconds with identical
 validated output, and the first stream check was 3.818/0.045 seconds. These are
-local timings; live Pi upload measurement was deferred when E3 reconnected.
+local preparation timings; the live upload measurement below was performed after
+the operator subsequently disconnected and closed E3.
 Focused protocol/store/server/remote tests: 194 passed; codec/remote: 92 passed;
 stream/geometry/codec: 145 passed. The combined run passed 488 checks and exposed
 one stale installer fixture; the corrected installer checks pass (2), and the
@@ -44,12 +45,25 @@ original committed resources/metadata were restored. The original bundle also
 passes isolated offscreen startup with its unchanged EXE hash. Future rebuilds
 must use a separate output checkout while an operator has a bundle open.
 
-Companion e3-pi-job-pause-459a399c is staged on the Pi and its read-only install
-dry-run passes. The operator is still using E3, so installation/service restart
-and actual upload timing remain deferred; the installed companion is still
-e3-pi-job-pause-fbd51fa7. Until the matching companion is installed, the desktop
-uses the original raw upload path. Physical pause/continuation and total live
-Start latency remain unverified.
+Companion e3-pi-job-pause-459a399c is installed after the operator disconnected
+and closed E3. Repeated authenticated preflight confirmed disconnected, disarmed,
+idle, unowned state with no attached clients. Six source files were updated with
+backups, five were already current; all eleven were verified after installation.
+The service restarted and advertises both pause and compressed-upload support.
+Configuration and service drop-in hashes were unchanged.
+
+Real Windows-to-Pi Tailscale upload benchmark, same 22,099,480-byte job and
+updated node: forced legacy raw transfer took 58.922 seconds / 338 chunks;
+negotiated compressed transfer took 6.346 seconds / 22 chunks (9.29x faster,
+89.2% less elapsed time). Base64 payload fell from 29,466,872 to 4,708,120 bytes.
+Timing includes job.begin, compression and durable chunk acknowledgements;
+neither upload was finalized, armed or started. Both temporary jobs were deleted.
+The controller remained disconnected and disarmed throughout both benchmarks,
+with no motion requested. A subsequent final read-only check observed a new
+client reconnect (READY_HOME_REQUIRED, disarmed, no active job); it was left alone.
+This verifies real upload performance, not total Start latency or physical
+pause/continuation, which remain unverified. Permanent E3 DEV TEST still selects
+the exact matching 0.7.235 Windows build listed above.
 
 ## Pause / resume feature verification (2026-10-15)
 
