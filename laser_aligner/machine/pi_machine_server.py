@@ -19,6 +19,7 @@ from typing import Any
 from ..errors import MachineError, SafetyError
 from ..identity import application_version, build_revision
 from ..raster_safety import CAPABILITY as RASTER_TRAVEL_CAPABILITY
+from ..raster_safety import SURFACE_CAPABILITY as RASTER_SURFACE_TRAVEL_CAPABILITY
 from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
@@ -117,6 +118,7 @@ SERVER_CAPABILITIES = (
     CAPABILITY_PI_COMPRESSED_UPLOAD,
     "pi-job-pause-v1",
     RASTER_TRAVEL_CAPABILITY,
+    RASTER_SURFACE_TRAVEL_CAPABILITY,
     MATERIAL_SURFACE_CAPABILITY,
     "pi-mainboard-z-v1",
     "pi-laser-focus-v1",

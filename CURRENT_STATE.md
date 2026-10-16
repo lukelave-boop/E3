@@ -1,5 +1,34 @@
 # Current repository state
 
+## Confirmed calibrated surface travel candidate (2026-10-16)
+
+Isolated branch `codex/verified-surface-travel` is based on selected upload/pause
+source `21273d01`. The recorded 191 x 191 surface reaches machine Y229.7643,
+while the separate old carriage rectangle ends at Y210. Operator confirmation
+of the whole surface is represented by an exact calibration/offset-bound polygon,
+combined with the unchanged old rectangle. It does not authorize the bounding
+rectangle's unverified corners or outside runout.
+
+Geometry, planner, Start Here, measured-focus and Pi validation use complete
+segments. Laser-off transfers may route through a verified intersection waypoint;
+powered samples remain unchanged. Old schemas retain their format and digest.
+The new Pi capability and matching local record are mandatory for surface jobs.
+`scripts/prepare_surface_travel_record.py` creates a separate proposal with source
+hashes and prior-envelope digest; it never applies settings.
+
+Offline Windows checks include 363 integrated geometry/planner/project/profile,
+proposal and runtime/focus tests, plus 97 simulated Pi server/E2E/focus checks.
+Three additional rounding-route regressions pass in the final 25-test planner run.
+The frozen saved barrel job reproduces the old Y224.436
+failure and generates with the proposed surface record at unchanged placement.
+Full 191 x 191 synthetic images with contained runout retain all powered samples.
+Rotated full-bleed edges can still reject if G-code rounding crosses the exact
+powered boundary; no powered clipping or tolerance expansion was introduced.
+Final runtime/regression counts are recorded in the task handoff. No physical
+test, active profile change, build selection, Pi installation or deployment was
+performed. This candidate is not installed; matching desktop/Pi review and
+configuration application remain pending.
+
 ## Faster upload and preparation follow-up (2026-10-15)
 
 The operator requested removal of upload delay as well as the earlier Start fix.

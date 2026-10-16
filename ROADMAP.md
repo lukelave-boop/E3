@@ -1,5 +1,14 @@
 # Roadmap
 
+## Confirmed surface travel (2026-10-16)
+
+Implemented in an isolated candidate: exact calibrated surface authority alongside
+the existing carriage rectangle, complete segment checks, contained transfer
+routing, calibration/offset invalidation, matching Pi capability and a proposal-only
+configuration helper. Full 191 x 191 image coverage with contained runout and the
+reported high-Y raster are covered offline. Matched desktop/Pi installation and
+reviewed record application remain pending; no active limits were changed.
+
 Compressed upload and repeated-geometry/stream-size optimizations are implemented.
 Verify actual Pi transfer and preparation timing with the matched companion;
 physical pause/resume qualification remains separate from inert upload timing.

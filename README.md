@@ -37,6 +37,14 @@ safety validation; generated motion, power, calibration and settings are unchang
 
 ## Raster surface and verified travel
 
+An explicitly confirmed calibrated surface can now be recorded as a separate
+carriage-travel polygon alongside the existing verified rectangle. This permits
+full-size images when their complete motion fits those verified regions. Records
+bind the exact calibration and laser offset; transfers can use a verified overlap
+waypoint. Overscan beyond both regions still rejects. Matching desktop and Pi
+support and reviewed configuration are required; see the
+[surface-travel proposal workflow](docs/RASTER_OVERSCAN.md).
+
 Desktop raster generation now requires a separately recorded, verified carriage
 travel envelope. The calibrated engraving surface remains the powered-output
 boundary; laser-off lead-in, blank gaps and transfers are checked in machine

@@ -111,6 +111,11 @@ def _capabilities(value: object, label: str) -> tuple[str, ...]:
 
 def _machine_dict(settings: MachineSettings) -> dict[str, Any]:
     payload = asdict(settings)
+    # Preserve the legacy envelope shape/digest when no surface record exists.
+    payload["raster_travel_envelope"] = (
+        None if settings.raster_travel_envelope is None
+        else settings.raster_travel_envelope.to_dict()
+    )
     payload["air_assist"]["mode"] = coerce_air_assist_mode(
         settings.air_assist.mode
     ).value

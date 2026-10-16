@@ -28,6 +28,16 @@ safety validation; generated motion, power, calibration and settings are unchang
 
 ## Raster engraving and carriage domains
 
+An optional `VerifiedSurfaceTravel` adds the exact calibrated surface, translated
+by the recorded beam-to-carriage offset, to the independently verified rectangle.
+Schema 2 binds the surface and envelope digests; schema 1 bytes remain unchanged.
+The combined domain can be non-convex, so segment validation covers its complete
+parameter interval. Laser-off planning may route through a rounded waypoint in
+the regions' intersection. Route selection uses emitted coordinates while keeping
+the actual initial position exact; final serialized validation remains required.
+The Pi advertises `pi-raster-surface-travel-v2` and independently matches the local
+record. No axis-aligned bounding box or convex hull gains travel authority.
+
 `raster_safety.py` owns Qt/HTTP-independent typed travel evidence and the strict
 `E3RASTER` program directive. Its convex polygon is the current calibrated
 machine-beam engraving surface, while its travel rectangle is the separately

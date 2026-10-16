@@ -71,8 +71,9 @@ def selected_plan(machine, program):
         words = {w.letter: w.value for w in parse_words(line)}
         if words.get("G") in (0, 1):
             if raster_boundary is not None:
-                raster_boundary.require_travel_point(tuple(plan["xy"]), label="Measured-focus transfer start")
-                raster_boundary.require_travel_point((words["X"], words["Y"]), label="Measured-focus transfer end")
+                raster_boundary.require_travel_segment(
+                    tuple(plan["xy"]), (words["X"], words["Y"]), label="Measured-focus transfer",
+                )
                 break
             bounds = FocusXYBounds(machine.settings.work_area, program.guarded_output_polygon_mm)
             if not bounds.contains_segment(tuple(plan["xy"]), (words["X"], words["Y"])):

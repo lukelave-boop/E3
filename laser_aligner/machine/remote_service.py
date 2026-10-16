@@ -28,7 +28,8 @@ from ..operation_focus import CAPABILITY as OPERATION_FOCUS_CAPABILITY
 from ..operation_focus import mode as operation_focus_mode
 from ..operation_focus import validate_targets
 from ..raster_safety import CAPABILITY as RASTER_TRAVEL_CAPABILITY
-from ..raster_safety import program_raster_boundary
+from ..raster_safety import SURFACE_CAPABILITY as RASTER_SURFACE_TRAVEL_CAPABILITY
+from ..raster_safety import parse_raster_travel_envelope, program_raster_boundary
 from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
 from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
@@ -1864,8 +1865,14 @@ class RemoteMachineService:
         self._require_raster_travel_capability(program)
 
     def _require_raster_travel_capability(self, program: ValidatedProgram) -> None:
-        if (program_raster_boundary(program.lines) is not None
-                and RASTER_TRAVEL_CAPABILITY not in (self._node_capabilities or ())):
+        boundary = program_raster_boundary(program.lines)
+        envelope = parse_raster_travel_envelope(self.settings.raster_travel_envelope)
+        capabilities = self._node_capabilities or ()
+        if ((boundary is not None and boundary.travel_surface_polygon_mm is not None)
+                or (envelope is not None and envelope.surface is not None)):
+            if RASTER_SURFACE_TRAVEL_CAPABILITY not in capabilities:
+                raise SafetyError("Update the Pi companion and configure matching verified surface travel before preparing this job")
+        if boundary is not None and RASTER_TRAVEL_CAPABILITY not in capabilities:
             raise SafetyError("Update the Pi companion and configure matching verified raster travel limits before preparing this job")
 
     def _require_operation_focus(self, program: ValidatedProgram) -> None:
