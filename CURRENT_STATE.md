@@ -16,8 +16,40 @@ file, offline original/new validation was 12.505/6.704 seconds with identical
 validated output, and the first stream check was 3.818/0.045 seconds. These are
 local timings; live Pi upload measurement was deferred when E3 reconnected.
 Focused protocol/store/server/remote tests: 194 passed; codec/remote: 92 passed;
-stream/geometry/codec: 145 passed. Final checks, updated build and installation
-are pending. The installer now includes eleven files, pinned to installed e649a22.
+stream/geometry/codec: 145 passed. The combined run passed 488 checks and exposed
+one stale installer fixture; the corrected installer checks pass (2), and the
+modal replay/source-byte upper-bound checks pass (76). Ruff and compileall pass.
+The installer now includes eleven files, pinned to installed e649a22.
+
+Initial compatibility CI 38842586933 passes Windows 3.10 core (6,250 tests),
+POSIX serial/session (656 tests), and lint. Windows 3.12 passes 7,765 tests but
+reports a browser Node subprocess timeout and a retained-Z reconnect assertion.
+Their focused files pass all 25 checks; four-worker coverage alongside compression
+and polygon checks passes all 59. The reconnect test now reports its checkpoint
+and retention status on failure (focused check passes). The unchanged-revision
+rerun passes: Windows 3.12 desktop 7,767 passed / 65 skipped. Full compatibility
+CI is green; neither affected runtime path was changed here.
+
+Frozen Windows 0.7.235 uses exact revision
+21273d01cb9409b9aea0733c57f0387f387a720a in the separate managed build checkout
+C:\Users\lukel\.codex\worktrees\job-upload-build\E3. All 191 packaged application
+modules and three resources match that commit. Isolated offscreen startup with
+a synthetic saved profile passes; no interactive camera/controller test was run.
+The permanent E3 DEV TEST pointer selects this exact EXE via the validated atomic
+pointer script. Canonical Windows installer packaging also completes successfully.
+The first rebuild was interrupted after it removed unlocked support files from
+the still-open older bundle. Its original EXE was retained, missing dependencies
+were restored only after comparison with retained dependency contents, and its
+original committed resources/metadata were restored. The original bundle also
+passes isolated offscreen startup with its unchanged EXE hash. Future rebuilds
+must use a separate output checkout while an operator has a bundle open.
+
+Companion e3-pi-job-pause-459a399c is staged on the Pi and its read-only install
+dry-run passes. The operator is still using E3, so installation/service restart
+and actual upload timing remain deferred; the installed companion is still
+e3-pi-job-pause-fbd51fa7. Until the matching companion is installed, the desktop
+uses the original raw upload path. Physical pause/continuation and total live
+Start latency remain unverified.
 
 ## Pause / resume feature verification (2026-10-15)
 

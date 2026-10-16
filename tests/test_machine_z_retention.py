@@ -102,10 +102,12 @@ def test_clean_disconnect_restart_restores_z_without_probing_and_survives_xy_hom
 
 def test_live_ender_reconnect_verifies_matching_z_without_motion(rig):
     rig.machine.disconnect()
+    assert _clean(rig), rig.machine.status()["z_retention"]
     rig.serial.writes.clear()
     rig.machine.connect()
     assert not _clean(rig)
-    assert rig.machine.status()["z_retention"]["restored"]
+    retention = rig.machine.status()["z_retention"]
+    assert retention["restored"], retention
     assert rig.serial.writes.count("M124 Z30.000") == 1
     assert not any(line.startswith(("G1 ", "G28", "G39")) for line in rig.serial.writes)
 
