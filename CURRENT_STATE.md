@@ -2,40 +2,48 @@
 
 ## Default packaging storage guard (2026-10-16)
 
-The normal Windows installer, private home-installer call chain, DEV TEST
-launcher and Linux AppImage entrypoints now invoke a shared storage guard by
-default. Existing output paths and normal build parameters remain supported.
-Admission measures legacy generated artifacts, bounds further growth to the
-recorded baseline plus eight GiB, reserves concurrent build capacity and checks
-a free-space floor. Hosted CI opts into verified fresh-workspace handling;
-intermediate uploaded packages have seven-day retention.
+The normal Windows installer, private home-installer call chain and DEV TEST
+launcher use a shared **eight-GiB managed-output admission budget**. All new
+local outputs go into `.e3-builds/<mode>-<build-id>` under the source checkout.
+The complete enrolled containers count, including temporary files, caches,
+private payloads, failed builds and unknown or protected children. Each build
+reserves two GiB within that budget, with a separate two-GiB physical free-space
+floor. This admission policy is not a filesystem quota. Hosted CI uses verified
+fresh-workspace handling; intermediate uploaded packages have seven-day retention.
 
 Ordinary explicit builds may replace only their own previously successful,
 unchanged generated outputs. Selected, running and pinned output trees are
-protected, including supporting runtime files. Windows, private and launcher
-builds preserve legacy, changed and protected outputs by automatically choosing
-a fresh `.e3-builds/<mode>-<build-id>` output directory. They keep source inputs
-in the checkout, contain generated files and cache in the chosen output root,
-and print exact resulting paths. Launcher selection stays unchanged. Inspection
-and capacity errors still stop the build; Linux retains strict output checks.
+protected, including supporting runtime files. Managed directories can be reused
+only after exact ownership, source/mode, identity and protection checks. Builders
+keep source inputs in the checkout, contain generated files, caches and temporary
+files in the chosen output root, and print exact resulting paths. They use
+installed dependencies; normal local builds do not automatically upgrade Python
+packages or install Inno Setup. Launcher selection stays unchanged. Inaccessible,
+missing, linked or unstable enrolled containers stop admission. Linux retains its
+separate legacy accounting and strict output checks.
 Private outputs use metadata-only ownership and capacity accounting; secret
 payloads never enter the prunable registry. Failed builds retain their lease;
 no automatic pruning is enabled.
 
-First-time initialization is available through an explicit-root metadata-only
-inventory helper. It refuses incomplete or changing inventories and creates
-empty ownership/lease collections; legacy outputs are never adopted. Successful
-managed destinations are reused only for the same source, mode and installer
-after identity, ownership and protection checks.
+Normal local Windows builds initialize schema-2 managed state on their first
+admission without a legacy inventory. Historical output usage remains explicitly
+unknown (`legacy_total_bytes: null`) and outside the managed budget. Existing
+virtual environments and source copies are inputs outside that budget, although
+their disk impact affects the physical free-space check. Schema-1 state is never
+silently reset or reinterpreted. The explicit metadata inventory helper remains
+available for legacy diagnostics; it is not a prerequisite for managed builds.
 
-Verification: 164 focused synthetic-file and stub-command tests passed; the two
-sandbox-skipped hardlink/junction cases passed in a separate fixture-only run.
-Affected Python Ruff, compileall, diff checks and PowerShell parsing passed.
-No real packaging, dependency installation,
+Verification of the final managed-only policy: 232 focused tests passed across
+the guard, inventory, managed outputs, launcher, artifact registry and normal
+entrypoints. The two sandbox-skipped hardlink/junction cases passed separately
+using isolated fixtures. The normal Windows builder completed against the real
+guard with synthetic compiler tools, recording schema-2 ownership and releasing
+its lease. Environment restoration, dependency failures, enrollment races and
+default CLI routing are covered. Affected Ruff, compileall, diff checks and
+PowerShell parsing passed. No real E3 packaging, dependency installation,
 launcher change, hardware connection or physical qualification was performed.
-This entry documents source behavior; deployment to active checkouts and the
-separately approved one-time cleanup must be recorded independently. See
-[local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
+Active installation and the separately approved one-time cleanup are recorded
+outside this source file. See [local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
 
 Follow-up census verification: path deduplication now uses ancestor-set
 membership, preserving the exact inventory scope without quadratic comparisons
@@ -46,8 +54,9 @@ An approved metadata-only live initialization over 296 explicitly enumerated
 roots refused to initialize: historical generated test directories were
 inaccessible or changed during enumeration, and several legacy virtual
 environments are links/reparse points. No baseline or ownership was adopted.
-Those filesystem conditions require separate review; do not silently omit
-them, reset the baseline, follow links or weaken admission to make builds pass.
+Those filesystem conditions remain unresolved and no historical total is
+claimed. The explicitly approved managed-only policy avoids those legacy scopes;
+it does not omit failed entries from a claimed complete historical census.
 
 ## Streaming fix merged into main (2026-10-15)
 

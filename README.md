@@ -1,12 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
 
 Normal packaging commands now share a [build storage guard](docs/LOCAL_ARTIFACT_RETENTION.md).
-It bounds additional artifact growth, reserves space for concurrent builds, and
-protects selected/running/rollback output trees while allowing verified ordinary
-rebuilds in place. Windows, Home and launcher builds use a fresh managed output
-directory when old outputs need preservation, and print the actual paths.
-Private installers use metadata-only accounting; cleanup remains a separate
-dry-run proposal requiring approval.
+Local Windows, Home and launcher builds place all new outputs, caches and
+temporary files in managed directories under a shared eight-GiB admission budget.
+It includes concurrent reservations, preserves selected/running/rollback outputs,
+and allows verified reuse. Historical storage remains unknown and outside this
+budget; the physical free-space floor still includes its disk impact. Builders
+use installed dependencies and print exact output paths. Private installers use
+metadata-only accounting; cleanup remains a separate approved action.
 
 GRBL jobs use continuous command streaming for consecutive linear moves, with
 lossless wire compression and guarded FIFO acknowledgements. This removes the

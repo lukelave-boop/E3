@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - managed local build storage
+
+- Route normal Windows, Home and DEV TEST launcher build outputs, caches and
+  temporary files into managed containers under a shared eight-GiB admission
+  budget, including two-GiB reservations and a two-GiB physical free-space floor.
+- Preserve historical outputs and report their total as unknown. New builds no
+  longer require a complete legacy census. Keep exact ownership, selected/running
+  output protection, source concurrency checks and failed reservations.
+- Require existing local build dependencies instead of automatically upgrading
+  packages or installing a compiler. No automatic deletion is enabled. See
+  [local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
+
 ## Unreleased — continuous GRBL command streaming
 
 - Remove per-pixel acknowledgement quiet delays from contiguous guarded G1 runs.

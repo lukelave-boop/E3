@@ -14,16 +14,11 @@ if (-not (Test-Path $Python)) {
     $Python = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Python)
 }
 . (Join-Path $PSScriptRoot "build_storage_gate.ps1")
+Assert-E3BuildDependencies -Python $Python -Modules @('PyInstaller')
 $storageLease = Start-E3BuildStorage -Python $Python -Worktree $repoRoot `
     -Mode launcher -EphemeralCI:$EphemeralCI
 $outputRoot = [IO.Path]::GetFullPath([string]$storageLease.output_root)
-if ($outputRoot -ne $sourceRoot) {
-    Write-Host "Preserving previous launcher output; building in managed directory: $outputRoot"
-}
-& $Python -c "import PyInstaller"
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller is required to build E3 DEV TEST"
-}
+Write-Host "Launcher output directory: $outputRoot"
 
 $icon = Join-Path $repoRoot "packaging\e3-dev-test.ico"
 if (-not (Test-Path $icon)) {
@@ -33,19 +28,22 @@ $versionFile = Join-Path $repoRoot "packaging\dev_test_launcher_version.txt"
 
 $workPath = Join-Path $outputRoot "build\dev-test-launcher"
 $specPath = Join-Path $outputRoot "build\dev-test-launcher-spec"
-$cachePath = Join-Path $outputRoot "build\pyinstaller-cache"
+$cachePath = Join-Path $outputRoot "cache"
+$tempPath = Join-Path $outputRoot "temp"
 $distPath = Join-Path $outputRoot "launcher-dist"
 Confirm-E3BuildReplacement -Python $Python -Lease $storageLease
-foreach ($target in @($workPath, $specPath, $cachePath, (Join-Path $distPath "E3 DEV TEST.exe"))) {
+foreach ($target in @($workPath, $specPath, $cachePath, $tempPath, (Join-Path $distPath "E3 DEV TEST.exe"))) {
     if (Test-Path -LiteralPath $target) {
         Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
     }
 }
 
-$originalPyInstallerConfig = $env:PYINSTALLER_CONFIG_DIR
-New-Item -Path $cachePath -ItemType Directory -ErrorAction Stop | Out-Null
+$savedEnvironment = Enter-E3ManagedBuildEnvironment -OutputRoot $outputRoot
 try {
-    $env:PYINSTALLER_CONFIG_DIR = $cachePath
+    & $Python -c "import PyInstaller"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The existing PyInstaller installation cannot import under the managed build environment."
+    }
     & $Python -m PyInstaller `
     --noconfirm `
     --clean `
@@ -62,9 +60,9 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "E3 DEV TEST PyInstaller build failed"
     }
-} finally {
-    $env:PYINSTALLER_CONFIG_DIR = $originalPyInstallerConfig
-}
 Complete-E3BuildStorage -Python $Python -Lease $storageLease
 
 Write-Host (Resolve-Path (Join-Path $distPath "E3 DEV TEST.exe"))
+} finally {
+    Exit-E3ManagedBuildEnvironment -Saved $savedEnvironment
+}

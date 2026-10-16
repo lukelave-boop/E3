@@ -66,7 +66,7 @@ def test_windows_builder_sanitizes_before_and_validates_after_pyinstaller() -> N
     sanitize = source.index("sanitize-path")
     pyinstaller = source.index("-m PyInstaller")
     validate = source.index("validate-bundle")
-    restore = source.index("$env:PATH = $originalPath")
+    restore = source.index("Exit-E3ManagedBuildEnvironment -Saved $savedEnvironment")
 
     assert sanitize < pyinstaller < validate < restore
     assert "from PySide6 import QtCore, QtGui, QtWidgets" in source

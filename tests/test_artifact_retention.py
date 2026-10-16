@@ -372,10 +372,9 @@ def wrapper_fixture(tmp_path: Path):
     (packaging / "build_windows.ps1").write_text(
         "param($Channel, $OutputBaseFilename, $Revision, [switch]$RequireFreshOutputs, [switch]$PassThru, $RetentionRegistry)\n"
         "Set-Location (Join-Path $PSScriptRoot '..')\n"
-        "if (-not $RequireFreshOutputs) { throw 'fresh mode missing' }\n"
-        "Add-Content -LiteralPath $env:RETENTION_TEST_LOG -Value '\"BUILD\"'\n"
+        "Add-Content -LiteralPath $env:RETENTION_TEST_LOG -Value (ConvertTo-Json -Compress -InputObject @('BUILD', $RetentionRegistry))\n"
         "if ($env:RETENTION_TEST_FAIL_BUILD -eq '1') { throw 'synthetic build failure' }\n"
-        "[pscustomobject]@{ Kind='E3WindowsBuild'; OutputRoot=(Get-Location).Path; "
+        "[pscustomobject]@{ Kind='E3WindowsBuild'; OutputRoot=(Join-Path (Get-Location) '.e3-builds/synthetic'); "
         "Executable=(Join-Path (Get-Location) 'dist/E3/E3.exe'); "
         "Installer=(Join-Path (Get-Location) ('installer-dist/' + $OutputBaseFilename + '.exe')) }\n",
         encoding="utf-8",
@@ -400,21 +399,24 @@ def test_wrapper_defaults_to_inventory_without_lease_or_build(wrapper_fixture) -
 
 
 @pytest.mark.parametrize("output", ["build/E3", "dist/E3", "installer-dist", "packaging/machine-seed"])
-def test_wrapper_refuses_every_existing_destructive_builder_output(wrapper_fixture, output: str) -> None:
+def test_wrapper_managed_build_preserves_legacy_outputs_without_inventory(wrapper_fixture, output: str) -> None:
     root, log, env, command = wrapper_fixture
-    (root / output).mkdir(parents=True)
+    legacy = root / output
+    legacy.mkdir(parents=True)
+    payload = legacy / "preserved.txt"
+    payload.write_bytes(b"user-owned legacy material")
     result = subprocess.run([*command, "-Build"], env=env, capture_output=True, text=True)
-    assert result.returncode != 0
-    assert "Refusing to replace existing output" in result.stderr
-    assert [call[0] for call in read_calls(log)] == ["plan"]
+    assert result.returncode == 0, result.stderr
+    assert [call[0] for call in read_calls(log)] == ["BUILD"]
+    assert payload.read_bytes() == b"user-owned legacy material"
 
 
-def test_wrapper_refuses_incomplete_inspection_before_build(wrapper_fixture) -> None:
+def test_wrapper_does_not_require_legacy_inventory_for_managed_build(wrapper_fixture) -> None:
     _, log, env, command = wrapper_fixture
     env["RETENTION_TEST_INCOMPLETE"] = "1"
     result = subprocess.run([*command, "-Build"], env=env, capture_output=True, text=True)
-    assert result.returncode != 0
-    assert [call[0] for call in read_calls(log)] == ["plan"]
+    assert result.returncode == 0, result.stderr
+    assert [call[0] for call in read_calls(log)] == ["BUILD"]
 
 
 def test_wrapper_prints_incomplete_inventory_report(wrapper_fixture) -> None:
@@ -427,7 +429,7 @@ def test_wrapper_prints_incomplete_inventory_report(wrapper_fixture) -> None:
 
 
 @pytest.mark.parametrize("fails", [False, True])
-def test_wrapper_uses_canonical_lease_and_registers_only_success(wrapper_fixture, fails: bool) -> None:
+def test_wrapper_uses_canonical_managed_lease_without_legacy_registration(wrapper_fixture, fails: bool) -> None:
     _, log, env, command = wrapper_fixture
     if fails:
         env["RETENTION_TEST_FAIL_BUILD"] = "1"
@@ -437,24 +439,18 @@ def test_wrapper_uses_canonical_lease_and_registers_only_success(wrapper_fixture
     actions = [call if isinstance(call, str) else call[0] for call in calls]
     if fails:
         assert result.returncode != 0
-        assert actions == ["plan", "plan", "BUILD"]
     else:
         assert result.returncode == 0, result.stderr
-        assert actions == ["plan", "plan", "BUILD", "register", "plan"]
+    assert actions == ["BUILD"]
     assert "lease" not in actions and "release" not in actions
-    if not fails:
-        registration = next(call for call in calls if isinstance(call, list) and call[0] == "register")
-        assert registration[registration.index("--installer") + 1].endswith("E3-Setup.exe")
-        assert "--lease-token" not in registration
 
 
-def test_wrapper_budget_blocks_before_acquiring_lease(wrapper_fixture) -> None:
+def test_wrapper_cannot_override_managed_budget(wrapper_fixture) -> None:
     _, log, env, command = wrapper_fixture
-    env["RETENTION_TEST_USED_BYTES"] = str(7 * 1024**3)
-    result = subprocess.run([*command, "-Build"], env=env, capture_output=True, text=True)
+    result = subprocess.run([*command, "-Build", "-BudgetGiB", "9"], env=env, capture_output=True, text=True)
     assert result.returncode != 0
-    assert "admission budget" in result.stderr
-    assert [call[0] for call in read_calls(log)] == ["plan"]
+    assert "fixed shared 8 GiB cap" in result.stderr
+    assert not log.exists()
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "NaN", "Infinity"])
@@ -474,32 +470,35 @@ def test_wrapper_relative_paths_keep_identity_after_builder_changes_cwd(wrapper_
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     calls = [call for call in read_calls(log) if isinstance(call, list)]
-    assert {call[call.index("--registry") + 1] for call in calls} == {str(tmp_path / "relative-registry.json")}
+    assert calls == [["BUILD", str(tmp_path / "relative-registry.json")]]
 
 
 @pytest.mark.parametrize("relative", ["build/E3", "dist/E3", "installer-dist", "build-info.json", "E3.spec"])
-def test_canonical_fresh_mode_stops_before_dependency_install(tmp_path: Path, relative: str) -> None:
+def test_gate_rejects_unmanaged_output_even_when_legacy_files_exist(tmp_path: Path, relative: str) -> None:
     pwsh = shutil.which("pwsh")
     if pwsh is None:
         pytest.skip("PowerShell not installed")
     root = tmp_path / "fresh-build"
     (root / "packaging").mkdir(parents=True)
-    builder = root / "packaging" / "build_windows.ps1"
-    shutil.copyfile(ROOT / "packaging" / "build_windows.ps1", builder)
     shutil.copyfile(ROOT / "packaging" / "build_storage_gate.ps1", root / "packaging" / "build_storage_gate.ps1")
-    (root / "packaging" / "build_storage_guard.py").write_text(
-        "import json, sys\n"
-        "root = sys.argv[sys.argv.index('--worktree') + 1]\n"
-        "print(json.dumps({'source_root': root, 'output_root': root}))\n",
-        encoding="utf-8",
-    )
+    fake_python = root / "fake-python.ps1"
+    fake_python.write_text(
+        "param([Parameter(ValueFromRemainingArguments=$true)]$Rest)\n"
+        "@{source_root=$PSScriptRoot; output_root=$PSScriptRoot} | ConvertTo-Json -Compress\n"
+        "$global:LASTEXITCODE=0\n", encoding="utf-8")
+    harness = root / "probe.ps1"
+    harness.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        ". (Join-Path $PSScriptRoot 'packaging/build_storage_gate.ps1')\n"
+        "Start-E3BuildStorage -Python (Join-Path $PSScriptRoot 'fake-python.ps1') -Worktree $PSScriptRoot -Mode windows\n",
+        encoding="utf-8")
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("preserve this synthetic output", encoding="utf-8")
-    result = subprocess.run([pwsh, "-NoProfile", "-File", str(builder), "-RequireFreshOutputs"],
+    result = subprocess.run([pwsh, "-NoProfile", "-File", str(harness)],
                             capture_output=True, text=True)
     assert result.returncode != 0
-    assert "refuses to replace" in result.stderr
+    assert "output outside" in result.stderr
     assert target.read_text(encoding="utf-8") == "preserve this synthetic output"
 
 

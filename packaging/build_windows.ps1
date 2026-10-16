@@ -52,6 +52,30 @@ if (-not [string]::IsNullOrWhiteSpace($MachineRegistryPath)) {
     $MachineRegistryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($MachineRegistryPath)
 }
 . (Join-Path $PSScriptRoot "build_storage_gate.ps1")
+Assert-E3BuildDependencies -Python $python -Modules @('PyInstaller', 'PySide6')
+$innoCandidates = @(
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+)
+$iscc = $innoCandidates |
+    Where-Object { Test-Path $_ } |
+    Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($iscc)) {
+    throw "Inno Setup 6 must already be installed in Program Files or LocalAppData\Programs. Install it explicitly before retrying; this build does not run winget or Chocolatey."
+}
+$preflightBytecode = [Environment]::GetEnvironmentVariable('PYTHONDONTWRITEBYTECODE', 'Process')
+try {
+    $env:PYTHONDONTWRITEBYTECODE = '1'
+    $sanitizedPath = & $python .\packaging\windows_build_guard.py `
+        sanitize-path `
+        --system-root $env:WINDIR
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sanitizedPath)) {
+        throw "Could not establish a collision-free Windows build PATH"
+    }
+} finally {
+    Restore-E3EnvironmentValue -Name 'PYTHONDONTWRITEBYTECODE' -Value $preflightBytecode
+}
 $storageMode = if ($MachineSeed -or $Channel -eq "home") { "private" } else { "windows" }
 $storageLease = Start-E3BuildStorage -Python $python -Worktree $repoRoot `
     -Mode $storageMode -InstallerName $OutputBaseFilename `
@@ -60,12 +84,9 @@ $outputRoot = [IO.Path]::GetFullPath([string]$storageLease.output_root)
 $bundleRoot = Join-Path $outputRoot 'dist\E3'
 $installerRoot = Join-Path $outputRoot 'installer-dist'
 $seedRoot = Join-Path $outputRoot 'packaging\machine-seed'
-$cacheRoot = Join-Path $outputRoot 'build\pyinstaller-cache'
-if ($outputRoot -ne $sourceRoot) {
-    Write-Host "Preserving previous output; building in managed directory: $outputRoot"
-}
+Write-Host "Build output directory: $outputRoot"
 if ($RequireFreshOutputs) {
-    foreach ($relative in @('build\E3', 'build\pyinstaller-cache', 'dist\E3', 'installer-dist', 'packaging\machine-seed', 'build-info.json', 'E3.spec')) {
+    foreach ($relative in @('build\E3', 'cache', 'temp', 'dist\E3', 'installer-dist', 'packaging\machine-seed', 'build-info.json', 'E3.spec')) {
         Assert-FreshBuildPath -Path (Join-Path $outputRoot $relative)
     }
 }
@@ -76,25 +97,30 @@ if ([string]::IsNullOrWhiteSpace($Revision)) {
     throw "Could not determine the E3 build revision"
 }
 
-$originalPath = $env:PATH
-$originalPyInstallerConfig = $env:PYINSTALLER_CONFIG_DIR
-$sanitizedPath = & $python .\packaging\windows_build_guard.py `
-    sanitize-path `
-    --system-root $env:WINDIR
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sanitizedPath)) {
-    throw "Could not establish a collision-free Windows build PATH"
+Confirm-E3BuildReplacement -Python $python -Lease $storageLease
+if ($RequireFreshOutputs) {
+    foreach ($relative in @('build\E3', 'cache', 'temp', 'dist\E3', 'installer-dist', 'packaging\machine-seed', 'build-info.json', 'E3.spec')) {
+        Assert-FreshBuildPath -Path (Join-Path $outputRoot $relative)
+    }
+} else {
+    foreach ($relative in @('build\E3', 'cache', 'temp', 'dist\E3', "installer-dist\$OutputBaseFilename.exe", 'packaging\machine-seed', 'build-info.json', 'E3.spec')) {
+        $target = [IO.Path]::GetFullPath((Join-Path $outputRoot $relative))
+        if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+        }
+    }
 }
-$env:PATH = $sanitizedPath.Trim()
-
+$savedEnvironment = Enter-E3ManagedBuildEnvironment -OutputRoot $outputRoot
 try {
-    & $python -m pip install --upgrade pyinstaller
+    $env:PATH = $sanitizedPath.Trim()
+    & $python -c "import PyInstaller"
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not install PyInstaller"
+        throw "PyInstaller is required in $python. Prepare the build environment explicitly before retrying; this build does not install or upgrade dependencies."
     }
 
     & $python -c "from PySide6 import QtCore, QtGui, QtWidgets"
     if ($LASTEXITCODE -ne 0) {
-        throw "PySide6 does not import under the sanitized Windows build PATH"
+        throw "PySide6 must already be available in $python and import under the sanitized PATH. Prepare the desktop dependencies explicitly before retrying."
     }
 
     $version = (
@@ -104,23 +130,6 @@ try {
         throw "Could not determine the E3 application version"
     }
     $buildInfo = Join-Path $outputRoot "build-info.json"
-    # Dependencies can take time. Refresh protection and ownership immediately
-    # before replacing this build's exact previously generated outputs.
-    Confirm-E3BuildReplacement -Python $python -Lease $storageLease
-    if ($RequireFreshOutputs) {
-        foreach ($relative in @("build\E3", "build\pyinstaller-cache", "dist\E3", "installer-dist", "packaging\machine-seed", "build-info.json", "E3.spec")) {
-            Assert-FreshBuildPath -Path (Join-Path $outputRoot $relative)
-        }
-    } else {
-        foreach ($relative in @("build\E3", "build\pyinstaller-cache", "dist\E3", "installer-dist\$OutputBaseFilename.exe", "packaging\machine-seed", "build-info.json", "E3.spec")) {
-            $target = [IO.Path]::GetFullPath((Join-Path $outputRoot $relative))
-            if (Test-Path -LiteralPath $target) {
-                Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
-            }
-        }
-    }
-    New-Item -Path $cacheRoot -ItemType Directory -ErrorAction Stop | Out-Null
-    $env:PYINSTALLER_CONFIG_DIR = $cacheRoot
     & $python .\packaging\write_build_info.py `
         --output $buildInfo `
         --revision $Revision `
@@ -162,12 +171,6 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller collected conflicting foreign runtime DLLs"
     }
-}
-finally {
-    $env:PATH = $originalPath
-    $env:PYINSTALLER_CONFIG_DIR = $originalPyInstallerConfig
-}
-
 if ($RequireFreshOutputs) {
     $bundleInfo = Join-Path $bundleRoot "build-info.json"
     $bundleConfig = Join-Path $bundleRoot "config"
@@ -243,34 +246,6 @@ if ($MachineSeed) {
     )
 }
 
-$innoCandidates = @(
-    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-    "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
-    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-)
-$iscc = $innoCandidates |
-    Where-Object { Test-Path $_ } |
-    Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($iscc)) {
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        winget install `
-            --id JRSoftware.InnoSetup `
-            --exact `
-            --accept-source-agreements `
-            --accept-package-agreements
-    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-        choco install innosetup -y --no-progress
-    } else {
-        throw "Inno Setup 6 is required"
-    }
-    $iscc = $innoCandidates |
-        Where-Object { Test-Path $_ } |
-        Select-Object -First 1
-}
-if ([string]::IsNullOrWhiteSpace($iscc)) {
-    throw "Could not locate Inno Setup ISCC.exe"
-}
-
 $defines = @(
     "/DMyAppVersion=$version",
     "/DOutputBaseFilename=$OutputBaseFilename",
@@ -303,4 +278,7 @@ if ($PassThru) {
         Installer = $installerPath
         Version = $version
     }
+}
+} finally {
+    Exit-E3ManagedBuildEnvironment -Saved $savedEnvironment
 }

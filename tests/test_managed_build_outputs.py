@@ -24,7 +24,12 @@ _SPEC.loader.exec_module(guard)
 def environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = tmp_path / "checkout"
     source.mkdir()
-    monkeypatch.setattr(guard, "discover_roots", lambda worktree: [worktree])
+
+    def legacy_inventory_forbidden(*args, **kwargs):
+        pytest.fail("managed admission must not inspect legacy output locations")
+
+    for name in ("discover_roots", "_measure", "_census_paths"):
+        monkeypatch.setattr(guard, name, legacy_inventory_forbidden)
     monkeypatch.setattr(guard, "inspect_build_processes", lambda: [])
     monkeypatch.setattr(
         guard.shutil, "disk_usage",
@@ -39,7 +44,7 @@ def environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return {
         "worktree": source, "mode": "windows", "build_id": "first", "owner_pid": os.getppid(),
         "state_path": tmp_path / "storage.json", "launcher_pointers": [pointer],
-        "reserve_bytes": 1024, "managed_outputs": True,
+        "reserve_bytes": guard.DEFAULT_RESERVATION_BYTES, "managed_outputs": True,
     }
 
 
@@ -95,7 +100,9 @@ def _finish_build(arguments: dict) -> dict:
     identity = _identity(arguments, lease)
     guard.verify_build(**identity)
     output = Path(lease["output_root"])
-    for path in guard.output_paths(output, arguments["mode"], arguments.get("installer_name", "E3-Setup")):
+    for path in guard.output_paths(
+        output, arguments["mode"], arguments.get("installer_name", "E3-Setup"), managed=True,
+    ):
         if path.suffix in {".json", ".spec", ".exe", ".AppImage"}:
             _write(path, b"synthetic generated output")
         else:
@@ -104,6 +111,25 @@ def _finish_build(arguments: dict) -> dict:
         _write(output / "dist" / "E3" / "E3.exe", b"synthetic executable")
     guard.complete_build(**identity)
     return lease
+
+
+@pytest.mark.parametrize("mode", ["windows", "private", "launcher"])
+def test_clean_checkout_always_uses_managed_root(environment, mode):
+    environment["mode"] = mode
+    source = environment["worktree"]
+    assert list(source.iterdir()) == []
+
+    lease = guard.begin_build(**environment)
+
+    output = _assert_fresh_destination(environment, lease)
+    assert list(source.iterdir()) == [output.parent]
+    state = json.loads(environment["state_path"].read_text(encoding="utf-8"))
+    assert state["schema_version"] == 2
+    assert state["accounting_policy"] == "managed_outputs_v2"
+    assert state["managed_budget_bytes"] == 8 * 1024**3
+    assert state["legacy_total_bytes"] is None
+    assert {Path(item["path"]) for item in state["managed_containers"]} == {output.parent}
+    guard.verify_build(**_identity(environment, lease))
 
 
 @pytest.mark.parametrize("mode", ["windows", "private", "launcher"])
@@ -124,11 +150,12 @@ def test_unknown_legacy_output_gets_empty_managed_root_without_reading_payload(e
     guard.verify_build(**_identity(environment, lease))
 
 
-def test_changed_owned_output_is_preserved_and_new_build_uses_fresh_destination(environment, monkeypatch):
+@pytest.mark.parametrize("relative_payload", ["dist/E3/user-project.e3laser", "cache/new.bin", "temp/new.bin"])
+def test_changed_owned_output_is_preserved_and_new_build_uses_fresh_destination(environment, monkeypatch, relative_payload):
     _write(environment["worktree"] / "dist" / "E3" / "legacy.bin")
     first = _finish_build(environment)
     previous_output = Path(first["output_root"])
-    payload = _write(previous_output / "dist" / "E3" / "user-project.e3laser", b"new unique artwork")
+    payload = _write(previous_output / relative_payload, b"new unique artwork")
     before = _stamp(payload)
     _forbid_reads(monkeypatch, payload)
     environment["build_id"] = "second"
@@ -217,20 +244,25 @@ def test_public_build_with_legacy_private_seed_uses_fresh_root_without_reading_s
     guard.verify_build(**_identity(environment, lease))
 
 
-def test_census_counts_whole_managed_container_without_opening_private_payloads(environment, monkeypatch):
+def test_managed_measure_counts_whole_container_and_excludes_source_and_legacy(environment, monkeypatch):
     source = environment["worktree"]
     paths = [
         _write(source / ".e3-builds" / "windows-old" / "unexpected-cache.bin", b"a" * 19),
         _write(source / ".e3-builds" / "private-old" / "secrets" / "bridge-token.txt", b"b" * 23),
         _write(source / ".e3-builds" / "unregistered-note.bin", b"c" * 29),
         _write(source / ".venv" / "Lib" / "runtime.bin", b"d" * 31),
+        _write(source / "source-not-build-output.py", b"e" * 101),
+        _write(source / "dist" / "E3" / "legacy.bin", b"f" * 103),
+        _write(source / "data" / "project.e3laser", b"g" * 107),
     ]
-    _write(source / "source-not-build-output.py", b"e" * 101)
     _forbid_reads(monkeypatch, *paths)
+    lease = guard.begin_build(**environment)
+    _assert_fresh_destination(environment, lease)
+    state = json.loads(environment["state_path"].read_text(encoding="utf-8"))
 
-    measured, census = guard._measure([source], ephemeral=False)
+    measured, census = guard._measure_managed(state)
 
-    assert measured == 19 + 23 + 29 + 31
+    assert measured == 19 + 23 + 29
     assert sum(item["logical_bytes"] for item in census) == measured
 
 
@@ -258,7 +290,7 @@ def test_admission_failures_never_allocate_managed_output_or_fall_back(environme
     before = _stamp(payload)
     _forbid_reads(monkeypatch, payload)
     if failure == "budget":
-        environment["reserve_bytes"] = guard.GROWTH_HEADROOM_BYTES + 1
+        environment["reserve_bytes"] = guard.MANAGED_BUDGET_BYTES + 1
     elif failure == "free_space":
         monkeypatch.setattr(
             guard.shutil, "disk_usage",
@@ -270,7 +302,9 @@ def test_admission_failures_never_allocate_managed_output_or_fall_back(environme
         def unavailable(*args, **kwargs):
             raise guard.StorageGuardError("inspection unavailable")
 
-        monkeypatch.setattr(guard, "inspect_build_processes" if failure == "process_inventory" else "_measure", unavailable)
+        monkeypatch.setattr(
+            guard, "inspect_build_processes" if failure == "process_inventory" else "_measure_managed", unavailable,
+        )
 
     with pytest.raises(guard.StorageGuardError):
         guard.begin_build(**environment)
