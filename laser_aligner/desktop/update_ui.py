@@ -3,15 +3,18 @@ from __future__ import annotations
 import time
 from collections import deque
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from typing import Any
 
 from ..deployment import load_build_info
 from ..updates import (
+    DOWNLOAD_MAX_SECONDS,
+    DOWNLOAD_STALL_SECONDS,
     UpdateCheckResult,
     check_for_update,
     download_update,
     launch_downloaded_update,
+    record_download_problem,
 )
 from .qt import require_qt
 
@@ -29,16 +32,20 @@ def _download_size(size: float) -> str:
 class _DownloadProgress(QtWidgets.QProgressDialog):
     """Poll bounded worker state; widgets and speed sampling stay on the UI thread."""
 
+    stalled = QtCore.Signal(str)
+
     def __init__(self, window: QtWidgets.QMainWindow, name: str, size: int) -> None:
         super().__init__("", "", 0, 1000, window)
         self._name = name
         self._size = size
         self._received = 0
         self._lock = Lock()
-        self._samples: deque[tuple[float, int]] = deque([(time.monotonic(), 0)])
+        self.cancel_event = Event()
+        self._started = self._last_progress = time.monotonic()
+        self._samples: deque[tuple[float, int]] = deque([(self._started, 0)])
         self.setWindowTitle("E3 Update")
         self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        self.setCancelButton(None)
+        self.setCancelButtonText("Cancel download")
         self.setMinimumDuration(0)
         self.setAutoClose(False)
         self.setAutoReset(False)
@@ -52,12 +59,31 @@ class _DownloadProgress(QtWidgets.QProgressDialog):
     def report(self, received: int, total: int) -> None:
         # Called by the download worker: never touch Qt objects here.
         with self._lock:
+            if received > self._received:
+                self._last_progress = time.monotonic()
             self._received = received
 
     def _refresh(self) -> None:
         with self._lock:
             received = self._received
+            last_progress = self._last_progress
         now = time.monotonic()
+        if self.cancel_event.is_set():
+            return
+        reason = None
+        if now - self._started >= DOWNLOAD_MAX_SECONDS:
+            reason = "The update exceeded the 15-minute download time limit."
+        elif now - last_progress >= DOWNLOAD_STALL_SECONDS:
+            reason = "The update made no progress for 45 seconds."
+        if reason is not None:
+            self.cancel_event.set()
+            self._timer.stop()
+            self.stalled.emit(
+                f"{reason}\nDownloaded {_download_size(received)} of "
+                f"{_download_size(self._size)}.\n\n"
+                "Check your connection and use Check for Updates to retry."
+            )
+            return
         self._samples.append((now, received))
         while len(self._samples) > 2 and self._samples[1][0] <= now - 3.0:
             self._samples.popleft()
@@ -150,10 +176,10 @@ def _progress_dialog(
 
 def _close_progress(window: QtWidgets.QMainWindow) -> None:
     dialog = getattr(window, "_e3_update_progress", None)
+    window._e3_update_progress = None  # type: ignore[attr-defined]
     if isinstance(dialog, QtWidgets.QProgressDialog):
         dialog.close()
         dialog.deleteLater()
-    window._e3_update_progress = None  # type: ignore[attr-defined]
 
 
 def _show_failure(
@@ -242,14 +268,43 @@ def _begin_download(
     action.setEnabled(False)
     dialog = _DownloadProgress(window, result.asset.name, result.asset.size)
     window._e3_update_progress = dialog  # type: ignore[attr-defined]
+
+    def active() -> bool:
+        return getattr(window, "_e3_update_progress", None) is dialog
+
+    def failure(message: str) -> None:
+        if active():
+            record_download_problem(result.asset, message)
+            _show_failure(window, action, message)
+
+    def success(path: Path) -> None:
+        if active() and not dialog.cancel_event.is_set():
+            _download_complete(window, action, path)
+
+    def cancel() -> None:
+        dialog.cancel_event.set()
+        if active():
+            _close_progress(window)
+            action.setEnabled(True)
+
+    dialog.canceled.connect(cancel)
+    dialog.stalled.connect(failure)
     dialog.show()
-    window.controller.run_background(
-        lambda: download_update(result.asset, progress=dialog.report),
-        on_success=lambda path: _download_complete(window, action, path),
-        on_failure=lambda message: _show_failure(window, action, message),
-        label="Download E3 update",
-        show_busy=False,
-    )
+    try:
+        window.controller.run_background(
+            lambda: download_update(
+                result.asset, progress=dialog.report,
+                cancelled=dialog.cancel_event.is_set,
+            ),
+            on_success=success,
+            on_failure=failure,
+            cancel=dialog.cancel_event.set,
+            label="Download E3 update",
+            show_busy=False,
+        )
+    except Exception as exc:
+        cancel()
+        _show_failure(window, action, str(exc))
 
 
 def _handoff_downloaded_update(

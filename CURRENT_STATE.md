@@ -1,5 +1,52 @@
 # Current repository state
 
+## Updater stall recovery - reproduced and corrected in source (2026-10-16)
+
+Isolated branch codex/updater-stall-recovery starts from main 718e931 and merges
+the existing progress change 986525a without replacing newer main behavior.
+The unchanged installed normal E3 0.7.153 had repeatedly remained at Downloading
+and verifying for ten minutes per the operator. Its retained older package
+partial is 63,963,136 / 220,077,007 bytes. A later real in-app retry fetched and
+verified 0.7.301 in about 29 seconds. That retry did not establish a repair;
+installation was not approved or performed in this investigation.
+
+A concrete timeout defect is reproduced against a loopback TCP server using
+the exact historical download_update function from bc86c8912ef2: bytes arriving
+every 50 ms keep a 200 ms socket timeout alive, and the 1 MiB buffered read
+delivers no progress until all 32 test bytes finish at 1.579 seconds (1.583 total).
+There is no overall deadline, independent dialog watchdog or cancellation in
+that installed updater. This establishes a reproducible mechanism for a
+long-lived downloading dialog, not proof of the original network condition;
+those attempts lack download-stage logs. No lost worker completion is reproduced.
+
+The corrected source combines the existing available-data progress reads with
+a 45-second no-progress GUI watchdog, a 15-minute overall bound, Cancel download,
+cooperative worker cancellation, unique partial files and active-dialog callback
+checks. The same trickling server now delivers progress at 3 ms and expires at
+306 ms with a 300 ms test budget. A blocked connection/header worker cannot keep
+the dialog open, initiate a late install or delete a subsequent attempt's partial.
+Network/disk calls may unwind later; the UI does not wait for them before returning
+control. Size/SHA-256 acceptance and normal installer handoff remain mandatory.
+Per-attempt .download.json records retain phase/byte counts/time/outcome, while
+<package>.last-failure.json records GUI failures even if the worker is stuck.
+The desktop update pipeline is the only affected product behavior; project,
+browser, machine, motion, arming and laser paths are unchanged.
+
+Windows Python 3.14 focused verification passes 91 tests including 17 new stall,
+cancellation, overlap and actual queued Qt-worker checks, existing installer
+handoff, and controller-task shutdown. The initial sandbox run passed 66 checks
+and failed the loopback test because Windows sandbox networking forbids its
+socket; the unchanged test passes with loopback access. Repository Ruff,
+application compileall and whitespace checks pass. Real-network retrieval through
+the corrected downloader verifies all 220,121,914 bytes of public 0.7.301 with
+SHA-256 9ee5a6fe3e48e29b94d25cffdbebae3ac2ba5d102cf9d4bf60243d251681cecf
+in 33.491 seconds. The deterministic before/after script is
+scripts/reproduce_update_trickle.py; ignored measurements and downloads are under
+build/updater-stall-evidence. This is source/offscreen and real-network
+verification; frozen corrected GUI, compatibility CI, main integration and
+publication remain pending. No installed bundle, permanent launcher selection,
+configuration or hardware was modified by this repair.
+
 ## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)
 
 Permanent **E3 DEV TEST** now selects **Desktop UI and cleaned-image tracing**,

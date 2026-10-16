@@ -58,14 +58,16 @@ def test_download_reports_partial_reads_before_network_failure(monkeypatch, tmp_
             asset, destination_dir=tmp_path, progress=lambda *args: events.append(args),
         )
     assert events == [(1, 5), (2, 5)]
-    assert list(tmp_path.iterdir()) == []
+    assert not list(tmp_path.glob("*.part"))
+    assert len(list(tmp_path.glob("*.download.json"))) == 1
 
 
 @pytest.fixture
-def ui():
+def ui(monkeypatch, tmp_path):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")
     from laser_aligner.desktop import update_ui
+    monkeypatch.setattr(updates, "update_cache_dir", lambda: tmp_path)
 
     app = update_ui.QtWidgets.QApplication.instance() or update_ui.QtWidgets.QApplication([])
     yield update_ui
@@ -113,8 +115,9 @@ def test_begin_download_wires_progress_and_closes_on_result(ui, monkeypatch, tmp
     )
     asset = SimpleNamespace(name="setup.exe", size=1000)
     package = tmp_path / "setup.exe"
-    def download(actual_asset, *, progress):
+    def download(actual_asset, *, progress, cancelled):
         assert actual_asset is asset
+        assert not cancelled()
         progress(500, 1000)
         return package
     monkeypatch.setattr(ui, "download_update", download)

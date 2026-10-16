@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Stalled update attempts now return control after 45 seconds without progress,
+with Cancel download, a 15-minute total limit, and local diagnostic records.
+Retry through Help > Check for Updates; every package still requires exact
+size and SHA-256 verification.
+
 Desktop updates show the package size before download, then downloaded/total bytes,
 percentage and current transfer speed. See [updates](docs/UPDATES.md).
 

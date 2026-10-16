@@ -185,7 +185,7 @@ def test_download_hash_mismatch_is_discarded_without_retry(
 
     def urlopen(_request: object, *, timeout: float) -> object:
         nonlocal calls
-        assert timeout == 60.0
+        assert timeout == updates.DOWNLOAD_STALL_SECONDS
         calls += 1
         return io.BytesIO(b"bad")
 
@@ -217,7 +217,7 @@ def test_manifest_retry_never_bypasses_asset_verification(
     ]
 
     def urlopen(request: object, *, timeout: float) -> object:
-        assert timeout in {15.0, 60.0}
+        assert timeout in {15.0, updates.DOWNLOAD_STALL_SECONDS}
         requests.append(str(request.full_url))  # type: ignore[attr-defined]
         response = responses.pop(0)
         if isinstance(response, BaseException):

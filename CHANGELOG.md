@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - updater stall recovery (2026-10-16)
+
+- End the update dialog after 45 seconds without progress or 15 minutes overall,
+  even if its worker is waiting for a connection or response headers.
+- Add Cancel download and ignore late results from cancelled or timed-out work.
+- Give overlapping retries separate partial files and preserve download-stage,
+  byte-count, elapsed-time and failure diagnostics in the update cache.
+- Preserve mandatory exact-size/SHA-256 verification and normal installer handoff.
+
 ## Unreleased - DEV TEST startup compatibility (2026-10-16)
 
 - Fix DEV TEST taskbar identity initialization on Windows Python 3.10 through 3.13
