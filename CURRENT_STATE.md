@@ -1,8 +1,9 @@
 # Current repository state
 
-## Cleaned-image tracing correction (2026-10-16)
+## Cleaned-image tracing correction — integrated and DEV TEST selected (2026-10-16)
 
-Isolated branch codex/cleaned-image-trace starts from integrated main 3070d56.
+PR #51 merged as `b1c6c4b67a847dd0850acd2f16e15599ea2ce9d9`; the completed
+`codex/cleaned-image-trace` branch was deleted locally and remotely.
 Automatic preview snapshots the current cleaned grayscale image rather than the
 original source. Both outline modes use bounded subpixel mask boundaries, preserving
 diagonal foreground connectivity without retracing thin pixel features. Existing
@@ -17,14 +18,52 @@ linked vectors and raster integration. Repository Ruff, application compileall
 and whitespace checks pass. Both actual offscreen preview buttons on the unchanged
 operator JPEG produce valid two-contour / 1,790-segment outlines (barrel and
 remaining shadow) with unchanged native topology validation. Preview does not
-accept the candidate or modify source bytes. Frozen build and compatibility CI
-are pending. Read-only packaging preflight reports the eight-GiB pool blocked
-by 2.50 GiB of measured files plus three old two-GiB reservations.
-No interactive operator or physical hardware acceptance is claimed.
+accept the candidate or modify source bytes.
 
-## Desktop UI clarity — integrated and DEV TEST selected (2026-10-16)
+Full [compatibility CI 38939968958](https://github.com/lukelave-boop/E3/actions/runs/38939968958)
+passes: Windows Python 3.12 desktop **8,522 passed / 65 skipped**, Windows Python
+3.10 core **6,966 passed / 160 skipped**, POSIX **1,502 passed / 2 skipped**, and
+repository Ruff.
 
-Permanent **E3 DEV TEST** selects **Desktop UI clarity**, version **0.7.283**,
+Permanent **E3 DEV TEST** now selects **Cleaned-image tracing**, version
+**0.7.292**, exact frozen revision `c5cb9d5b16f740c087aac58894307c6ac508c65b`,
+built from `codex/cleaned-image-trace`. Target:
+`C:\Users\lukel\.codex\worktrees\trc\E3\.e3-builds\windows-windows-6790c59473ef45a68fb9f546a10af998\dist\E3\E3.exe`.
+The canonical Windows builder used Python 3.14.4, PyInstaller 6.22.3 and Qt 6.11.2.
+All **194 frozen application modules**, entrypoint and **ten resources** match
+the committed revision. The actual EXE passed an isolated offscreen startup:
+native Qt Widgets loaded, no traceback or startup-error log, camera autostart
+off, motion disabled, and no hardware-enabled process. Atomic pointer update and
+launcher-validator readback pass. Save work, close the older application, and
+reopen the permanent launcher; no image replacement or re-import is needed.
+Source editor renders were visually reviewed. No interactive operator, real
+camera, controller or laser acceptance is claimed. Evidence is in the retained
+source/build worktrees' ignored `build/` directories. Inno Setup again failed
+at the bundled Qt `objects-RelWithDebInfo` path-length limit. No installer is
+claimed; the independently verified app bundle is selected. Its files and build
+reservation remain retained and counted. EXE SHA-256:
+`6ff2cb1fb7e1f10651ae26a08a30cd6adce15fe74b15b9c420b070c76d20f1e1`.
+
+The first packaging attempt used ambient Python 3.13.15 and produced a rejected
+EXE: actual startup exposed the existing `ctypes.wintypes.HRESULT` compatibility
+gap in `identity.py`. Inno Setup also hit a bundled Qt path-length limit. That
+EXE was never selected. Rebuilding the unchanged source in the shorter `trc`
+checkout with the established Python 3.14 environment passed startup; this does
+not establish support for Python 3.13 frozen startup.
+
+With explicit user approval, identity-checked recovery released only the two
+stale two-GiB reservations for completed machine-axis raster and transparency
+builds, after verifying their owner processes had exited. The rejected attempt's
+own exited build reservation was subsequently released with the same checks.
+All artifacts remain and count toward measured usage; no files were deleted.
+Accounting backups are `state.before-cleaned-trace-recovery.json` and
+`state.before-rejected-trace-build-recovery.json` under
+`C:\Users\lukel\AppData\Local\E3 Build Storage`. The running older E3 application,
+its reservation, permanent launcher and shortcut, and production E3 were preserved.
+
+## Desktop UI clarity — integrated, previous DEV TEST selection (2026-10-16)
+
+The previous **E3 DEV TEST** selection was **Desktop UI clarity**, version **0.7.283**,
 exact frozen revision `ba488ec9fcce4b547464aff0ad563d8823e142ca`, built from
 `codex/desktop-ui-polish`. Target:
 `C:\Users\lukel\.codex\worktrees\ui\E3\.e3-builds\windows-windows-37ab0dd160f6487b9e35d537fc13d104\dist\E3\E3.exe`.
