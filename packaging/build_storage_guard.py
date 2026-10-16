@@ -273,13 +273,12 @@ def _locked_state(path: Path) -> Iterator[dict[str, Any]]:
 
 
 def _measure(roots: Sequence[Path], *, ephemeral: bool) -> tuple[int, list[dict[str, Any]]]:
-    paths = []
     for root in roots:
         _existing_chain(root)
-        for path in _census_paths(root):
-            if not any(retention._within(path, existing) for existing in paths):
-                paths = [existing for existing in paths if not retention._within(existing, path)]
-                paths.append(path)
+    candidates = {path for root in roots for path in _census_paths(root)}
+    # Membership by ancestor keeps the same non-overlapping scope without
+    # comparing every generated path against every other checkout's paths.
+    paths = [path for path in candidates if not any(parent in candidates for parent in path.parents)]
     measured, total = [], 0
     for path in sorted(paths):
         size = _snapshot(path, private=True, allow_posix_links=ephemeral and os.name != "nt")["logical_bytes"]

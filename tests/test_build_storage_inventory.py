@@ -230,6 +230,43 @@ def test_only_explicit_roots_are_enumerated_and_nested_scopes_are_deduplicated(s
     assert result["logical_bytes"] == expected + len(b"nested payload") + nested_markers
 
 
+def test_census_scope_matches_original_pairwise_policy_for_overlaps(tmp_path):
+    root = tmp_path / "root"
+    roots = [
+        root / ".e3-builds" / "nested-source" / "build" / "deeper-source",
+        root / "build" / "nested-source",
+        root / ".e3-builds" / "nested-source",
+        root / "worktrees" / "sibling",
+        root,
+        root,
+        tmp_path / "root-prefix-is-not-an-ancestor",
+    ]
+    # Preserve the previous policy as a small independent compatibility oracle.
+    expected = []
+    for source in roots:
+        for relative in inventory.GENERATED_RELATIVE_PATHS:
+            candidate = source / relative
+            if any(candidate.is_relative_to(previous) for previous in expected):
+                continue
+            expected = [previous for previous in expected if not previous.is_relative_to(candidate)]
+            expected.append(candidate)
+    expected = sorted(expected)
+    assert inventory._census_paths(roots) == expected
+    assert inventory._census_paths(list(reversed(roots))) == expected
+    assert root / ".e3-builds" in expected
+    assert not any(path != root / ".e3-builds" and path.is_relative_to(root / ".e3-builds") for path in expected)
+
+
+def test_census_hundreds_of_roots_never_uses_pairwise_containment(tmp_path, monkeypatch):
+    # No filesystem access: these are synthetic path objects only. This size
+    # reproduces the 296-root case that made the former quadratic loop costly.
+    roots = [tmp_path / f"checkout-{index:03d}" for index in range(296)]
+    monkeypatch.setattr(inventory, "_within", lambda *args: pytest.fail("pairwise containment regression"))
+    result = inventory._census_paths(list(reversed(roots)) + roots[:5])
+    assert result == sorted(root / relative for root in roots for relative in inventory.GENERATED_RELATIVE_PATHS)
+    assert len(result) == 296 * len(inventory.GENERATED_RELATIVE_PATHS)
+
+
 def test_report_and_state_may_not_be_created_inside_checkout(sample, tmp_path):
     root, _ = sample
     with pytest.raises(inventory.InventoryError, match="outside"):

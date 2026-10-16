@@ -37,6 +37,18 @@ This entry documents source behavior; deployment to active checkouts and the
 separately approved one-time cleanup must be recorded independently. See
 [local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
 
+Follow-up census verification: path deduplication now uses ancestor-set
+membership, preserving the exact inventory scope without quadratic comparisons
+across hundreds of roots. All 62 focused guard/inventory/managed-output tests
+pass, including four added scope-equivalence/scale checks. The synthetic
+296-root/3,552-path selection takes 0.072 seconds; this is not whole-census timing.
+An approved metadata-only live initialization over 296 explicitly enumerated
+roots refused to initialize: historical generated test directories were
+inaccessible or changed during enumeration, and several legacy virtual
+environments are links/reparse points. No baseline or ownership was adopted.
+Those filesystem conditions require separate review; do not silently omit
+them, reset the baseline, follow links or weaken admission to make builds pass.
+
 ## Streaming fix merged into main (2026-10-15)
 
 At the operator's explicit request, [PR #45](https://github.com/lukelave-boop/E3/pull/45)

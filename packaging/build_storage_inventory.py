@@ -119,15 +119,11 @@ def _validated_roots(values: Sequence[Path]) -> list[Path]:
 
 
 def _census_paths(roots: Sequence[Path]) -> list[Path]:
-    unique: list[Path] = []
-    for root in roots:
-        for relative in GENERATED_RELATIVE_PATHS:
-            path = root / relative
-            if any(_within(path, previous) for previous in unique):
-                continue
-            unique = [previous for previous in unique if not _within(previous, path)]
-            unique.append(path)
-    return sorted(unique)
+    # Set membership checks only each path's ancestors, instead of comparing
+    # every generated path with all preceding paths across hundreds of roots.
+    # Any candidate ancestor covers its descendants, irrespective of root order.
+    candidates = {root / relative for root in roots for relative in GENERATED_RELATIVE_PATHS}
+    return sorted(path for path in candidates if not any(parent in candidates for parent in path.parents))
 
 
 def _scan_pass(roots: Sequence[Path]) -> dict[str, Any]:

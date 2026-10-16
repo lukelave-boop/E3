@@ -215,3 +215,31 @@ def test_custom_installer_names_preserve_ordinary_build_compatibility(tmp_path, 
 def test_ambiguous_installer_names_are_rejected(tmp_path, name):
     with pytest.raises(guard.StorageGuardError):
         guard.output_paths(tmp_path, "windows", name)
+
+
+def test_census_counts_nested_outputs_only_once(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    nested = root / "dist" / "nested-checkout"
+    sibling = tmp_path / "checkout-other"
+    observed = []
+    monkeypatch.setattr(guard, "_existing_chain", lambda path: None)
+
+    def metadata_only(path, *, private, allow_posix_links):
+        assert private is True
+        observed.append(path)
+        return {"logical_bytes": 1}
+
+    monkeypatch.setattr(guard, "_snapshot", metadata_only)
+    total, _ = guard._measure([nested, sibling, root, nested], ephemeral=False)
+    expected = sorted([*guard._census_paths(root), *guard._census_paths(sibling)])
+    assert observed == expected
+    assert total == len(expected)
+
+
+def test_census_supports_hundreds_of_explicit_checkout_roots(tmp_path, monkeypatch):
+    roots = [tmp_path / f"checkout-{number:03}" for number in range(296)]
+    monkeypatch.setattr(guard, "_existing_chain", lambda path: None)
+    monkeypatch.setattr(guard, "_snapshot", lambda path, **kwargs: {"logical_bytes": 1})
+    total, census = guard._measure(roots, ephemeral=False)
+    assert total == 3552
+    assert len(census) == 3552

@@ -181,10 +181,10 @@ Existing worktrees keep their old scripts until these changes are integrated.
 They do not automatically gain protection because another checkout uses the
 shared guard. Integrate the reviewed normal-entry guard commit and managed
 output follow-up together, in order, into a clean target branch. For the local
-two-commit delivery, the sequence is:
+delivery, include the census performance follow-up as well:
 
 ```powershell
-git cherry-pick 1b131d3 <managed-output-commit-from-handoff>
+git cherry-pick 1b131d3 16290c5 <census-performance-commit-from-handoff>
 ```
 
 Alternatively, apply the cumulative patch supplied with the handoff using
