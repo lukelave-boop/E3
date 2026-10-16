@@ -1,6 +1,13 @@
-﻿from pathlib import Path
+﻿import ctypes
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
-from laser_aligner import __version__
+import pytest
+
+from laser_aligner import __version__, dev_test_launcher
 from laser_aligner.identity import (
     APPLICATION_NAME,
     DEV_TEST_APP_USER_MODEL_ID,
@@ -101,3 +108,86 @@ def test_dev_identity_gate_requires_the_exact_enabled_value(monkeypatch) -> None
     assert dev_test_identity() is None
     assert application_icon_filename() == "e3-positioning-system.svg"
 
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires the real Windows shell32 API")
+@pytest.mark.parametrize("entrypoint", ["application", "launcher"])
+def test_windows_app_id_real_signature_in_isolated_process(entrypoint: str) -> None:
+    # Changing a child process's identity cannot change the test runner's taskbar
+    # grouping, launcher pointer, registry settings, or any existing E3 process.
+    script = r"""
+import ctypes
+import os
+import sys
+from laser_aligner import dev_test_launcher, identity
+
+os.environ[identity.DEV_TEST_ENVIRONMENT_VARIABLE] = "1"
+assert ctypes.sizeof(ctypes.c_long) == 4
+if sys.argv[1] == "application":
+    assert identity.configure_windows_app_user_model_id() is True
+else:
+    assert dev_test_launcher.set_process_app_user_model_id() is None
+
+getter = ctypes.WinDLL("shell32", use_last_error=True).GetCurrentProcessExplicitAppUserModelID
+getter.argtypes = (ctypes.POINTER(ctypes.c_void_p),)
+getter.restype = ctypes.c_long
+value = ctypes.c_void_p()
+assert getter(ctypes.byref(value)) == 0 and value.value
+try:
+    assert ctypes.cast(value, ctypes.c_wchar_p).value == identity.DEV_TEST_APP_USER_MODEL_ID
+finally:
+    release = ctypes.WinDLL("ole32", use_last_error=True).CoTaskMemFree
+    release.argtypes = (ctypes.c_void_p,)
+    release.restype = None
+    release(value)
+assert "PySide6" not in sys.modules
+"""
+    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script, entrypoint],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=15,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires Windows ctypes calling conventions")
+@pytest.mark.parametrize("entrypoint", ["application", "launcher"])
+def test_windows_app_id_rejects_signed_hresult_from_native_signature(monkeypatch, entrypoint: str) -> None:
+    from ctypes import wintypes
+
+    calls: list[str] = []
+    failure = -2147467259  # E_FAIL: 0x80004005 as a signed 32-bit HRESULT.
+
+    def fail(app_id: str) -> int:
+        calls.append(app_id)
+        return failure
+
+    native_failure = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.LPCWSTR)(fail)
+    library_calls = []
+
+    def load_library(name: str, *, use_last_error: bool):
+        library_calls.append((name, use_last_error))
+        return SimpleNamespace(SetCurrentProcessExplicitAppUserModelID=native_failure)
+
+    monkeypatch.setattr(ctypes, "WinDLL", load_library)
+    monkeypatch.setenv(DEV_TEST_ENVIRONMENT_VARIABLE, "1")
+    function, error = (
+        (configure_windows_app_user_model_id, OSError)
+        if entrypoint == "application"
+        else (dev_test_launcher.set_process_app_user_model_id, dev_test_launcher.DevTestLauncherError)
+    )
+
+    with pytest.raises(error, match=r"HRESULT 0x80004005"):
+        function()
+
+    assert library_calls == [("shell32", True)]
+    assert calls == [DEV_TEST_APP_USER_MODEL_ID]
+    assert native_failure.argtypes == (wintypes.LPCWSTR,)
+    assert ctypes.sizeof(native_failure.restype) == 4
+    assert native_failure.restype(failure).value == failure

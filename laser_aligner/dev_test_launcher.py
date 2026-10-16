@@ -389,7 +389,7 @@ def set_process_app_user_model_id(
 
     function = ctypes.WinDLL("shell32", use_last_error=True).SetCurrentProcessExplicitAppUserModelID
     function.argtypes = (wintypes.LPCWSTR,)
-    function.restype = wintypes.HRESULT
+    function.restype = ctypes.c_long
     result = int(function(app_id))
     if result < 0:
         raise DevTestLauncherError(

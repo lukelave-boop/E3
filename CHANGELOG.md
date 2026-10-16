@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased - DEV TEST startup compatibility (2026-10-16)
+
+- Fix DEV TEST taskbar identity initialization on Windows Python 3.10 through 3.13
+  by using the signed Windows HRESULT declaration in both launcher and app.
+
 ## Unreleased - Windows installer long paths (2026-10-16)
 
 - Require Inno Setup 7+ before reserving build storage, fixing failures and possible
