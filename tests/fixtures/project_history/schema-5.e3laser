@@ -1,0 +1,449 @@
+{
+  "coordinate_space": "machine",
+  "created_at": "2026-01-02T03:04:05+00:00",
+  "id": "project-historical-schema-5",
+  "layers": [
+    {
+      "air_assist": true,
+      "color": "#315B86",
+      "id": "layer-line",
+      "line_interval_mm": 0.15,
+      "mode": "line",
+      "name": "Historical line",
+      "output_enabled": true,
+      "overscan_percent": 4.5,
+      "passes": 1,
+      "power_percent": 17.25,
+      "priority": 3,
+      "raster_power_correction": 7.25,
+      "scan_angle_deg": 31.0,
+      "speed_mm_min": 1234.5,
+      "vector_power_correction": -13.5,
+      "visible": true
+    },
+    {
+      "air_assist": false,
+      "color": "#315B86",
+      "id": "layer-fill",
+      "line_interval_mm": 0.15,
+      "mode": "fill",
+      "name": "Historical fill",
+      "output_enabled": true,
+      "overscan_percent": 4.5,
+      "passes": 2,
+      "power_percent": 18.25,
+      "priority": 2,
+      "raster_power_correction": 7.25,
+      "scan_angle_deg": 31.0,
+      "speed_mm_min": 1235.5,
+      "vector_power_correction": -13.5,
+      "visible": false
+    },
+    {
+      "air_assist": false,
+      "color": "#315B86",
+      "id": "layer-raster",
+      "line_interval_mm": 0.15,
+      "mode": "raster",
+      "name": "Historical raster",
+      "output_enabled": false,
+      "overscan_percent": 4.5,
+      "passes": 3,
+      "power_percent": 19.25,
+      "priority": 1,
+      "raster_power_correction": 7.25,
+      "scan_angle_deg": 31.0,
+      "speed_mm_min": 1236.5,
+      "vector_power_correction": -13.5,
+      "visible": true
+    }
+  ],
+  "metadata": {
+    "custom": {
+      "nested": [
+        1,
+        false,
+        null
+      ]
+    },
+    "material_surface": {
+      "binding_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "capture_pose": [
+        110.0,
+        210.0,
+        null
+      ],
+      "datum_id": "historical-datum",
+      "evidence_source_ids": [
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "honeycomb_height_mm": 10.0,
+      "measurement_id": "historical-measurement",
+      "model_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "plan_id": "historical-plan",
+      "reference": {
+        "id": "historical-reference"
+      },
+      "schema_version": 1,
+      "session": [
+        "offline",
+        42
+      ],
+      "surface_elevation_mm": 13.5
+    },
+    "operator_note": "Frozen synthetic regression project"
+  },
+  "modified_at": "2026-01-03T04:05:06+00:00",
+  "name": "Historical schema 5 — Café",
+  "objects": [
+    {
+      "geometry": {
+        "corner_radius_mm": 1.25
+      },
+      "group_id": null,
+      "id": "object-rectangle",
+      "kind": "rectangle",
+      "layer_id": "layer-line",
+      "locked": false,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "source": "historical-rectangle"
+      },
+      "name": "Historical rectangle",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": true,
+        "mirror_y": false,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 35.25,
+        "y_mm": 46.5
+      },
+      "visible": true
+    },
+    {
+      "geometry": {},
+      "group_id": null,
+      "id": "object-ellipse",
+      "kind": "ellipse",
+      "layer_id": "layer-line",
+      "locked": false,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "source": "historical-ellipse"
+      },
+      "name": "Historical ellipse",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": false,
+        "mirror_y": true,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 45.25,
+        "y_mm": 46.5
+      },
+      "visible": false
+    },
+    {
+      "geometry": {
+        "points": [
+          [
+            -0.5,
+            0.125
+          ],
+          [
+            0.5,
+            -0.125
+          ]
+        ]
+      },
+      "group_id": null,
+      "id": "object-line",
+      "kind": "line",
+      "layer_id": "layer-line",
+      "locked": false,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "source": "historical-line"
+      },
+      "name": "Historical line",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": true,
+        "mirror_y": false,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 55.25,
+        "y_mm": 46.5
+      },
+      "visible": true
+    },
+    {
+      "geometry": {
+        "fill_rule": "evenodd",
+        "path_version": 1,
+        "subpaths": [
+          {
+            "closed": true,
+            "segments": [
+              {
+                "to": [
+                  0.5,
+                  -0.5
+                ],
+                "type": "line"
+              },
+              {
+                "to": [
+                  0.5,
+                  0.5
+                ],
+                "type": "line"
+              }
+            ],
+            "start": [
+              -0.5,
+              -0.5
+            ]
+          }
+        ]
+      },
+      "group_id": "historical-group",
+      "id": "object-polygon",
+      "kind": "polygon",
+      "layer_id": "layer-line",
+      "locked": false,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "source": "historical-polygon"
+      },
+      "name": "Historical polygon",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": false,
+        "mirror_y": true,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 65.25,
+        "y_mm": 46.5
+      },
+      "visible": true
+    },
+    {
+      "geometry": {
+        "fill_rule": "nonzero",
+        "path_version": 1,
+        "subpaths": [
+          {
+            "closed": false,
+            "segments": [
+              {
+                "control_1": [
+                  -0.25,
+                  -0.375
+                ],
+                "control_2": [
+                  0.25,
+                  0.375
+                ],
+                "to": [
+                  0.5,
+                  0.0
+                ],
+                "type": "cubic"
+              }
+            ],
+            "start": [
+              -0.5,
+              0.0
+            ]
+          },
+          {
+            "closed": true,
+            "segments": [
+              {
+                "to": [
+                  0.5,
+                  -0.5
+                ],
+                "type": "line"
+              },
+              {
+                "to": [
+                  0.5,
+                  0.5
+                ],
+                "type": "line"
+              }
+            ],
+            "start": [
+              -0.5,
+              -0.5
+            ]
+          }
+        ]
+      },
+      "group_id": "historical-group",
+      "id": "object-path",
+      "kind": "path",
+      "layer_id": "layer-line",
+      "locked": false,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "material_surface": {
+          "binding_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "capture_pose": [
+            110.0,
+            210.0,
+            null
+          ],
+          "datum_id": "historical-datum",
+          "evidence_source_ids": [
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          "honeycomb_height_mm": 10.0,
+          "measurement_id": "historical-measurement",
+          "model_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "plan_id": "historical-plan",
+          "reference": {
+            "id": "historical-reference"
+          },
+          "schema_version": 1,
+          "session": [
+            "offline",
+            42
+          ],
+          "surface_elevation_mm": 13.5
+        },
+        "source": "historical-path"
+      },
+      "name": "Historical path",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": true,
+        "mirror_y": false,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 75.25,
+        "y_mm": 46.5
+      },
+      "visible": true
+    },
+    {
+      "geometry": {
+        "font_family": "Sans Serif",
+        "text": "Café — 雪"
+      },
+      "group_id": null,
+      "id": "object-text",
+      "kind": "text",
+      "layer_id": "layer-line",
+      "locked": true,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "source": "historical-text"
+      },
+      "name": "Historical text",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": false,
+        "mirror_y": true,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 85.25,
+        "y_mm": 46.5
+      },
+      "visible": true
+    },
+    {
+      "geometry": {
+        "asset": "assets/café logo.png",
+        "background_cleanup": {
+          "enabled": true,
+          "tolerance": 9
+        }
+      },
+      "group_id": null,
+      "id": "object-image",
+      "kind": "image",
+      "layer_id": "layer-raster",
+      "locked": false,
+      "metadata": {
+        "custom": {
+          "labels": [
+            "one",
+            2,
+            null,
+            true
+          ]
+        },
+        "source": "historical-image"
+      },
+      "name": "Historical image",
+      "transform": {
+        "height_mm": 12.25,
+        "mirror_x": true,
+        "mirror_y": false,
+        "rotation_deg": 23.0,
+        "width_mm": 18.5,
+        "x_mm": 95.25,
+        "y_mm": 46.5
+      },
+      "visible": true
+    }
+  ],
+  "revision": 12,
+  "schema_version": 5,
+  "work_area": {
+    "x_max": 190.0,
+    "x_min": 0.0,
+    "y_max": 190.0,
+    "y_min": 0.0
+  }
+}
