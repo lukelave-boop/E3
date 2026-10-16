@@ -1,9 +1,27 @@
 # Changelog
 
+## Unreleased - updater stall recovery (2026-10-16)
+
+- Bound manifest checks to 75 seconds, add Cancel check, and reject late offers.
+
+- End the update dialog after 45 seconds without progress or 15 minutes overall,
+  even if its worker is waiting for a connection or response headers.
+- Add Cancel download and ignore late results from cancelled or timed-out work.
+- Give overlapping retries separate partial files and preserve download-stage,
+  byte-count, elapsed-time and failure diagnostics in the update cache.
+- Preserve mandatory exact-size/SHA-256 verification and normal installer handoff.
+
 ## Unreleased - DEV TEST startup compatibility (2026-10-16)
 
 - Fix DEV TEST taskbar identity initialization on Windows Python 3.10 through 3.13
   by using the signed Windows HRESULT declaration in both launcher and app.
+
+## Unreleased - update download progress (2026-10-16)
+
+- Replace the download spinner with percentage, downloaded/total size and current
+  speed; show package size before download and a separate verification status.
+- Read available network data promptly so slow links report progress without
+  waiting for a full megabyte. Size and SHA-256 rejection remain mandatory.
 
 ## Unreleased - Windows installer long paths (2026-10-16)
 

@@ -1,5 +1,64 @@
 # Current repository state
 
+## Updater stall recovery - reproduced and corrected in source (2026-10-16)
+
+Isolated branch codex/updater-stall-recovery starts from main 718e931 and merges
+the existing progress change 986525a without replacing newer main behavior.
+The unchanged installed normal E3 0.7.153 had repeatedly remained at Downloading
+and verifying for ten minutes per the operator. Its retained older package
+partial is 63,963,136 / 220,077,007 bytes. A later real in-app retry fetched and
+verified 0.7.301 in about 29 seconds. That retry did not establish a repair;
+installation was not approved or performed in this investigation.
+
+A concrete timeout defect is reproduced against a loopback TCP server using
+the exact historical download_update function from bc86c8912ef2: bytes arriving
+every 50 ms keep a 200 ms socket timeout alive, and the 1 MiB buffered read
+delivers no progress until all 32 test bytes finish at 1.579 seconds (1.583 total).
+There is no overall deadline, independent dialog watchdog or cancellation in
+that installed updater. This establishes a reproducible mechanism for a
+long-lived downloading dialog, not proof of the original network condition;
+those attempts lack download-stage logs. No lost worker completion is reproduced. The manifest check has the same
+unbounded response-read exposure; its UI now has a 75-second deadline, Cancel
+check, and stale-result rejection, including while queued behind another task.
+
+The corrected source combines the existing available-data progress reads with
+a 45-second no-progress GUI watchdog, a 15-minute overall bound, Cancel download,
+cooperative worker cancellation, unique partial files and active-dialog callback
+checks. The same trickling server now delivers progress at 3 ms and expires at
+306 ms with a 300 ms test budget. A blocked connection/header worker cannot keep
+the dialog open, initiate a late install or delete a subsequent attempt's partial.
+Network/disk calls may unwind later; the UI does not wait for them before returning
+control. Size/SHA-256 acceptance and normal installer handoff remain mandatory.
+Per-attempt .download.json records retain phase/byte counts/time/outcome, while
+<package>.last-failure.json records GUI failures even if the worker is stuck.
+The desktop update pipeline is the only affected product behavior; project,
+browser, machine, motion, arming and laser paths are unchanged.
+
+Windows Python 3.14 focused verification passes 98 tests including 24 new stall,
+cancellation, overlap and actual queued Qt-worker checks, existing installer
+handoff, and controller-task shutdown. The initial sandbox run passed 66 checks
+and failed the loopback test because Windows sandbox networking forbids its
+socket; the unchanged test passes with loopback access. Repository Ruff,
+application compileall and whitespace checks pass. Real-network retrieval through
+the corrected downloader verifies all 220,121,914 bytes of public 0.7.301 with
+SHA-256 9ee5a6fe3e48e29b94d25cffdbebae3ac2ba5d102cf9d4bf60243d251681cecf
+in 33.491 seconds. The deterministic before/after script is
+scripts/reproduce_update_trickle.py; ignored measurements and downloads are under
+build/updater-stall-evidence. This is source/offscreen and real-network
+verification; frozen corrected GUI, compatibility CI, main integration and
+publication remain pending. Review also covers delayed timer delivery at result
+acceptance and blocked diagnostic writes: deadlines are rechecked before
+acceptance, and failure-log writes never run on the GUI thread. Offscreen visual
+inspection with the installed Segoe UI font passes. No installed bundle, permanent launcher selection,
+configuration or hardware was modified by this repair.
+
+A canonical local build attempt was refused before admission because managed
+container trc/E3/.e3-builds changed metadata during inventory; no guard was
+bypassed and no cleanup was performed. Hosted packaging at intermediate
+3166c7c passed (run 38959853245); the final manifest-check correction requires
+a fresh package. Current compatibility/package checks are tracked on PR #57.
+
+
 ## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)
 
 Permanent **E3 DEV TEST** now selects **Desktop UI and cleaned-image tracing**,
@@ -64,6 +123,27 @@ full pool inventories were stable, and the old tree fingerprint still matches
 its earlier review; the transient writer/cause is unverified. Actual managed
 usage is 5,583,915,600 bytes plus 2,147,483,648 reserved, within the unchanged
 eight-GiB cap. Independent payload and launcher validation passed as above.
+
+## Update download progress (2026-10-16)
+
+Isolated branch codex/update-download-progress replaces the desktop download
+spinner with manifest-sized progress, downloaded/total bytes, percentage and a
+rolling three-second transfer speed. The offer shows total size before download.
+Available-data reads report slow transfers promptly; speed falls to zero during
+a stall. A full bar says verification/saving is pending, never that an unchecked
+package is ready. Exact size/SHA-256 rejection and installer handoff are preserved.
+
+Windows Python 3.14 focused updater coverage passes 51 tests, including actual
+offscreen Qt dialog construction, worker reporting, large byte counts, rate/stall
+rendering, success/failure cleanup, corrupt/truncated/oversize rejection and
+existing installer handoff. Repository Ruff, application compileall and visual inspection of the offscreen
+dialog with the installed Segoe UI font pass. No interactive GUI, frozen installer,
+real network
+download or hardware verification is claimed. Compatibility CI/integration pending.
+Automatic approval review blocked the GitHub push because uploading repository
+source/documentation to origin requires explicit user authorization. No push,
+remote CI, main merge, publication or installed application replacement occurred.
+Existing shared checkout changes and other branches remain untouched.
 
 ## Windows installer long paths — verified (2026-10-16)
 

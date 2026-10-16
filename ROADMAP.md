@@ -1,5 +1,18 @@
 # Roadmap
 
+## Updater stall recovery (2026-10-16)
+
+Implemented: bounded/cancellable manifest checks and download dialogs,
+an independent desktop watchdog, cooperative cancellation, bounded
+transfer duration, attempt-owned partial files and persistent failure evidence.
+Historical ten-minute stalls are not retrospectively attributed to a network
+cause; a slow-trickle timeout defect is reproduced offline. See CURRENT_STATE.md.
+
+## Update download progress (2026-10-16)
+
+Implemented: manifest-sized progress, downloaded/total bytes and a recent transfer
+rate, followed by an explicit verification status. See [verification](CURRENT_STATE.md).
+
 ## Windows installer long paths (2026-10-16)
 
 Implemented: Inno Setup 7+ compiler preflight, explicit portable compiler support,

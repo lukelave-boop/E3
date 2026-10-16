@@ -1,5 +1,14 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Update checks can be cancelled and are limited to 75 seconds.
+Stalled update attempts now return control after 45 seconds without progress,
+with Cancel download, a 15-minute total limit, and local diagnostic records.
+Retry through Help > Check for Updates; every package still requires exact
+size and SHA-256 verification.
+
+Desktop updates show the package size before download, then downloaded/total bytes,
+percentage and current transfer speed. See [updates](docs/UPDATES.md).
+
 Image-editor automatic outlines use the current cleaned image, including background
 cleanup and local edits. Both outline previews preserve thin pixel features without
 retracing their edges. See the [image editor guide](docs/ENGRAVING_IMAGE_EDITOR.md).

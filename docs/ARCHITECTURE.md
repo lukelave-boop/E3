@@ -1,5 +1,27 @@
 # Architecture
 
+Manifest checks use a 75-second UI deadline and the same active-dialog identity
+rule, so stale workers cannot offer an update after cancellation or timeout.
+Update downloads retain the controller-owned background-task lifecycle but use
+an independent UI timer to bound the visible operation. No progress for 45 seconds
+or 15 minutes overall cancels that attempt and restores the update action.
+Callbacks require the same active dialog identity; late worker outcomes cannot
+close a newer dialog or initiate installation. Each worker owns a unique partial
+and diagnostic file, so retries cannot delete or append to another attempt.
+Cancellation is cooperative at available-data reads; DNS, response-header and
+filesystem waits may outlive the dialog, but their eventual results are ignored.
+The worker also checks its own deadline before accepting or committing bytes.
+Deadlines are rechecked when accepting a queued result. Best-effort failure
+diagnostics run on a separate daemon writer so filesystem latency cannot block
+the watchdog; this writer owns no Qt or machine state.
+These changes affect only desktop updates, not browser jobs or machine authority.
+
+Desktop update progress uses the exact package size from the validated manifest.
+The UI-neutral downloader reports byte counts after writing each available chunk.
+A locked counter transfers worker progress to a 250 ms GUI timer, which renders
+percentage and a rolling three-second byte rate without queuing one Qt event per
+chunk. Completion still requires exact size, SHA-256 and atomic cache promotion.
+
 Windows installer tooling selects and identifies Inno Setup 7 or newer before
 build admission. Its native long-path support preserves deeply nested PySide/Qt
 payloads without relocating the source or changing storage policy. Long compiler
