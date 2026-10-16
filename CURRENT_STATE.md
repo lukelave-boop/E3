@@ -2,7 +2,7 @@
 
 ## Desktop UI clarity (2026-10-16)
 
-Isolated branch `codex/desktop-ui-polish` incorporates integrated main `2748f7b`,
+Isolated branch `codex/desktop-ui-polish` incorporates integrated main `8c336dd`,
 preserving selected-object transparency, machine-axis raster, surface travel
 and prior upload/pause/Start work.
 The unrelated shared checkout is untouched. Shared desktop controls now have
@@ -66,6 +66,46 @@ three retained failed leases reserve six GiB alongside about 1.67 GiB of files.
 This task's failed lease windows-53d8a8f697e5425eb10a20167b300e99 has an empty
 output root, absent generated paths and an exited owner. Recovery review is
 prepared separately; no lease, artifact or existing DEV TEST selection is changed.
+
+## Transparency DEV TEST handoff and integration (2026-10-16)
+
+Permanent **E3 DEV TEST** selects **Selected-object transparency**, version
+**0.7.272**, exact frozen revision `5fa335baa43f98a5510f010352aa2718b635cf1c`,
+from branch `codex/selection-transparency`. Target:
+`C:\Users\lukel\.codex\worktrees\selection-transparency\E3\.e3-builds\windows-windows-102bb1d638804e238374e298ac2df49b\dist\E3\E3.exe`.
+The validated atomic pointer script and launcher-validator readback both pass.
+Reopen the permanent E3 DEV TEST launcher, select artwork and adjust Transparency
+above the viewer; 0% is fully visible, 100% hides artwork but keeps selection
+cues, and Reset all restores every object. This changes viewing only.
+
+[PR #48](https://github.com/lukelave-boop/E3/pull/48) merged into main at
+`2748f7b101136348684f106b3cb50af3773910e6` after complete
+[compatibility CI 38922995164](https://github.com/lukelave-boop/E3/actions/runs/38922995164)
+passed on the exact runtime revision: Windows Python 3.12 desktop **8,487 passed /
+65 skipped**, Windows Python 3.10 core **6,941 passed / 158 skipped**, POSIX
+**1,502 passed / 2 skipped**, and Ruff. The local 78 focused Windows offscreen
+checks, repository Ruff and application compileall also pass. Synthetic viewer
+screenshots were visually inspected at normal and compact widths. No interactive
+operator, real camera, controller or laser test was performed.
+
+The canonical Windows builder produced the direct frozen EXE. All **193**
+archived E3 modules, its entrypoint, three resources and metadata match the
+committed source. EXE SHA-256:
+`c7b71fbfbad042873b550f3003711f7b820fe9227ca7d6135c78b039b42f3db5`.
+Isolated archived-code and bundled native Qt 6.11.2 imports pass, including the
+new viewer control. That smoke constructed no QApplication/runtime, opened no
+QSettings and launched no E3 executable; full frozen GUI startup is unverified.
+
+Initial build attempts were refused before admission while a Python process
+could not be inspected. After process inventory recovered, the unchanged guard
+admitted the canonical build. Inno then hit the previously recorded long Qt
+assetdownloader `.cpp.obj` path error. Both source files exist; no installer was
+produced. The failed managed lease/reservation remains intact. This installer
+limitation is separate from the verified direct EXE selected for DEV TEST.
+No protection was bypassed, existing processes were not stopped, and the normal
+E3 launcher, permanent DEV launcher executable and shortcuts were unchanged.
+The integrated feature branch can be removed while retaining this selected build
+and ignored evidence under the attached worktree's `build/` directory.
 
 ## Main viewer object transparency (2026-10-16)
 
