@@ -32,7 +32,7 @@ Per-attempt .download.json records retain phase/byte counts/time/outcome, while
 The desktop update pipeline is the only affected product behavior; project,
 browser, machine, motion, arming and laser paths are unchanged.
 
-Windows Python 3.14 focused verification passes 91 tests including 17 new stall,
+Windows Python 3.14 focused verification passes 93 tests including 19 new stall,
 cancellation, overlap and actual queued Qt-worker checks, existing installer
 handoff, and controller-task shutdown. The initial sandbox run passed 66 checks
 and failed the loopback test because Windows sandbox networking forbids its
@@ -44,7 +44,10 @@ in 33.491 seconds. The deterministic before/after script is
 scripts/reproduce_update_trickle.py; ignored measurements and downloads are under
 build/updater-stall-evidence. This is source/offscreen and real-network
 verification; frozen corrected GUI, compatibility CI, main integration and
-publication remain pending. No installed bundle, permanent launcher selection,
+publication remain pending. Review also covers delayed timer delivery at result
+acceptance and blocked diagnostic writes: deadlines are rechecked before
+acceptance, and failure-log writes never run on the GUI thread. Offscreen visual
+inspection with the installed Segoe UI font passes. No installed bundle, permanent launcher selection,
 configuration or hardware was modified by this repair.
 
 ## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)

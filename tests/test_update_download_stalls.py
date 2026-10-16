@@ -158,6 +158,10 @@ def ui(monkeypatch, tmp_path):
     app = update_ui.QtWidgets.QApplication.instance() or update_ui.QtWidgets.QApplication([])
     monkeypatch.setattr(updates, "update_cache_dir", lambda: tmp_path)
     yield update_ui, app
+    for worker in threading.enumerate():
+        if worker.name == "E3 update diagnostics":
+            worker.join(5)
+            assert not worker.is_alive()
     app.processEvents()
 
 
@@ -187,7 +191,15 @@ def test_ui_watchdog_recovers_and_ignores_late_results(ui, monkeypatch, tmp_path
         assert window._e3_update_progress is None
         assert action.isEnabled()
         assert len(failures) == 1 and "no progress" in failures[0]
-        assert "no progress" in json.loads((tmp_path / "setup.exe.last-failure.json").read_text())["error"]
+        report = tmp_path / "setup.exe.last-failure.json"
+        deadline = time.monotonic() + 5
+        recorded = None
+        while recorded is None and time.monotonic() < deadline:
+            try:
+                recorded = json.loads(report.read_text())
+            except (OSError, ValueError):
+                time.sleep(0.005)
+        assert recorded is not None and "no progress" in recorded["error"]
         module._begin_download(window, action, SimpleNamespace(asset=asset()))
         current = window._e3_update_progress
         pending[0]["on_success"](tmp_path / "stale.exe")
@@ -217,6 +229,62 @@ def test_ui_total_deadline_cannot_be_extended_by_trickle(ui, monkeypatch):
     finally:
         dialog.close()
         window.deleteLater()
+
+
+def test_late_completion_checks_deadline_even_before_timer(ui, monkeypatch, tmp_path):
+    module, app = ui
+    window = module.QtWidgets.QMainWindow()
+    action = module.QtGui.QAction(window)
+    pending = {}
+    errors = []
+    window.controller = SimpleNamespace(run_background=lambda work, **kw: pending.update(**kw))
+    monkeypatch.setattr(module.QtWidgets.QMessageBox, "critical", lambda *a: errors.append(a[-1]))
+    monkeypatch.setattr(module, "_download_complete", lambda *a: pytest.fail("Expired install"))
+    try:
+        module._begin_download(window, action, SimpleNamespace(asset=asset()))
+        dialog = window._e3_update_progress
+        dialog._started -= module.DOWNLOAD_MAX_SECONDS + 1
+        dialog.report(8, 8)
+        pending["on_success"](tmp_path / "setup.exe")
+        assert errors and "time limit" in errors[0]
+        assert window._e3_update_progress is None and action.isEnabled()
+    finally:
+        module._close_progress(window)
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_blocked_diagnostic_write_does_not_block_watchdog(ui, monkeypatch):
+    module, app = ui
+    window = module.QtWidgets.QMainWindow()
+    action = module.QtGui.QAction(window)
+    entered = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+    errors = []
+    def blocked_record(*args):
+        entered.set()
+        try:
+            release.wait(5)
+        finally:
+            done.set()
+    window.controller = SimpleNamespace(run_background=lambda *a, **kw: None)
+    monkeypatch.setattr(module, "record_download_problem", blocked_record)
+    monkeypatch.setattr(module.QtWidgets.QMessageBox, "critical", lambda *a: errors.append(a[-1]))
+    try:
+        module._begin_download(window, action, SimpleNamespace(asset=asset()))
+        dialog = window._e3_update_progress
+        dialog._last_progress -= module.DOWNLOAD_STALL_SECONDS + 1
+        dialog._refresh()
+        assert entered.wait(2)
+        assert not done.is_set()
+        assert errors and action.isEnabled() and window._e3_update_progress is None
+    finally:
+        release.set()
+        assert done.wait(5)
+        module._close_progress(window)
+        window.deleteLater()
+        app.processEvents()
 
 
 def test_cancel_button_releases_ui_and_suppresses_late_install(ui, monkeypatch, tmp_path):

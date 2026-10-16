@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 from typing import Any
 
 from ..deployment import load_build_info
@@ -274,10 +274,22 @@ def _begin_download(
 
     def failure(message: str) -> None:
         if active():
-            record_download_problem(result.asset, message)
+            # Diagnostics must not replace a network stall with a GUI-thread
+            # filesystem wait. This best-effort writer owns no Qt or machine state.
+            try:
+                Thread(
+                    target=record_download_problem, args=(result.asset, message),
+                    name="E3 update diagnostics", daemon=True,
+                ).start()
+            except RuntimeError:
+                pass  # Best-effort logging must never prevent UI recovery.
             _show_failure(window, action, message)
 
     def success(path: Path) -> None:
+        if active() and not dialog.cancel_event.is_set():
+            # A queued result can beat a delayed timer event. Enforce the same
+            # deadline at acceptance, not just on the next timer tick.
+            dialog._refresh()
         if active() and not dialog.cancel_event.is_set():
             _download_complete(window, action, path)
 

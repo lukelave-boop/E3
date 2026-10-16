@@ -9,6 +9,9 @@ and diagnostic file, so retries cannot delete or append to another attempt.
 Cancellation is cooperative at available-data reads; DNS, response-header and
 filesystem waits may outlive the dialog, but their eventual results are ignored.
 The worker also checks its own deadline before accepting or committing bytes.
+Deadlines are rechecked when accepting a queued result. Best-effort failure
+diagnostics run on a separate daemon writer so filesystem latency cannot block
+the watchdog; this writer owns no Qt or machine state.
 These changes affect only desktop updates, not browser jobs or machine authority.
 
 Desktop update progress uses the exact package size from the validated manifest.

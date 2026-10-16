@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import threading
 from threading import Thread
 from types import SimpleNamespace
 
@@ -71,6 +72,10 @@ def ui(monkeypatch, tmp_path):
 
     app = update_ui.QtWidgets.QApplication.instance() or update_ui.QtWidgets.QApplication([])
     yield update_ui
+    for worker in threading.enumerate():
+        if worker.name == "E3 update diagnostics":
+            worker.join(5)
+            assert not worker.is_alive()
     app.processEvents()
 
 
