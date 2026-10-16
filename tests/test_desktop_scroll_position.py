@@ -193,7 +193,7 @@ def test_deleted_anchor_is_safe(form):
     area.ensureWidgetVisible(buttons[8])
     QtTest.QTest.mouseClick(buttons[8], QtCore.Qt.MouseButton.LeftButton)
     buttons[8].deleteLater()
-    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    QtCore.QCoreApplication.sendPostedEvents(buttons[8], QtCore.QEvent.Type.DeferredDelete)
     buttons[0].setFixedHeight(100)
     settle(app)
 

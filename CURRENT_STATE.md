@@ -35,22 +35,35 @@ behavior. Repository Ruff and compileall pass. Initial CI exposed a primary
 STOP lock held across a secondary ACK wait; separate admission locking fixes
 that regression. CI run 38837488585 passes Windows 3.10, POSIX and Ruff;
 Windows 3.12 reports 7,726 passed and one native Qt teardown crash. The outline
-fixture now drains only its own deferred deletion instead of all tests' objects;
-18 outline/confirmation offscreen tests pass. Final compatibility CI is pending.
+and deleted-scroll-anchor tests now drain only their own deferred deletion instead
+of other tests' objects; 18 outline/confirmation and 20 scroll/outline checks pass.
+A broader local desktop rerun has 1,575 passed, one five-second startup timeout,
+and no native crash; that startup check passes separately in 2.16 seconds.
+Final compatibility CI [38838991061](https://github.com/lukelave-boop/E3/actions/runs/38838991061)
+passes against the exact frozen runtime: Windows 3.12 desktop 7,730 passed,
+65 skipped; Windows 3.10 core 6,213 passed, 157 skipped; POSIX serial/session
+654 passed; Ruff passes. The subsequent scroll test cleanup and this record do
+not change runtime files. The feature branch remains for operator acceptance.
 
-Earlier candidate 0.7.230, source ea091da791acd02fede0f27bdc17a3ef017e10c1,
+Candidate 0.7.232, source e649a22d62020dc751656d6a8f78a09b4c55cc96,
 passes exact comparison of 191 application modules and three resources against
 the commit. The frozen offscreen saved-profile startup smoke constructs and
 shows the main window without an error modal. It uses an unavailable synthetic
 serial port, disabled motion/camera and isolated persistence with registry
-writes denied. It is superseded by the approved identity compatibility and Start
-fixes, which need a new freeze. This is not interactive GUI, camera or physical
-hardware testing.
+writes denied. It includes the approved identity compatibility and Start fixes.
+This is not interactive GUI, camera or physical hardware testing.
 
-Matching Pi companion e3-pi-job-pause-cf2b147a passes the installed-source
-preflight against predecessor 34902b8. Installation is deferred while the
-controller is connected. The Windows installer and permanent launcher selection
-remain pending. No hardware output or new physical verification is claimed.
+Matching Pi companion e3-pi-job-pause-fbd51fa7 passes the installed-source
+preflight against predecessor 34902b8 and is staged on the Pi. Installation is
+deferred while the controller is connected (last observed idle, disarmed,
+READY_HOME_REQUIRED). Both Pause and the Pi-side Start fix require installation;
+the currently running node still lacks the pause capability. The operator has
+been asked to Disconnect and close E3 before the guarded idle-only update.
+The canonical Windows installer completed and the permanent E3 DEV TEST pointer
+now selects version 0.7.232 at this worktree's dist/E3/E3.exe. Adjacent build-info
+and pointer match e649a22d62020dc751656d6a8f78a09b4c55cc96; EXE SHA-256 is
+2e696077baca2d24bd7341fcfbfa4abd3cd36e5d5558762cc25d8d66a3f524b8.
+No hardware output or new physical verification is claimed.
 
 
 ## Streaming fix merged into main (2026-10-15)
