@@ -1,5 +1,29 @@
 # Current repository state
 
+## Default packaging storage guard (2026-10-16)
+
+The normal Windows installer, private home-installer call chain, DEV TEST
+launcher and Linux AppImage entrypoints now invoke a shared storage guard by
+default. Existing output paths and normal build parameters remain supported.
+Admission measures legacy generated artifacts, bounds further growth to the
+recorded baseline plus eight GiB, reserves concurrent build capacity and checks
+a free-space floor. Hosted CI opts into verified fresh-workspace handling;
+intermediate uploaded packages have seven-day retention.
+
+Ordinary explicit builds may replace only their own previously successful,
+unchanged generated outputs. Selected, running and pinned output trees are
+protected, including supporting runtime files. Unknown legacy or modified
+outputs refuse replacement and require review. Private outputs use metadata-only
+ownership and capacity accounting; secret payloads never enter the prunable
+registry. Failed builds retain their lease; no automatic pruning is enabled.
+
+Verification uses focused synthetic-file and stub-command tests, Python static
+checks and PowerShell parsing. No real packaging, dependency installation,
+launcher change, hardware connection or physical qualification was performed.
+This entry documents source behavior; deployment to active checkouts and the
+separately approved one-time cleanup must be recorded independently. See
+[local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
+
 ## Streaming fix merged into main (2026-10-15)
 
 At the operator's explicit request, [PR #45](https://github.com/lukelave-boop/E3/pull/45)

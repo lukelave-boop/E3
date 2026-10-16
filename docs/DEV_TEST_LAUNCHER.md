@@ -63,6 +63,10 @@ Changing this JSON is the only normal launcher update. The pinned executable
 and Desktop shortcut remain stable.
 
 Feature builds must be produced with `packaging/build_windows.ps1`. The build
+now checks shared storage capacity and protects selected, running and pinned
+output trees before replacing its own generated files. Keep using the same
+command; see [local build storage](LOCAL_ARTIFACT_RETENTION.md) for refusal
+recovery and the separate dry-run cleanup inventory. The build
 sanitizes foreign ICU/OpenSSL directories from the PyInstaller environment and
 rejects known conflicting root-level native libraries before a build can be
 selected.

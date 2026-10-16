@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Normal packaging commands now share a [build storage guard](docs/LOCAL_ARTIFACT_RETENTION.md).
+It bounds additional artifact growth, reserves space for concurrent builds, and
+protects selected/running/rollback output trees while allowing verified ordinary
+rebuilds in place. Private installers use metadata-only accounting; cleanup
+remains a separate dry-run proposal requiring approval.
+
 GRBL jobs use continuous command streaming for consecutive linear moves, with
 lossless wire compression and guarded FIFO acknowledgements. This removes the
 per-segment quiet delay in detailed raster areas while preserving Stop, focus,
