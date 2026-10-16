@@ -12,7 +12,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,7 @@ from .job_focus import check_context as check_job_focus_context
 from .job_focus import move as move_job_focus
 from .job_focus import preserve_through_park, program_binding, retain_after_job, selected_plan
 from .job_focus import selection_snapshot as focus_selection_snapshot
+from .job_pause import JobPause
 from .laser_focus import LaserFocus, validate_setup_evidence
 from .laser_focus import validate_request as validate_focus_request
 from .mainboard import control as control_mainboard
@@ -340,6 +341,7 @@ class _JobRunContext:
     air_assist_off_commands: tuple[str, ...]
     focus_plan: dict[str, Any] | None = None
     retained_workpiece_plan: dict[str, Any] | None = None
+    pause: JobPause = field(default_factory=JobPause)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1183,11 +1185,16 @@ class MachineService:
             if machine is not None:
                 machine._mark_controller_command_state_untrusted(session, reason=reason)
 
+        def realtime(line: str) -> bool:
+            machine = owner()
+            return machine._observe_job_pause(session, line) if machine is not None else False
+
         receiver = ControllerReceiver(
             session.transport, session.dialect,
             on_failure=failed,
             on_idle=lambda line: session.diagnostics.record_rx(None, line),
             owner_alive=lambda: owner() is not None,
+            on_realtime=realtime,
         )
         return replace(session, receiver=receiver)
 
@@ -1326,6 +1333,7 @@ class MachineService:
         self._armed_program_digest = None
 
     def _invalidate_coordinate_reference(self) -> None:
+        self._pause_hold_session_generation = None
         self._laser_focus.invalidate()
         if self._z_probe is not None:
             self._z_probe.invalidate()
@@ -3030,9 +3038,13 @@ class MachineService:
                         if job_stop is not None and job_stop.is_set():
                             raise MachineError("Job stopped") from None
                         raise MachineError("Controller session was superseded")
-            deadline = time.monotonic() + timeout
+            clock = self._job_ack_clock if job_stop is not None else time.monotonic
+            deadline = clock() + timeout
             responses: list[str] = []
-            while time.monotonic() < deadline:
+            while clock() < deadline:
+                job_context = self._current_job_run_context() if job_stop is not None else None
+                if job_context is not None:
+                    self._job_pause_checkpoint(job_context)
                 # Focus XY completion can legitimately outlast an ordinary ACK.
                 # Recheck its network/Ender/deadline guard between bounded reads;
                 # never retain either guard lock while waiting for serial input.
@@ -3047,7 +3059,7 @@ class MachineService:
                     raise MachineError("Job stopped")
                 try:
                     response = self._read_session_line(session,
-                        timeout=min(0.2, max(0.0, deadline - time.monotonic()))
+                        timeout=min(0.2, max(0.0, deadline - clock()))
                     )
                 except Exception as exc:
                     self._raise_session_failure(session)
@@ -3081,7 +3093,7 @@ class MachineService:
                     self._reject_queued_unowned_responses(
                         session,
                         command_sequence=command_sequence,
-                        transaction_deadline=deadline,
+                        transaction_deadline=time.monotonic() + max(0, deadline - clock()),
                     )
                     if command_sequence is not None:
                         session.diagnostics.record_success(
@@ -3101,7 +3113,7 @@ class MachineService:
                     self._reject_queued_unowned_responses(
                         session,
                         command_sequence=command_sequence,
-                        transaction_deadline=deadline,
+                        transaction_deadline=time.monotonic() + max(0, deadline - clock()),
                     )
                     raise _ControllerCommandRejected(response)
                 if response_kind is CommandResponseKind.STARTUP:
@@ -3116,7 +3128,7 @@ class MachineService:
                         self._reject_queued_unowned_responses(
                             session,
                             command_sequence=command_sequence,
-                            transaction_deadline=deadline,
+                            transaction_deadline=time.monotonic() + max(0, deadline - clock()),
                         )
                         raise _ControllerCommandRejected(response)
                     raise MachineError(
@@ -3324,6 +3336,12 @@ class MachineService:
             dialect=GRBL_DIALECT if session is not None else None,
         )
         responses = execute(policy.settings_query_command)
+        if session is not None:
+            identity = session.diagnostics.snapshot()["firmware_identity"]
+            # Observation only: never change laser mode to enable this feature.
+            if ([line.strip() for line in responses if line.strip().startswith("$32=")] == ["$32=1"]
+                    and any(re.match(r"\[VER:1\.1[a-z][.:]", line) for line in identity)):
+                self._pause_session_generation = session.generation
         current = self._reported_grbl_step_idle_delay(responses)
         if current is None:
             raise MachineError("GRBL $$ did not report the $1 step-idle delay")
@@ -3425,6 +3443,7 @@ class MachineService:
                 raise MachineError(
                     f"{context}: GRBL did not verify the held-stepper $1={held} policy"
                 )
+        self._pause_hold_session_generation = self._controller_session_generation
         self._append_log("INFO", f"{context}: GRBL steppers held with $1={held}")
 
     @contextmanager
@@ -6299,11 +6318,119 @@ class MachineService:
         context = self._current_job_run_context()
         if context is None:
             raise MachineError("Controller job context is unavailable")
-        with self._lock:
-            if self._active_job_context is context:
-                context.status.phase = phase
+        while True:
+            self._job_pause_checkpoint(context)
+            with self._transport_write_lock:
+                if getattr(context, "pause", None) is not None and context.pause.state != "running":
+                    continue
+                with self._lock:
+                    if self._active_job_context is context:
+                        context.status.phase = phase
+                return
+
+    def _observe_job_pause(self, session: ControllerSession, response: str) -> bool:
+        # Called under RX ingress: never acquire service or physical-write locks.
+        context = self._active_job_context
+        if (context is None or context.stop_event.is_set()
+                or not self._same_controller_session(context.session, session)):
+            return False
+        return context.pause.observe(response)
+
+    def _pause_supported(self, context: _JobRunContext | None) -> bool:
+        return bool(context is not None and context.session.receiver is not None
+                    and context.session.dialect is GRBL_DIALECT
+                    and callable(getattr(context.session.transport, "write_raw_guarded", None))
+                    and self._coordinate_reference_ready
+                    and getattr(self, "_pause_hold_session_generation", None) == context.session.generation
+                    and getattr(self, "_pause_session_generation", None) == context.session.generation)
+
+    def _require_pause_authority(self, context: _JobRunContext) -> None:
+        self._raise_session_failure(context.session)
+        if not self._pause_supported(context):
+            raise MachineError("Pause/resume lost its verified controller or motor-hold reference")
+        if (context.stop_event.is_set() or self._active_job_context is not context
+                or not self._same_controller_session(self._session, context.session)
+                or self._controller_state is not ControllerState.JOB_RUNNING):
+            raise MachineError("Job stopped or its controller session changed")
+        if self.hardware_enabled is not True or self.settings.allow_motion is not True:
+            raise SafetyError("Hardware/motion permission was revoked")
+        if context.status.powered and (not self._job_laser_authorized or self.laser_lockout):
+            raise SafetyError("Powered job authorization was revoked")
+        self._raise_if_secondary_faulted()
+        check_job_focus_context(self, context)
+
+    def request_pause(self, *, resume: bool = False, expected_run_id: int | None = None,
+                      expected_pause_revision: int | None = None) -> dict[str, Any]:
+        if type(resume) is not bool:
+            raise SafetyError("resume must be an exact boolean")
+        for value in (expected_run_id, expected_pause_revision):
+            if value is not None and (type(value) is not int or value < 0):
+                raise SafetyError("Pause identity/revision must be nonnegative integers")
+        context = self._active_job_context
+        if context is None or not self._pause_supported(context):
+            raise MachineError("Pause requires an active GRBL 1.1 job with reported $32=1")
+        # Same gate as job writes and phase changes; STOP remains independent.
+        with self._transport_write_lock:
+            self._require_pause_authority(context)
+            if (expected_run_id is not None and expected_run_id != context.identity
+                    or expected_pause_revision is not None and expected_pause_revision != context.pause.revision):
+                raise MachineError("Pause/resume request is stale; refresh job status")
+            if context.status.phase not in {"streaming", "draining"}:
+                raise MachineError("Pause is unavailable during focus or Home / park")
+            if context.pause.request(resume=resume):
+                try:
+                    # $32=1 prevents GRBL parking and makes restore start with motion.
+                    # Do not inject M5 into the suspended planner or replay G-code.
+                    def guard() -> None:
+                        if (context.stop_event.is_set() or self._active_job_context is not context
+                                or not self._same_controller_session(self._session, context.session)
+                                or self.hardware_enabled is not True or self.settings.allow_motion is not True
+                                or context.status.powered and (not self._job_laser_authorized or self.laser_lockout)):
+                            raise MachineError("Pause/resume authority was revoked before write")
+                    context.session.transport.write_raw_guarded(b"~" if resume else b"\x84", guard)
+                    self._append_log("TX", "Resume requested" if resume else "Pause requested")
+                except Exception as exc:
+                    self._mark_controller_command_state_untrusted(context.session, reason=f"Pause/resume write failed: {exc}")
+                    raise MachineError(f"Pause/resume write failed: {exc}") from exc
+        return self.status()
+
+    def _job_pause_checkpoint(self, context: _JobRunContext) -> None:
+        pause = getattr(context, "pause", None)
+        if pause is None:
+            return  # Historical test-only contexts; never a production job.
+        while pause.state != "running":
+            self._require_pause_authority(context)
+            pause.check()
+            now = time.monotonic()
+            if now - pause.last_query >= 0.2:
+                with self._transport_write_lock:
+                    self._require_pause_authority(context)
+                    context.session.transport.write_raw(b"?")
+                    pause.last_query = now
+            assert context.session.receiver is not None
+            context.session.receiver.poll_suspended(0.02)
+            context.stop_event.wait(0.01)
+
+    def _job_ack_clock(self) -> float:
+        context = self._current_job_run_context()
+        pause = getattr(context, "pause", None)
+        return time.monotonic() if pause is None else pause.clock()
 
     def _write_running_job_line(
+        self, command: str, **kwargs: Any,
+    ) -> bool:
+        context = self._current_job_run_context()
+        if context is None:
+            raise MachineError("Controller job context is unavailable")
+        while True:
+            self._job_pause_checkpoint(context)
+            with self._transport_write_lock:
+                pause = getattr(context, "pause", None)
+                if pause is not None and pause.state != "running":
+                    continue
+                return self._write_unpaused_job_line(command, **kwargs)
+
+    def _write_unpaused_job_line(
         self,
         command: str,
         *,
@@ -6451,17 +6578,18 @@ class MachineService:
         # capacity is bounded again by the receive owner, counting the newline.
         capacity = window.rx_bytes or 127
         token = start + 1
-        pending: deque[tuple[int, int, float, str]] = deque()
+        pending: deque[tuple[int, int, float, str, float]] = deque()
         compactor = GrblStreamCompactor()
 
         def acknowledge() -> None:
-            source_index, sequence, started, wire_command = pending[0]
+            source_index, sequence, started, wire_command, ack_started = pending[0]
             while True:
+                self._job_pause_checkpoint(context)
                 self._raise_session_failure(session)
                 if context.stop_event.is_set():
                     raise MachineError("Job stopped")
                 self._raise_if_secondary_faulted()
-                remaining = started + timeout - time.monotonic()
+                remaining = ack_started + timeout - context.pause.clock()
                 if remaining <= 0:
                     self._record_ack_timeout_evidence(session, sequence, timeout, command=wire_command)
                     raise MachineError(f"Controller did not acknowledge streamed motion within {timeout:g} seconds")
@@ -6494,7 +6622,7 @@ class MachineService:
                 raise MachineError("Motion command exceeds the controller stream byte window")
             while True:
                 if pending and (len(pending) >= window.max_pending
-                                or time.monotonic() >= pending[0][2] + timeout):
+                                or context.pause.clock() >= pending[0][4] + timeout):
                     acknowledge()
                     continue
                 accepted = self._write_running_job_line(
@@ -6505,7 +6633,7 @@ class MachineService:
                 )
                 if accepted:
                     sequence, started = self._job_context.last_stream_transaction
-                    pending.append((index, sequence, started, wire))
+                    pending.append((index, sequence, started, wire, context.pause.clock()))
                     break
                 if not pending:
                     raise MachineError("Controller stream window cannot admit a motion line")
@@ -6761,6 +6889,7 @@ class MachineService:
                         self.settings.read_timeout,
                     ),
                 )
+            self._set_running_job_phase("finishing")
             self._raise_session_failure(context.session)
             if context.stop_event.is_set():
                 raise MachineError("Job stopped")
@@ -7184,6 +7313,19 @@ class MachineService:
             )
             jog_position = self._jog_position_mm
             job = self._job.to_dict()
+            context = self._active_job_context
+            pause = getattr(context, "pause", None)
+            job_pause = {
+                "supported": self._pause_supported(context),
+                "state": pause.state if pause is not None else "unavailable",
+                "revision": pause.revision if pause is not None else 0,
+                "run_id": context.identity if context is not None else None,
+                "available": bool(context is not None and self._pause_supported(context)
+                                  and context.status.phase in {"streaming", "draining"}
+                                  and not context.stop_event.is_set()),
+            }
+            if job["running"] and pause is not None and pause.state != "running":
+                job["phase"] = pause.state
             last_successful_job = (
                 None
                 if self._last_successful_job is None
@@ -7250,6 +7392,7 @@ class MachineService:
                 ),
             },
             "job": job,
+            "job_pause": job_pause,
             "last_successful_job": last_successful_job,
             "log": list(self._log)[-80:],
         }

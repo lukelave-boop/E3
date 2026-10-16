@@ -1,5 +1,32 @@
 # Current repository state
 
+## Pause / resume implementation in progress (2026-10-15)
+
+Isolated branch codex/job-pause-resume starts from authoritative main 7e86608
+and retains the selected engraving editor from e768590/d21145c while preserving
+main's newer raster-travel and streaming behavior. The shared working tree and
+existing launcher selection remain untouched during development.
+
+Desktop/Pi pause uses GRBL 1.1 laser-mode suspend, requires reported $32=1 and
+verified motor holding, and retains the exact job/stream/ACK ownership. The
+original job authorization survives suspension only for that immutable job.
+Transition/status watchdogs, stale job/session/revision checks and independent
+STOP fail-off remain active. Explicit reattachment to an unowned paused job
+claims control without serial reset. See docs/JOB_PAUSE.md.
+
+Latest focused Windows 3.14 run: 376 tests passed, covering pause/continuation,
+STOP races, controller/session/stream regressions, authenticated Pi reattachment,
+offscreen controls and exact companion installer behavior. Repository Ruff passes.
+The earlier broader run passed 540 checks with one new loopback fixture failure;
+that case now passes with monitoring and no-reset paused-job reattachment.
+
+Initial Windows 3.14 fake-controller/offscreen regression run: 540 passed and
+one new loopback fixture failed. Corrected the missing monitor startup and
+implemented the subsequently exposed paused-job reattachment path. Final
+verification, frozen build, companion installation and physical acceptance
+remain pending; no hardware output or new physical verification is claimed.
+
+
 ## Streaming fix merged into main (2026-10-15)
 
 At the operator's explicit request, [PR #45](https://github.com/lukelave-boop/E3/pull/45)

@@ -16,6 +16,40 @@ import pytest
 from scripts import package_command_streaming as packager
 
 
+@pytest.fixture(autouse=True)
+def historical_streaming_contract(tmp_path, monkeypatch, request):
+    """Installer unit tests use a minimal historical three-module API fixture.
+
+    Current service sources now require the larger pause companion. The separate
+    Git-backed integration test below still imports the actual historical runtime.
+    """
+    if request.node.name in {"test_current_pause_sources_reject_partial_package", "test_exact_recorded_pi_upgrade_hashes_and_imports_without_hardware"}:
+        return
+    original = packager.ROOT
+    root = tmp_path / "historical-source"
+    sources = {
+        "laser_aligner/machine/grbl_stream.py": (original / "laser_aligner/machine/grbl_stream.py").read_bytes(),
+        "laser_aligner/machine/service.py": b"from .grbl_stream import GrblStreamCompactor\n",
+        "laser_aligner/machine/controller_receiver.py": (
+            b"class ControllerReceiver:\n"
+            b"    def begin_stream(self): pass\n    def stream_write(self): pass\n"
+            b"    def stream_read_ack(self): pass\n    def finish_stream(self): pass\n"
+        ),
+        "scripts/install_workpiece_focus.py": (original / "scripts/install_workpiece_focus.py").read_bytes(),
+    }
+    for name, data in sources.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    monkeypatch.setattr(packager, "ROOT", root)
+
+
+def test_current_pause_sources_reject_partial_package(tmp_path):
+    with pytest.raises(ValueError, match="package_job_pause"):
+        packager.package(tmp_path / "dist")
+    assert not (tmp_path / "dist").exists()
+
+
 def load_installer(bundle):
     spec = importlib.util.spec_from_file_location("streaming_installer", bundle / "install_command_streaming.py")
     installer = importlib.util.module_from_spec(spec)
@@ -228,6 +262,11 @@ def test_service_gate_accepts_only_linux_inactive_and_never_starts_it(tmp_path, 
 
 
 def test_exact_recorded_pi_upgrade_hashes_and_imports_without_hardware(tmp_path, monkeypatch):
+    selected = "34902b8"
+    if shutil.which("git") is None or subprocess.run(
+        ["git", "cat-file", "-e", selected], cwd=packager.ROOT, capture_output=True,
+    ).returncode:
+        pytest.skip("Historical streaming revision is absent in this shallow checkout")
     revision = packager.PREVIOUS_REVISION
     if shutil.which("git") is None or subprocess.run(
         ["git", "cat-file", "-e", revision], cwd=packager.ROOT, capture_output=True,
@@ -242,7 +281,7 @@ def test_exact_recorded_pi_upgrade_hashes_and_imports_without_hardware(tmp_path,
     for name, expected in packager.PREVIOUS.items():
         target = project / name
         assert (hashlib.sha256(target.read_bytes().replace(b"\r\n", b"\n")).hexdigest() if target.exists() else None) == expected
-    bundle = packager.package(tmp_path / "dist")
+    bundle = packager.package(tmp_path / "dist", revision=selected)
     installer = load_installer(bundle)
     monkeypatch.setattr(installer, "inactive", lambda: None)  # Isolated fixture, no real service.
     before = snapshot(project)

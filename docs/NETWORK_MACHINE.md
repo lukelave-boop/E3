@@ -179,6 +179,13 @@ Pi-owned fresh-session operation and observe its same result. Monitoring needs
 no lease. STOP needs no lease, bypasses ordinary ownership, and can cancel an
 active hold or recovery.
 
+Nodes advertising `pi-job-pause-v1` support authenticated `job.pause` and
+`job.resume`, bound to the control owner, Pi boot, controller session, exact
+active job UUID, local run ID and pause revision. They preserve the Pi-owned
+active job and stream queue. A confirmed paused job permits explicit Connect
+to claim an unowned control lease without any serial connection operation;
+another desktop's ownership still blocks it. See [Pause / Resume](JOB_PAUSE.md).
+
 On the Pi, `PiJobService` owns exactly one local `MachineService`, so a remote
 client never opens, steals, or interleaves the controller serial port. Status and
 STOP remain available during execution; another START, connect/reconnect/

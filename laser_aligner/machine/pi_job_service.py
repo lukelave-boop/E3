@@ -1180,6 +1180,22 @@ class PiJobService:
                 "job": _public_record(record),
             }
 
+    def pause(self, job_id: str, *, resume: bool, expected_run_id: int,
+              expected_pause_revision: int, expected_session_generation: int | None) -> dict[str, Any]:
+        self.require_accepting_requests("pause/resume a job")
+        # Serialize admission with START, but never with STOP or the job worker.
+        with self._ordinary_lock:
+            self._require_session_generation(expected_session_generation)
+            with self._state_lock:
+                if self._active_job_id != job_id or self._stop_requested_for == job_id:
+                    raise PiJobServiceError("Pause/resume requires the exact active job")
+            status = self.machine.request_pause(
+                resume=resume, expected_run_id=expected_run_id,
+                expected_pause_revision=expected_pause_revision,
+            )
+            self._set_machine_status(status)
+            return status
+
     def stop(
         self,
         *,
@@ -1452,6 +1468,20 @@ class PiJobService:
         *,
         expected_session_generation: int | None = None,
     ) -> dict[str, Any]:
+        # Explicit operator reattachment to a paused job claims only the server
+        # control lease. It must never call connect/reset on the retained serial
+        # session. The server still rejects an owner held by another desktop.
+        with self._state_lock:
+            active = self._active_job_id is not None and self._stop_requested_for != self._active_job_id
+        if active:
+            with self._ordinary_lock:
+                self.require_accepting_requests("reattach to a paused job")
+                self._require_session_generation(expected_session_generation)
+                status = self.machine.status()
+                if ((status.get("job_pause") or {}).get("state") == "paused"
+                        and (status.get("job_pause") or {}).get("available") is True):
+                    self._set_machine_status(status)
+                    return status
         return self._run_lifecycle_operation(
             "connect to the controller",
             self.machine.connect,

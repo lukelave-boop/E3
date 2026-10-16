@@ -62,6 +62,8 @@ ACTION_JOB_ACTIVE = "job.active"
 ACTION_JOB_LATEST = "job.latest"
 ACTION_JOB_RESULT = "job.result"
 ACTION_JOB_STOP = "job.stop"
+ACTION_JOB_PAUSE = "job.pause"
+ACTION_JOB_RESUME = "job.resume"
 ACTION_JOB_DELETE = "job.delete"
 JOB_ACTIONS = frozenset(
     {
@@ -74,6 +76,8 @@ JOB_ACTIONS = frozenset(
         ACTION_JOB_LATEST,
         ACTION_JOB_RESULT,
         ACTION_JOB_STOP,
+        ACTION_JOB_PAUSE,
+        ACTION_JOB_RESUME,
         ACTION_JOB_DELETE,
     }
 )

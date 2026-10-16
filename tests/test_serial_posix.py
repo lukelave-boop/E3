@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 
 import pytest
+from test_grbl_stream_posix import pty_stream as pty_stream
+from test_grbl_stream_posix import read_exact
 
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.errors import MachineError, SafetyError
@@ -566,3 +568,33 @@ def test_machine_service_over_pseudoterminal() -> None:
         thread.join(timeout=1)
         os.close(master_fd)
         os.close(slave_fd)
+
+def test_guarded_resume_rechecks_authority_after_physical_write_lock(pty_stream):
+    master, serial, _receiver, _failures = pty_stream
+    revoked = threading.Event()
+    entered = threading.Event()
+    failures = []
+
+    def guard():
+        if revoked.is_set():
+            raise MachineError("revoked")
+
+    def resume():
+        entered.set()
+        try:
+            serial.write_raw_guarded(b"~", guard)
+        except MachineError as exc:
+            failures.append(str(exc))
+
+    with serial._write_lock:
+        worker = threading.Thread(target=resume)
+        worker.start()
+        assert entered.wait(1)
+        revoked.set()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert failures == ["revoked"]
+    assert not select.select([master], [], [], 0.05)[0]
+    serial.write_raw_guarded(b"\x84", lambda: None)
+    assert read_exact(master, 1) == b"\x84"
+

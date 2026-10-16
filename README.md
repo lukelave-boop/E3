@@ -1,5 +1,14 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Pause and continue a job
+
+The desktop now supports **Pause / Resume** for supported GRBL 1.1 laser-mode
+jobs with the matching Pi companion. Wait for **JOB PAUSED**, then Resume to
+continue the retained controller queue. Air Assist retains its current state.
+See [Pause / Resume](docs/JOB_PAUSE.md) for controller requirements, reconnect
+behavior and supervised physical acceptance. Operator qualification is pending.
+
+
 GRBL jobs use continuous command streaming for consecutive linear moves, with
 lossless wire compression and guarded FIFO acknowledgements. This removes the
 per-segment quiet delay in detailed raster areas while preserving Stop, focus,

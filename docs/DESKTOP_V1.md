@@ -592,8 +592,10 @@ every jog press is converted to an absolute move, begins with `M5`, uses an
 explicit bounded travel feed on `G1` motion, and intentionally does not apply
 the configured work-area rectangle so the operator can measure the actual
 travel limits. STOP, disconnect, jobs, and motor release invalidate the jog
-position. Pause remains visibly adjacent to STOP but disabled until the Falcon
-controller's realtime hold/resume behavior has been physically verified.
+position. Pause is enabled during supported GRBL laser-mode jobs when the matching
+Pi companion is installed. It displays Pausing, Paused/Resume and Resuming from
+controller telemetry. See [Pause / Resume](JOB_PAUSE.md) for gates and physical
+acceptance requirements; automated tests do not qualify physical behavior.
 
 ## Validation performed for this milestone
 

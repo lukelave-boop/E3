@@ -1,5 +1,13 @@
 # Roadmap
 
+## Job pause / resume
+
+Implemented desktop and Pi-owned controller-confirmed pause/resume with retained
+queue, stale-request rejection and fail-off coverage. Complete supervised
+zero-power, powered raster, resume-alignment and paused-STOP qualification before
+claiming physical acceptance. See [Pause / Resume](docs/JOB_PAUSE.md).
+
+
 ## Continuous command streaming
 
 Implemented for verification: bounded GRBL G1 streaming, exact modal wire

@@ -27,7 +27,9 @@ from .pi_job_protocol import (
     ACTION_JOB_DELETE,
     ACTION_JOB_FINALIZE,
     ACTION_JOB_LATEST,
+    ACTION_JOB_PAUSE,
     ACTION_JOB_RESULT,
+    ACTION_JOB_RESUME,
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
@@ -109,6 +111,7 @@ MACHINE_ACTIONS = frozenset(
 )
 
 SERVER_CAPABILITIES = (
+    "pi-job-pause-v1",
     RASTER_TRAVEL_CAPABILITY,
     MATERIAL_SURFACE_CAPABILITY,
     "pi-mainboard-z-v1",
@@ -295,6 +298,16 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
         "response": ("job",),
         "priority": "bypasses ordinary operation serialization",
     },
+    ACTION_JOB_PAUSE: {
+        "required": ("job_id", "expected_run_id", "expected_pause_revision"),
+        "optional": (),
+        "response": ("status",),
+    },
+    ACTION_JOB_RESUME: {
+        "required": ("job_id", "expected_run_id", "expected_pause_revision"),
+        "optional": (),
+        "response": ("status",),
+    },
     ACTION_JOB_DELETE: {
         "required": ("job_id",),
         "optional": (),
@@ -326,6 +339,8 @@ _CONTROL_LEASE_SECONDS = 30.0
 
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_JOB_PAUSE,
+        ACTION_JOB_RESUME,
         ACTION_MACHINE_MAINBOARD,
         ACTION_MACHINE_FOCUS,
         ACTION_MACHINE_PROBE_Z,
@@ -1024,6 +1039,14 @@ class PiMachineServer:
             }
         if action == ACTION_JOB_LATEST:
             return {"job": self.service.latest_result()}
+        if action in {ACTION_JOB_PAUSE, ACTION_JOB_RESUME}:
+            return {"status": self.service.pause(
+                validate_job_id(request.get("job_id")),
+                resume=action == ACTION_JOB_RESUME,
+                expected_run_id=validate_session_generation(request.get("expected_run_id"), label="expected_run_id"),
+                expected_pause_revision=validate_session_generation(request.get("expected_pause_revision"), label="expected_pause_revision"),
+                expected_session_generation=expected_generation,
+            )}
         if action == ACTION_JOB_STOP:
             raw_job_id = request.get("job_id")
             requested_job_id = (

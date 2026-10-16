@@ -48,6 +48,9 @@ def require_command_streaming_sources(sources: Mapping[str, bytes]) -> None:
     """Require the complete, matching source API before emitting a streaming kit."""
     if set(sources) != set(COMMAND_STREAMING_FILES) or not requires_command_streaming(sources):
         raise ValueError("Command-streaming companion requires the complete matching three-file payload")
+    if any(isinstance(node, ast.ImportFrom) and node.module == "job_pause"
+           for content in sources.values() for node in ast.walk(ast.parse(content))):
+        raise ValueError("Pause-aware sources require scripts/package_job_pause.py and its complete Pi payload")
     expected = {
         COMMAND_STREAMING_FILES[0]: {"GrblStreamCompactor", "canonical_linear_move", "parse_stream_window"},
         COMMAND_STREAMING_FILES[1]: {"begin_stream", "stream_write", "stream_read_ack", "finish_stream"},

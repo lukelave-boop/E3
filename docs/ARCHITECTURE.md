@@ -1667,7 +1667,7 @@ when the notice also fits, and the normal responsive widgets return when the
 notice clears.
 
 `RuntimeSafetyStrip` owns only the primary presentation and request signals for
-Connect/Reconnect, Disconnect, the deliberately disabled Pause, and software
+Connect/Reconnect, Disconnect, session-bound Pause / Resume, and software
 STOP. `DesktopController` receives those requests and retains the existing
 `MachineService` boundary. STOP stays enabled during ordinary background work.
 On compact windows the non-hideable strip moves to its own toolbar row, and when

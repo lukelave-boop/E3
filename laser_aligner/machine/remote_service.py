@@ -50,7 +50,9 @@ from .pi_job_protocol import (
     ACTION_JOB_BEGIN,
     ACTION_JOB_CHUNK,
     ACTION_JOB_FINALIZE,
+    ACTION_JOB_PAUSE,
     ACTION_JOB_RESULT,
+    ACTION_JOB_RESUME,
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
@@ -144,6 +146,8 @@ _CLIENT_POLICY_MISMATCH_ERROR = (
 )
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_JOB_PAUSE,
+        ACTION_JOB_RESUME,
         ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_MAINBOARD,
         ACTION_MACHINE_FOCUS,
@@ -1055,6 +1059,15 @@ class RemoteMachineService:
         status["ender_z_telemetry"] = _validated_ender_z_telemetry(status.get("ender_z_telemetry"))
         with self._state_lock:
             boot_changed = False
+            old_pause = self._status_cache.get("job_pause")
+            new_pause = status.get("job_pause")
+            if (isinstance(old_pause, Mapping) and isinstance(new_pause, Mapping)
+                    and (response is None or response.get("boot_id") == self._node_boot_id)
+                    and status.get("controller_session_generation") == self._status_cache.get("controller_session_generation")
+                    and old_pause.get("run_id") == new_pause.get("run_id")
+                    and type(old_pause.get("revision")) is int and type(new_pause.get("revision")) is int
+                    and old_pause["revision"] > new_pause["revision"]):
+                status["job_pause"] = copy.deepcopy(old_pause)
             if response is not None:
                 accepted, boot_changed = self._commit_response_metadata(response)
                 if not accepted:
@@ -3008,6 +3021,36 @@ class RemoteMachineService:
             name,
             _expected_stop_epoch=generation,
         )
+
+    def request_pause(self, *, resume: bool = False, expected_run_id: int | None = None,
+                      expected_pause_revision: int | None = None) -> dict[str, Any]:
+        if type(resume) is not bool:
+            raise SafetyError("resume must be an exact boolean")
+        self._require_hardware_authority()
+        generation = self._operation_stop_epoch()
+        self._require_capabilities()
+        self._require_controller_session_capability()
+        with self._state_lock:
+            if "pi-job-pause-v1" not in (self._node_capabilities or ()):
+                raise MachineError("Update the Pi companion to enable job Pause / Resume")
+            job_id = self._accepted_job_id
+            if job_id is None:
+                raise MachineError("Pause/resume requires an accepted Pi-owned job")
+        self._require_operation_current(generation)
+        action = ACTION_JOB_RESUME if resume else ACTION_JOB_PAUSE
+        # Never retry a timed-out motion-authorizing operation. Monitoring tells
+        # the operator whether the Pi accepted it, using the same job identity.
+        response = self._rpc(action, {
+            "job_id": job_id, "expected_run_id": expected_run_id,
+            "expected_pause_revision": expected_pause_revision,
+        }, timeout=3.0)
+        self._require_operation_current(generation)
+        self._commit_current_response(response, action=action)
+        status = self._response_mapping(response, "status")
+        with self._state_lock:
+            record = copy.deepcopy(self._status_cache.get("job"))
+        self._cache_remote_status(status, job_record=record, response=response)
+        return self.status()
 
     def request_stop(self, emergency: bool = False) -> None:
         if type(emergency) is not bool:

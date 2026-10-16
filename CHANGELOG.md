@@ -1,5 +1,16 @@
 # Changelog
 
+## Job pause / resume (2026-10-15)
+
+- Add controller-confirmed Pause / Resume to the desktop and Pi-owned job protocol.
+- Retain queued motion and ACK ownership; suspend ACK deadlines while maintaining
+  transition/status watchdogs and STOP/session/authorization checks.
+- Require observed GRBL 1.1 laser mode and verified motor holding; keep unsupported
+  controllers and old Pi nodes disabled. Reattach explicitly to an unowned paused job.
+- Preserve current main streaming fixes and the selected engraving image editor.
+  Physical behavior remains pending operator validation; see docs/JOB_PAUSE.md.
+
+
 ## Unreleased — continuous GRBL command streaming
 
 - Remove per-pixel acknowledgement quiet delays from contiguous guarded G1 runs.

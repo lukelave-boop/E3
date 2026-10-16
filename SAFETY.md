@@ -1,5 +1,13 @@
 # Safety requirements
 
+Pause / Resume is a job-continuation feature, not an emergency stop or a
+safety-rated control. It requires observed GRBL 1.1 laser mode and verified
+motor holding. The app requests suspension and waits for controller status;
+neither that status nor the UI proves physical laser-off or a safe work area.
+STOP, disarm, disconnect and failure retain their existing reset/M5 cleanup.
+See [Pause / Resume](docs/JOB_PAUSE.md) for implementation and physical-test limits.
+
+
 Continuous GRBL G1 streaming retains per-write motion, process, arming, focus
 and session checks against original validated commands. Pending bytes and
 acknowledgements are bounded; unknown receive capacity permits one outstanding
