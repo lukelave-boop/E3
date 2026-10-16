@@ -121,3 +121,43 @@ def test_linux_package_validation_has_no_publication_or_application_launch():
         assert "AppRun" not in run
         if step.get("uses", "").startswith("actions/checkout@"):
             assert step["with"]["persist-credentials"] == "false"
+
+
+def test_baseline_creation_is_after_identity_gates_and_before_publication():
+    release = workflow("publish-development-update.yml")
+    publish = release["jobs"]["publish"]
+    steps = publish["steps"]
+    tag_steps = [(i, step) for i, step in enumerate(steps)
+                 if "ensure_release_baseline.py" in step.get("run", "")]
+    assert len(tag_steps) == 1
+    tag_index, tag_step = tag_steps[0]
+    verification = next(i for i, step in enumerate(steps)
+                        if "verify_release_metadata.py" in step.get("run", ""))
+    publication = next(i for i, step in enumerate(steps)
+                       if "publish_development_update.py publish" in step.get("run", ""))
+    assert verification < tag_index < publication
+    # Neither this check nor the downstream publisher may run after failure.
+    for step in steps[verification:publication + 1]:
+        assert "if" not in step and "continue-on-error" not in step
+    assert tag_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    for required in (
+        '--repository "${{ github.repository }}"', '--revision "$GITHUB_SHA"',
+        '--channel "$E3_UPDATE_CHANNEL"', "--windows-build-info release/build-info-windows.json",
+        "--linux-build-info release/build-info-linux.json",
+        '--windows "release/E3-Setup-${short_sha}.exe"', '--linux "release/E3-${short_sha}-x86_64.AppImage"',
+        '--manifest "release/update-manifest-${short_sha}-${publication_id}.json"',
+    ):
+        assert required in tag_step["run"]
+    assert publish["permissions"] == {"contents": "write"}
+    checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == "0"
+    assert "ref" not in checkout["with"]
+
+
+def test_baseline_cannot_run_in_ungated_or_read_only_jobs():
+    jobs = workflow("publish-development-update.yml")["jobs"]
+    for name, job in jobs.items():
+        if name != "publish":
+            assert all("ensure_release_baseline.py" not in step.get("run", "") for step in job.get("steps", []))
+    assert jobs["publish"]["needs"] == ["compatibility", "windows", "linux"]
+    assert jobs["publish"]["if"] == "github.ref == 'refs/heads/main'"

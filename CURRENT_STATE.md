@@ -26,6 +26,55 @@ the unchanged check passed its single approved retry with loopback access. These
 focused results do not replace fresh full compatibility and package validation
 on the final combined head.
 
+Candidate `6483322` passed the PR compatibility run `38964812658` and all
+four Windows/Linux package-identity checks. Its manual exact-head compatibility
+run `38964835132` failed one desktop real-socket test: the expected 300 ms
+expiry occurred before any progress callback. These results remain distinct;
+the green PR result does not override the failing exact-head run.
+
+The deadline test now checks its unchanged 200 ms socket timeout, 300 ms total
+budget, expected time-limit error, original two-second bound and absent output.
+A separate real-socket handshake withholds the body after one byte until a
+progress callback releases it. This tests early progress without requiring
+connection startup and diagnostic file I/O inside 300 ms. A runtime-only
+negative control replacing `HTTPResponse.read1` with buffered `read` fails the
+new test after ten seconds because the incomplete body cannot verify.
+No production deadline, updater behavior or accepted error was changed.
+
+Cloud recovery reconstructs this test correction after the original local
+executor disconnected before commit/push. The cloud candidate also preserves
+documentation-only main `5447c09` / PR #58 and its verified PR #57 publication
+record below. Linux/Python 3.12.14 with PySide 6.12 passes 102 focused updater,
+version and state tests with two Windows-boundary skips, plus 173 updater and
+release-metadata/publisher tests. The focused runs overlap and are not a full
+compatibility pass. Independent review, repository Ruff, compilation,
+dependency integrity and whitespace checks pass. Fresh final-head Windows
+compatibility and Windows/Linux package validation remain required.
+
+The release automation now establishes the immutable `v0.8.0` baseline in the
+existing content-write publication job after compatibility and package identity
+checks, before channel publication. It verifies the exact main revision, complete
+Git ancestry, both packages and staged manifest, then creates only an absent tag
+and reads it back. Existing tags are never moved or deleted; later versions must
+match the baseline-derived commit count. First bootstrap requires unambiguous
+prior-series publication evidence, so an absent tag after a successful 0.8
+publication fails closed instead of resetting the version sequence. Repository
+and updater destination checks bind the inputs to this same release channel.
+No new credential, workflow permission, hardware behavior or deployment is added.
+The final focused baseline/release/publisher/metadata/version run passes 362
+tests. An additional raster-dialog/version/package-boundary run passes 49 tests
+with nine expected Windows-only skips. These selections overlap earlier checks.
+A read-only live-service preflight verifies the current 0.7.308 stable manifest
+and its published predecessor `50b2798` against the bootstrap guard. Present
+local baseline tags must agree with the remote peeled commit, including when
+divergent ancestors would coincidentally produce the same version count.
+Independent review, repository Ruff, compilation and whitespace checks pass;
+final remote compatibility and package validation remain required.
+The existing POSIX compatibility selection also passes locally: 1,481 passed
+and 23 skips in 192.10 seconds. Twenty-one skips require PowerShell unavailable
+in this cloud environment; two cover Windows-only junction/redirector behavior.
+This does not substitute for the hosted POSIX run with its full installed tools.
+
 The source series advances to 0.8, with immutable `v0.8.0` intended for the exact
 final main release revision. Untagged preparation and that final tagged revision
 both resolve to 0.8.0; subsequent commits increment the patch. Frozen older builds
@@ -143,18 +192,26 @@ and publication verification remain pending. Historical project schema 1-5
 fixtures remain intact. No installed app, launcher selection, calibration,
 hardware or Pi deployment was changed by this integration.
 
-## Updater stall recovery - reproduced and corrected in source (2026-10-16)
+## Updater stall recovery - published as 0.7.308 (2026-10-16)
 
-The following is the source-validation checkpoint before PR #57 merged into
-main. Validation of the combined 0.8.0 candidate is tracked above.
+This is the verified PR #57 baseline, recorded by documentation-only PR #58
+at main `5447c0927f65a1832ecb6d1cf2c6d89bc2f3c03e`. It supersedes the earlier
+source-only checkpoint; combined 0.8.0 candidate validation remains separate
+and is tracked above.
 
-Isolated branch codex/updater-stall-recovery starts from main 718e931 and merges
-the existing progress change 986525a without replacing newer main behavior.
+PR #57 is merged into main at 50b2798 after compatibility and packaging passed.
+The repair starts from main 718e931 and includes existing progress change 986525a
+without replacing newer main behavior.
 The unchanged installed normal E3 0.7.153 had repeatedly remained at Downloading
 and verifying for ten minutes per the operator. Its retained older package
 partial is 63,963,136 / 220,077,007 bytes. A later real in-app retry fetched and
 verified 0.7.301 in about 29 seconds. That retry did not establish a repair;
 installation was not approved or performed in this investigation.
+The operator subsequently confirmed the progress animation kept moving during
+failed attempts, consistent with a blocked background operation rather than an
+observed whole-UI freeze. Read-only Windows network logs show a disconnect at
+13:14:42 and reconnects at 13:15:30-36, after the retained partial's 13:12:33
+last-write timestamp; this does not establish the cause of that earlier stall.
 
 A concrete timeout defect is reproduced against a loopback TCP server using
 the exact historical download_update function from bc86c8912ef2: bytes arriving
@@ -191,8 +248,18 @@ SHA-256 9ee5a6fe3e48e29b94d25cffdbebae3ac2ba5d102cf9d4bf60243d251681cecf
 in 33.491 seconds. The deterministic before/after script is
 scripts/reproduce_update_trickle.py; ignored measurements and downloads are under
 build/updater-stall-evidence. This is source/offscreen and real-network
-verification; frozen corrected GUI, compatibility CI, main integration and
-publication remain pending. Review also covers delayed timer delivery at result
+verification; no frozen corrected GUI or physical hardware test is claimed.
+Compatibility CI run 38961543555 passed: Windows Python 3.12 desktop 8,577
+passed / 69 skipped; Windows Python 3.10 core 7,003 passed / 182 skipped;
+POSIX 1,502 passed / 2 skipped; repository Ruff passed. Main publication run
+38963421297 passed for merge revision 50b2798 and published normal development
+update 0.7.308. The public manifest selects that exact revision and offers it to
+the installed 0.7.301 metadata. A fresh public download through the corrected
+updater verified 220,107,788 bytes in 30.230 seconds with SHA-256
+4bba175d6e16d27ead27fb58681a3591b9b07ce45ccb94d4f1d3ee70c2eb9a17.
+That installer was not run; installation through E3 remains an operator action.
+The repaired branch has been deleted after merge.
+Review also covers delayed timer delivery at result
 acceptance and blocked diagnostic writes: deadlines are rechecked before
 acceptance, and failure-log writes never run on the GUI thread. Offscreen visual
 inspection with the installed Segoe UI font passes. No installed bundle, permanent launcher selection,
@@ -201,8 +268,16 @@ configuration or hardware was modified by this repair.
 A canonical local build attempt was refused before admission because managed
 container trc/E3/.e3-builds changed metadata during inventory; no guard was
 bypassed and no cleanup was performed. Hosted packaging at intermediate
-3166c7c passed (run 38959853245); the final manifest-check correction requires
-a fresh package. Current compatibility/package checks are tracked on PR #57.
+3166c7c passed (run 38959853245). Final packaging at 6b98f16 also passed
+(run 38961534822): installer metadata and PE ProductVersion both report
+0.7.307, metadata names exact revision 6b98f16dd97a5903854332c2d239eafefbe1bc6c,
+size is 220,076,933 bytes and SHA-256 is
+386a76916c51b71de7e34d2d75c7b297ddbaafa8ad45096fe5c216fa0421250c.
+The standalone installer was inspected but not run. Normal installed E3 now
+reports 0.7.301; that build predates this repair. Reproduce the loopback evidence
+from the checkout root with python -m scripts.reproduce_update_trickle so an
+editable installation from another worktree cannot shadow the corrected source.
+
 
 ## Update download progress (2026-10-16)
 

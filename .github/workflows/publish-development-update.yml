@@ -169,6 +169,20 @@ jobs:
             --build-info windows-x86_64 release/build-info-windows.json \
             --build-info linux-x86_64 release/build-info-linux.json \
             --manifest "release/update-manifest-${short_sha}-${publication_id}.json"
+      - name: Establish immutable release baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short_sha="${GITHUB_SHA:0:12}"
+          publication_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python packaging/ensure_release_baseline.py \
+            --repository "${{ github.repository }}" \
+            --revision "$GITHUB_SHA" --channel "$E3_UPDATE_CHANNEL" \
+            --windows-build-info release/build-info-windows.json \
+            --linux-build-info release/build-info-linux.json \
+            --windows "release/E3-Setup-${short_sha}.exe" \
+            --linux "release/E3-${short_sha}-x86_64.AppImage" \
+            --manifest "release/update-manifest-${short_sha}-${publication_id}.json"
       - name: Publish verified development update
         id: publish
         env:
