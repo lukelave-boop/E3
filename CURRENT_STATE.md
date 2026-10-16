@@ -41,16 +41,16 @@ camera autostart was off, motion disabled and hardware_enabled=False. These are
 automated offscreen widget checks; interactive operator acceptance and real
 camera/controller/laser tests remain unperformed. No Pi update occurred.
 
-Packaging is blocked by the fixed eight-GiB managed pool: three failed leases
-reserve six GiB alongside about 1.67 GiB of files. This task's lease
-`windows-53d8a8f697e5425eb10a20167b300e99` has an empty output root, seven absent
-generated paths, matching ancestor identities and an exited owner. Read-only
-review and a backup/identity-checked one-off recovery are prepared under the
-isolated checkout's ignored `build/` directory. Recovery remains pending user
-approval; no lease, artifact, guard policy or DEV TEST pointer was changed.
-A short-path checkout at `C:\Users\lukel\.codex\worktrees\ui\E3` is prepared
-for the canonical build after recovery. The current DEV TEST selection still
-contains the previously verified transparency build recorded below.
+The user explicitly approved recovery of this task's verified-empty failed
+reservation `windows-53d8a8f697e5425eb10a20167b300e99`. The guarded one-off
+recovery backed up the accounting file, rechecked empty outputs, identities and
+exited owner, and removed only that reservation. Every other state field and
+artifact was preserved; no files were deleted. Evidence and the backup are in
+the isolated checkout's ignored `build/` directory. The canonical build now
+runs from the short-path checkout `C:\Users\lukel\.codex\worktrees\ui\E3`
+on exact source `ba488ec9fcce4b547464aff0ad563d8823e142ca`, with runtime source
+unchanged from `81125cb`. DEV TEST still selects the previous transparency build
+until frozen verification and validated pointer selection complete.
 
 Compatibility CI [38926805559](https://github.com/lukelave-boop/E3/actions/runs/38926805559)
 passed Windows Python 3.10 core (6,941 passed / 160 skipped), POSIX
@@ -65,7 +65,16 @@ navigation probe covers both 9pt and 13pt. The focused layout group passes
 12 collected checks, including all ten isolated navigation assertions. The
 original narrow-reset case also passes with the inherited dark 9pt theme;
 its explicit startup wait and normal status-layout refresh remove fixture
-timing assumptions. Runtime source is unchanged. Final compatibility
+timing assumptions. Runtime source is unchanged.
+
+The subsequent complete [CI 38929737660](https://github.com/lukelave-boop/E3/actions/runs/38929737660)
+passed those UI checks and again passed core, POSIX and Ruff. Windows 3.12
+finished with 8,492 passed / 65 skipped and one pre-existing probe fixture
+failure: a two-millisecond wall-clock deadline expired during an otherwise
+ready fake response. That test now advances a simulated clock only for silent
+reads, retaining the production timeout and every safety assertion and adding
+explicit timeout/rejection evidence. All 75 probe/secondary-controller focused
+tests pass locally. No production controller code changed. Final compatibility
 verification is pending before main integration.
 
 ## Transparency DEV TEST handoff and integration (2026-10-16)

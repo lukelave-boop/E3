@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 
 import pytest
 
 from laser_aligner.errors import SafetyError
-from laser_aligner.machine import probe_pin
+from laser_aligner.machine import secondary_controller
 from laser_aligner.machine.probe_pin import ProbePinDiagnosticError, run_pin_diagnostic
 from tests.test_secondary_controller import FakeSerial, _controller
 
@@ -136,7 +137,22 @@ def test_failed_exchange_has_context_and_never_retries_stows_or_emergency_resets
     serial, owner = ready_pin()
     serial.overrides[command] = response
     failures = []
-    monkeypatch.setattr(probe_pin, "_EXCHANGE_TIMEOUT_SECONDS", 0.002)
+    # Ready scripted replies must not expire because a CI worker is descheduled.
+    # Advance only an unanswered read, preserving the production timeout policy.
+    elapsed_seconds = 0.0
+    read_line = serial.read_line
+
+    def timed_read(timeout=1.0):
+        nonlocal elapsed_seconds
+        reply = read_line(timeout)
+        if reply is None:
+            elapsed_seconds += timeout
+        return reply
+
+    monkeypatch.setattr(serial, "read_line", timed_read)
+    monkeypatch.setattr(
+        secondary_controller, "time", SimpleNamespace(monotonic=lambda: elapsed_seconds),
+    )
     with pytest.raises(ProbePinDiagnosticError) as error:
         run_pin_diagnostic(
             owner, "deploy", nullcontext, lambda: failures.append(True), sleep=lambda _delay: None,
@@ -150,6 +166,8 @@ def test_failed_exchange_has_context_and_never_retries_stows_or_emergency_resets
     assert error.value.diagnostic["completed"] is False
     assert error.value.transcript[-1]["command"] == command
     assert command in error.value.transcript[-1]["error"]
+    expected_failure = "timed out" if not response else "controller rejected"
+    assert expected_failure in error.value.transcript[-1]["error"]
     assert error.value.diagnostic["physical_pin_state"] == "unknown"
 
 
