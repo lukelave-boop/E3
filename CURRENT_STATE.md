@@ -1,14 +1,20 @@
 # Current repository state
 
-## Updater stall recovery - reproduced and corrected in source (2026-10-16)
+## Updater stall recovery - published as 0.7.308 (2026-10-16)
 
-Isolated branch codex/updater-stall-recovery starts from main 718e931 and merges
-the existing progress change 986525a without replacing newer main behavior.
+PR #57 is merged into main at 50b2798 after compatibility and packaging passed.
+The repair starts from main 718e931 and includes existing progress change 986525a
+without replacing newer main behavior.
 The unchanged installed normal E3 0.7.153 had repeatedly remained at Downloading
 and verifying for ten minutes per the operator. Its retained older package
 partial is 63,963,136 / 220,077,007 bytes. A later real in-app retry fetched and
 verified 0.7.301 in about 29 seconds. That retry did not establish a repair;
 installation was not approved or performed in this investigation.
+The operator subsequently confirmed the progress animation kept moving during
+failed attempts, consistent with a blocked background operation rather than an
+observed whole-UI freeze. Read-only Windows network logs show a disconnect at
+13:14:42 and reconnects at 13:15:30-36, after the retained partial's 13:12:33
+last-write timestamp; this does not establish the cause of that earlier stall.
 
 A concrete timeout defect is reproduced against a loopback TCP server using
 the exact historical download_update function from bc86c8912ef2: bytes arriving
@@ -45,8 +51,18 @@ SHA-256 9ee5a6fe3e48e29b94d25cffdbebae3ac2ba5d102cf9d4bf60243d251681cecf
 in 33.491 seconds. The deterministic before/after script is
 scripts/reproduce_update_trickle.py; ignored measurements and downloads are under
 build/updater-stall-evidence. This is source/offscreen and real-network
-verification; frozen corrected GUI, compatibility CI, main integration and
-publication remain pending. Review also covers delayed timer delivery at result
+verification; no frozen corrected GUI or physical hardware test is claimed.
+Compatibility CI run 38961543555 passed: Windows Python 3.12 desktop 8,577
+passed / 69 skipped; Windows Python 3.10 core 7,003 passed / 182 skipped;
+POSIX 1,502 passed / 2 skipped; repository Ruff passed. Main publication run
+38963421297 passed for merge revision 50b2798 and published normal development
+update 0.7.308. The public manifest selects that exact revision and offers it to
+the installed 0.7.301 metadata. A fresh public download through the corrected
+updater verified 220,107,788 bytes in 30.230 seconds with SHA-256
+4bba175d6e16d27ead27fb58681a3591b9b07ce45ccb94d4f1d3ee70c2eb9a17.
+That installer was not run; installation through E3 remains an operator action.
+The repaired branch has been deleted after merge.
+Review also covers delayed timer delivery at result
 acceptance and blocked diagnostic writes: deadlines are rechecked before
 acceptance, and failure-log writes never run on the GUI thread. Offscreen visual
 inspection with the installed Segoe UI font passes. No installed bundle, permanent launcher selection,
@@ -55,8 +71,15 @@ configuration or hardware was modified by this repair.
 A canonical local build attempt was refused before admission because managed
 container trc/E3/.e3-builds changed metadata during inventory; no guard was
 bypassed and no cleanup was performed. Hosted packaging at intermediate
-3166c7c passed (run 38959853245); the final manifest-check correction requires
-a fresh package. Current compatibility/package checks are tracked on PR #57.
+3166c7c passed (run 38959853245). Final packaging at 6b98f16 also passed
+(run 38961534822): installer metadata and PE ProductVersion both report
+0.7.307, metadata names exact revision 6b98f16dd97a5903854332c2d239eafefbe1bc6c,
+size is 220,076,933 bytes and SHA-256 is
+386a76916c51b71de7e34d2d75c7b297ddbaafa8ad45096fe5c216fa0421250c.
+The standalone installer was inspected but not run. Normal installed E3 now
+reports 0.7.301; that build predates this repair. Reproduce the loopback evidence
+from the checkout root with python -m scripts.reproduce_update_trickle so an
+editable installation from another worktree cannot shadow the corrected source.
 
 
 ## DEV TEST 0.7.300 - selected; startup compatibility verified (2026-10-16)
