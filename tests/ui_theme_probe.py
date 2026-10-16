@@ -13,7 +13,8 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 from shiboken6 import isValid
 
 from laser_aligner.desktop.controls import InspectorTabs, NumericDoubleSpinBox, NumericSpinBox
-from laser_aligner.desktop.theme import apply_dark_theme
+from laser_aligner.desktop.selection_transparency import SelectionTransparencyBar
+from laser_aligner.desktop.theme import DARK_STYLESHEET, apply_dark_theme
 
 
 @pytest.fixture(scope="session")
@@ -202,6 +203,21 @@ def test_native_palette_has_readable_menu_and_disabled_text(app):
     assert palette.color(roles.Button).lightness() < 80
     disabled = palette.color(QtGui.QPalette.ColorGroup.Disabled, roles.Text)
     assert 140 <= disabled.lightness() <= 180
+
+
+@pytest.mark.parametrize("font_points", [9, 13])
+def test_transparency_percent_and_mixed_label_fit_themed_editor(app, font_points):
+    app.setStyleSheet(DARK_STYLESHEET + f"\nQWidget {{ font-size: {font_points}pt; }}")
+    bar = SelectionTransparencyBar()
+    bar.resize(600, 60)
+    bar.show()
+    app.processEvents()
+    for values, text in (([100], "100%"), ([20, 80], "Mixed")):
+        bar.set_selection(values)
+        app.processEvents()
+        edit = bar.spin.lineEdit()
+        assert edit.width() >= edit.fontMetrics().horizontalAdvance(text) + 4
+        assert bar.spin.width() <= bar.spin.sizeHint().width()
 
 
 @pytest.mark.parametrize("position", [QtWidgets.QTabWidget.TabPosition.North,

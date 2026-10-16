@@ -55,6 +55,18 @@ failed lease is retained. A short-path build checkout is prepared at
 `C:\Users\lukel\.codex\worktrees\ui\E3` to avoid the known Inno path-length issue;
 no guard state, process protection or budget was bypassed.
 
+The combined branch incorporates selected-object transparency from main. Its
+percentage editor now measures the active theme and font so both 100% and Mixed
+remain readable at standard and enlarged text sizes. Fourteen isolated theme
+checks pass; the wrapper passes. The merged selection/navigation group passes
+35 checks. Final compatibility CI and complete desktop verification are pending.
+
+Packaging readiness currently refuses the fixed eight-GiB managed budget:
+three retained failed leases reserve six GiB alongside about 1.67 GiB of files.
+This task's failed lease windows-53d8a8f697e5425eb10a20167b300e99 has an empty
+output root, absent generated paths and an exited owner. Recovery review is
+prepared separately; no lease, artifact or existing DEV TEST selection is changed.
+
 ## Main viewer object transparency (2026-10-16)
 
 Branch `codex/selection-transparency` starts from integrated main `fc9a0e3`.
