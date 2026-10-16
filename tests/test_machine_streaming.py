@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections import deque
 from dataclasses import asdict
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -519,6 +521,61 @@ def test_oversized_stream_line_rejected_before_job_motion_or_arm(stream_machine,
     assert not any(kind == "line" and str(line).startswith(("G0", "G1", "M3", "M4"))
                    for kind, line in transport.writes[before:])
     assert (program.lines, program.digest) == original
+
+
+def test_slow_stream_preparation_does_not_repeat_after_arming(stream_machine, monkeypatch):
+    machine, _transport = stream_machine()
+    machine.laser_settings.arm_timeout_seconds = 5
+    real_monotonic = time.monotonic
+    elapsed = [0.0]
+    checked = []
+    encode = service_module.GrblStreamCompactor.encode
+
+    def slow_validation(compactor, line):
+        if not machine._job.running:
+            checked.append(line)
+            elapsed[0] += 1  # Twenty seconds of CPU work before a five-second grant.
+        return encode(compactor, line)
+
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(
+        **{**vars(time), "monotonic": lambda: real_monotonic() + elapsed[0]},
+    ))
+    monkeypatch.setattr(service_module.GrblStreamCompactor, "encode", slow_validation)
+    # Force exact compaction of long source lines that become short on the wire.
+    text = _program(powered=True).replace("F600.000", "F" + "0" * 140 + "600.000")
+    _proof, worker = _start(machine, text)
+    assert _finish(machine, worker)["error"] is None
+    assert len(checked) == 20
+
+
+def test_short_source_window_check_does_not_encode_whole_raster(stream_machine, monkeypatch):
+    machine, _transport = stream_machine()
+    program = machine.preflight_program(_program(200, powered=True))
+    monkeypatch.setattr(service_module.GrblStreamCompactor, "encode",
+                        lambda *_args: pytest.fail("Short source already bounds compacted bytes"))
+    machine._require_program_stream_window(program, machine._session)
+
+
+def test_stream_window_cache_rechecks_changed_capacity_and_source(stream_machine):
+    machine, _transport = stream_machine()
+    move = "G1 X1.234 Y1.234 F600 S100"
+    program = machine.preflight_program("\n".join([
+        "G21", "G90", "M5", "G0 X1 Y1 F100", "M4 S0", move, move, "M5",
+    ]))
+    session = machine._session
+    machine._require_program_stream_window(program, session)
+    small = SimpleNamespace(receiver=session.receiver, dialect=session.dialect,
+        diagnostics=SimpleNamespace(snapshot=lambda: {"firmware_identity": ["[OPT:V,16,16]"]}))
+    for _ in range(2):
+        with pytest.raises(SafetyError, match="byte window"):
+            machine._require_program_stream_window(program, small)
+    coordinate = "1." + "123456789" * 8
+    long_move = f"G1 X{coordinate} Y{coordinate} F600 S100"
+    changed = machine.preflight_program("\n".join([
+        "G21", "G90", "M5", "G0 X1 Y1 F100", "M4 S0", long_move, long_move, "M5",
+    ]))
+    with pytest.raises(SafetyError, match="byte window"):
+        machine._require_program_stream_window(changed, session)
 
 
 def test_isolated_canonical_move_retains_ordinary_transaction_path(stream_machine):

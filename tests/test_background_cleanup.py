@@ -92,7 +92,7 @@ def test_project_roundtrip_undo_redo_and_original_file_integrity(tmp_path):
     save_project(doc, destination)
     restored = load_project(destination)
     assert restored.objects[0].geometry == geometry
-    assert restored.to_dict()["schema_version"] == 5
+    assert restored.to_dict()["schema_version"] == 6
     history.undo()
     assert "background_cleanup" not in item.geometry
     history.redo()
@@ -107,7 +107,7 @@ def test_old_projects_migrate_with_cleanup_off_and_reject_unversioned_settings(s
     payload["schema_version"] = schema
     restored = ProjectDocument.from_dict(payload)
     assert "background_cleanup" not in restored.objects[0].geometry
-    assert restored.to_dict()["schema_version"] == 5
+    assert restored.to_dict()["schema_version"] == 6
     payload["objects"][0]["geometry"].update(settings())
     with pytest.raises(ValueError, match="requires project schema 5"):
         ProjectDocument.from_dict(payload)

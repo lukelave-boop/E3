@@ -18,7 +18,6 @@ from laser_aligner.machine.controller_dialects import GRBL_DIALECT, MARLIN_DIALE
 from laser_aligner.machine.controller_session import ControllerState
 from laser_aligner.machine.service import (
     MachineService,
-    ValidatedProgram,
     _ControllerCommandRejected,
 )
 from tests.fakes.simulator_transport import SimulatedTransport
@@ -1287,22 +1286,14 @@ def test_validated_program_cleanup_mapping_survives_mutation_after_integrity_che
     machine.connect()
     try:
         machine.arm_program(machine.ARM_PHRASE, program)
-        require_current_profile = machine._require_current_safety_profile
 
-        def validate_then_mutate(candidate: ValidatedProgram) -> None:
-            require_current_profile(candidate)
+        def fail_to_start(_thread: threading.Thread) -> None:
+            # Mutate after every pre-start policy check. Earlier mutation now
+            # rejects during metadata-proof access before the worker is built.
             settings.air_assist.fan_index = 2
             # Preserve the newly configured mapping as the current cleanup
             # fallback while the validated program remains bound to P1.
             machine._resolved_air_assist_commands()
-
-        monkeypatch.setattr(
-            machine,
-            "_require_current_safety_profile",
-            validate_then_mutate,
-        )
-
-        def fail_to_start(_thread: threading.Thread) -> None:
             raise RuntimeError("thread unavailable after validation")
 
         monkeypatch.setattr(threading.Thread, "start", fail_to_start)

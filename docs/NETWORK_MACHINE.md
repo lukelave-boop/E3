@@ -1,5 +1,46 @@
 # E3 Raspberry Pi hardware node
 
+## Faster bounded job preparation
+
+Nodes advertising `pi-compressed-upload-v1` accept `job.chunk.compressed`.
+The desktop sends independent zlib streams, at most 256 KiB compressed and
+1 MiB expanded per chunk. Incompressible pieces are shortened to fit; small
+pieces and older nodes use the original 64 KiB raw chunks. The bounded JSON
+frame ceiling is 512 KiB; larger frames are sent only after capability discovery.
+The measured 22,099,480-byte raster requires 22 requests and 3,531,069 compressed
+bytes, compared with 338 raw requests. Compression took 0.31 seconds locally.
+On 2026-10-15, the same job over the real Windows-to-Pi Tailscale connection
+uploaded in 6.346 seconds compressed versus 58.922 seconds using the legacy raw
+path on the same updated node. Timing includes compression and durable chunk
+acknowledgements; both uploads remained unfinalized and were deleted without
+arming or execution. Upload timing is separate from validation and machine
+preparation; it does not measure first laser output.
+
+Decoded bytes retain original offsets, total-size limits, durable writes,
+idempotent exact-byte retry checks, SHA-256 finalization and full Pi validation.
+Truncated/concatenated/trailing streams, noncanonical base64 and expansion beyond
+1 MiB reject before storage. No upload authorizes motion; STOP/cancellation,
+session binding and explicit Start remain unchanged. Reserved STOP admission is
+unchanged. The installed upload companion includes storage and geometry
+dependencies as well as the complete pause implementation.
+
+### Remove repeated preparation work
+
+A subsequent 399,777-line job reported 43.805 seconds in Pi verification and
+7.288 seconds in Start acceptance. The next update removes the desktop's second
+preflight when focus attachment leaves bytes unchanged, retains immutable
+directive facts with the local validation proof, and reduces parser allocations
+and repeated endpoint calculations. Current policy, material, focus, session and
+arming checks remain live; the Pi still verifies uploaded and committed bytes.
+
+On the retained older 729,269-line job, local Windows validation averaged
+10.037 seconds before and 7.175 seconds after, about 28.5% less time with identical
+output. System load affected individual runs; this does not predict total Pi
+Start time. The companion containing these preparation changes has not yet been
+installed. Its twelve source files include focus metadata support and are pinned
+to installed revision 21273d0. The running Pi job was left untouched; installation and new Pi timing
+must wait until the operator finishes and disconnects.
+
 ## LAN and Tailscale camera addresses
 
 The same-machine Duplicate option retains camera/calibration profile IDs. Open
@@ -178,6 +219,13 @@ Connect/Reconnect are the exception: simultaneous same-owner lifecycle requests 
 Pi-owned fresh-session operation and observe its same result. Monitoring needs
 no lease. STOP needs no lease, bypasses ordinary ownership, and can cancel an
 active hold or recovery.
+
+Nodes advertising `pi-job-pause-v1` support authenticated `job.pause` and
+`job.resume`, bound to the control owner, Pi boot, controller session, exact
+active job UUID, local run ID and pause revision. They preserve the Pi-owned
+active job and stream queue. A confirmed paused job permits explicit Connect
+to claim an unowned control lease without any serial connection operation;
+another desktop's ownership still blocks it. See [Pause / Resume](JOB_PAUSE.md).
 
 On the Pi, `PiJobService` owns exactly one local `MachineService`, so a remote
 client never opens, steals, or interleaves the controller serial port. Status and

@@ -122,6 +122,8 @@ class RasterBoundary:
         if not math.isfinite(x) or not math.isfinite(y):
             raise SafetyError(f"{label}: machine carriage travel point must be finite")
         xmin, xmax, ymin, ymax = self.travel_bounds_mm
+        if xmin <= x <= xmax and ymin <= y <= ymax:
+            return
         extra = (max(0.0, xmin - x), max(0.0, x - xmax), max(0.0, ymin - y), max(0.0, y - ymax))
         if any(extra):
             clearance = ", ".join(f"{side} {distance:.4f} mm" for side, distance in zip(("X−", "X+", "Y−", "Y+"), extra, strict=True) if distance)

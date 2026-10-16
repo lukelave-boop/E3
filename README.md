@@ -1,10 +1,39 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Large Pi-owned jobs use negotiated lossless upload compression and larger bounded
+chunks with the matching companion. Validation reuses fixed polygon geometry and
+avoids unnecessary stream encoding passes. Exact bytes, bounds, arming and Start
+checks remain required. Older nodes retain the original upload path. See
+[job preparation](docs/NETWORK_MACHINE.md#faster-bounded-job-preparation).
+
+The next Start preparation update removes a second desktop preflight when focus
+attachment leaves the program unchanged, reuses validated immutable job metadata,
+and reduces repeated raster endpoint checks and parser allocations. Current
+policy, material, focus, session and arming checks still run. Offline validation
+of the retained 729,269-line job was about 28.5% faster; this is a local Windows
+measurement, not total Pi Start time. The matching companion update is pending;
+the currently running Pi job has not been interrupted.
+
+## Pause and continue a job
+
+The desktop now supports **Pause / Resume** for compatible GRBL laser-mode
+jobs with the matching Pi companion. Wait for **JOB PAUSED**, then Resume to
+continue the retained controller queue. Separate Air Assist keeps its state;
+primary GRBL coolant follows firmware suspension and restoration.
+See [Pause / Resume](docs/JOB_PAUSE.md) for controller requirements, reconnect
+behavior and supervised physical acceptance. Operator qualification is pending.
+
+
 GRBL jobs use continuous command streaming for consecutive linear moves, with
 lossless wire compression and guarded FIFO acknowledgements. This removes the
 per-segment quiet delay in detailed raster areas while preserving Stop, focus,
 arming and program bounds. Pi-owned jobs require the matching Pi companion.
 Serial bandwidth can still limit requested feed; see [command streaming](docs/COMMAND_STREAMING.md).
+
+Large-job Start reuses a completed stream-size check for the exact immutable
+commands and controller capacity, avoiding an expensive repeat after arming.
+Raster validation also avoids unused legacy-area calculations. Upload and
+full safety validation still take time for very dense images.
 
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.
@@ -29,6 +58,13 @@ ordered-dither stage. The planner keeps at least the requested percent of the
 original row width and the configured acceleration-model distance. The model is
 not physical qualification at every feed. See [raster overscan](docs/RASTER_OVERSCAN.md)
 for settings and operator validation, and [measured performance](docs/RASTER_PERFORMANCE.md).
+## Engraving image editor
+
+Select an image and open **Objects → Image → Edit image for engraving…** for
+local shadow removal, reversible grayscale masks, automatic or manual Bézier
+outlines, node editing, and aligned vector snapshots with physical offsets.
+New vectors start with output disabled and power zero. Project schema 6 retains
+edits and explicit transform links. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
 
 Image background cleanup is available under **Objects → Image → Clean background…**
 for one selected image. Enable it, adjust tolerance (start at 5), compare

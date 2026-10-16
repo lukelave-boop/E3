@@ -1,5 +1,231 @@
 # Current repository state
 
+## Remove redundant validation work (2026-10-15)
+
+The operator requested a fix and E3 DEV TEST build without interrupting the
+running job. Desktop remote preflight now reuses its exact result when attaching
+focus does not change the source. Changed focus-prefixed programs still receive
+full validation. An immutable program proof stores parsed focus, operation,
+raster and material facts; current policy, session, material measurement, focus
+selection/targets, capabilities and arming checks remain live. Cache misses,
+changed fields/line identity and changed policy still require validation or fail.
+Snapshot publication and eviction races have explicit rejection tests.
+
+Within one full validation, only successfully checked identical endpoints are
+reused. Initial approach, power transitions, physical spot offsets, travel and
+powered geometry remain guarded. The exact bounded decimal raster grammar uses
+scalar parsing; other syntax retains the complete allowlist and finite checks.
+Pi Start still rereads/hashes the committed canonical bytes before execution.
+
+The retained 729,269-line / 22,099,480-byte job gives identical validated output
+against installed revision 21273d0. Paired local Windows validation means are
+10.037 to 7.175 seconds (28.5% less elapsed time; CPU 9.969 to 7.148 seconds).
+Machine load affects these timings; this is not a live Pi or total Start result.
+A subsequent complete-preflight comparison includes new metadata extraction and
+canonical hashing: two-pair means are 9.042 to 6.090 seconds (32.7% less), with
+identical complete ValidatedProgram results. Ten unchanged integrity checks per
+sample average 39.60 to 2.45 ms per check (about 16x faster). This offline run
+uses an unconnected machine with no live focus plan and failing stubs for transport,
+connection, commands, arming and execution; it is not a real Start measurement.
+1,800 implementation differential cases and 1,200 independent review cases
+match prior acceptance and exact rejection messages. The independent review's
+124 focused tests pass with no remaining actionable findings. Combined focused
+verification passes 502 tests. Core/stream checks pass 284 and expose one older
+cleanup test that expects admission after a policy mutation; the new metadata
+check correctly rejects earlier. The adjusted late-mutation cleanup test passes,
+and explicit early-admission rejection coverage is added. The twelve-file
+companion is pinned to exact installed 21273d0; four installer tests pass.
+The final 16 metadata-proof tests pass, including early policy mutation rejection;
+repository Ruff and compileall pass. Compatibility CI 38846925424 passes at
+exact revision 99544e44ae0e50f37101fba4053a584d3b723942: Windows 3.12 desktop
+7,875 passed / 65 skipped, Windows 3.10 core 6,358 passed / 157 skipped, POSIX
+serial/controller recovery 656 passed, and Ruff. No rerun was required.
+No Pi access, service restart, controller action or live benchmark was performed
+for this change. The existing job and its open Windows bundle remain untouched;
+the matching companion will remain staged until an idle installation is possible.
+
+Frozen Windows version 0.7.239 is built in the separate managed checkout
+C:\Users\lukel\.codex\worktrees\job-validation-build\E3 from exact revision
+99544e44ae0e50f37101fba4053a584d3b723942. All 191 application modules and three
+resources match that commit. Isolated offscreen startup passes with a synthetic
+saved profile, nonexistent serial port, camera off, motion disabled and production
+QSettings writes denied by the sandbox. No interactive camera/controller test
+was performed. Matching companion e3-pi-job-pause-26c8c6b8 passes local read-only
+inspection against all twelve exact predecessor files: service.py and job_focus.py
+need updates, ten are already current. It has not been copied to or installed on
+the Pi. Canonical Windows installer packaging completes successfully. The permanent
+E3 DEV TEST pointer now selects this exact EXE through packaging/set_dev_test_feature.py;
+the permanent launcher, shortcut, production E3 and running application were not
+replaced or restarted. Operator testing and real Pi timing must follow idle
+companion installation; physical pause/laser-off/continuation remain unverified.
+The feature branch remains isolated pending that operator qualification.
+
+## Remaining Start-delay diagnosis (2026-10-15)
+
+Read-only authenticated status for the operator's subsequent running job
+7ebb0aa5-e01e-4579-ab3d-92ebd869226b reports 399,777 lines / 12,148,801 bytes,
+verification_seconds=43.805338 and start_latency_seconds=7.287502. Record creation
+to prepared is 47.571357 seconds, leaving approximately 3.766 seconds for upload
+and timing-boundary overhead. Creation to local started_at is 55.168391 seconds.
+The job was observed streaming with Pause available; this is software status,
+not physical pause/laser-off verification. No controller actions were requested.
+
+The verification timer covers finalize lock acquisition, uploaded-file hashing,
+full preflight, canonical-byte comparison and durable commit. Source audit and
+an offline profile identify substantial per-command parser, powered-endpoint and
+travel-bound computation. The retained older 729,269-line job performs 45.98
+million Python calls; uninstrumented local validation is 5.17 seconds wall/CPU.
+Instrumented shares are about 29% validator loop, 26% raster parser, 20% powered
+endpoint checks; 2.17 million polygon and 1.45 million travel-point calls occur.
+These local older-job profile shares are not a live Pi CPU breakdown.
+
+Start reuses prepared full validation, but still rereads/hashes canonical bytes
+and repeatedly scans immutable material/focus/raster metadata. Windows remote
+preflight also validates the complete program twice, before and after attaching
+focus. That desktop stage was not timed for this job; the filename timestamp is
+generation/preview time, not a Start-click timestamp. started_at precedes worker
+clearance/approach/focus moves, so it is not first laser output. Further Pi journal
+reads timed out; exact CPU/storage/lock and hardware-preparation shares remain
+unmeasured. No runtime changes or new feature build were made in this diagnosis.
+
+## Faster upload and preparation follow-up (2026-10-15)
+
+The operator requested removal of upload delay as well as the earlier Start fix.
+The exact 22,099,480-byte raster used 338 fresh authenticated requests and durable
+chunk writes. Negotiated compression now uses 22 chunks and 3,531,069 compressed
+bytes (0.31 seconds local compression), preserving original bytes and offsets.
+Compressed input is bounded at 256 KiB, expansion at 1 MiB, frames at 512 KiB;
+raw legacy chunks remain 64 KiB. Finalization and explicit Start remain required.
+
+Prepared polygon edges preserve reference arithmetic and tolerances. The stream
+size check now proves already-fitting ASCII source lines without full compaction;
+long eligible source still takes the exact stateful scan. On the operator's exact
+file, offline original/new validation was 12.505/6.704 seconds with identical
+validated output, and the first stream check was 3.818/0.045 seconds. These are
+local preparation timings; the live upload measurement below was performed after
+the operator subsequently disconnected and closed E3.
+Focused protocol/store/server/remote tests: 194 passed; codec/remote: 92 passed;
+stream/geometry/codec: 145 passed. The combined run passed 488 checks and exposed
+one stale installer fixture; the corrected installer checks pass (2), and the
+modal replay/source-byte upper-bound checks pass (76). Ruff and compileall pass.
+The installer now includes eleven files, pinned to installed e649a22.
+
+Initial compatibility CI 38842586933 passes Windows 3.10 core (6,250 tests),
+POSIX serial/session (656 tests), and lint. Windows 3.12 passes 7,765 tests but
+reports a browser Node subprocess timeout and a retained-Z reconnect assertion.
+Their focused files pass all 25 checks; four-worker coverage alongside compression
+and polygon checks passes all 59. The reconnect test now reports its checkpoint
+and retention status on failure (focused check passes). The unchanged-revision
+rerun passes: Windows 3.12 desktop 7,767 passed / 65 skipped. Full compatibility
+CI is green; neither affected runtime path was changed here.
+
+Frozen Windows 0.7.235 uses exact revision
+21273d01cb9409b9aea0733c57f0387f387a720a in the separate managed build checkout
+C:\Users\lukel\.codex\worktrees\job-upload-build\E3. All 191 packaged application
+modules and three resources match that commit. Isolated offscreen startup with
+a synthetic saved profile passes; no interactive camera/controller test was run.
+The permanent E3 DEV TEST pointer selects this exact EXE via the validated atomic
+pointer script. Canonical Windows installer packaging also completes successfully.
+The first rebuild was interrupted after it removed unlocked support files from
+the still-open older bundle. Its original EXE was retained, missing dependencies
+were restored only after comparison with retained dependency contents, and its
+original committed resources/metadata were restored. The original bundle also
+passes isolated offscreen startup with its unchanged EXE hash. Future rebuilds
+must use a separate output checkout while an operator has a bundle open.
+
+Companion e3-pi-job-pause-459a399c is installed after the operator disconnected
+and closed E3. Repeated authenticated preflight confirmed disconnected, disarmed,
+idle, unowned state with no attached clients. Six source files were updated with
+backups, five were already current; all eleven were verified after installation.
+The service restarted and advertises both pause and compressed-upload support.
+Configuration and service drop-in hashes were unchanged.
+
+Real Windows-to-Pi Tailscale upload benchmark, same 22,099,480-byte job and
+updated node: forced legacy raw transfer took 58.922 seconds / 338 chunks;
+negotiated compressed transfer took 6.346 seconds / 22 chunks (9.29x faster,
+89.2% less elapsed time). Base64 payload fell from 29,466,872 to 4,708,120 bytes.
+Timing includes job.begin, compression and durable chunk acknowledgements;
+neither upload was finalized, armed or started. Both temporary jobs were deleted.
+The controller remained disconnected and disarmed throughout both benchmarks,
+with no motion requested. A subsequent final read-only check observed a new
+client reconnect (READY_HOME_REQUIRED, disarmed, no active job); it was left alone.
+This verifies real upload performance, not total Start latency or physical
+pause/continuation, which remain unverified. Permanent E3 DEV TEST still selects
+the exact matching 0.7.235 Windows build listed above.
+
+## Pause / resume feature verification (2026-10-15)
+
+Isolated branch codex/job-pause-resume starts from authoritative main 7e86608
+and retains the selected engraving editor from e768590/d21145c while preserving
+main's newer raster-travel and streaming behavior. Unrelated changes in the
+shared working tree are preserved.
+
+Desktop/Pi pause uses GRBL laser-mode suspend, requires reported $32=1 and
+verified motor holding, and retains the exact job/stream/ACK ownership. The
+original job authorization survives suspension only for that immutable job.
+Transition/status watchdogs, stale job/session/revision checks and independent
+STOP fail-off remain active. Explicit reattachment to an unowned paused job
+claims control without serial reset. See docs/JOB_PAUSE.md.
+
+The operator explicitly approved support for the installed controller's omitted
+optional firmware identity. The existing GRBL handshake and reported laser mode
+remain required, contradictory reported versions reject, and Resume requires
+confirmed Door:0. Exact physical firmware identity remains unknown.
+
+The operator's subsequent dense-job Start failure was traced using read-only Pi
+logs and the retained program: 729,269 commands/22,099,480 bytes, about 59 seconds
+upload, 173 seconds validation, then 105 seconds Start and expired authorization.
+Start repeated its stream-size scan after arming. It now reuses only a completed
+check of the same immutable commands/capacity; changed inputs still recheck.
+Unused legacy-area raster predicates are skipped, preserving powered endpoint
+and travel checks. Offline exact-file validation improved 10.9 to 8.3 seconds;
+the repeated stream check improved 2.8 seconds to below 1 ms. Pi timing unverified.
+
+Latest focused Windows 3.14 run: 422 tests passed, covering pause/continuation,
+STOP races, controller/session/stream regressions, authenticated Pi reattachment,
+offscreen controls, secondary-controller STOP and exact companion installer
+behavior. Repository Ruff and compileall pass. Initial CI exposed a primary
+STOP lock held across a secondary ACK wait; separate admission locking fixes
+that regression. CI run 38837488585 passes Windows 3.10, POSIX and Ruff;
+Windows 3.12 reports 7,726 passed and one native Qt teardown crash. The outline
+and deleted-scroll-anchor tests now drain only their own deferred deletion instead
+of other tests' objects; 18 outline/confirmation and 20 scroll/outline checks pass.
+A broader local desktop rerun has 1,575 passed, one five-second startup timeout,
+and no native crash; that startup check passes separately in 2.16 seconds.
+Final compatibility CI [38838991061](https://github.com/lukelave-boop/E3/actions/runs/38838991061)
+passes against the exact frozen runtime: Windows 3.12 desktop 7,730 passed,
+65 skipped; Windows 3.10 core 6,213 passed, 157 skipped; POSIX serial/session
+654 passed; Ruff passes. The subsequent scroll test cleanup and this record do
+not change runtime files. The feature branch remains for operator acceptance.
+
+Candidate 0.7.232, source e649a22d62020dc751656d6a8f78a09b4c55cc96,
+passes exact comparison of 191 application modules and three resources against
+the commit. The frozen offscreen saved-profile startup smoke constructs and
+shows the main window without an error modal. It uses an unavailable synthetic
+serial port, disabled motion/camera and isolated persistence with registry
+writes denied. It includes the approved identity compatibility and Start fixes.
+This is not interactive GUI, camera or physical hardware testing.
+
+Matching Pi companion e3-pi-job-pause-fbd51fa7 is installed on the Pi after
+the operator reported E3 disconnected and closed. The first preflight rejected
+a retained idle controller connection without changing files or restarting.
+No client, owner or active job remained; normal session-bound connect claimed
+the existing session without resetting it, then normal disconnect closed it.
+The guarded idle-only installer then updated seven files (streaming dependency
+already matched), retained backups, verified all eight exact source hashes, and
+restarted the service. Authenticated capability discovery confirms pi-job-pause-v1;
+post-install status is disconnected, disarmed, unowned and without an active job.
+Configuration and systemd drop-in hashes are unchanged. No motion was requested;
+normal disconnect performed its existing output-off cleanup. Both Pause and the
+Pi-side Start fix are now installed. Upload speed is unchanged; new total Pi
+preparation time and physical pause/continuation still require operator testing.
+The canonical Windows installer completed and the permanent E3 DEV TEST pointer
+now selects version 0.7.232 at this worktree's dist/E3/E3.exe. Adjacent build-info
+and pointer match e649a22d62020dc751656d6a8f78a09b4c55cc96; EXE SHA-256 is
+2e696077baca2d24bd7341fcfbfa4abd3cd36e5d5558762cc25d8d66a3f524b8.
+No hardware output or new physical verification is claimed.
+
+
 ## Streaming fix merged into main (2026-10-15)
 
 At the operator's explicit request, [PR #45](https://github.com/lukelave-boop/E3/pull/45)
@@ -458,10 +684,54 @@ companion, then perform supervised physical acceptance. See
 [RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). Physical validation remains pending.
 The branch is pushed and retained without main integration while the known
 baseline desktop failure and operator acceptance remain unresolved.
+## Engraving image editor development (2026-10-15)
 
-## Background cleanup frozen DEV TEST handoff (2026-10-15)
+Active branch codex/engraving-editor was created from committed background-cleanup
+52f25b4 in .codex-worktrees/engraving-editor-dev. The shared codex/setup-wizard
+working tree and all unrelated pre-existing changes are preserved. No existing
+feature branch tip was already merged into main at the initial hygiene check.
 
-E3 DEV TEST selects Image background cleanup, version 0.7.206, branch
+Implemented desktop first-stage reversible image editing, automatic/manual native
+outlines, region/brush cleanup, editable nodes/handles, schema-6 persistence,
+transform-linked frozen vectors and reviewed physical offsets. New vectors have
+power zero/output off; image edits never modify an existing cut snapshot. Shared
+image processing preserves retained grayscale and propagates separate eligibility
+through post-dither output gating. See docs/ENGRAVING_IMAGE_EDITOR.md for operation,
+accuracy boundaries and deferred tools. Browser single-SVG behavior is unchanged.
+
+Windows Python 3.14 verification at e768590: all 472 focused tests passed, with
+repository Ruff and compileall. Compatibility CI run 38813160637 completed:
+Windows Python 3.10 had 5882 passed, 144 skipped and three failures; Windows
+Python 3.12 desktop had 7360 passed, 54 skipped and four failures. All failures
+were reproduced on clean baseline 52f25b4: three stale command-budget checks
+and the retained-Z group visibility assertion. Ruff and the POSIX controller
+tier passed. CI is not green and this branch is not ready for main integration.
+The sandboxed local full run stalled at 91% without a final summary; it was
+interrupted and all owned pytest workers exited. It is not a passing suite.
+With workspace TEMP/TMP, planning checks passed 83 tests with the two confirmed
+baseline aggregate-budget cases deselected.
+
+Final UI hardening releases closed dialogs and their decoded image planes,
+owns the initial fit timer, and clears or rejects stale node selections after
+reset, undo/redo and outline replacement. All 486 focused tests pass after this
+hardening, along with repository Ruff and compileall. A fresh frozen build
+and compatibility run follow these changes. Source
+fixtures are synthetic barrel-like grayscale with lettering and separate shadow;
+no original barrel asset is claimed. Core 0.8MP benchmark median: committed mask
+render 1.075 ms; unique node change plus render 2.081 ms; automatic rectangular
+trace 32.977 ms. Instrumentation observed zero source decodes or toolpath builds
+inside edit rendering. Offscreen Qt event measurements on a 1.57MP synthetic image: brush movement
+p95 1.343 ms / commit 7.877 ms; 192-node editing p95 4.284 ms / commit
+40.398 ms. Movement caused zero full-image processing and zero job generation.
+Interactive operator latency is not yet verified.
+
+No camera/controller/laser test, machine setting or calibration change, Pi
+installation, motion or laser output was performed. This feature remains under
+software/operator verification and is not merged into main.
+
+## Historical background cleanup frozen DEV TEST handoff (2026-10-15)
+
+At that handoff, E3 DEV TEST selected Image background cleanup, version 0.7.206, branch
 codex/background-cleanup, exact frozen application revision
 `dcaa217a019bfab986af2bb28506264c830e7a24`. Target:
 `C:\Users\lukel\Documents\E3\.codex-worktrees\background-cleanup-dev\dist\E3\E3.exe`.

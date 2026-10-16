@@ -1,5 +1,28 @@
 # Architecture
 
+Pi job upload negotiates bounded compressed chunks through `pi_job_protocol`.
+The server expands each complete bounded stream before passing original bytes
+to `PiJobStore`; storage durability, finalization and MachineService ownership
+are unchanged. Pure geometry predicates prepare immutable polygon edges for
+whole-program validation. See [node transport](NETWORK_MACHINE.md).
+
+`RemoteMachineService` retains the first local preflight only when focus
+attachment leaves the text unchanged, after checking current policy and focus
+selection. Changed text still receives complete preflight. `MachineService`
+keeps immutable directive facts alongside its exact program snapshot, avoiding
+repeated scans for focus modes, raster bounds, first movement and material
+bindings. Reuse requires the same validated line tuple, field values/types and
+current safety profile. Current material, focus/session state and temporary
+arming are checked independently; committed Pi bytes are still read and hashed.
+
+Within one program analysis, successful powered endpoint proofs can cover an
+identical later endpoint under the same fixed polygons and physical spot. Each
+new travel endpoint is checked; its preceding endpoint already passed the same
+immutable convex envelope. Power transitions still require a powered start-point
+proof. The canonical raster parser uses scalar values and a bounded decimal
+grammar; other syntax retains the general allowlist. These shared service changes
+cover both execution pipelines without changing their generated program bytes.
+
 MachineService owns continuous GRBL G1 streams. ControllerReceiver temporarily
 gives the job worker exclusive receive pumping with bounded FIFO byte credit;
 ordinary commands retain individual transactions and quiet fences. The pure
@@ -45,6 +68,29 @@ low-level generator's absent-envelope compatibility path retains its former
 restrictive surface/output checks and never grants expanded travel. The browser
 single-SVG pipeline remains separate and unchanged. See
 [RASTER_OVERSCAN.md](RASTER_OVERSCAN.md) for configuration and verification limits.
+## Engraving image editor
+
+Schema 6 adds strict IMAGE geometry.image_edit (version 1, original SHA256/size,
+centered native outline, mask flag, ordered regions, inversion and trace options)
+and PATH metadata.image_outline (source id, explicit transform link, offset and
+interior-contour provenance). Legacy schemas reject these fields. Image edits
+are Qt/HTTP-independent in project/image_edit.py and reuse foreground extraction,
+the authoritative native curve fitter, and topology validation. Regions preserve
+source geometry and grayscale; accepted outline rasterization has a bounded cache.
+
+The desktop image editor owns transient overlays and local history, decoding once.
+Preview workers carry cancellation and generation identity. Acceptance uses the
+existing project history and invalidates prepared jobs. Canvas variants include
+all edit settings in cache/recovery identity. project/toolpath.py processes through
+the same image function and gates post-dither cells using a summed-area exclusion
+mask over each whole source footprint, conservatively bounding rotated cells.
+
+project/image_outline.py creates disabled zero-power PATH snapshots, propagates
+only transforms, and provides explicit detachment. History supports linked undo,
+source removal, and duplicate-link remapping. Native geometry is never rewritten
+by later source edits. Nonzero offsets are reviewed mitered polylines; invalid or
+topology-changing results reject instead of auto-repairing. The browser SVG
+pipeline, MachineService and hardware authority remain unchanged.
 
 ## Raster background cleanup
 
@@ -1644,7 +1690,7 @@ when the notice also fits, and the normal responsive widgets return when the
 notice clears.
 
 `RuntimeSafetyStrip` owns only the primary presentation and request signals for
-Connect/Reconnect, Disconnect, the deliberately disabled Pause, and software
+Connect/Reconnect, Disconnect, session-bound Pause / Resume, and software
 STOP. `DesktopController` receives those requests and retains the existing
 `MachineService` boundary. STOP stays enabled during ordinary background work.
 On compact windows the non-hideable strip moves to its own toolbar row, and when

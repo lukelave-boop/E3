@@ -23,8 +23,8 @@ from ..errors import MachineError
 from ..geometry.polygon import ConvexPolygon
 from ..storage import atomic_write_json, strict_json_loads
 from .pi_job_protocol import (
+    MAX_EXPANDED_CHUNK_BYTES,
     MAX_JOB_BYTES,
-    MAX_UPLOAD_CHUNK_BYTES,
     PiJobProtocolError,
     validate_guarded_output_polygon,
     validate_job_id,
@@ -619,9 +619,9 @@ class PiJobStore:
             canonical = validate_job_id(job_id)
         except PiJobProtocolError as exc:
             raise PiJobStoreError(str(exc)) from exc
-        if type(data) is not bytes or not 1 <= len(data) <= MAX_UPLOAD_CHUNK_BYTES:
+        if type(data) is not bytes or not 1 <= len(data) <= MAX_EXPANDED_CHUNK_BYTES:
             raise PiJobStoreError(
-                f"Pi job chunk must contain 1 through {MAX_UPLOAD_CHUNK_BYTES} bytes"
+                f"Pi job chunk must contain 1 through {MAX_EXPANDED_CHUNK_BYTES} bytes"
             )
         with self._lock:
             record = self._synchronize_receiving_size(self._load_record(canonical))

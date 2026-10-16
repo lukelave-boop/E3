@@ -23,6 +23,7 @@ import struct
 import threading
 import time
 import uuid
+import zlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -41,6 +42,7 @@ CAPABILITY_PI_CONTROLLER_SESSION = "pi-controller-session-v1"
 CAPABILITY_PI_STRUCTURED_ERRORS = "pi-structured-errors-v1"
 CAPABILITY_PI_COHERENT_STATUS = "pi-coherent-status-v1"
 CAPABILITY_PI_CONTROL_OWNER = "pi-control-owner-v1"
+CAPABILITY_PI_COMPRESSED_UPLOAD = "pi-compressed-upload-v1"
 
 ERROR_INVALID_REQUEST = "request.invalid"
 ERROR_REQUEST_CONFLICT = "request.conflict"
@@ -55,6 +57,7 @@ ERROR_INTERNAL = "service.internal"
 
 ACTION_JOB_BEGIN = "job.begin"
 ACTION_JOB_CHUNK = "job.chunk"
+ACTION_JOB_CHUNK_COMPRESSED = "job.chunk.compressed"
 ACTION_JOB_FINALIZE = "job.finalize"
 ACTION_JOB_START = "job.start"
 ACTION_JOB_STATUS = "job.status"
@@ -62,11 +65,14 @@ ACTION_JOB_ACTIVE = "job.active"
 ACTION_JOB_LATEST = "job.latest"
 ACTION_JOB_RESULT = "job.result"
 ACTION_JOB_STOP = "job.stop"
+ACTION_JOB_PAUSE = "job.pause"
+ACTION_JOB_RESUME = "job.resume"
 ACTION_JOB_DELETE = "job.delete"
 JOB_ACTIONS = frozenset(
     {
         ACTION_JOB_BEGIN,
         ACTION_JOB_CHUNK,
+        ACTION_JOB_CHUNK_COMPRESSED,
         ACTION_JOB_FINALIZE,
         ACTION_JOB_START,
         ACTION_JOB_STATUS,
@@ -74,12 +80,16 @@ JOB_ACTIONS = frozenset(
         ACTION_JOB_LATEST,
         ACTION_JOB_RESULT,
         ACTION_JOB_STOP,
+        ACTION_JOB_PAUSE,
+        ACTION_JOB_RESUME,
         ACTION_JOB_DELETE,
     }
 )
 
-MAX_FRAME_PAYLOAD_BYTES = 128 * 1024
+MAX_FRAME_PAYLOAD_BYTES = 512 * 1024
 MAX_UPLOAD_CHUNK_BYTES = 64 * 1024
+MAX_COMPRESSED_CHUNK_BYTES = 256 * 1024
+MAX_EXPANDED_CHUNK_BYTES = 1024 * 1024
 MAX_JOB_BYTES = 64 * 1024 * 1024
 MAX_JOB_NAME_CHARACTERS = 160
 MAX_GUARDED_POLYGON_POINTS = 64
@@ -264,6 +274,45 @@ def decode_upload_chunk(value: object) -> bytes:
     if base64.b64encode(decoded).decode("ascii") != value:
         raise PiJobProtocolError("upload chunk is not canonical base64")
     return decoded
+
+
+def encode_upload_piece(data: bytes, *, compressed: bool) -> tuple[str, str, int]:
+    """Encode one bounded piece; old peers retain their original raw framing."""
+    if type(data) is not bytes or not data:
+        raise PiJobProtocolError("upload piece must contain bytes")
+    if compressed:
+        piece = data[:MAX_EXPANDED_CHUNK_BYTES]
+        while len(piece) > MAX_UPLOAD_CHUNK_BYTES:
+            packed = zlib.compress(piece, level=6)
+            if len(packed) <= MAX_COMPRESSED_CHUNK_BYTES:
+                return ACTION_JOB_CHUNK_COMPRESSED, base64.b64encode(packed).decode("ascii"), len(piece)
+            piece = piece[:len(piece) // 2]
+    piece = data[:MAX_UPLOAD_CHUNK_BYTES]
+    return ACTION_JOB_CHUNK, encode_upload_chunk(piece), len(piece)
+
+
+def decode_compressed_upload_chunk(value: object) -> bytes:
+    """Expand one complete zlib stream with strict input and output bounds."""
+    if (type(value) is not str or not value
+            or len(value) > 4 * math.ceil(MAX_COMPRESSED_CHUNK_BYTES / 3)):
+        raise PiJobProtocolError("compressed upload chunk exceeds its encoded bound")
+    try:
+        packed = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise PiJobProtocolError("compressed upload chunk is not canonical base64") from exc
+    if (not 1 <= len(packed) <= MAX_COMPRESSED_CHUNK_BYTES
+            or base64.b64encode(packed).decode("ascii") != value):
+        raise PiJobProtocolError("compressed upload chunk is not bounded canonical base64")
+    inflater = zlib.decompressobj()
+    try:
+        expanded = inflater.decompress(packed, MAX_EXPANDED_CHUNK_BYTES + 1)
+    except zlib.error as exc:
+        raise PiJobProtocolError("compressed upload chunk is invalid") from exc
+    # Never call unbounded flush; truncated, concatenated and oversized streams reject.
+    if (not 1 <= len(expanded) <= MAX_EXPANDED_CHUNK_BYTES or not inflater.eof
+            or inflater.unused_data or inflater.unconsumed_tail):
+        raise PiJobProtocolError("compressed upload chunk is incomplete, trailing or oversized")
+    return expanded
 
 
 def _read_exact(sock: socket.socket, length: int) -> bytes:

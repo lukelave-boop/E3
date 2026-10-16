@@ -138,6 +138,7 @@ class RasterSource:
     metadata: RasterAssetMetadata
     image: np.ndarray | None = None
     identity: RasterAssetIdentity | None = None
+    source_allowed: np.ndarray | None = None
 
 
 @dataclass(slots=True)

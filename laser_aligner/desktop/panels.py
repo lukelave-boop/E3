@@ -3426,11 +3426,14 @@ class ObjectPanel(QtWidgets.QWidget):
     layerColorEditRequested = QtCore.Signal(str)
     rasterVectorizeRequested = QtCore.Signal(str)
     backgroundCleanupRequested = QtCore.Signal(str)
+    imageEditorRequested = QtCore.Signal(str)
+    detachImageOutlineRequested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._updating = False
         self._object_kinds: dict[str, ObjectKind] = {}
+        self._linked_outline_ids: set[str] = set()
         layout = _panel_layout(self)
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setMinimumHeight(220)
@@ -3453,6 +3456,10 @@ class ObjectPanel(QtWidgets.QWidget):
         self.image_group = QtWidgets.QGroupBox("Image")
         image_layout = QtWidgets.QVBoxLayout(self.image_group)
         image_layout.setContentsMargins(8, 8, 8, 8)
+        self.image_editor_button = QtWidgets.QPushButton("Edit image for engraving\u2026")
+        self.image_editor_button.setToolTip("Remove local backgrounds, refine an outline, and create an aligned vector")
+        image_layout.addWidget(self.image_editor_button)
+        self.image_editor_button.clicked.connect(self._request_image_editor)
         self.raster_vectorize_button = QtWidgets.QPushButton(
             "Trace image to vectors\u2026"
         )
@@ -3472,6 +3479,11 @@ class ObjectPanel(QtWidgets.QWidget):
         )
         self.image_group.setVisible(False)
         self.raster_vectorize_button.setEnabled(False)
+        self.detach_outline_button = QtWidgets.QPushButton("Detach outline from image")
+        self.detach_outline_button.setToolTip("Keep the current vector shape and position; allow independent transforms")
+        self.detach_outline_button.clicked.connect(self._request_detach_outline)
+        self.detach_outline_button.setVisible(False)
+        layout.addWidget(self.detach_outline_button)
 
     def set_document(
         self,
@@ -3482,6 +3494,10 @@ class ObjectPanel(QtWidgets.QWidget):
         layers = {layer.id: layer for layer in document.layers}
         self._object_kinds = {
             scene_object.id: scene_object.kind for scene_object in document.objects
+        }
+        self._linked_outline_ids = {
+            item.id for item in document.objects
+            if item.metadata.get("image_outline", {}).get("linked", False)
         }
         self._updating = True
         try:
@@ -3595,6 +3611,19 @@ class ObjectPanel(QtWidgets.QWidget):
         self.image_group.setVisible(available)
         self.raster_vectorize_button.setEnabled(available)
         self.background_cleanup_button.setEnabled(available)
+        self.image_editor_button.setEnabled(available)
+        selected = self._selected_ids() if selected_ids is None else selected_ids
+        self.detach_outline_button.setVisible(len(selected) == 1 and selected[0] in self._linked_outline_ids)
+
+    def _request_image_editor(self) -> None:
+        object_id = self._selected_image_id()
+        if object_id is not None:
+            self.imageEditorRequested.emit(object_id)
+
+    def _request_detach_outline(self) -> None:
+        selected = self._selected_ids()
+        if len(selected) == 1 and selected[0] in self._linked_outline_ids:
+            self.detachImageOutlineRequested.emit(selected[0])
 
     def _request_background_cleanup(self) -> None:
         object_id = self._selected_image_id()

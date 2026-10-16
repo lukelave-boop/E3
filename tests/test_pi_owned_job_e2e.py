@@ -4,13 +4,18 @@ import copy
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from test_job_pause import paused_machine as paused_machine
+from test_job_pause import request, wait_for
+from test_machine_streaming import _program
 
 from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
+from laser_aligner.errors import MachineError
 from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_BEGIN,
@@ -482,3 +487,56 @@ def test_windows_detach_does_not_change_pi_owned_secondary_fan(
         job_service.shutdown(stop_machine=True)
         fan.close()
         server_thread.join(timeout=2.0)
+
+def test_authenticated_pi_pause_resume_retains_job_and_monitor_detach(paused_machine, monkeypatch, tmp_path):
+    machine, transport = paused_machine()
+    token = "pause-e2e-only-token-0123456789abcdef"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    jobs = PiJobService(machine, PiJobStore(tmp_path / "jobs"), watch_interval_seconds=0.01)
+    server = PiMachineServer(jobs, host="127.0.0.1", port=0, token=token)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    wait_for(lambda: server._bound_port is not None)
+    remote = RemoteMachineService(
+        replace(machine.settings, port=f"e3bridge://127.0.0.1:{server.bound_port}"),
+        machine.laser_settings, hardware_enabled=True, monitor_interval_seconds=0.02,
+    )
+    try:
+        remote.connect()
+        remote.start_monitoring()
+        program = remote.preflight_program(_program(powered=True))
+        started = remote.start_preflighted_program(program, "pause-e2e", authorization_phrase=remote.ARM_PHRASE)
+        transport.wait_for_motion(1)
+        wait_for(lambda: (remote.status().get("job_pause") or {}).get("available") is True)
+        request(remote)
+        wait_for(lambda: (remote.status().get("job_pause") or {}).get("state") == "paused")
+        assert jobs.get(started["job_id"])["state"] == "running"
+        with pytest.raises(MachineError, match="stale"):
+            request(remote, resume=True, expected_pause_revision=0)
+        remote.detach()
+        time.sleep(0.1)
+        assert machine.status()["job_pause"]["state"] == "paused"
+        assert ("raw", b"~") not in transport.writes
+        # A new desktop observes first, then explicitly takes the unowned paused
+        # job without resetting or reconnecting its controller transport.
+        remote = RemoteMachineService(
+            replace(machine.settings, port=f"e3bridge://127.0.0.1:{server.bound_port}"),
+            machine.laser_settings, hardware_enabled=True, monitor_interval_seconds=0.02,
+        )
+        remote.start_monitoring()
+        wait_for(lambda: (remote.status().get("job_pause") or {}).get("state") == "paused")
+        prior_writes = list(transport.writes)
+        remote.connect()
+        assert transport.writes == prior_writes or all(kind == "raw" and data == b"?" for kind, data in transport.writes[len(prior_writes):])
+        wait_for(lambda: (remote.status().get("job_pause") or {}).get("state") == "paused")
+        request(remote, resume=True)
+        wait_for(lambda: machine.status()["job_pause"]["state"] == "running")
+        transport.release_all()
+        wait_for(lambda: jobs.get(started["job_id"])["state"] == "complete")
+        assert len(transport.motion_lines) == 20
+        assert jobs.get(started["job_id"])["program_digest"] == program.digest
+    finally:
+        remote.detach()
+        server.stop()
+        jobs.shutdown()
+        server_thread.join(3)

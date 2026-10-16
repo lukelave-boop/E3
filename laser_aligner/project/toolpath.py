@@ -99,6 +99,7 @@ from .power_correction import (
 from .raster_asset import (
     RasterAssetIdentity,
     decode_raster_grayscale,
+    decode_raster_payload_planes,
     probe_raster_asset,
     read_raster_asset_payload,
     verify_raster_asset_identities,
@@ -137,6 +138,18 @@ def _toolpath_cancel_requested() -> bool:
 def _raise_if_toolpath_cancelled() -> None:
     if _toolpath_cancel_requested():
         raise ToolpathGenerationCancelled("Toolpath generation was cancelled")
+
+
+def _validate_image_outline_output(document: ProjectDocument) -> None:
+    from .image_edit import validate_outline
+
+    for item in document.visible_output_objects():
+        if "image_outline" not in item.metadata:
+            continue
+        errors = validate_outline(item.path_geometry(), width_mm=item.transform.width_mm,
+                                  height_mm=item.transform.height_mm)
+        if errors:
+            raise ValueError(f"Invalid image cutting outline {item.name}: {'; '.join(errors)}")
 
 
 @dataclass(slots=True)
@@ -2208,6 +2221,49 @@ def _ordered_dither_thresholds(width: int) -> np.ndarray:
     ) * (255.0 / 64.0)
 
 
+def _image_mask_cell_gate(
+    excluded_integral: np.ndarray,
+    scan_boundaries: np.ndarray,
+    row_position: float,
+    pitch: float,
+    item: SceneObject,
+    scan_to_machine: np.ndarray,
+) -> np.ndarray:
+    """Admit only cells whose whole source footprint contains no excluded pixel.
+
+    The source-space bounding rectangle is deliberately conservative under
+    rotation. A summed-area table makes this independent of brush complexity
+    and avoids interpolating an exclusion mask into engraving power.
+    """
+    height, width = np.array(excluded_integral.shape) - 1
+    centers = (scan_boundaries[:-1] + scan_boundaries[1:]) * 0.5
+    source = _scan_points_source_coordinates(
+        np.column_stack([centers, np.full(centers.size, row_position)]),
+        item, scan_to_machine, int(width), int(height),
+    )
+    reference = _scan_points_source_coordinates(
+        np.array([[0., 0.], [1., 0.], [0., 1.]]),
+        item, scan_to_machine, int(width), int(height),
+    )
+    horizontal = np.abs(reference[1] - reference[0])
+    vertical = np.abs(reference[2] - reference[0])
+    half_extents = (np.diff(scan_boundaries)[:, None] * horizontal + pitch * vertical) * 0.5
+    # G-code serializes controller coordinates to 0.001 mm. Its half-step
+    # rounding error can rotate back into either source axis (including a
+    # honeycomb frame and laser offset), so reserve a full 0.001 mm per scan
+    # axis before admitting a cell adjacent to excluded artwork.
+    half_extents += (horizontal + vertical) * 0.001
+    lower = np.floor(source - half_extents + 0.5 + 1e-7).astype(np.int64)
+    upper = np.ceil(source + half_extents + 0.5 - 1e-7).astype(np.int64)
+    inside = ((lower[:, 0] >= 0) & (lower[:, 1] >= 0)
+              & (upper[:, 0] <= width) & (upper[:, 1] <= height))
+    left, top = np.clip(lower[:, 0], 0, width), np.clip(lower[:, 1], 0, height)
+    right, bottom = np.clip(upper[:, 0], 0, width), np.clip(upper[:, 1], 0, height)
+    excluded = (excluded_integral[bottom, right] - excluded_integral[top, right]
+                - excluded_integral[bottom, left] + excluded_integral[top, left])
+    return inside & (excluded == 0) & (right > left) & (bottom > top)
+
+
 def _ordered_dither_row(
     image: np.ndarray,
     row_index: int,
@@ -2282,14 +2338,31 @@ def _image_raster_rows(
         source = raster_sources[source_path]
     except KeyError as exc:
         raise ValueError(f"Raster source was not included in project preflight: {asset}") from exc
-    if source.image is None or source.identity is None:
+    edit = item.geometry.get("image_edit")
+    if edit is not None and source.source_allowed is None:
+        payload = read_raster_asset_payload(asset, metadata=source.metadata)
+        image, source_allowed = decode_raster_payload_planes(payload)
+        image.setflags(write=False)
+        source_allowed.setflags(write=False)
+        source.image, source.identity, source.source_allowed = image, payload.identity, source_allowed
+    elif source.image is None or source.identity is None:
         image, identity = decode_raster_grayscale(asset, metadata=source.metadata)
         image.setflags(write=False)
         source.image = image
         source.identity = identity
-    from .raster_cleanup import clean_background
+    from .image_edit import process_image
 
-    image = clean_background(source.image, item.geometry)
+    if edit is not None and (
+        edit["source_sha256"] != source.identity.sha256
+        or edit["source_size"] != [source.identity.width, source.identity.height]
+    ):
+        raise ValueError(f"Original image changed; its saved edits cannot be used: {item.name}")
+    image, allowed = process_image(source.image, item.geometry,
+                                   source_allowed=source.source_allowed if edit is not None else None)
+    excluded_integral = (
+        cv2.integral((~allowed.astype(bool)).astype(np.uint8), sdepth=cv2.CV_32S)
+        if edit is not None and not np.all(allowed) else None
+    )
     identity = source.identity
     image = _area_prefilter_raster(
         image,
@@ -2339,9 +2412,13 @@ def _image_raster_rows(
             interpolation=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_REPLICATE,
         )[0]
-        runs = _enabled_runs(
-            _ordered_dither_row(sampled_row, row_index, dither_thresholds)
-        )
+        enabled = _ordered_dither_row(sampled_row, row_index, dither_thresholds)
+        if excluded_integral is not None:
+            enabled &= _image_mask_cell_gate(
+                excluded_integral, scan_boundaries, float(row_position),
+                layer.line_interval_mm, item, scan_to_machine,
+            )
+        runs = _enabled_runs(enabled)
         if not runs:
             continue
         row_start, row_end = row_interval
@@ -2707,6 +2784,7 @@ def _generate_project_gcode(
     if raster_requested and (raster_travel_envelope is not None or require_verified_raster_travel_limits):
         raster_travel_envelope = require_verified_raster_travel(raster_travel_envelope)
     expanded_raster_travel = raster_requested and raster_travel_envelope is not None
+    _validate_image_outline_output(document)
     scene_revision = project_scene_revision(document)
     controller_power_max = int(power_max or laser.power_max)
     prepared_object_paths: dict[str, tuple[Polyline, ...]] = {}
