@@ -1,81 +1,75 @@
 # Current repository state
 
-## Desktop UI clarity (2026-10-16)
+## Desktop UI clarity — integrated and DEV TEST selected (2026-10-16)
 
-Runtime revision `81125cb2f61497d2d93e2b72715bc7a7837a3102` incorporates main
-through `8c336dd`, including selected-object transparency, machine-axis raster,
-surface travel and upload/pause/Start behavior. Work used an isolated checkout;
-the unrelated shared working-tree changes were preserved.
+Permanent **E3 DEV TEST** selects **Desktop UI clarity**, version **0.7.283**,
+exact frozen revision `ba488ec9fcce4b547464aff0ad563d8823e142ca`, built from
+`codex/desktop-ui-polish`. Target:
+`C:\Users\lukel\.codex\worktrees\ui\E3\.e3-builds\windows-windows-37ab0dd160f6487b9e35d537fc13d104\dist\E3\E3.exe`.
+The atomic pointer script and launcher-validator readback both pass. Reopen the
+permanent launcher to inspect the UI. Its launcher, shortcut and production E3
+were not replaced. The isolated checkout preserves unrelated shared-tree work.
+
+[PR #49](https://github.com/lukelave-boop/E3/pull/49) merged into main as
+`43134e69cfc1a275fa84e6b5204e48b2475311f6`; the completed feature branch was
+deleted locally and remotely. It incorporates main through `2420808`, including
+transparency and the browser-test completion fix. Runtime source and packaging
+at verified head `5dee1dc455bb3881eedf38f98af37fc2969ed1df` match the frozen
+`ba488ec` source; subsequent changes were tests and documentation only.
+
+Complete [compatibility CI 38932473837](https://github.com/lukelave-boop/E3/actions/runs/38932473837)
+passes on that integrated head: Windows Python 3.12 desktop **8,498 passed /
+65 skipped** (963.23 seconds), Windows Python 3.10 core **6,946 passed /
+160 skipped**, POSIX **1,502 passed / 2 skipped**, and repository Ruff.
+Local Windows Python 3.14 passed the complete desktop selection: **1,616 tests**,
+four workers, at `85a1114`. Final trace sizing, normal/enlarged-font navigation,
+compact layout, isolated theme probes, application compileall and whitespace
+checks also pass. Focused test counts overlap.
 
 The desktop has packaged visible dropdown/stepper indicators, clearer hover,
 focus and selected states, a matching dark native palette and a Panels menu
 exposing every inspector. Drawing and job actions show names. Cuts labels its
 selectors, layer actions, job inclusion and canvas visibility. Units,
-transparency percentages and trace-slider values accommodate the visible arrows
-at normal and enlarged font sizes.
+transparency percentages and trace-slider values accommodate visible arrows
+at normal and enlarged font sizes. The engraving editor groups Clean image,
+Outline and Cut path, with named tools, Exclude/Restore choices, contextual
+instructions and explicit preview/draft feedback. Source pixels, processing,
+persistence/schema, machine authority and the browser SVG pipeline retain their
+behavior. See [UI guide](docs/DESKTOP_UI.md) and [editor guide](docs/ENGRAVING_IMAGE_EDITOR.md).
 
-The engraving editor groups Clean image, Outline and Cut path. Named exclusive
-tools, Exclude/Restore choices, contextual controls/instructions and explicit
-preview/draft feedback replace unlabeled dropdowns and a long form. Source pixels,
-image processing, persistence/schema, machine services, execution gates and the
-browser SVG pipeline retain their behavior. See [UI guide](docs/DESKTOP_UI.md)
-for design references and [editor guide](docs/ENGRAVING_IMAGE_EDITOR.md) for actions.
+Frozen verification matches **193 application modules**, entrypoint and **ten
+resources** against the committed build source. Native bundled Qt 6.11.2 imports
+pass. Archived theme/controls render offscreen with all four SVG indicators,
+ten enabled/disabled indicator checks, confirmation filter and Panels navigation
+passing. EXE SHA-256:
+`eb5a0c7640eff0abbe215e25803879553c4899bdcd00afa2425bd59e44d85a83`.
+Source simulator renders were inspected at 900x680, 1080x780 and 1600x900, plus
+compact image-editor and enlarged-font checks. Settings/data were isolated,
+camera autostart off, motion disabled and hardware_enabled=False. The initial
+archive harness crash was reproduced as its replacement of native QSettings;
+retaining native Qt types and isolating settings paths resolves it without a
+product change. Evidence remains under the source checkout's ignored `build/`.
+These checks did not launch the canonical frozen EXE or establish interactive
+operator, real camera, controller or laser verification. No Pi update occurred.
 
-Local Windows Python 3.14 verification passed the complete desktop selection:
-**1,616 tests in 173.90 seconds**, four workers, at `85a1114`. The following final
-trace-field sizing change passed **11** focused checks (the wrapper's **18**
-child theme checks plus ten raster-vectorization dialog checks). Navigation's
-layout/interaction assertions also run in a fresh Qt process. An ordered
-93-check shared-Qt group passes. Repository Ruff, application compileall and
-whitespace checks pass. Counts of focused groups overlap.
+The canonical Windows builder produced the selected app bundle, but Inno Setup
+failed at a bundled Qt dependency's Windows path-length limit. No installer is
+claimed. That failed build's files and reservation remain counted and retained;
+storage policy was not bypassed. Before this build, the user explicitly approved
+recovery of this task's earlier verified-empty reservation
+`windows-53d8a8f697e5425eb10a20167b300e99`. The identity-checked recovery backed
+up accounting and removed only that reservation, preserving every artifact and
+other state field. No artifacts were deleted.
 
-Initial broad runs exposed a native Qt cleanup crash and expensive global
-restyling of retained widgets. New tests now delete only their own widgets,
-style only their owned dialogs, and isolate global theme/font probes in bounded
-child processes; the subsequent complete desktop run above passes. This does
-not establish the sole cause of the original native crash.
-
-Actual source simulator renders were inspected at 900x680, 1080x780 and 1600x900,
-with compact image-editor checks and enlarged text. Settings/data were isolated,
-camera autostart was off, motion disabled and hardware_enabled=False. These are
-automated offscreen widget checks; interactive operator acceptance and real
-camera/controller/laser tests remain unperformed. No Pi update occurred.
-
-The user explicitly approved recovery of this task's verified-empty failed
-reservation `windows-53d8a8f697e5425eb10a20167b300e99`. The guarded one-off
-recovery backed up the accounting file, rechecked empty outputs, identities and
-exited owner, and removed only that reservation. Every other state field and
-artifact was preserved; no files were deleted. Evidence and the backup are in
-the isolated checkout's ignored `build/` directory. The canonical build now
-runs from the short-path checkout `C:\Users\lukel\.codex\worktrees\ui\E3`
-on exact source `ba488ec9fcce4b547464aff0ad563d8823e142ca`, with runtime source
-unchanged from `81125cb`. DEV TEST still selects the previous transparency build
-until frozen verification and validated pointer selection complete.
-
-Compatibility CI [38926805559](https://github.com/lukelave-boop/E3/actions/runs/38926805559)
-passed Windows Python 3.10 core (6,941 passed / 160 skipped), POSIX
-(1,502 passed / 2 skipped), and Ruff. Windows Python 3.12 completed with
-8,492 passed / 65 skipped and one narrow-layout assertion failure.
-Independent real-font reproduction showed that all secondary hints fit
-at 9pt (714 pixels needed in a 900-pixel window), while 13pt requires
-934 pixels and correctly hides them. This was a test font assumption,
-not stale layout or clipped controls. The regression now specifies its
-enlarged per-window font, retains every assertion, and the isolated
-navigation probe covers both 9pt and 13pt. The focused layout group passes
-12 collected checks, including all ten isolated navigation assertions. The
-original narrow-reset case also passes with the inherited dark 9pt theme;
-its explicit startup wait and normal status-layout refresh remove fixture
-timing assumptions. Runtime source is unchanged.
-
-The subsequent complete [CI 38929737660](https://github.com/lukelave-boop/E3/actions/runs/38929737660)
-passed those UI checks and again passed core, POSIX and Ruff. Windows 3.12
-finished with 8,492 passed / 65 skipped and one pre-existing probe fixture
-failure: a two-millisecond wall-clock deadline expired during an otherwise
-ready fake response. That test now advances a simulated clock only for silent
-reads, retaining the production timeout and every safety assertion and adding
-explicit timeout/rejection evidence. All 75 probe/secondary-controller focused
-tests pass locally. No production controller code changed. Final compatibility
-verification is pending before main integration.
+Test reliability work retains all behavior assertions: new Qt probes isolate
+global styles/fonts and delete only owned widgets; the compact-layout regression
+specifies its enlarged font and settles startup; the probe failure fixture uses
+a deterministic clock instead of a 2ms wall-clock deadline. The latter's 75
+focused checks pass with explicit timeout/rejection evidence. Earlier CI failures
+are recorded in runs [38926805559](https://github.com/lukelave-boop/E3/actions/runs/38926805559)
+and [38929737660](https://github.com/lukelave-boop/E3/actions/runs/38929737660).
+No production controller code changed, and the original native Qt cleanup crash's
+sole cause remains unproven despite subsequent passing isolated/full runs.
 
 ## Browser CI subprocess completion (2026-10-16)
 
@@ -111,9 +105,9 @@ establish the historical timeout cause or replace the supported CI tier.
 This change affects only test infrastructure and this evidence record; runtime,
 project formats, machine configuration and the selected DEV TEST are unchanged.
 
-## Transparency DEV TEST handoff and integration (2026-10-16)
+## Previous transparency DEV TEST handoff and integration (2026-10-16)
 
-Permanent **E3 DEV TEST** selects **Selected-object transparency**, version
+The previous **E3 DEV TEST** handoff selected **Selected-object transparency**, version
 **0.7.272**, exact frozen revision `5fa335baa43f98a5510f010352aa2718b635cf1c`,
 from branch `codex/selection-transparency`. Target:
 `C:\Users\lukel\.codex\worktrees\selection-transparency\E3\.e3-builds\windows-windows-102bb1d638804e238374e298ac2df49b\dist\E3\E3.exe`.
