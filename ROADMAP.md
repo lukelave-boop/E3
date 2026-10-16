@@ -7,6 +7,13 @@ verified CI dependency preparation, long-path payload completeness regressions,
 and a complete installer build on packaging PRs. Installation and interactive
 update handoff remain separate verification levels. See [dated evidence](CURRENT_STATE.md).
 
+## Cleaned-image tracing (2026-10-16)
+
+Implemented: automatic outlines use the current cleaned grayscale image. Both
+preview modes use bounded subpixel mask boundaries before native curve fitting.
+Source assets and manual refinements remain unchanged until explicit acceptance.
+See [current state](CURRENT_STATE.md) for verification and operator-test status.
+
 ## Desktop UI clarity (2026-10-16)
 
 Implemented: shared control affordances, named drawing/job controls, clearer

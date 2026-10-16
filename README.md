@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Image-editor automatic outlines use the current cleaned image, including background
+cleanup and local edits. Both outline previews preserve thin pixel features without
+retracing their edges. See the [image editor guide](docs/ENGRAVING_IMAGE_EDITOR.md).
+
 Desktop controls now have visible dropdown arrows and number steppers, stronger
 hover/focus/selection states, and named drawing and job tools. The Cuts panel
 labels operation selection and distinguishes **Include in job** from **Show on

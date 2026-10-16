@@ -134,6 +134,14 @@ are Qt/HTTP-independent in project/image_edit.py and reuse foreground extraction
 the authoritative native curve fitter, and topology validation. Regions preserve
 source geometry and grayscale; accepted outline rasterization has a bounded cache.
 
+Image-editor mask extraction lives in project/image_mask_contours.py. Directed
+marching squares uses half-level crossings and foreground-connected saddles,
+avoiding the retraced edges of pixel-centre walks. Point, contour and hierarchy
+work limits plus cancellation bound extraction. Parent-first loops pass through
+the existing authoritative fitter and topology checks. Automatic preview workers
+snapshot the current processed grayscale; mask previews snapshot eligibility.
+This change is confined to the desktop image editor's project pipeline.
+
 The desktop image editor owns transient overlays and local history, decoding once.
 Preview workers carry cancellation and generation identity. Acceptance uses the
 existing project history and invalidates prepared jobs. Canvas variants include

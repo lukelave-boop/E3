@@ -22,14 +22,44 @@ and path-conversion regressions. A separate Windows PowerShell 5.1.26100.9711
 probe also selects the actual compiler, preserves ErrorActionPreference and
 compiles all four fixture files into a 321-character output path with exact
 manifest hashes. Its native stderr compatibility fix has a dedicated regression.
-Ten dependency-preparation/workflow tests,
-repository Ruff, compileall and independent review also pass. Complete installer
-and Windows compatibility CI results are pending before integration.
+All 51 local builder/storage-entrypoint tests pass, along with ten dependency/
+workflow tests, repository Ruff, compileall and independent review. Hosted
+[packaging CI 38941548566](https://github.com/lukelave-boop/E3/actions/runs/38941548566)
+passed all 17 focused checks and produced the complete **0.7.294** installer at
+PR merge revision `5ec29308f9bb56e2cb9ff96e038946d70d639e46` in 8m18s. Its
+[installer artifact](https://github.com/lukelave-boop/E3/actions/runs/38941548566/artifacts/12063253852)
+expires October 23. This proves the original installer failure is repaired.
+
+The branch then incorporated newer main `b1c6c4b` and its cleaned-image tracing
+feature, preserving both documentation records. Complete installer and Windows
+compatibility CI are being repeated on that combined revision before integration.
 
 The selected UI bundle and permanent DEV TEST pointer remain unchanged. Existing
 local failed reservations and artifacts are preserved; full installer validation
 uses genuine hosted Windows CI with the existing bounded ephemeral admission.
 No E3 installer, application, camera, controller or laser is launched by these checks.
+
+## Cleaned-image tracing correction (2026-10-16)
+
+Isolated branch codex/cleaned-image-trace starts from integrated main 3070d56.
+Automatic preview snapshots the current cleaned grayscale image rather than the
+original source. Both outline modes use bounded subpixel mask boundaries, preserving
+diagonal foreground connectivity without retracing thin pixel features. Existing
+native fitting and intersection rejection remain mandatory. Invalid edits block
+both previews. No schema, browser SVG, machine or Pi behavior changes.
+
+Windows Python 3.14 verification passes 183 focused tests, including all
+marching-square cases, nested holes/islands, frame edges, noisy masks, one-pixel
+whiskers, work limits, cancellation and an actual offscreen automatic-preview
+button click on a cleaned gray-background image, image/outline persistence,
+linked vectors and raster integration. Repository Ruff, application compileall
+and whitespace checks pass. Both actual offscreen preview buttons on the unchanged
+operator JPEG produce valid two-contour / 1,790-segment outlines (barrel and
+remaining shadow) with unchanged native topology validation. Preview does not
+accept the candidate or modify source bytes. Frozen build and compatibility CI
+are pending. Read-only packaging preflight reports the eight-GiB pool blocked
+by 2.50 GiB of measured files plus three old two-GiB reservations.
+No interactive operator or physical hardware acceptance is claimed.
 
 ## Desktop UI clarity — integrated and DEV TEST selected (2026-10-16)
 

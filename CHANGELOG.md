@@ -10,6 +10,14 @@
 - Pin and verify Inno Setup 7.1.0 in CI, check compiled long-path payload manifests,
   and retain a full Windows installer from packaging PR validation for seven days.
 
+## Unreleased - cleaned-image tracing (2026-10-16)
+
+- Trace the cleaned grayscale preview instead of the original source, so removed
+  gray backgrounds no longer produce a full-frame automatic outline.
+- Extract subpixel mask boundaries before curve fitting, avoiding retraced
+  one-pixel features while retaining bounded work, cancellation and topology checks.
+- Block both outline previews when the current image edits are invalid.
+
 ## Unreleased - desktop UI clarity (2026-10-16)
 
 - Make dropdowns, numeric steppers, menu buttons, selected tabs and keyboard focus

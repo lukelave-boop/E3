@@ -52,6 +52,64 @@ def _rectangle_region():
             "points": [[-.5, -.22], [.5, -.48]], "radius": 0.0}
 
 
+def test_automatic_outline_uses_cleaned_gray_background_image(app, tmp_path):
+    gray = np.full((120, 140), 200, dtype=np.uint8)
+    cv2.ellipse(gray, (70, 55), (45, 40), 0, 0, 360, 60, -1)
+    gray[55, 110:130] = 60  # Thin edge feature that formerly retraced itself.
+    path = tmp_path / "gray-background.png"
+    assert cv2.imwrite(str(path), gray)
+    payload = read_raster_asset_payload(path)
+    dialog = ImageEditorDialog(payload, {"background_cleanup": {"enabled": True, "tolerance": 64}}, 70, 60)
+    assert dialog.gray[0, 0] == 200 and dialog.after_gray[0, 0] == 255
+    dialog.workflow.setCurrentIndex(1)
+    QtTest.QTest.mouseClick(dialog.trace_button, QtCore.Qt.MouseButton.LeftButton)
+    deadline = time.monotonic() + 10
+    while dialog._worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.005)
+    assert dialog._worker is None
+    assert dialog.candidate is not None, dialog.status.text()
+    assert dialog.candidate.segment_count > 4
+    assert validate_outline(dialog.candidate) == ()
+    assert dialog.settings["outline"] is None
+    assert np.array_equal(dialog.gray, gray)
+    dialog.apply_candidate()
+    assert dialog.settings["outline"] is not None
+    assert not dialog.allowed[0, 0]
+    dialog.undo()
+    assert dialog.settings["outline"] is None
+    dialog.reject()
+
+
+def test_automatic_worker_snapshots_current_edits_and_inversion(app, source, monkeypatch):
+    _, payload, _ = source
+    workers = []
+    monkeypatch.setattr(QtCore.QThreadPool.globalInstance(), "start", workers.append)
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    dialog.add_region(_rectangle_region())
+    dialog.invert.setChecked(True)
+    expected = dialog.after_gray.copy()
+    dialog.preview_trace()
+    worker = workers[0]
+    assert np.array_equal(worker.gray, expected)
+    assert not np.shares_memory(worker.gray, dialog.after_gray)
+    assert worker.gray[80, 64] == 255
+    dialog.undo()
+    assert np.array_equal(worker.gray, expected)
+    dialog.reject()
+
+
+@pytest.mark.parametrize("from_mask", [False, True])
+def test_invalid_edit_cannot_start_either_preview(app, source, from_mask):
+    _, payload, _ = source
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    dialog.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply).setEnabled(False)
+    dialog._start_trace(from_mask)
+    assert dialog._worker is None
+    assert "invalid" in dialog.status.text()
+    dialog.reject()
+
+
 def _subject_path():
     return NativePathGeometry((PathSubpath((-.35, .42), (
         PathLineSegment((.35, .42)), PathLineSegment((.35, -.2)), PathLineSegment((-.35, -.2)),

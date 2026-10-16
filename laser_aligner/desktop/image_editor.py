@@ -682,6 +682,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
         self.trace_holes.setChecked(options.get("include_holes", False))
         trace_buttons = QtWidgets.QVBoxLayout()
         self.trace_button = self._button("Preview automatic outline", self.preview_trace, trace_buttons)
+        self.trace_button.setToolTip("Detect artwork in the current cleaned image, including your edits and background cleanup.")
         self.trace_button.setProperty("role", "primary")
         self.mask_trace_button = self._button("Preview from cleaned image", self.preview_mask_outline, trace_buttons)
         self.mask_trace_button.setToolTip("Trace the current edited mask, including local exclusions and restorations.")
@@ -893,12 +894,12 @@ class ImageEditorDialog(QtWidgets.QDialog):
         if self._worker is not None:
             self.status.setText("Finishing the previous preview. Your latest edits remain unchanged; try Preview again shortly.")
             return
-        if from_mask and not self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply).isEnabled():
+        if not self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply).isEnabled():
             self.status.setText("The current mask is invalid. Undo or refine its outline before tracing it.")
             return
         self._invalidate_trace()
         self._candidate_from_mask = from_mask
-        worker = _TraceWorker(self._generation, self.allowed.copy() if from_mask else self.gray,
+        worker = _TraceWorker(self._generation, self.allowed.copy() if from_mask else self.after_gray.copy(),
                               self._trace_options(), edited_mask=from_mask)
         worker.signals.finished.connect(self._trace_finished)
         self._worker = worker
