@@ -5,17 +5,23 @@ The editor changes a reversible mask and editable outline. It retains the origin
 asset, full source dimensions and physical image frame. Retained grayscale values
 are unchanged unless **Invert retained artwork** is selected.
 
+The three tabs keep cleanup, outline editing and optional vector output separate.
+Tool buttons stay visible; instructions and relevant settings follow the selected
+tool. Switching tabs cancels an unfinished gesture and preserves committed draft
+edits. Preview state and the Apply/Cancel footer remain visible. The original
+image comparison prevents drawing until you return to the draft.
+
 ## Remove a barrel's shadow
 
-1. Choose **Rectangle selection**, **Ellipse selection**, **Lasso selection**, or
-   **Exclude brush** in the editing tools. Select **Subtract / exclude selection**
+1. Open **Clean image** and choose **Rectangle**, **Ellipse**, **Lasso**, or
+   **Exclude brush**. Select **Exclude selected area**
    for selections and mark the unwanted shadow. Adjust brush diameter in source
    pixels. Release completes one undoable gesture.
-2. Use **Restore brush** or **Add / restore original pixels** to recover original
+2. Use **Restore brush** or **Restore original pixels** to recover original
    artwork if you remove too much. Restore can recover pixels outside the outline
    and pixels excluded by legacy Clean background. Fully transparent source pixels
    always remain excluded, even after Restore and inversion.
-3. Check **Before / original** to compare. Scroll to zoom; middle-drag or the Pan
+3. Select **Show original** to compare. Scroll to zoom; middle-drag or the **Pan image**
    tool pans. **Fit** and **100%** reset the view. Cyan anchors and handles identify
    editable geometry; the brush cursor shows its footprint.
 4. Choose **Apply to project**. Cancel discards the draft. The entire dialog is one
@@ -26,18 +32,19 @@ separate shadow locally preserves the grayscale grain and lettering in the subje
 
 ## Create and refine an outline
 
-Set **background tolerance**, **detail**, **smoothing**, **minimum component area**,
-and optional **interior holes**, then choose **Preview automatic trace**.
+Open **Outline**. Set **Background tolerance**, **Detail error**, **Edge smoothing**,
+**Smallest area**, and optional **Include interior holes**, then choose
+**Preview automatic outline**.
 Tolerance is distance from white: higher values exclude darker background pixels.
 Detail is fitting tolerance in source pixels; smaller values retain finer detail.
 Smoothing can change boundaries. Minimum component area removes small disconnected
 components. The trace supports multiple disconnected pieces.
 
-The gold dashed outline is an unapplied candidate. **Apply preview outline** or
+The gold dashed outline is an unapplied candidate. **Use preview outline** or
 **Replace outline with preview** explicitly accepts it. Changing settings or
 running another preview never overwrites accepted manual refinements.
 
-Use **Polygon outline** to click straight anchors, or **Curved pen outline** to click-drag
+Use **Polygon outline** to click straight anchors, or **Curved pen** to click-drag
 tangents. Enter closes a contour. Additional contours retain existing ones.
 **Edit nodes** lets you drag anchors and cubic handles. **Add node** splits the
 following segment; **Delete node** removes the selected anchor. Remove a selected
@@ -45,29 +52,29 @@ contour to discard a separate unwanted piece. Invalid geometry is reported and
 cannot be used for a mask or cutting vector; Undo restores the previous state.
 
 Selections and brushes are saved as ordered reversible regions. To turn their
-result into a new editable outline, use **Preview outline from edited mask**,
+result into a new editable outline, use **Preview from cleaned image**,
 inspect it, and explicitly replace the outline. This clears the baked-in region
 list in that new draft and is undoable. It can approximate boundaries according
 to the selected detail, smoothing, component and hole settings. Existing manual
 curves are preserved until that explicit replacement.
 
-**Use outline as mask** can disable the outline mask without deleting its nodes.
+**Keep only the area inside the outline** in **Clean image** can disable the outline mask without deleting its nodes.
 Local exclusion regions remain active. **Reset edits** clears editor edits;
 Undo restores them. Legacy Clean background remains a separate reversible setting.
 
 ## Create an aligned cutting path
 
-Choose **Create aligned vector (output off)**. If there are local regions, first
+Open **Cut path** and enable **Create a separate vector**. If there are local regions, first
 review and accept a new outline from the edited mask. Choose optional interior
 contours and an offset in millimetres: positive expands foreground; negative
-contracts it. Preview the vector and inspect the green dashed result before
+contracts it. Choose **Preview cut path** and inspect the green dashed result before
 applying to the project.
 
 The new PATH is on a new visible LINE layer with **Output off and power 0**.
 Assign it to a reviewed operation and set power/output explicitly before it can
 be cut. Creating an outline never starts a job or changes machine authority.
 
-**Link image and vector transforms** defaults on. Moving, rotating, mirroring or
+**Move image and vector together** defaults on. Moving, rotating, mirroring or
 resizing the source image moves both together. The vector shape is a frozen
 snapshot: later image edits do not change an already reviewed cut path. Select
 the path and use **Detach outline from image** in Objects before independent

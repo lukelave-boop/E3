@@ -309,11 +309,12 @@ class ContextPropertyBar(QtWidgets.QWidget):
                 else:
                     button.setMinimumWidth(0)
                     button.setMaximumWidth(16777215)
-            if self._compact:
-                self.units_combo.setFixedWidth(50)
-            else:
-                self.units_combo.setMinimumWidth(52)
-                self.units_combo.setMaximumWidth(68)
+            # Keep both unit letters visible alongside the explicit dropdown
+            # gutter, including when the property bar uses its compact layout.
+            self.units_combo.setFixedWidth(max(
+                72, self.units_combo.fontMetrics().horizontalAdvance("mm") + 48,
+                self.units_combo.sizeHint().width(),
+            ))
             self.updateGeometry()
         finally:
             self._responsive_updating = False

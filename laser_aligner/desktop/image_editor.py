@@ -357,7 +357,7 @@ class ImageEditView(QtWidgets.QGraphicsView):
             minimum = 3 if self.tool == "lasso" else 2 if self.tool in {"rectangle", "ellipse"} else 1
             if len(self.points) >= minimum:
                 region = {"operation": "subtract" if self.tool == "exclude" else
-                          "restore" if self.tool == "restore" else self.editor.selection_operation.currentData(),
+                          "restore" if self.tool == "restore" else self.editor.selection_operation.checkedButton().property("operation"),
                           "kind": "brush" if self.tool in {"exclude", "restore"} else
                           "polygon" if self.tool == "lasso" else self.tool,
                           "points": copy.deepcopy(self.points),
@@ -522,24 +522,138 @@ class ImageEditorDialog(QtWidgets.QDialog):
 
     def _button(self, text, slot, layout):
         button = QtWidgets.QPushButton(text)
+        button.setAutoDefault(False)
         button.clicked.connect(slot)
         layout.addWidget(button)
         return button
 
+    def _help(self, text, layout):
+        label = QtWidgets.QLabel(text)
+        label.setWordWrap(True)
+        label.setProperty("role", "muted")
+        layout.addWidget(label)
+        return label
+
+    def _page(self, title, description):
+        content = QtWidgets.QWidget()
+        box = QtWidgets.QVBoxLayout(content)
+        box.setContentsMargins(12, 14, 12, 14)
+        box.setSpacing(10)
+        heading = QtWidgets.QLabel(title)
+        heading.setProperty("role", "sectionTitle")
+        box.addWidget(heading)
+        self._help(description, box)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll, box
+
+    def _tool_buttons(self, choices, layout):
+        grid = QtWidgets.QGridLayout()
+        grid.setSpacing(6)
+        for index, (title, key, tip) in enumerate(choices):
+            button = QtWidgets.QPushButton(title)
+            button.setAutoDefault(False)
+            button.setCheckable(True)
+            button.setMinimumHeight(38)
+            button.setToolTip(tip)
+            button.setAccessibleName(title)
+            button.setProperty("editorTool", True)
+            button.setProperty("editorToolKey", key)
+            self.tool_group.addButton(button)
+            self.tool_buttons[key] = button
+            button.clicked.connect(lambda _checked=False, selected=key: self._tool_changed(selected))
+            grid.addWidget(button, index // 2, index % 2)
+        layout.addLayout(grid)
+
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-        intro = QtWidgets.QLabel("Keep grayscale detail inside an editable outline. Exclude unwanted shadows locally. "
-                                "The source and physical image frame stay unchanged.")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
+        layout.setContentsMargins(18, 16, 18, 12)
+        layout.setSpacing(12)
+        title = QtWidgets.QLabel("Prepare your image")
+        title.setObjectName("editorTitle")
+        layout.addWidget(title)
+        self._help("Remove unwanted areas, refine an outline, or create an aligned cut path. "
+                   "Your original image is preserved.", layout)
         body = QtWidgets.QHBoxLayout()
-        left = QtWidgets.QVBoxLayout()
-        trace = QtWidgets.QGroupBox("1 · Preview foreground outline")
+        body.setSpacing(14)
+        sidebar = QtWidgets.QFrame()
+        sidebar.setObjectName("imageEditorSidebar")
+        sidebar.setMinimumWidth(350)
+        sidebar.setMaximumWidth(390)
+        sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        self.workflow = QtWidgets.QTabWidget()
+        self.workflow.setObjectName("imageEditorWorkflow")
+        self.workflow.setDocumentMode(True)
+        sidebar_layout.addWidget(self.workflow)
+        self.tool_group = QtWidgets.QButtonGroup(self)
+        self.tool_group.setExclusive(True)
+        self.tool_buttons = {}
+        self._page_tools = {0: "exclude", 1: "nodes", 2: "pan"}
+        clean_page, clean = self._page("Clean image", "Paint or select the shadow and background you want to remove.")
+        self.workflow.addTab(clean_page, "Clean image")
+        self._tool_buttons((
+            ("Exclude brush", "exclude", "Paint to remove unwanted image areas."),
+            ("Restore brush", "restore", "Paint to recover original image pixels."),
+            ("Rectangle", "rectangle", "Drag a rectangular area to exclude or restore."),
+            ("Ellipse", "ellipse", "Drag an elliptical area to exclude or restore."),
+            ("Lasso", "lasso", "Draw a freehand area to exclude or restore."),
+            ("Pan image", "pan", "Drag the image without editing it."),
+        ), clean)
+        self.clean_help = self._help("", clean)
+        self.clean_help.setObjectName("editorToolHelp")
+        self.brush_controls = QtWidgets.QWidget()
+        brush_row = QtWidgets.QFormLayout(self.brush_controls)
+        brush_row.setContentsMargins(0, 0, 0, 0)
+        self.brush_pixels = QtWidgets.QSpinBox()
+        self.brush_pixels.setRange(1, min(4096, 4 * min(self.width, self.height)))
+        self.brush_pixels.setValue(max(2, min(48, min(self.width, self.height) // 15)))
+        self.brush_pixels.setSuffix(" px")
+        brush_row.addRow("Brush diameter", self.brush_pixels)
+        clean.addWidget(self.brush_controls)
+        self.selection_controls = QtWidgets.QGroupBox("What should this selection do?")
+        selection_layout = QtWidgets.QVBoxLayout(self.selection_controls)
+        self.selection_operation = QtWidgets.QButtonGroup(self)
+        self.selection_buttons = {}
+        for label, operation in (("Exclude selected area", "subtract"), ("Restore original pixels", "restore")):
+            choice = QtWidgets.QRadioButton(label)
+            choice.setProperty("operation", operation)
+            self.selection_operation.addButton(choice)
+            self.selection_buttons[operation] = choice
+            selection_layout.addWidget(choice)
+        self.selection_buttons["subtract"].setChecked(True)
+        clean.addWidget(self.selection_controls)
+        result = QtWidgets.QGroupBox("Image appearance")
+        result_layout = QtWidgets.QVBoxLayout(result)
+        self.mask_enabled = QtWidgets.QCheckBox("Keep only the area inside the outline")
+        self.mask_enabled.setToolTip("Local exclusions remain active when this is off. "
+                                    "Create or refine an outline in the Outline tab.")
+        self.mask_enabled.setChecked(self._settings["mask_enabled"])
+        result_layout.addWidget(self.mask_enabled)
+        self.invert = QtWidgets.QCheckBox("Invert retained artwork")
+        self.invert.setToolTip("Swap light and dark in retained pixels. Excluded areas stay white.")
+        self.invert.setChecked(self._settings["invert"])
+        result_layout.addWidget(self.invert)
+        self._help("Excluded areas appear white. Retained grayscale detail stays intact.", result_layout)
+        clean.addWidget(result)
+        self._help("Need a boundary around the subject? Open Outline.\n"
+                   "Need a separate vector? Open Cut path.", clean)
+        clean.addStretch()
+
+        outline_page, outline = self._page("Create & refine an outline",
+                                           "Trace a candidate, review the dashed gold boundary, then accept it.")
+        self.workflow.addTab(outline_page, "Outline")
+        trace = QtWidgets.QGroupBox("Automatic outline")
         form = QtWidgets.QFormLayout(trace)
+        form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.tolerance = QtWidgets.QSpinBox()
         self.tolerance.setRange(0, 255)
         self.tolerance.setValue(20)
-        self.tolerance.setToolTip("Distance from white; larger values discard darker background. Local exclusion removes shadows.")
+        self.tolerance.setToolTip("Distance from white; larger values discard darker background. "
+                                 "Remove shadows locally in Clean image.")
         self.detail = QtWidgets.QDoubleSpinBox()
         self.detail.setRange(.05, 10)
         self.detail.setDecimals(2)
@@ -548,14 +662,16 @@ class ImageEditorDialog(QtWidgets.QDialog):
         self.detail.setToolTip("Maximum contour simplification error. Smaller values preserve finer detail.")
         self.smoothing = QtWidgets.QDoubleSpinBox()
         self.smoothing.setRange(0, 10)
-        self.smoothing.setValue(0)
         self.smoothing.setSuffix(" px")
+        self.smoothing.setToolTip("Smooth the boundary before fitting. Zero preserves the unsmoothed edge.")
         self.minimum = QtWidgets.QSpinBox()
         self.minimum.setRange(1, 1_000_000)
         self.minimum.setValue(8)
+        self.minimum.setSuffix(" px²")
+        self.minimum.setToolTip("Discard disconnected components smaller than this area.")
         self.trace_holes = QtWidgets.QCheckBox("Include interior holes")
         for label, control in (("Background tolerance", self.tolerance), ("Detail error", self.detail),
-                               ("Smoothing", self.smoothing), ("Minimum component px²", self.minimum)):
+                               ("Edge smoothing", self.smoothing), ("Smallest area", self.minimum)):
             form.addRow(label, control)
         form.addRow(self.trace_holes)
         options = self._settings.get("trace") or {}
@@ -565,110 +681,125 @@ class ImageEditorDialog(QtWidgets.QDialog):
                 control.setValue(options[key])
         self.trace_holes.setChecked(options.get("include_holes", False))
         trace_buttons = QtWidgets.QVBoxLayout()
-        self.trace_button = self._button("Preview automatic trace", self.preview_trace, trace_buttons)
-        self.mask_trace_button = self._button("Preview outline from edited mask", self.preview_mask_outline, trace_buttons)
-        self.apply_candidate_button = self._button("Apply preview outline", self.apply_candidate, trace_buttons)
+        self.trace_button = self._button("Preview automatic outline", self.preview_trace, trace_buttons)
+        self.trace_button.setProperty("role", "primary")
+        self.mask_trace_button = self._button("Preview from cleaned image", self.preview_mask_outline, trace_buttons)
+        self.mask_trace_button.setToolTip("Trace the current edited mask, including local exclusions and restorations.")
+        self.apply_candidate_button = self._button("Use preview outline", self.apply_candidate, trace_buttons)
         self.apply_candidate_button.setEnabled(False)
+        self.apply_candidate_button.setToolTip("Accept this outline in the draft. Apply to project saves all draft edits.")
         form.addRow(trace_buttons)
-        left.addWidget(trace)
-        editing = QtWidgets.QGroupBox("2 · Refine outline and mask")
-        tools_layout = QtWidgets.QVBoxLayout(editing)
-        self.tool = QtWidgets.QComboBox()
-        for title, key in (("Edit nodes / curve handles", "nodes"), ("Polygon outline", "polygon"),
-                           ("Curved pen outline", "pen"), ("Rectangle selection", "rectangle"),
-                           ("Ellipse selection", "ellipse"), ("Lasso selection", "lasso"),
-                           ("Exclude brush", "exclude"), ("Restore brush", "restore"), ("Pan", "pan")):
-            self.tool.addItem(title, key)
-        tools_layout.addWidget(self.tool)
-        self.selection_operation = QtWidgets.QComboBox()
-        self.selection_operation.addItem("Subtract / exclude selection", "subtract")
-        self.selection_operation.addItem("Add / restore original pixels", "add")
-        self.selection_operation.addItem("Restore original pixels", "restore")
-        tools_layout.addWidget(self.selection_operation)
-        brush_row = QtWidgets.QHBoxLayout()
-        brush_row.addWidget(QtWidgets.QLabel("Brush diameter"))
-        self.brush_pixels = QtWidgets.QSpinBox()
-        self.brush_pixels.setRange(1, min(4096, 4 * min(self.width, self.height)))
-        self.brush_pixels.setValue(max(2, min(48, min(self.width, self.height) // 15)))
-        self.brush_pixels.setSuffix(" px")
-        brush_row.addWidget(self.brush_pixels)
-        tools_layout.addLayout(brush_row)
-        nodes = QtWidgets.QHBoxLayout()
-        self._button("Add node", lambda: self.view.add_node(), nodes)
-        self._button("Delete node", lambda: self.view.delete_node(), nodes)
-        tools_layout.addLayout(nodes)
-        self._button("Remove selected contour", lambda: self.view.remove_contour(), tools_layout)
-        self._button("Finish pen contour (Enter)", lambda: self.view.finish_pen(), tools_layout)
-        self.mask_enabled = QtWidgets.QCheckBox("Use outline as mask")
-        self.mask_enabled.setToolTip("Local exclusions remain active. Reset edits clears all editor edits; Undo can restore them.")
-        self.mask_enabled.setChecked(self._settings["mask_enabled"])
-        tools_layout.addWidget(self.mask_enabled)
-        self.invert = QtWidgets.QCheckBox("Invert retained artwork")
-        self.invert.setChecked(self._settings["invert"])
-        tools_layout.addWidget(self.invert)
-        left.addWidget(editing)
-        vector = QtWidgets.QGroupBox("3 · Optional separate vector")
-        vector_layout = QtWidgets.QFormLayout(vector)
-        self.vector_checkbox = QtWidgets.QCheckBox("Create aligned vector (output off)")
-        vector_layout.addRow(self.vector_checkbox)
+        outline.addWidget(trace)
+        manual = QtWidgets.QGroupBox("Draw or edit manually")
+        tools_layout = QtWidgets.QVBoxLayout(manual)
+        self._tool_buttons((
+            ("Edit nodes", "nodes", "Drag outline anchors and curve handles."),
+            ("Polygon outline", "polygon", "Click straight anchors, then Enter to close."),
+            ("Curved pen", "pen", "Click and drag to draw curved segments; Enter closes the contour."),
+        ), tools_layout)
+        self.outline_help = self._help("", tools_layout)
+        self.node_controls = QtWidgets.QWidget()
+        nodes = QtWidgets.QVBoxLayout(self.node_controls)
+        nodes.setContentsMargins(0, 0, 0, 0)
+        node_row = QtWidgets.QHBoxLayout()
+        self._button("Add node", lambda: self.view.add_node(), node_row)
+        self._button("Delete node", lambda: self.view.delete_node(), node_row)
+        nodes.addLayout(node_row)
+        self._button("Remove selected contour", lambda: self.view.remove_contour(), nodes)
+        tools_layout.addWidget(self.node_controls)
+        self.finish_contour_button = self._button("Finish contour · Enter", lambda: self.view.finish_pen(), tools_layout)
+        outline.addWidget(manual)
+        outline.addStretch()
+
+        vector_page, vector = self._page("Create an aligned cut path",
+                                         "Optional: add a separate vector around the image after reviewing its outline.")
+        self.workflow.addTab(vector_page, "Cut path")
+        self.vector_checkbox = QtWidgets.QCheckBox("Create a separate vector")
+        vector.addWidget(self.vector_checkbox)
+        self._help("The new layer starts with output off and power 0. Assign a cutting operation after review.", vector)
+        self.vector_controls = QtWidgets.QGroupBox("Vector settings")
+        vector_layout = QtWidgets.QFormLayout(self.vector_controls)
         self.offset = QtWidgets.QDoubleSpinBox()
         self.offset.setRange(-1000, 1000)
         self.offset.setDecimals(3)
         self.offset.setSuffix(" mm")
         self.offset.setToolTip("Positive = outside; negative = inside. Nonzero offsets approximate curves with "
                                "lines (≤0.01 mm flattening tolerance) and mitered corners. Invalid offsets are rejected.")
-        vector_layout.addRow("Inside − / outside +", self.offset)
-        self.vector_preview_button = QtWidgets.QPushButton("Preview vector and offset")
-        self.vector_preview_button.clicked.connect(self.preview_vector)
-        vector_layout.addRow(self.vector_preview_button)
+        vector_layout.addRow("Boundary offset", self.offset)
+        direction = QtWidgets.QLabel("− moves inside · + moves outside")
+        direction.setProperty("role", "muted")
+        vector_layout.addRow(direction)
         self.vector_holes = QtWidgets.QCheckBox("Include interior contours")
         self.vector_holes.setChecked(True)
         vector_layout.addRow(self.vector_holes)
-        self.link_checkbox = QtWidgets.QCheckBox("Link image and vector transforms")
+        self.link_checkbox = QtWidgets.QCheckBox("Move image and vector together")
         self.link_checkbox.setChecked(True)
+        self.link_checkbox.setToolTip("Link moves, rotation, mirroring and resizing. Later image edits do not change the vector shape.")
         vector_layout.addRow(self.link_checkbox)
-        note = QtWidgets.QLabel("After local edits, preview an outline from the edited mask and explicitly replace the outline. "
-                               "Vector is a separate snapshot; later image edits never change it. Assign cutting after review.")
-        note.setWordWrap(True)
-        vector_layout.addRow(note)
-        left.addWidget(vector)
-        left.addStretch()
-        left_widget = QtWidgets.QWidget()
-        left_widget.setLayout(left)
-        left_widget.setMaximumWidth(360)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(left_widget)
-        scroll.setMinimumWidth(335)
-        scroll.setMaximumWidth(375)
-        body.addWidget(scroll)
+        self.vector_preview_button = QtWidgets.QPushButton("Preview cut path")
+        self.vector_preview_button.setAutoDefault(False)
+        self.vector_preview_button.setProperty("role", "primary")
+        self.vector_preview_button.clicked.connect(self.preview_vector)
+        vector_layout.addRow(self.vector_preview_button)
+        self.vector_controls.setEnabled(False)
+        vector.addWidget(self.vector_controls)
+        self._help("After cleaning: open Outline, preview from the cleaned image, and accept the outline first.\n\n"
+                   "The cut path is a snapshot. Later image edits do not change its shape.", vector)
+        vector.addStretch()
+        body.addWidget(sidebar)
         right = QtWidgets.QVBoxLayout()
+        right.setSpacing(8)
         bar = QtWidgets.QHBoxLayout()
-        self.before = QtWidgets.QCheckBox("Before / original")
+        self.before = QtWidgets.QPushButton("Show original")
+        self.before.setAutoDefault(False)
+        self.before.setCheckable(True)
+        self.before.setToolTip("Compare the unedited source image with the current draft.")
         bar.addWidget(self.before)
         self._button("Fit", self.fit, bar)
         self._button("100%", lambda: self.view.resetTransform(), bar)
+        bar.addStretch()
         self.undo_button = self._button("Undo", self.undo, bar)
         self.redo_button = self._button("Redo", self.redo, bar)
         self._button("Reset edits", self.reset_edits, bar)
         right.addLayout(bar)
+        self.preview_state = QtWidgets.QLabel()
+        self.preview_state.setObjectName("editorPreviewState")
+        self.preview_state.setWordWrap(True)
+        right.addWidget(self.preview_state)
         self.view = ImageEditView(self)
         right.addWidget(self.view, 1)
-        self.instructions = QtWidgets.QLabel()
-        self.instructions.setWordWrap(True)
-        right.addWidget(self.instructions)
+        legend = QtWidgets.QLabel(
+            '<span style="color:#70ddea">Accepted outline (solid)</span> &nbsp; '
+            '<span style="color:#ffcc69">Unapplied preview (dashed)</span> &nbsp; '
+            '<span style="color:#8eea9b">Cut path (dashed)</span>')
+        legend.setWordWrap(True)
+        right.addWidget(legend)
+        self.instructions = self._help("", right)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         right.addWidget(self.status)
         body.addLayout(right, 1)
         layout.addLayout(body, 1)
+        footer = QtWidgets.QFrame()
+        footer.setObjectName("editorFooter")
+        footer_layout = QtWidgets.QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 10, 0, 0)
+        self.draft_state = QtWidgets.QLabel("Draft only · Apply saves one project undo step. Cancel discards changes.")
+        self.draft_state.setObjectName("editorDraftState")
+        self.draft_state.setWordWrap(True)
+        footer_layout.addWidget(self.draft_state, 1)
         self.buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Apply |
                                                 QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply).setText("Apply to project")
-        self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply).clicked.connect(self.accept)
+        apply_button = self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply)
+        apply_button.setText("Apply to project")
+        apply_button.setProperty("role", "primary")
+        apply_button.setAutoDefault(False)
+        apply_button.clicked.connect(self.accept)
+        self.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setAutoDefault(False)
         self.buttons.rejected.connect(self.reject)
-        layout.addWidget(self.buttons)
-        self.tool.currentIndexChanged.connect(self._tool_changed)
+        footer_layout.addWidget(self.buttons)
+        layout.addWidget(footer)
+        self.workflow.currentChanged.connect(self._workflow_changed)
         self.before.toggled.connect(self._show_image)
         self.mask_enabled.toggled.connect(lambda value: self._toggle("mask_enabled", value))
         self.invert.toggled.connect(lambda value: self._toggle("invert", value))
@@ -677,26 +808,54 @@ class ImageEditorDialog(QtWidgets.QDialog):
         self.trace_holes.toggled.connect(self._trace_options_changed)
         self.offset.valueChanged.connect(self._clear_vector_preview)
         self.vector_holes.toggled.connect(self._clear_vector_preview)
+        self.vector_checkbox.toggled.connect(self.vector_controls.setEnabled)
         self.vector_checkbox.toggled.connect(self._clear_vector_preview)
         self.finished.connect(self._finish)
         for sequence, callback in ((QtGui.QKeySequence.StandardKey.Undo, self.undo),
                                    (QtGui.QKeySequence.StandardKey.Redo, self.redo)):
             shortcut = QtGui.QShortcut(QtGui.QKeySequence(sequence), self)
             shortcut.activated.connect(callback)
-        self._tool_changed()
+        self._tool_changed("exclude")
 
-    def _tool_changed(self, *_args):
-        key = self.tool.currentData()
+    def _workflow_changed(self, index):
+        self._tool_changed(self._page_tools[index])
+
+    def _tool_changed(self, key):
+        self._page_tools[self.workflow.currentIndex()] = key
+        self.tool_buttons[key].setChecked(True)
         self.view.set_tool(key)
-        self.instructions.setText({
-            "nodes": "Drag cyan anchors or their curve handles. Add node splits the following segment. Delete removes an anchor. "
-                     "Cyan = accepted outline; dashed gold = unapplied preview.",
-            "polygon": "Click anchors, then Enter or click the first anchor to close. New contours are added; existing refinements remain.",
-            "pen": "Click and drag each anchor to set its tangent; click for a corner. Enter closes the contour. Refine handles with Edit nodes.",
-            "exclude": "Paint unwanted shadow/background. White areas are excluded without changing retained source pixels.",
-            "restore": "Paint to restore original source pixels, including outside the outline. Undo reverses a complete stroke.",
-            "pan": "Drag to pan; scroll to zoom. Middle-drag also pans in every tool.",
-        }.get(key, "Drag a selection; choose subtract or restore above. Local changes commit on release. Scroll to zoom; middle-drag to pan."))
+        self.brush_controls.setVisible(key in {"exclude", "restore"})
+        self.selection_controls.setVisible(key in {"rectangle", "ellipse", "lasso"})
+        self.node_controls.setVisible(key == "nodes")
+        self.finish_contour_button.setVisible(key in {"polygon", "pen"})
+        help_text = {
+            "nodes": "Select an anchor to add or delete nodes. Drag anchors or handles to refine the accepted outline.",
+            "polygon": "Click anchors, then press Enter to close. Each new contour is added to the existing outline.",
+            "pen": "Click and drag for a curve; click for a corner. Press Enter to close, then refine with Edit nodes.",
+            "exclude": "Paint over unwanted shadows or background. Release to finish one undoable stroke.",
+            "restore": "Paint to recover original pixels, even outside the outline. Release to finish one undoable stroke.",
+            "pan": "Drag to move the image. Scroll to zoom. Middle-drag also pans with every tool.",
+        }.get(key, "Choose Exclude or Restore below, then drag an area on the image. Release to apply the selection.")
+        self.clean_help.setText(help_text)
+        self.outline_help.setText(help_text)
+        self.instructions.setText("On the image: scroll to zoom · Middle-drag to pan · Ctrl+Z to undo · "
+                                  "Enter to close a contour · Esc to discard a gesture")
+        self._update_preview_state()
+
+    def _update_preview_state(self):
+        if self.before.isChecked():
+            text = "Original source image · Turn off Show original to return to your draft."
+        elif self.candidate is not None:
+            text = "Outline preview ready · Review the dashed gold line, then use the preview in Outline."
+        elif self._worker is not None:
+            text = "Building outline preview… Your current draft stays unchanged."
+        elif self._offset_preview is not None:
+            text = "Cut path preview ready · Review the green dashed line before applying to the project."
+        elif self._settings.get("outline"):
+            text = "Draft image · Cyan shows your accepted outline."
+        else:
+            text = "Draft image · Choose a cleanup tool, or open Outline to create a boundary."
+        self.preview_state.setText(text)
 
     def fit(self):
         self.view.fitInView(self.view.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
@@ -721,6 +880,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
             self._worker.cancelled.set()
         self.candidate = None
         self.apply_candidate_button.setEnabled(False)
+        self._update_preview_state()
         self.view.viewport().update()
 
     def preview_trace(self):
@@ -742,6 +902,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
                               self._trace_options(), edited_mask=from_mask)
         worker.signals.finished.connect(self._trace_finished)
         self._worker = worker
+        self._update_preview_state()
         self.trace_button.setEnabled(False)
         self.mask_trace_button.setEnabled(False)
         self.status.setText("Building preview… Accepted outline remains unchanged. You can continue editing.")
@@ -753,6 +914,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
             self._worker = None
             self.trace_button.setEnabled(True)
             self.mask_trace_button.setEnabled(True)
+            self._update_preview_state()
         if self._closed or generation != self._generation:
             return
         if error:
@@ -761,11 +923,12 @@ class ImageEditorDialog(QtWidgets.QDialog):
         self.candidate = native
         self.apply_candidate_button.setEnabled(True)
         self.apply_candidate_button.setText("Replace outline with preview" if self._settings.get("outline")
-                                            else "Apply preview outline")
+                                            else "Use preview outline")
         issues = validate_outline(native)
         self.status.setText("; ".join(issues) if issues else
                             f"Preview: {len(native.subpaths)} contours / {native.segment_count} segments. "
                             "Gold is a preview only. Apply explicitly to replace the accepted outline.")
+        self._update_preview_state()
         self.view.viewport().update()
 
     def apply_candidate(self):
@@ -863,12 +1026,14 @@ class ImageEditorDialog(QtWidgets.QDialog):
     def _show_image(self, *_args):
         self.view.image_item.setPixmap(QtGui.QPixmap.fromImage(
             self.original_image if self.before.isChecked() else self.after_image))
+        self._update_preview_state()
         self.view.viewport().update()
 
     def _clear_vector_preview(self, *_args):
         self.vector_outline = None
         self._offset_preview = None
         self._vector_preview_key = None
+        self._update_preview_state()
         self.view.viewport().update()
 
     def _vector_key(self):
@@ -901,6 +1066,7 @@ class ImageEditorDialog(QtWidgets.QDialog):
         except (ValueError, TypeError) as exc:
             self._clear_vector_preview()
             self.status.setText(f"Cannot create vector: {exc}. No geometry was silently repaired.")
+        self._update_preview_state()
         self.view.viewport().update()
 
     def accept(self):

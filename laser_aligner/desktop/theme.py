@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 # Shared scene colors for the high-contrast drafting surface.  Workspace code
 # may import this mapping instead of duplicating chrome-dependent color values.
 DRAFTING_COLORS = {
@@ -54,14 +56,19 @@ QMenu {
     padding: 2px;
 }
 QMenu::item {
-    padding: 4px 26px 4px 7px;
+    padding: 5px 28px 5px 24px;
 }
 QMenu::item:selected {
     background: #3D665F;
     color: #FFFFFF;
 }
 QMenu::item:disabled {
-    color: #777777;
+    color: #999FA5;
+}
+QMenu::indicator {
+    width: 14px;
+    height: 14px;
+    left: 5px;
 }
 QMenu::separator {
     height: 1px;
@@ -87,6 +94,9 @@ QToolBar#drawingToolbar {
     border-bottom: none;
     padding: 2px 1px;
 }
+QToolBar#drawingToolbar QToolButton {
+    min-width: 94px;
+}
 QToolBar#contextToolbar {
     background: #292929;
     border-top: 1px solid #414141;
@@ -105,16 +115,16 @@ QToolBar#layerPaletteToolbar {
     padding: 1px 3px;
 }
 QToolButton {
-    background: transparent;
-    border: 1px solid transparent;
+    background: #2B2D30;
+    border: 1px solid #53585D;
     border-radius: 2px;
     padding: 2px 4px;
     min-width: 18px;
     min-height: 18px;
 }
 QToolButton:hover {
-    background: #393939;
-    border-color: #565656;
+    background: #41474C;
+    border-color: #929BA4;
 }
 QToolButton:pressed {
     background: #171717;
@@ -125,12 +135,29 @@ QToolButton:checked {
     border-color: #62C8B5;
     color: #FFFFFF;
 }
-QToolButton:disabled {
-    color: #6F6F6F;
+QToolButton:focus {
+    border-color: #82E3D0;
 }
-QToolButton::menu-indicator {
-    width: 7px;
-    height: 7px;
+QToolButton:disabled {
+    color: #91969C;
+    background: #292B2E;
+    border-color: #3E4246;
+}
+QToolButton::menu-indicator, QPushButton::menu-indicator {
+    image: url("__THEME_ASSETS__/control-chevron-down.svg");
+    width: 10px;
+    height: 6px;
+}
+QToolButton::menu-indicator:disabled, QPushButton::menu-indicator:disabled {
+    image: url("__THEME_ASSETS__/control-chevron-down-disabled.svg");
+}
+QToolButton#inspectorPanelMenuButton {
+    padding-right: 17px;
+}
+QToolButton#inspectorPanelMenuButton::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    right: 4px;
 }
 QToolButton#saveLayerProfileButton[profileChanged="true"] {
     background: #237A43;
@@ -206,9 +233,9 @@ QTabBar#inspectorTabBar {
 }
 QTabBar#inspectorTabBar::tab,
 QTabBar::tab {
-    background: #242424;
-    border: 1px solid #414141;
-    border-bottom: 2px solid transparent;
+    background: #292C30;
+    border: 1px solid #5E656C;
+    border-bottom: 2px solid #5E656C;
     padding: 4px 7px;
     min-height: 16px;
 }
@@ -218,9 +245,14 @@ QTabBar::tab:hover {
 }
 QTabBar#inspectorTabBar::tab:selected,
 QTabBar::tab:selected {
-    background: #303030;
-    border-bottom-color: #58C7B2;
+    background: #294D46;
+    border-bottom-color: #82E3D0;
     color: #FFFFFF;
+    font-weight: 600;
+}
+QTabBar::tab:disabled {
+    color: #91969C;
+    background: #26282B;
 }
 QTabWidget::pane {
     border: 1px solid #414141;
@@ -246,8 +278,9 @@ QLabel#panelHeading {
     font-size: 10pt;
     font-weight: 700;
 }
-QLabel#mutedLabel {
-    color: #A8A8A8;
+QLabel#mutedLabel, QLabel[role="muted"] {
+    color: #BBC2C9;
+    background: transparent;
 }
 QLabel#warningLabel {
     color: #FFD689;
@@ -264,32 +297,43 @@ QLabel#statusCard {
 }
 
 QPushButton {
-    background: #333333;
-    border: 1px solid #555555;
-    border-radius: 2px;
+    background: #373C42;
+    border: 1px solid #707982;
+    border-radius: 3px;
     padding: 3px 7px;
     min-height: 20px;
 }
 QPushButton:hover {
-    background: #414141;
-    border-color: #707070;
+    background: #485159;
+    border-color: #A5B2BD;
 }
 QPushButton:pressed {
     background: #222222;
     border-color: #777777;
 }
-QPushButton:default {
-    background: #328F7E;
+QPushButton:focus {
+    border-color: #82E3D0;
+}
+QPushButton:checked {
+    background: #2A5C50;
+    border-color: #82E3D0;
+    color: #FFFFFF;
+}
+QPushButton:default, QPushButton[role="primary"] {
+    background: #287D6D;
     color: #FFFFFF;
     border-color: #66CEBA;
 }
-QPushButton#primaryActionButton {
+QPushButton#primaryActionButton, QPushButton[role="primary"] {
     font-weight: 700;
 }
-QPushButton:disabled {
-    color: #747474;
-    background: #262626;
-    border-color: #393939;
+QPushButton:default:hover, QPushButton[role="primary"]:hover {
+    background: #329583;
+}
+QPushButton:disabled, QPushButton[role="primary"]:disabled {
+    color: #999FA5;
+    background: #292B2E;
+    border-color: #42474C;
 }
 
 /* Answer semantics take precedence over the generic default-button accent. */
@@ -332,9 +376,9 @@ QPushButton[confirmationAnswer="cancel"]:disabled {
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPlainTextEdit {
     color: #F3F3F3;
-    background: #151515;
-    border: 1px solid #505050;
-    border-radius: 1px;
+    background: #191C20;
+    border: 1px solid #737D87;
+    border-radius: 3px;
     padding: 2px 4px;
     selection-color: #FFFFFF;
     selection-background-color: #287B6C;
@@ -342,42 +386,126 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPlainTextEdit {
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     min-height: 20px;
 }
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover,
+QTextEdit:hover, QPlainTextEdit:hover {
+    border-color: #A5B2BD;
+}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus,
 QTextEdit:focus, QPlainTextEdit:focus {
-    border-color: #63CDB9;
+    border-color: #82E3D0;
+    background: #1D2728;
 }
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
 QComboBox:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
-    color: #747474;
-    background: #242424;
-    border-color: #373737;
+    color: #999FA5;
+    background: #292B2E;
+    border-color: #42474C;
 }
 QComboBox {
-    padding-right: 17px;
+    padding-right: 28px;
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 16px;
-    border-left: 1px solid #444444;
+    width: 24px;
+    background: #3A424A;
+    border-left: 1px solid #737D87;
+    border-top-right-radius: 2px;
+    border-bottom-right-radius: 2px;
+}
+QComboBox::drop-down:hover, QComboBox::drop-down:on {
+    background: #50616A;
+}
+QComboBox::drop-down:disabled {
+    background: #30353A;
+    border-left-color: #42474C;
+}
+QComboBox::down-arrow {
+    image: url("__THEME_ASSETS__/control-chevron-down.svg");
+    width: 10px;
+    height: 6px;
+}
+QComboBox::down-arrow:disabled {
+    image: url("__THEME_ASSETS__/control-chevron-down-disabled.svg");
 }
 QComboBox QAbstractItemView {
     color: #F0F0F0;
-    background: #242424;
-    border: 1px solid #555555;
-    selection-background-color: #3D665F;
+    background: #242A30;
+    border: 1px solid #87949F;
+    selection-color: #FFFFFF;
+    selection-background-color: #386B60;
     outline: none;
 }
+QComboBox QAbstractItemView::item {
+    padding: 4px 7px;
+    min-height: 20px;
+}
+QAbstractSpinBox {
+    padding-right: 24px;
+}
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
-    width: 14px;
-    background: #292929;
-    border-left: 1px solid #444444;
+    subcontrol-origin: border;
+    width: 21px;
+    background: #3A424A;
+    border-left: 1px solid #737D87;
+}
+QAbstractSpinBox::up-button {
+    subcontrol-position: top right;
+    border-bottom: 1px solid #737D87;
+    border-top-right-radius: 3px;
+}
+QAbstractSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 3px;
 }
 QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {
-    background: #424242;
+    background: #50616A;
+}
+QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {
+    background: #2A5C50;
+}
+QAbstractSpinBox::up-button:disabled, QAbstractSpinBox::down-button:disabled {
+    background: #30353A;
+    border-color: #42474C;
+}
+QAbstractSpinBox::up-arrow {
+    image: url("__THEME_ASSETS__/control-chevron-up.svg");
+    width: 10px;
+    height: 6px;
+}
+QAbstractSpinBox::down-arrow {
+    image: url("__THEME_ASSETS__/control-chevron-down.svg");
+    width: 10px;
+    height: 6px;
+}
+QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off {
+    image: url("__THEME_ASSETS__/control-chevron-up-disabled.svg");
+}
+QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off {
+    image: url("__THEME_ASSETS__/control-chevron-down-disabled.svg");
+}
+/* The transform toolbar keeps its intentionally compact numeric fields. */
+QToolBar#contextToolbar QAbstractSpinBox {
+    padding-right: 17px;
+}
+QToolBar#contextToolbar QAbstractSpinBox::up-button,
+QToolBar#contextToolbar QAbstractSpinBox::down-button {
+    width: 14px;
 }
 QCheckBox, QRadioButton {
     spacing: 7px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 2px;
+}
+QCheckBox:hover, QRadioButton:hover {
+    background: #2C3539;
+}
+QCheckBox:focus, QRadioButton:focus {
+    border-color: #82E3D0;
+}
+QCheckBox:disabled, QRadioButton:disabled {
+    color: #999FA5;
 }
 QCheckBox::indicator {
     width: 30px;
@@ -405,9 +533,40 @@ QCheckBox::indicator:disabled {
     border-color: #4A4A4A;
     background: #333333;
 }
+QCheckBox::indicator:checked:disabled {
+    border-color: #738781;
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #47665D, stop: 0.57 #47665D,
+        stop: 0.58 #ADB8B4, stop: 1 #ADB8B4
+    );
+}
 QRadioButton::indicator {
-    width: 13px;
-    height: 13px;
+    width: 16px;
+    height: 16px;
+    border: 1px solid #929DA7;
+    border-radius: 9px;
+    background: #191C20;
+}
+QRadioButton::indicator:checked {
+    background: qradialgradient(
+        cx: 0.5, cy: 0.5, radius: 0.5,
+        fx: 0.5, fy: 0.5,
+        stop: 0 #82E3D0, stop: 0.5 #82E3D0,
+        stop: 0.56 #191C20, stop: 1 #191C20
+    );
+    border-color: #82E3D0;
+}
+QRadioButton::indicator:disabled {
+    border-color: #5F686F;
+}
+QRadioButton::indicator:checked:disabled {
+    background: qradialgradient(
+        cx: 0.5, cy: 0.5, radius: 0.5,
+        fx: 0.5, fy: 0.5,
+        stop: 0 #738781, stop: 0.5 #738781,
+        stop: 0.56 #292B2E, stop: 1 #292B2E
+    );
 }
 
 /* Lists, operation tables, and headers */
@@ -422,10 +581,18 @@ QListWidget::item, QTreeWidget::item, QTableWidget::item,
 QTableView::item, QTreeView::item {
     padding: 2px;
 }
+QListWidget::item:hover, QTreeWidget::item:hover, QTableWidget::item:hover,
+QTableView::item:hover, QTreeView::item:hover {
+    background: #313E43;
+}
 QListWidget::item:selected, QTreeWidget::item:selected,
 QTableWidget::item:selected, QTableView::item:selected, QTreeView::item:selected {
-    background: #335C55;
+    background: #386B60;
     color: #FFFFFF;
+}
+QListWidget:focus, QTreeWidget:focus, QTableWidget:focus,
+QTableView:focus, QTreeView:focus {
+    border-color: #82E3D0;
 }
 QHeaderView::section {
     background: #2A2A2A;
@@ -545,12 +712,12 @@ QLabel#directEditStatus {
     font-weight: 600;
 }
 
-/* Scrollbars are deliberately thin but retain a usable handle target. */
+/* Keep handles distinct from their track without crowding compact panels. */
 QScrollBar:vertical, QScrollBar:horizontal {
     background: #191919;
     border: none;
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     margin: 0;
 }
 QScrollBar::handle {
@@ -594,21 +761,96 @@ QGraphicsView#workspaceFrame, #workspaceFrame {
     background: #292929;
     border: 1px solid #555555;
 }
+/* Guided image editing shares the desktop's interaction colors. */
+QFrame#imageEditorSidebar {
+    background: #202428;
+    border: 1px solid #4F5962;
+    border-radius: 5px;
+}
+QLabel[role="sectionTitle"] {
+    color: #F3F7FA;
+    background: transparent;
+    font-size: 11pt;
+    font-weight: 600;
+}
+QLabel#editorTitle {
+    color: #FFFFFF;
+    background: transparent;
+    font-size: 15pt;
+    font-weight: 700;
+}
+QTabWidget#imageEditorWorkflow::pane {
+    border: none;
+    background: #202428;
+}
+QTabWidget#imageEditorWorkflow QTabBar::tab {
+    padding: 7px 9px;
+}
+QPushButton[editorTool="true"] {
+    text-align: left;
+    padding: 6px 9px;
+    min-height: 25px;
+}
+QPushButton[editorTool="true"]:checked {
+    background: #2A5C50;
+    border: 2px solid #82E3D0;
+    padding: 5px 8px;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+QLabel#editorToolHelp {
+    color: #D6E3E7;
+    background: #28343A;
+    border: 1px solid #4E6670;
+    border-radius: 4px;
+    padding: 8px;
+}
+QLabel#editorPreviewState, QLabel#editorDraftState {
+    color: #D2DBE0;
+    background: transparent;
+    padding: 3px 0;
+}
+QFrame#editorFooter {
+    background: #252B30;
+    border-top: 1px solid #53616B;
+}
 QToolTip {
     color: #FFFFFF;
     background: #303030;
     border: 1px solid #777777;
     padding: 3px 5px;
 }
-"""
+""".replace("__THEME_ASSETS__", (Path(__file__).resolve().parent / "assets").as_posix())
 
 
 def apply_dark_theme(application: object) -> None:
     """Apply the compact desktop theme while preserving OS DPI scaling."""
 
     from .dialogs import install_confirmation_button_colors
+    from .qt import require_qt
 
+    _, QtGui, _ = require_qt()
     application.setStyle("Fusion")
+    # Stylesheets do not cover every native primitive (menu checks, tree
+    # branches, dialog icons). Give Fusion a matching palette as well.
+    palette = QtGui.QPalette()
+    roles = QtGui.QPalette.ColorRole
+    colors = {
+        roles.Window: "#202020", roles.WindowText: "#E6E6E6",
+        roles.Base: "#191C20", roles.AlternateBase: "#242A30",
+        roles.Text: "#F3F3F3", roles.Button: "#373C42",
+        roles.ButtonText: "#F3F3F3", roles.BrightText: "#FFFFFF",
+        roles.Highlight: "#386B60", roles.HighlightedText: "#FFFFFF",
+        roles.ToolTipBase: "#303030", roles.ToolTipText: "#FFFFFF",
+        roles.Link: "#82E3D0", roles.PlaceholderText: "#A8B0B8",
+        roles.Light: "#929DA7", roles.Midlight: "#66717B",
+        roles.Mid: "#4F5962", roles.Dark: "#16191C", roles.Shadow: "#101214",
+    }
+    for role, color in colors.items():
+        palette.setColor(role, QtGui.QColor(color))
+    for role in (roles.WindowText, roles.Text, roles.ButtonText, roles.PlaceholderText):
+        palette.setColor(QtGui.QPalette.ColorGroup.Disabled, role, QtGui.QColor("#999FA5"))
+    application.setPalette(palette)
     application.setStyleSheet(DARK_STYLESHEET)
     install_confirmation_button_colors(application)
 

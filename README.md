@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop controls now have visible dropdown arrows and number steppers, stronger
+hover/focus/selection states, and named drawing and job tools. The Cuts panel
+labels operation selection and distinguishes **Include in job** from **Show on
+canvas**. The engraving editor groups its workflow and exposes named editing
+tools with contextual help. See [desktop UI guide](docs/DESKTOP_UI.md).
+
 Normal packaging commands now share a [build storage guard](docs/LOCAL_ARTIFACT_RETENTION.md).
 Local Windows, Home and launcher builds place all new outputs, caches and
 temporary files in managed directories under a shared eight-GiB admission budget.

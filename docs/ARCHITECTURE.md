@@ -1,5 +1,12 @@
 # Architecture
 
+Desktop visual affordances live in `desktop/theme.py` and packaged
+`desktop/assets/control-*.svg` indicators. Shared navigation stays in
+`desktop/controls.py`; the main shell, operation labels and image-editor workflow
+remain desktop-only presentation. Existing actions, project draft/commit paths
+and shared controller services retain ownership of behavior. The browser SVG
+pipeline and project schema are unchanged. See [UI guide](DESKTOP_UI.md).
+
 Pi job upload negotiates bounded compressed chunks through `pi_job_protocol`.
 The server expands each complete bounded stream before passing original bytes
 to `PiJobStore`; storage durability, finalization and MachineService ownership

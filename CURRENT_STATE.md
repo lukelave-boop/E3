@@ -1,5 +1,34 @@
 # Current repository state
 
+## Desktop UI clarity (2026-10-16)
+
+Isolated branch `codex/desktop-ui-polish` starts from integrated main `fc9a0e3`,
+preserving machine-axis raster, surface travel and prior upload/pause/Start work.
+The unrelated shared checkout is untouched. Shared desktop controls now have
+packaged visible dropdown/stepper indicators, stronger hover/focus/selected
+states, a matching dark native palette and a Panels menu exposing every inspector.
+Drawing and job actions show short names; Cuts labels its selectors, layer actions,
+job inclusion and canvas visibility. The units field accommodates its arrow.
+
+The engraving editor groups Clean image, Outline and Cut path. Named exclusive
+tool buttons, Exclude/Restore choices, contextual controls/instructions and explicit
+preview/draft feedback replace unlabeled tool dropdowns and a long undifferentiated
+form. Source pixels, image processing, persistence/schema, machine services,
+execution gates and the browser SVG pipeline are unchanged. See
+[UI guide](docs/DESKTOP_UI.md) for design references and
+[editor guide](docs/ENGRAVING_IMAGE_EDITOR.md) for actions.
+
+Initial Windows Python 3.14 offscreen verification: 82 general desktop tests,
+85 shared-control/confirmation/icon checks, 62 layout checks and 32 editor checks
+passed (overlapping groups). Eleven new indicator/menu checks also pass at both
+100% and 150% scale. Actual offscreen main-window and editor renders were inspected
+at large and compact sizes; source simulator windows use isolated settings/data,
+camera autostart off, motion disabled and hardware_enabled=False. Repository Ruff,
+application compileall and diff whitespace checks pass. Full local four-worker
+pytest and exact-revision Windows compatibility CI are pending. Frozen packaging,
+DEV TEST selection, interactive operator acceptance and main integration are not
+yet claimed. No physical camera/controller/laser test or Pi update occurred.
+
 ## Machine-axis raster generation (2026-10-16)
 
 Branch `codex/machine-x-raster` retains the integrated surface-travel and

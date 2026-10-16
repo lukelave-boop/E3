@@ -479,3 +479,145 @@ def test_closing_and_deleting_during_trace_releases_worker_source_safely(app, so
     assert dialog_ref() is None
     assert plane_ref() is None
     parent.close()
+
+
+def _dispose_editor(dialog, app):
+    dialog.reject()
+    dialog.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
+def test_visible_tools_follow_workflow_and_show_only_relevant_controls(app, source):
+    _, payload, _ = source
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    try:
+        dialog.show()
+        app.processEvents()
+        before = dialog.settings
+        assert [dialog.workflow.tabText(i) for i in range(3)] == ["Clean image", "Outline", "Cut path"]
+        assert dialog.view.tool == "exclude"
+        assert dialog.tool_buttons["exclude"].isChecked()
+        assert dialog.brush_controls.isVisible()
+        assert not dialog.selection_controls.isVisible()
+        dialog.tool_buttons["rectangle"].click()
+        assert dialog.view.tool == "rectangle"
+        assert dialog.selection_controls.isVisible()
+        assert not dialog.brush_controls.isVisible()
+        assert not dialog.tool_buttons["exclude"].isChecked()
+        dialog.selection_buttons["restore"].click()
+        assert dialog.selection_operation.checkedButton().property("operation") == "restore"
+        dialog.workflow.setCurrentIndex(1)
+        assert dialog.view.tool == "nodes"
+        assert dialog.node_controls.isVisible()
+        assert not dialog.finish_contour_button.isVisible()
+        dialog.tool_buttons["pen"].click()
+        assert dialog.view.tool == "pen"
+        assert not dialog.node_controls.isVisible()
+        assert dialog.finish_contour_button.isVisible()
+        dialog.view.points = [[-.3, -.1], [.3, -.1]]
+        dialog.view.pen_handles = [[.05, 0], [0, .05]]
+        dialog.workflow.setCurrentIndex(0)
+        assert not dialog.view.points
+        assert not dialog.view.pen_handles
+        assert dialog.view.tool == "rectangle"
+        dialog.workflow.setCurrentIndex(1)
+        assert dialog.view.tool == "pen"
+        assert dialog.settings == before
+        assert "Draft only" in dialog.draft_state.text()
+    finally:
+        _dispose_editor(dialog, app)
+
+
+def test_selection_restore_choice_reaches_reversible_region(app, source):
+    _, payload, _ = source
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    try:
+        dialog.show()
+        app.processEvents()
+        dialog.add_region(_rectangle_region())
+        assert not dialog.allowed[80, 64]
+        dialog.tool_buttons["rectangle"].click()
+        dialog.selection_buttons["restore"].click()
+        view = dialog.view
+        QtTest.QTest.mousePress(view.viewport(), QtCore.Qt.MouseButton.LeftButton,
+                               pos=view.mapFromScene(30, 75))
+        QtTest.QTest.mouseMove(view.viewport(), view.mapFromScene(95, 85))
+        QtTest.QTest.mouseRelease(view.viewport(), QtCore.Qt.MouseButton.LeftButton,
+                                 pos=view.mapFromScene(95, 85))
+        assert dialog.settings["regions"][-1]["operation"] == "restore"
+        assert dialog.allowed[80, 64]
+        dialog.undo()
+        assert not dialog.allowed[80, 64]
+    finally:
+        _dispose_editor(dialog, app)
+
+
+def test_preview_feedback_and_optional_vector_controls_do_not_commit_implicitly(app, source):
+    _, payload, _ = source
+    dialog = ImageEditorDialog(payload, {}, 64, 48)
+    try:
+        original = dialog.settings
+        assert not dialog.vector_controls.isEnabled()
+        dialog.workflow.setCurrentIndex(2)
+        dialog.vector_checkbox.setChecked(True)
+        assert dialog.vector_controls.isEnabled()
+        assert dialog.settings == original
+        dialog._trace_finished(dialog._generation, _subject_path(), None)
+        assert "preview ready" in dialog.preview_state.text()
+        assert dialog.apply_candidate_button.isEnabled()
+        assert dialog.settings == original
+        dialog.before.setChecked(True)
+        assert "Original source" in dialog.preview_state.text()
+        dialog.before.setChecked(False)
+        assert "preview ready" in dialog.preview_state.text()
+        dialog.apply_candidate()
+        assert "accepted outline" in dialog.preview_state.text()
+        assert not dialog.apply_candidate_button.isEnabled()
+        dialog.preview_vector()
+        assert "Cut path preview ready" in dialog.preview_state.text()
+        dialog.offset.setValue(.1)
+        assert dialog._offset_preview is None
+        assert "Cut path preview ready" not in dialog.preview_state.text()
+        assert dialog.result() != QtWidgets.QDialog.DialogCode.Accepted
+    finally:
+        _dispose_editor(dialog, app)
+
+
+def test_workflow_is_scrollable_and_apply_remains_visible_in_small_window(app, source):
+    from laser_aligner.desktop.theme import apply_dark_theme
+
+    _, payload, _ = source
+    old_sheet, old_palette, old_font = app.styleSheet(), app.palette(), app.font()
+    font_id = -1
+    if sys.platform == "win32":
+        font_path = os.path.join(os.environ["WINDIR"], "Fonts", "segoeui.ttf")
+        font_id = QtGui.QFontDatabase.addApplicationFont(font_path)
+    dialog = None
+    try:
+        apply_dark_theme(app)
+        app.setFont(QtGui.QFont("Segoe UI", 9))
+        dialog = ImageEditorDialog(payload, {}, 64, 48)
+        dialog.resize(900, 640)
+        dialog.show()
+        app.processEvents()
+        assert dialog.size().width() <= 900
+        assert dialog.size().height() <= 640
+        for index in range(dialog.workflow.count()):
+            dialog.workflow.setCurrentIndex(index)
+            app.processEvents()
+            page = dialog.workflow.widget(index)
+            assert page.horizontalScrollBar().maximum() == 0
+            assert page.viewport().width() >= 300
+            apply_button = dialog.buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Apply)
+            bounds = QtCore.QRect(apply_button.mapTo(dialog, QtCore.QPoint()), apply_button.size())
+            assert dialog.rect().contains(bounds)
+            assert apply_button.isVisible()
+    finally:
+        if dialog is not None:
+            _dispose_editor(dialog, app)
+        app.setStyleSheet(old_sheet)
+        app.setPalette(old_palette)
+        app.setFont(old_font)
+        if font_id >= 0:
+            QtGui.QFontDatabase.removeApplicationFont(font_id)

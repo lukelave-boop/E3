@@ -1,5 +1,12 @@
 # Roadmap
 
+## Desktop UI clarity (2026-10-16)
+
+Implemented: shared control affordances, named drawing/job controls, clearer
+operation settings and an organized engraving-editor workflow. Windows offscreen
+layout and interaction checks are required; operator usability acceptance remains
+separate. See [UI guide](docs/DESKTOP_UI.md) and dated [evidence](CURRENT_STATE.md).
+
 ## Machine-axis raster scans (2026-10-16)
 
 Implemented in source: desktop raster angles are relative to machine X, so the

@@ -237,6 +237,23 @@ class InspectorTabs(QtWidgets.QTabWidget):
         self.tabBar().setExpanding(False)
         self.tabBar().installEventFilter(self)
         self._pages: dict[str, PanelScrollArea] = {}
+        self._panel_actions: dict[str, QtGui.QAction] = {}
+        self._panel_menu = QtWidgets.QMenu(self)
+        self._panel_menu.setToolTipsVisible(True)
+        self._panel_chooser = QtWidgets.QToolButton(self)
+        self._panel_chooser.setObjectName("inspectorPanelMenuButton")
+        self._panel_chooser.setText("Panels")
+        self._panel_chooser.setAccessibleName("Choose inspector panel")
+        self._panel_chooser.setToolTip("Show all inspector panels, including hidden tabs")
+        self._panel_chooser.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._panel_chooser.setMenu(self._panel_menu)
+        self.setCornerWidget(self._panel_chooser, QtCore.Qt.Corner.TopRightCorner)
+        self.currentChanged.connect(self._sync_panel_menu)
+
+    def _sync_panel_menu(self, _index: int = -1) -> None:
+        current = self.currentWidget()
+        for key, action in self._panel_actions.items():
+            action.setChecked(self._pages[key] is current)
 
     def add_panel(
         self,
@@ -251,11 +268,20 @@ class InspectorTabs(QtWidgets.QTabWidget):
         self._pages[key] = page
         index = self.addTab(page, title)
         self.setTabToolTip(index, tooltip or title)
+        action = self._panel_menu.addAction(title)
+        action.setCheckable(True)
+        action.setToolTip(tooltip or title)
+        action.triggered.connect(lambda _checked=False, panel_key=key: self.select_panel(panel_key))
+        self._panel_actions[key] = action
+        self._sync_panel_menu()
 
     def select_panel(self, key: str) -> None:
         page = self._pages.get(key)
         if page is not None:
             self.setCurrentWidget(page)
+            # Triggering an already-current checkable action toggles it before
+            # this slot; currentChanged does not fire for the same page.
+            self._sync_panel_menu()
 
     def current_scroll_area(self) -> PanelScrollArea | None:
         widget = self.currentWidget()

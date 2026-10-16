@@ -1,5 +1,10 @@
 # E3 native desktop v1 foundation
 
+The current desktop clarity pass supersedes the historical icon-only rail below:
+drawing tools and Capture / Generate / Preview show names, the Cuts editor labels
+its selectors and distinguishes job inclusion from canvas visibility, and dropdowns
+and number steppers have visible indicators. See [current UI guide](DESKTOP_UI.md).
+
 ## Engraving image workspace
 
 **Objects → Image → Edit image for engraving…** opens local exclusion/restore,
