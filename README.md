@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The main viewer has a **Transparency** slider and percentage field for selected
+objects. Fade images or vectors to align them with the bed and other artwork;
+**Reset all** restores every object's normal appearance. This is a temporary
+view setting and does not change engraving output. See the
+[desktop guide](docs/DESKTOP_V1.md#align-with-object-transparency).
+
 Normal packaging commands now share a [build storage guard](docs/LOCAL_ARTIFACT_RETENTION.md).
 Local Windows, Home and launcher builds place all new outputs, caches and
 temporary files in managed directories under a shared eight-GiB admission budget.

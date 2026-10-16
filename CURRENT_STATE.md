@@ -1,5 +1,28 @@
 # Current repository state
 
+## Main viewer object transparency (2026-10-16)
+
+Branch `codex/selection-transparency` starts from integrated main `fc9a0e3`.
+The main desktop viewer now has a Transparency slider/percentage field and
+Reset all. Percentages apply to selected images and vectors, including multiple
+or locked selections; differing values display Mixed. Viewer-only state survives
+same-document refreshes, deselection and delete/undo, then resets on project
+replacement. Painter opacity leaves hit testing and selection cues usable at
+100%. Camera opacity and toolpath overlays are independent. No project schema,
+history, image processing, generated program or machine behavior changes.
+The browser single-SVG pipeline is unaffected. Unrelated shared-checkout edits
+and existing feature checkouts are preserved.
+
+Local Windows Python 3.14 verification: 27 new focused tests pass, including
+actual raster/fill/line rendering, fully transparent click selection, mixed-value
+numeric and slider input, invalid input rejection, lifecycle retention/reset,
+and unchanged serialized project/G-code. Existing workspace raster/native-path/
+trace selection coverage passes 19 tests; context bar/dock layout/object handles/
+drafting coverage passes 31 tests. Repository Ruff and application compileall
+pass. These are automated offscreen widget checks, not interactive operator,
+real camera, controller or laser tests. Frozen build, remote compatibility and
+operator verification are pending at this source checkpoint.
+
 ## Machine-axis raster generation (2026-10-16)
 
 Branch `codex/machine-x-raster` retains the integrated surface-travel and
