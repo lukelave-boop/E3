@@ -61,6 +61,7 @@ class SelectionTransparencyBar(QtWidgets.QWidget):
         self.slider.setToolTip(tooltip)
         self.spin.setToolTip(tooltip)
         self.slider.valueChanged.connect(self._edited)
+        self.slider.actionTriggered.connect(self._slider_action_triggered)
         self.slider.sliderReleased.connect(self._slider_released)
         self.spin.valueChanged.connect(self._edited)
         self.spin.lineEdit().textEdited.connect(self._spin_text_edited)
@@ -101,6 +102,12 @@ class SelectionTransparencyBar(QtWidgets.QWidget):
     def _slider_released(self) -> None:
         if self._mixed:
             self._edited(self.slider.value())
+
+    def _slider_action_triggered(self, action: int) -> None:
+        # Home can explicitly choose zero even if the mixed-state slider is
+        # already there. Qt updates sliderPosition before emitting this signal.
+        if self._mixed and action != QtWidgets.QAbstractSlider.SliderAction.SliderNoAction.value:
+            self._edited(self.slider.sliderPosition())
 
     def _spin_text_edited(self, text: str) -> None:
         self._spin_draft = text

@@ -13,13 +13,17 @@ history, image processing, generated program or machine behavior changes.
 The browser single-SVG pipeline is unaffected. Unrelated shared-checkout edits
 and existing feature checkouts are preserved.
 
-Local Windows Python 3.14 verification: 27 new focused tests pass, including
+Local Windows Python 3.14 verification: 28 new focused tests pass, including
 actual raster/fill/line rendering, fully transparent click selection, mixed-value
 numeric and slider input, invalid input rejection, lifecycle retention/reset,
 and unchanged serialized project/G-code. Existing workspace raster/native-path/
 trace selection coverage passes 19 tests; context bar/dock layout/object handles/
 drafting coverage passes 31 tests. Repository Ruff and application compileall
-pass. These are automated offscreen widget checks, not interactive operator,
+pass. Synthetic viewer renders were visually inspected at 900 and 570 pixels
+wide; controls fit and artwork fades while selection handles remain clear.
+Independent review found a mixed-selection keyboard Home edge, corrected and
+covered by an actual key-event regression. No further actionable issue remains.
+These are automated offscreen widget checks, not interactive operator,
 real camera, controller or laser tests. Frozen build, remote compatibility and
 operator verification are pending at this source checkpoint.
 

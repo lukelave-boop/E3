@@ -382,3 +382,22 @@ def test_clicking_mixed_slider_at_zero_makes_selected_objects_fully_visible(appl
     assert view.selected_object_transparencies() == [0, 0]
     assert frame.transparency_bar.spin.value() == 0
     assert "Mixed" not in frame.transparency_bar.summary.text()
+
+
+def test_home_key_on_mixed_slider_makes_selected_objects_fully_visible(application, workspace) -> None:
+    document, view, frame = workspace
+    first, second, _third = document.objects
+    view.select_objects([first.id])
+    view.set_selection_transparency(20)
+    view.select_objects([second.id])
+    view.set_selection_transparency(80)
+    view.select_objects([first.id, second.id])
+    slider = frame.transparency_bar.slider
+    slider.setFocus()
+    application.processEvents()
+    QtTest.QTest.keyClick(slider, QtCore.Qt.Key.Key_Home)
+    application.processEvents()
+
+    assert view.selected_object_transparencies() == [0, 0]
+    assert frame.transparency_bar.spin.value() == 0
+    assert "Mixed" not in frame.transparency_bar.summary.text()
