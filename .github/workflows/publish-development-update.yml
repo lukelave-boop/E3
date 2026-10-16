@@ -56,7 +56,7 @@ jobs:
         run: |
           python -m venv .venv
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv\Scripts\python.exe -m pip install -e ".[desktop]"
+          .\.venv\Scripts\python.exe -m pip install -e ".[desktop]" pyinstaller
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup -y --no-progress
@@ -64,6 +64,7 @@ jobs:
         shell: pwsh
         run: |
           .\packaging\build_windows.ps1 `
+            -EphemeralCI `
             -Revision "${{ github.sha }}" `
             -Channel "$env:E3_UPDATE_CHANNEL" `
             -Repository "${{ github.repository }}" `
@@ -74,6 +75,7 @@ jobs:
           name: e3-windows-update
           path: installer-dist/E3-Setup.exe
           if-no-files-found: error
+          retention-days: 7
 
   linux:
     needs: compatibility
@@ -96,12 +98,13 @@ jobs:
         env:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash ./packaging/build_linux_appimage.sh
+        run: bash ./packaging/build_linux_appimage.sh --ephemeral-ci
       - uses: actions/upload-artifact@v7
         with:
           name: e3-linux-update
           path: E3-x86_64.AppImage
           if-no-files-found: error
+          retention-days: 7
 
   publish:
     if: github.ref == 'refs/heads/main'

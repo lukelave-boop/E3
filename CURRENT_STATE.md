@@ -42,6 +42,78 @@ Saving schema 6 is allowed; older binaries are not required to open schema 6.
 Main's exact-commit compatibility gate, gated release publisher and preview
 metadata contract remain authoritative.
 
+## Default packaging storage guard (2026-10-16)
+
+The normal Windows installer, private home-installer call chain and DEV TEST
+launcher use a shared **eight-GiB managed-output admission budget**. All new
+local outputs go into `.e3-builds/<mode>-<build-id>` under the source checkout.
+The complete enrolled containers count, including temporary files, caches,
+private payloads, failed builds and unknown or protected children. Each build
+reserves two GiB within that budget, with a separate two-GiB physical free-space
+floor. This admission policy is not a filesystem quota. Hosted CI uses verified
+fresh-workspace handling; intermediate uploaded packages have seven-day retention.
+
+Ordinary explicit builds may replace only their own previously successful,
+unchanged generated outputs. Selected, running and pinned output trees are
+protected, including supporting runtime files. Managed directories can be reused
+only after exact ownership, source/mode, identity and protection checks. Builders
+keep source inputs in the checkout, contain generated files, caches and temporary
+files in the chosen output root, and print exact resulting paths. They use
+installed dependencies; normal local builds do not automatically upgrade Python
+packages or install Inno Setup. Launcher selection stays unchanged. Inaccessible,
+missing, linked or unstable enrolled containers stop admission. Linux retains its
+separate legacy accounting and strict output checks.
+Private outputs use metadata-only ownership and capacity accounting; secret
+payloads never enter the prunable registry. Failed builds retain their lease;
+no automatic pruning is enabled.
+
+Normal local Windows builds initialize schema-2 managed state on their first
+admission without a legacy inventory. Historical output usage remains explicitly
+unknown (`legacy_total_bytes: null`) and outside the managed budget. Existing
+virtual environments and source copies are inputs outside that budget, although
+their disk impact affects the physical free-space check. Schema-1 state is never
+silently reset or reinterpreted. The explicit metadata inventory helper remains
+available for legacy diagnostics; it is not a prerequisite for managed builds.
+
+Verification of the final managed-only policy: 232 focused tests passed across
+the guard, inventory, managed outputs, launcher, artifact registry and normal
+entrypoints. The two sandbox-skipped hardlink/junction cases passed separately
+using isolated fixtures. The normal Windows builder completed against the real
+guard with synthetic compiler tools, recording schema-2 ownership and releasing
+its lease. Environment restoration, dependency failures, enrollment races and
+default CLI routing are covered. Affected Ruff, compileall, diff checks and
+PowerShell parsing passed. No real E3 packaging, dependency installation,
+launcher change, hardware connection or physical qualification was performed.
+See [local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
+
+Final storage handoff for `e6e9efee33aa7f342f059aa018b124bd60734eed`
+(`managed-policy-final-deliverables.json`, 2026-10-16) reports **234 unique focused
+tests passed** including the two isolated link cases, plus **six activation fault-
+injection tests passed**. The storage worker recorded its approved build-code
+installation in the primary checkout and a successful live, read-only admission-
+readiness check. That check created no reservation, state, lock or managed pool,
+read no private payload contents, and traversed no legacy inventory; protected
+launcher and bundle metadata remained unchanged. This is readiness evidence,
+not an executed build or this integration's full compatibility result.
+
+Real E3 Windows/Home packaging was not verified by that worker because Inno Setup
+was absent from its checked environment. No compiler installation was attempted.
+The synthetic-tool packaging check does not qualify a real packaged application.
+No launcher selection, machine settings, calibration, Pi deployment or hardware
+activity was performed as part of the storage activation or readiness check.
+
+Follow-up census verification: path deduplication now uses ancestor-set
+membership, preserving the exact inventory scope without quadratic comparisons
+across hundreds of roots. All 62 focused guard/inventory/managed-output tests
+pass, including four added scope-equivalence/scale checks. The synthetic
+296-root/3,552-path selection takes 0.072 seconds; this is not whole-census timing.
+An approved metadata-only live initialization over 296 explicitly enumerated
+roots refused to initialize: historical generated test directories were
+inaccessible or changed during enumeration, and several legacy virtual
+environments are links/reparse points. No baseline or ownership was adopted.
+Those filesystem conditions remain unresolved and no historical total is
+claimed. The explicitly approved managed-only policy avoids those legacy scopes;
+it does not omit failed entries from a claimed complete historical census.
 ## Historical confirmed surface-travel candidate record (2026-10-16)
 
 This source-branch checkpoint predates the supplied paired-installation context

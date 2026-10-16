@@ -24,6 +24,7 @@ data/*
 *.egg-info/
 build/
 dist/
+.e3-builds/
 pip-wheel-metadata/
 
 # Temporary backups and crash dumps

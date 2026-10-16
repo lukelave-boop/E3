@@ -1,5 +1,14 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Normal packaging commands now share a [build storage guard](docs/LOCAL_ARTIFACT_RETENTION.md).
+Local Windows, Home and launcher builds place all new outputs, caches and
+temporary files in managed directories under a shared eight-GiB admission budget.
+It includes concurrent reservations, preserves selected/running/rollback outputs,
+and allows verified reuse. Historical storage remains unknown and outside this
+budget; the physical free-space floor still includes its disk impact. Builders
+use installed dependencies and print exact output paths. Private installers use
+metadata-only accounting; cleanup remains a separate approved action.
+
 Large Pi-owned jobs use negotiated lossless upload compression and larger bounded
 chunks with the matching companion. Validation reuses fixed polygon geometry and
 avoids unnecessary stream encoding passes. Exact bytes, bounds, arming and Start

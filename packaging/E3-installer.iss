@@ -4,6 +4,15 @@
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "E3-Setup"
 #endif
+#ifndef E3BundleRoot
+  #define E3BundleRoot "..\dist\E3"
+#endif
+#ifndef E3SeedRoot
+  #define E3SeedRoot "machine-seed"
+#endif
+#ifndef E3InstallerOutputDir
+  #define E3InstallerOutputDir "..\installer-dist"
+#endif
 
 #define MyAppName "E3 Positioning System"
 #define MyAppExeName "E3.exe"
@@ -16,7 +25,7 @@ AppPublisher=E3
 DefaultDirName={localappdata}\Programs\E3 Positioning System
 DefaultGroupName=E3 Positioning System
 DisableProgramGroupPage=yes
-OutputDir=..\installer-dist
+OutputDir={#E3InstallerOutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 Compression=lzma2
 SolidCompression=yes
@@ -31,12 +40,12 @@ UsePreviousAppDir=yes
 SetupLogging=yes
 
 [Files]
-Source: "..\dist\E3\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#E3BundleRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 #ifdef MachineSeed
-Source: "machine-seed\config\network-local.json"; DestDir: "{localappdata}\E3 Positioning System\config"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
-Source: "machine-seed\data\calibration_profiles\*"; DestDir: "{localappdata}\E3 Positioning System\data\calibration_profiles"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist uninsneveruninstall
-Source: "machine-seed\data\machines.json"; DestDir: "{localappdata}\E3 Positioning System\data"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
-Source: "machine-seed\secrets\bridge-token.txt"; DestDir: "{localappdata}\E3 Positioning System\secrets"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "{#E3SeedRoot}\config\network-local.json"; DestDir: "{localappdata}\E3 Positioning System\config"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "{#E3SeedRoot}\data\calibration_profiles\*"; DestDir: "{localappdata}\E3 Positioning System\data\calibration_profiles"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist uninsneveruninstall
+Source: "{#E3SeedRoot}\data\machines.json"; DestDir: "{localappdata}\E3 Positioning System\data"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "{#E3SeedRoot}\secrets\bridge-token.txt"; DestDir: "{localappdata}\E3 Positioning System\secrets"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 #endif
 
 [Icons]

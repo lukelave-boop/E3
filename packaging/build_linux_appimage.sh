@@ -12,7 +12,23 @@ CHANNEL="${E3_UPDATE_CHANNEL:-development}"
 REPOSITORY="${GITHUB_REPOSITORY:-lukelave-boop/E3}"
 RELEASE_TAG="${E3_RELEASE_TAG:-e3-development}"
 
+BUILD_ID="linux-$("$PYTHON" -c 'import uuid; print(uuid.uuid4().hex)')"
+STORAGE_ARGS=(begin --worktree "$ROOT" --mode linux --build-id "$BUILD_ID" --pid "$$")
+if [[ $# -eq 1 && "$1" == "--ephemeral-ci" ]]; then
+  STORAGE_ARGS+=(--ephemeral-ci)
+elif [[ $# -ne 0 ]]; then
+  printf 'Usage: %s [--ephemeral-ci]\n' "$0" >&2
+  exit 2
+fi
+STORAGE_JSON="$("$PYTHON" packaging/build_storage_guard.py "${STORAGE_ARGS[@]}")"
+STORAGE_STATE="$("$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<< "$STORAGE_JSON")"
+STORAGE_TOKEN="$("$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<< "$STORAGE_JSON")"
+
 "$PYTHON" -m pip install --upgrade pyinstaller
+"$PYTHON" packaging/build_storage_guard.py verify \
+  --state "$STORAGE_STATE" --build-id "$BUILD_ID" --token "$STORAGE_TOKEN" --pid "$$"
+# The guard owns this exact replacement set; no wildcard or worktree cleanup.
+rm -rf -- build/E3 dist/E3 AppDir E3-x86_64.AppImage build-info.json E3.spec
 "$PYTHON" packaging/write_build_info.py \
   --output build-info.json \
   --revision "$REVISION" \
@@ -21,7 +37,6 @@ RELEASE_TAG="${E3_RELEASE_TAG:-e3-development}"
   --release-tag "$RELEASE_TAG" \
   --platform-key linux-x86_64
 
-rm -rf build/E3 dist/E3 AppDir E3-x86_64.AppImage
 "$PYTHON" -m PyInstaller \
   --noconfirm \
   --clean \
@@ -59,4 +74,6 @@ if [[ ! -x "$APPIMAGETOOL" ]]; then
 fi
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
   "$APPIMAGETOOL" AppDir E3-x86_64.AppImage
+"$PYTHON" packaging/build_storage_guard.py complete \
+  --state "$STORAGE_STATE" --build-id "$BUILD_ID" --token "$STORAGE_TOKEN" --pid "$$"
 printf '\nE3 Linux AppImage complete:\n%s\n' "$ROOT/E3-x86_64.AppImage"
