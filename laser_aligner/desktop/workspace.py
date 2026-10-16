@@ -29,6 +29,7 @@ from ..project.path_geometry import (
 from ..project.polygon import regular_polygon_points
 from .polygon_prompt import PolygonSidesPrompt
 from .qt import require_qt
+from .selection_transparency import SelectionTransparencyBar
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY, DRAFTING_COLORS
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -361,6 +362,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         self._raster_asset_reference: str | None = None
         self._cleanup_tolerance: int | None = None
         self._image_edit_json: str | None = None
+        self._display_transparency = 0
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -762,21 +764,64 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         finally:
             self._syncing = False
 
+    @property
+    def display_transparency(self) -> int:
+        return self._display_transparency
+
+    def set_display_transparency(self, value: int) -> None:
+        """Fade artwork without making a fully transparent item unselectable."""
+
+        if type(value) is not int or not 0 <= value <= 100:
+            raise ValueError("Transparency must be an integer from 0 to 100")
+        if value != self._display_transparency:
+            self._display_transparency = value
+            self.update()
+
     def paint(
         self,
         painter: QtGui.QPainter,
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget: QtWidgets.QWidget | None = None,
     ) -> None:
-        if self._raster_image is not None and not self._raster_image.isNull():
-            painter.save()
-            painter.setRenderHint(
-                QtGui.QPainter.RenderHint.SmoothPixmapTransform,
-                True,
+        faded = self._display_transparency > 0
+        selected = bool(option.state & QtWidgets.QStyle.StateFlag.State_Selected)
+        artwork_option = option
+        if faded:
+            artwork_option = QtWidgets.QStyleOptionGraphicsItem(option)
+            artwork_option.state &= ~QtWidgets.QStyle.StateFlag.State_Selected
+        painter.save()
+        try:
+            # Keep item opacity at one: Qt excludes zero-opacity items from hit
+            # testing. Only artwork paint fades; selection remains operable.
+            painter.setOpacity(
+                painter.opacity() * (1.0 - self._display_transparency / 100.0)
             )
-            painter.drawImage(self.path().boundingRect(), self._raster_image)
+            if self._raster_image is not None and not self._raster_image.isNull():
+                painter.setRenderHint(
+                    QtGui.QPainter.RenderHint.SmoothPixmapTransform,
+                    True,
+                )
+                painter.drawImage(self.path().boundingRect(), self._raster_image)
+            super().paint(painter, artwork_option, widget)
+        finally:
             painter.restore()
-        super().paint(painter, option, widget)
+        if faded and selected:
+            # Locked and multiple selections have no transform overlay. Retain
+            # their selection cue even when the artwork is fully transparent.
+            painter.save()
+            try:
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                pen = QtGui.QPen(QtGui.QColor("#F4F7F9"))
+                pen.setWidthF(1.0)
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+                painter.drawRect(self.boundingRect())
+                pen.setColor(QtGui.QColor("#152027"))
+                pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.drawRect(self.boundingRect())
+            finally:
+                painter.restore()
 
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
         self._start_position = self.pos()
@@ -1496,10 +1541,16 @@ class WorkspaceFrame(QtWidgets.QWidget):
             "background: #F5F5F5; border-right: 1px solid #B7BDC1; "
             "border-bottom: 1px solid #B7BDC1;"
         )
-        layout.addWidget(corner, 0, 0)
-        layout.addWidget(RulerWidget(view, QtCore.Qt.Orientation.Horizontal), 0, 1)
-        layout.addWidget(RulerWidget(view, QtCore.Qt.Orientation.Vertical), 1, 0)
-        layout.addWidget(view, 1, 1)
+        self.transparency_bar = SelectionTransparencyBar(self)
+        self.transparency_bar.transparencyEdited.connect(view.set_selection_transparency)
+        self.transparency_bar.resetRequested.connect(view.reset_object_transparency)
+        view.selectionTransparencyChanged.connect(self.transparency_bar.set_selection)
+        self.transparency_bar.set_selection(view.selected_object_transparencies())
+        layout.addWidget(self.transparency_bar, 0, 0, 1, 2)
+        layout.addWidget(corner, 1, 0)
+        layout.addWidget(RulerWidget(view, QtCore.Qt.Orientation.Horizontal), 1, 1)
+        layout.addWidget(RulerWidget(view, QtCore.Qt.Orientation.Vertical), 2, 0)
+        layout.addWidget(view, 2, 1)
 
 
 class _WorkspaceOverlayLegend(QtWidgets.QWidget):
@@ -1636,6 +1687,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     cameraImageChanged = QtCore.Signal(object)
     cursorPositionChanged = QtCore.Signal(float, float)
     selectionIdsChanged = QtCore.Signal(list)
+    selectionTransparencyChanged = QtCore.Signal(object)
     traceSelectionIdsChanged = QtCore.Signal(list)
     objectMoveCommitted = QtCore.Signal(str, object, object)
     objectTransformCommitted = QtCore.Signal(str, object, object)
@@ -1682,6 +1734,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.setBackgroundBrush(QtGui.QColor(DRAFTING_COLORS["outside"]))
         self._document: ProjectDocument | None = None
         self._items_by_id: dict[str, ObjectGraphicsItem] = {}
+        self._object_transparency: dict[str, int] = {}
         self._object_transform_overlay: _ObjectTransformOverlay | None = None
         self._syncing_document = False
         self._camera_item = QtWidgets.QGraphicsPixmapItem()
@@ -1763,6 +1816,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._space_pan = False
         self._pan_button = QtCore.Qt.MouseButton.NoButton
         self._fit_to_work_area = True
+        self.selectionIdsChanged.connect(self._selection_transparency_changed)
         self.workspace_scene.selectionChanged.connect(self._emit_selection)
         self.zoomChanged.connect(self._template_zoom_changed)
         self.zoomChanged.connect(self._object_transform_zoom_changed)
@@ -2907,6 +2961,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         selected = set(self.selected_object_ids())
         self._clear_object_transform_overlay()
         reuse_items = self._document is document
+        if not reuse_items:
+            self._object_transparency.clear()
         self._syncing_document = True
         try:
             raster_sources = {
@@ -2964,6 +3020,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 else:
                     item.apply_model(scene_object, layer)
                 item.setZValue(float(z_index))
+                item.set_display_transparency(
+                    self._object_transparency.get(scene_object.id, 0)
+                )
                 next_items[scene_object.id] = item
                 if scene_object.id in selected:
                     item.setSelected(True)
@@ -2991,6 +3050,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         finally:
             self._syncing_document = False
         self._update_object_transform_overlay()
+        self.selectionTransparencyChanged.emit(self.selected_object_transparencies())
 
     def _cancel_raster_preview_quality_restore(self) -> None:
         self._raster_restore_timer.stop()
@@ -3289,6 +3349,38 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             for item in self.workspace_scene.selectedItems()
             if isinstance(item, ObjectGraphicsItem)
         ]
+
+    def selected_object_transparencies(self) -> list[int]:
+        """Return viewer percentages for normal project objects in the selection."""
+
+        return [
+            self._object_transparency.get(object_id, 0)
+            for object_id in self.selected_object_ids()
+        ]
+
+    def set_selection_transparency(self, value: int) -> None:
+        """Change only how selected objects are displayed in this document session."""
+
+        if type(value) is not int or not 0 <= value <= 100:
+            raise ValueError("Transparency must be an integer from 0 to 100")
+        for object_id in self.selected_object_ids():
+            item = self._items_by_id.get(object_id)
+            if item is not None:
+                self._object_transparency[object_id] = value
+                item.set_display_transparency(value)
+        self.selectionTransparencyChanged.emit(self.selected_object_transparencies())
+
+    def reset_object_transparency(self) -> None:
+        """Restore every object, including deselected or temporarily deleted ones."""
+
+        self._object_transparency.clear()
+        for item in self._items_by_id.values():
+            item.set_display_transparency(0)
+        self.selectionTransparencyChanged.emit(self.selected_object_transparencies())
+
+    def _selection_transparency_changed(self, _object_ids: list[str]) -> None:
+        if not self._syncing_document:
+            self.selectionTransparencyChanged.emit(self.selected_object_transparencies())
 
     def selected_trace_ids(self) -> list[str]:
         return [

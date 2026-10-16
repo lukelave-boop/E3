@@ -10,6 +10,15 @@
   choices, contextual editing instructions and explicit preview/apply feedback.
 - Preserve project/image processing and all machine execution behavior.
 
+## Unreleased - selected-object transparency (2026-10-16)
+
+- Add a Transparency slider and percentage field above the main viewer for
+  aligning selected images and vectors with the bed and other objects.
+- Support multiple selected objects, mixed values and Reset all; retain visible
+  selection cues and hit testing even when artwork is fully transparent.
+- Keep transparency temporary to the open project, without changing saved data,
+  engraving output, camera opacity or exact-job Preview.
+
 ## Unreleased - machine-axis raster scans (2026-10-16)
 
 - Interpret desktop raster scan angles relative to machine X. The default 0°

@@ -7,6 +7,18 @@ remain desktop-only presentation. Existing actions, project draft/commit paths
 and shared controller services retain ownership of behavior. The browser SVG
 pipeline and project schema are unchanged. See [UI guide](DESKTOP_UI.md).
 
+## Selected-object display transparency
+
+`WorkspaceFrame` hosts a `SelectionTransparencyBar` above its rulers and canvas.
+`WorkspaceView` owns temporary integer percentages keyed by object ID; selection
+changes refresh the control without modifying objects. The map survives refreshes
+of the same document and resets on document replacement. Reset all clears it.
+`ObjectGraphicsItem` applies opacity only while painting artwork, leaving scene
+hit testing and selected-object cues available even at 100% transparency.
+Camera and toolpath overlays remain independent. This desktop project-view
+feature changes no project schema, history, image processing, G-code, machine
+service or browser single-SVG behavior.
+
 Pi job upload negotiates bounded compressed chunks through `pi_job_protocol`.
 The server expands each complete bounded stream before passing original bytes
 to `PiJobStore`; storage durability, finalization and MachineService ownership
