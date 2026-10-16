@@ -4,10 +4,13 @@ E3 separates replaceable application files from persistent machine/user state.
 
 ## Persistent state
 
-Packaged E3 reads machine configuration and the bridge credential from:
+The native per-user root holds initial machine state and version directories:
 
 - Windows: `%LOCALAPPDATA%\E3 Positioning System\`
-- Linux: `~/.local/share/e3-positioning-system/`
+- Linux: the configured XDG data directory, or the platform user-data fallback.
+
+Existing pre-isolation installations continue to read their original root.
+New desktop builds select independent version state before loading settings.
 
 The private machine-seeded Windows installer writes initial files only when they
 do not already exist:
@@ -19,6 +22,88 @@ do not already exist:
 Inno Setup marks them `onlyifdoesntexist` and `uninsneveruninstall`. Updates
 therefore replace application files only. Existing configuration, credentials,
 calibration, templates, materials, projects, and captures are not overwritten.
+
+## Independent version state
+
+An installed desktop build uses
+`state-scopes/installed/<version>-<revision>/` beneath the native per-user root.
+Its first launch creates a complete private snapshot; its later launches reuse
+that same snapshot. Configuration, saved machines, calibration, credentials,
+materials, templates, autosaves and new Qt preference files are kept in that
+version's state. A newer build cannot rewrite an older version's copy through
+the normal desktop launch path.
+
+After the main window has been constructed successfully, the installed build
+records `state-scopes/installed/last-successful.json`. A strictly newer numeric
+version can use that successful version's state as its first-launch source.
+Reopening an older version uses its existing copy and does not move the pointer
+backward. First launches of older or unorderable versions use the original
+legacy seed rather than importing a newer schema. Same-version revisions do
+not import one another automatically. State is copied before any migration;
+the prior version remains intact if the new copy cannot load.
+
+Snapshot preparation copies calibration evidence and machine values exactly,
+rebases only the copied `app.data_dir`, includes configuration sidecars and
+external configured data directories, and uses SQLite's backup operation.
+It rejects linked paths, incomplete destinations and changes to ordinary source
+files during the copy. An import error stops startup with a configuration error;
+there is no writable fallback to the source. Downloads and nested version copies
+are excluded. Source desktop checkouts receive a separate scope per checkout.
+
+The permanent [E3 DEV TEST launcher](DEV_TEST_LAUNCHER.md#independent-test-state)
+also isolates existing frozen test executables before they start. These builds
+use `state/<version>-<revision>/local/E3 Positioning System/` beside the permanent
+launcher in `Documents/E3 Dev Test`. New source moves window and trace preferences
+into private INI files, importing old Qt preferences once
+without writing the original registry. Older frozen executables retain their
+shared Qt UI-preference keys; their machine and calibration files are isolated
+by the launcher. Each test launch supplies private build metadata whose version
+and revision still identify the selected executable but whose update-manifest
+URL is empty. This disables installation from the test application's existing
+updater, including older frozen builds, without modifying the executable or its
+adjacent metadata. Application updates remain available through regular E3;
+test selection remains the permanent launcher's responsibility.
+
+The launcher's separate `state/last-prepared-test.json` carries test settings
+forward to a strictly newer numeric test version. It is published after the
+snapshot is complete, before the child starts; it does not claim a successful
+app or hardware test. Exact existing test scopes always win. An unseen older,
+equal-version/different-revision or unorderable test build starts from the regular
+seed rather than importing newer settings. Copy and pointer publication are
+serialized, and reopening an older scope cannot move the pointer backward.
+
+Explicit `--config` or `E3_CONFIG_PATH` invocations intentionally retain that
+configuration and its selected machine-data directory; their auxiliary defaults
+and new Qt preferences are scoped separately. `E3_USER_STATE_DIR` remains an
+explicit caller-selected root. These overrides are for deliberate deployments,
+not the ordinary installed or DEV TEST launch path.
+
+### Recovering an affected older installation
+
+An already installed binary is not rewritten to accept unfamiliar settings.
+First preserve the complete newer state in its own version directory and a
+recovery backup. Then validate the older application's known compatible files
+with its own parsers and restore only the incompatible files. For the reported
+0.7.153 failure, the available configuration and machine-registry backups differ
+only by the added `machine.raster_travel_envelope` fields; current lens, bed and
+honeycomb calibration already load in that version. Expanded raster-travel
+evidence belongs to the newer build's preserved state. That recovery was applied
+and the original installed 0.7.153 executable opened interactively with supported
+machine values and calibration preserved. The full pre-repair state backup is
+under the permanent launcher's `recovery-backups/` directory.
+See [current state](../CURRENT_STATE.md) for exact identities and verification;
+this procedure is not a general schema downgrade.
+
+Local editor startup does not require a successful Pi connection. Missing or
+incompatible Pi services should report an offline/error state for the affected
+camera or controller functions while local project editing remains available.
+Protocol checks and hardware authorization remain enforced; no automatic protocol
+fallback or hardware update is introduced by state isolation.
+
+Project documents are a separate persistence domain. A file deliberately opened
+and saved by a newer version retains that version's schema; keep an older-format
+copy when it must also open in an older application. Version state isolation
+does not convert shared project documents.
 
 ## Update channel
 

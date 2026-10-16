@@ -11,6 +11,7 @@ from ..storage import (
     atomic_write_bytes_if_absent,
     default_user_data_dir,
     legacy_user_data_dir,
+    state_is_isolated,
 )
 from .model import ProjectDocument, ProjectFormatError
 
@@ -104,6 +105,8 @@ def _default_autosave_path(
 ) -> Path:
     filename = _autosave_filename(document, project_path)
     preferred = (default_user_data_dir() / "backups" / filename).expanduser().resolve()
+    if state_is_isolated():
+        return preferred
     legacy = (legacy_user_data_dir() / "backups" / filename).expanduser().resolve()
     if preferred == legacy or preferred.exists() or not legacy.is_file():
         return preferred
@@ -259,5 +262,8 @@ def clear_autosave(
         ).unlink(missing_ok=True)
         return
     filename = _autosave_filename(document, project_path)
-    for root in (default_user_data_dir(), legacy_user_data_dir()):
+    roots = (default_user_data_dir(),)
+    if not state_is_isolated():
+        roots += (legacy_user_data_dir(),)
+    for root in roots:
         (root / "backups" / filename).expanduser().resolve().unlink(missing_ok=True)

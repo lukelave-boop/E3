@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased - independent desktop version state (2026-10-16)
+
+- Give each installed version/revision and source checkout an independent initial
+  copy of settings, calibration, material recipes and recovery data; reuse that
+  copy when reopening the version.
+- Seed a newer installed version from the previous successful installed version
+  without migrating the older copy; publish the pointer after window construction.
+- Isolate existing frozen DEV TEST builds through the permanent launcher before
+  they start, retaining the selected executable and production installation.
+- Keep test state beside the permanent launcher and disable its child E3 updater
+  through private metadata, preserving the original binary's version/revision.
+- Carry saved test settings forward to strictly newer test versions while exact
+  older test scopes remain independent; record preparation separately from success.
+- Read bridge credentials from the selected version state before packaged startup,
+  while retaining intentional process-level credential overrides.
+- Store new window/trace preferences in version-local INI files, importing legacy
+  Qt preferences read-only; older frozen UI registry preferences remain shared.
+- Preserve strict machine settings and project schema validation. Restore the
+  reported 0.7.153 installation with verified compatible configuration backups;
+  its original executable opens with existing settings and calibration preserved.
+
 ## Unreleased - Windows installer long paths (2026-10-16)
 
 - Require Inno Setup 7+ before reserving build storage, fixing failures and possible

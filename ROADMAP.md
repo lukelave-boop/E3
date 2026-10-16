@@ -1,5 +1,18 @@
 # Roadmap
 
+## Independent desktop version state (2026-10-16)
+
+Implemented: one-time state copies per installed version/revision and source
+checkout, a prior-successful installed-state pointer, forward inheritance from
+prepared test scopes, private DEV TEST file state and disabled test-launch
+updates. The permanent launcher is installed and frozen-launcher isolation is
+verified. Regular 0.7.153 was restored from exact compatible backups and its
+unchanged installed EXE opens interactively with saved settings and calibration.
+Source verification and final integration are tracked in
+[current state](CURRENT_STATE.md). New source uses private Qt preference files;
+older frozen Qt UI preferences remain shared. Project-format compatibility is
+separate from application state. No physical machine qualification is implied.
+
 ## Windows installer long paths (2026-10-16)
 
 Implemented: Inno Setup 7+ compiler preflight, explicit portable compiler support,

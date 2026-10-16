@@ -296,6 +296,100 @@ def feature_environment(
     return environment
 
 
+_PROFILE_ENVIRONMENT = (
+    "LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_DATA_HOME",
+)
+
+
+def _unscoped_environment(source: Mapping[str, str]) -> dict[str, str]:
+    environment = dict(source)
+    saved = environment.pop("E3_STATE_ORIGINAL_ENV", None)
+    if saved:
+        try:
+            original = json.loads(saved, object_pairs_hook=_strict_object)
+            if not isinstance(original, dict) or set(original) != set(_PROFILE_ENVIRONMENT):
+                raise ValueError("unexpected profile environment keys")
+            for key, value in original.items():
+                if value is not None and (not isinstance(value, str) or not value):
+                    raise ValueError("invalid profile environment value")
+                environment.pop(key, None)
+                if value is not None:
+                    environment[key] = value
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise DevTestLauncherError("cannot restore the original profile environment") from exc
+    return environment
+
+
+def feature_state_root(
+    feature: FeatureBuild, *, launcher_path: Path,
+    source: Mapping[str, str] | None = None,
+) -> Path:
+    """Bind mutable test data to the exact selected version and revision."""
+    environment = _unscoped_environment(os.environ if source is None else source)
+    if (_VERSION_PATTERN.fullmatch(feature.version) is None
+            or _REVISION_PATTERN.fullmatch(feature.revision) is None):
+        raise DevTestLauncherError("cannot isolate an invalid feature identity")
+    local = environment.get("LOCALAPPDATA", "")
+    if not local or not Path(local).is_absolute():
+        raise DevTestLauncherError("LOCALAPPDATA must identify the real absolute user profile")
+    return (Path(launcher_path).resolve().parent / "state"
+            / f"{feature.version}-{feature.revision.lower()}" / "local"
+            / "E3 Positioning System").resolve()
+
+
+def prepare_feature_environment(
+    feature: FeatureBuild, *, launcher_path: Path,
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Prepare a private state copy before even an older frozen EXE starts."""
+    from .state_scope import prepare_test_state
+    from .storage import atomic_write_json
+
+    _validate_build_info(feature)
+    original = _unscoped_environment(os.environ if source is None else source)
+    root = feature_state_root(feature, launcher_path=launcher_path, source=original)
+    seed = Path(original["LOCALAPPDATA"]) / "E3 Positioning System"
+    seed_config = seed / "config" / "network-local.json"
+    if not seed_config.is_file():
+        seed_config = feature.exe.parent / "config" / "network-local.json"
+    if not seed_config.is_file():
+        seed_config = feature.exe.parent / "config" / "default.json"
+    home = original.get("USERPROFILE") or original.get("HOME")
+    legacy_auxiliary = Path(home) / ".local" / "share" / "e3-positioning-system" if home else None
+    try:
+        config = prepare_test_state(root, seed, version=feature.version,
+                                    revision=feature.revision, config_path=seed_config,
+                                    legacy_auxiliary_root=legacy_auxiliary)
+    except (OSError, ValueError) as exc:
+        raise DevTestLauncherError(f"cannot prepare this build's private settings: {exc}") from exc
+    # Historical updaters cannot restore the redirected profile environment.
+    # Keep their exact build identity but disable installation from a test launch.
+    metadata = json.loads((feature.exe.parent / "build-info.json").read_text(encoding="utf-8"))
+    metadata.update(manifest_url="", channel="dev-test")
+    private_build_info = root / "dev-test-build-info.json"
+    atomic_write_json(private_build_info, metadata)
+    environment = feature_environment(feature, launcher_path=launcher_path, source=original)
+    for key in tuple(environment):
+        if key.upper() in {"E3_CONFIG_PATH", "E3_USER_STATE_DIR", "E3_BRIDGE_TOKEN_FILE", "E3_BUILD_INFO"}:
+            environment.pop(key, None)
+    outer = root.parent.parent
+    environment.update({
+        "E3_USER_STATE_DIR": str(root),
+        "E3_CONFIG_PATH": str(config),
+        "E3_BRIDGE_TOKEN_FILE": str(root / "secrets" / "bridge-token.txt"),
+        "E3_BUILD_INFO": str(private_build_info),
+        "E3_STATE_ORIGINAL_ENV": json.dumps({key: original.get(key) for key in _PROFILE_ENVIRONMENT}),
+        "LOCALAPPDATA": str(root.parent),
+        "APPDATA": str(outer / "roaming"),
+        "USERPROFILE": str(outer / "home"),
+        "HOME": str(outer / "home"),
+        "XDG_DATA_HOME": str(outer / "xdg-data"),
+    })
+    for name in _PROFILE_ENVIRONMENT:
+        Path(environment[name]).mkdir(parents=True, exist_ok=True)
+    return environment
+
+
 def _windows_dll_api() -> tuple[Any, Any, Any]:
     import ctypes
     from ctypes import wintypes
@@ -348,7 +442,7 @@ def start_feature_process(
     active_platform = sys.platform if platform is None else platform
     if active_platform != "win32":
         raise DevTestLauncherError("E3 DEV TEST is a Windows-only launcher")
-    environment = feature_environment(feature, launcher_path=launcher_path)
+    environment = prepare_feature_environment(feature, launcher_path=launcher_path)
     previous = _get_windows_dll_directory()
     _set_windows_dll_directory(None)
     try:

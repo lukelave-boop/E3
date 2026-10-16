@@ -1,5 +1,89 @@
 # Current repository state
 
+## Regular E3 0.7.153 restored; launcher isolation installed (2026-10-16)
+
+Regular E3 opens again at its existing version **0.7.153**, revision
+`bc86c8912ef2919ca5f5938153539cbab2ba2580`. The installed executable and adjacent
+build metadata are unchanged. Recovery restored only `config/network-local.json`
+and `data/machines.json` from their verified `before-x-clearance-20261015.bak`
+files. The only semantic differences were four added
+`machine.raster_travel_envelope` fields that the old version cannot parse.
+The selected machine, every supported machine/laser/camera setting and all
+calibration files were preserved. Newer raster-travel evidence remains in the
+separate test state.
+
+The repair backed up all **245 non-cache regular-state files** under
+`C:\Users\lukel\Documents\E3 Dev Test\recovery-backups\20261016T184144549918Z-regular-0.7.153`.
+Its `recovery-report.json` confirms that only those two files changed during the
+transaction and all other regular state was unchanged. Installed EXE SHA-256:
+`a28bf86ef5a272a92840d35f10782a2985a58bdb047664fefcf7ed1acb86fd54`.
+Build-info SHA-256:
+`693b561408653df73408e3cec16d891c0ed7679a6a7024061423bd5bad58ebf6`.
+
+The actual installed EXE was then launched interactively. Its main workspace
+displayed version 0.7.153 / build bc86c891 with the existing Ender 3 Tailscale
+profile. Camera status was ONLINE with a rendered bed image; the Pi was reachable
+in VIEW ONLY. No controller connection, Home, arming or job action was requested.
+The application was left open. A subsequent inventory check confirmed unchanged
+configuration, registry, calibration and binary hashes. Normal startup rewrote
+the SQLite materials file, but a read-only logical comparison found all 14
+material rows (13 built-ins and one custom), all 13 seed-history entries, the
+sequence record, schema and indexes unchanged. These are interactive startup
+and remote-view observations, not physical motion, laser or calibration-accuracy
+qualification. No Pi software or firmware was changed.
+
+Modern settings and calibration were copied and verified under the permanent
+launcher's `state/` directory for 0.7.292, revision
+`c5cb9d5b16f740c087aac58894307c6ac508c65b`. The existing selected 0.7.300 scope,
+revision `d154784fadf9ab6b4a2e157724d584d926017697`, inherits that copy. Neither
+selected feature executable was rebuilt or upgraded by this repair.
+Each actual state root is `state/<version>-<revision>/local/E3 Positioning System/`
+beside the permanent launcher. Installed future runtime scopes remain under
+the native LocalAppData root.
+
+The repaired **E3 DEV TEST** launcher is installed at its existing permanent
+path. Its SHA-256 is
+`1a0150044c72eed8ac36563b4be2f631930db3d258bb8453c0fd2222198c3da4`;
+the previous launcher is preserved under
+`C:\Users\lukel\Documents\E3 Dev Test\launcher-backups\20261016T184135650812Z`.
+An actual frozen-launcher run against a harmless C# probe verified private child
+profile/config paths, copied calibration, unchanged source state and private
+build metadata with an empty update-manifest URL. The selected application's
+original binary and metadata remain intact. Evidence is in the original
+checkout's ignored `build/regular-e3-repair/frozen-launcher-smoke-01/result.json`.
+
+Exact 0.7.153 source also passed three real Qt offscreen window scenarios:
+an unreachable Pi, an incompatible `E3MACHINE/999` response and a missing
+Pi-owned-job capability. Each runtime stayed RUNNING with controller controls
+disabled; rectangle create/undo/redo/save/reload worked and all calibration
+loaded. Original copied config/data hashes were unchanged. Fake RPC/camera
+responses, connection blockers, hardware-disabled operation, laser lockout and
+owned test INI preferences kept these checks isolated; zero network connections
+were attempted. This is separate exact-source/offscreen evidence, not a claim
+that the installed binary was exercised against those three Pi failures.
+Report: `build/legacy-pi-probe-436e754037264aa7a3ee32b07819acac/result.json` in
+this isolated worktree. Eleven recovery-helper acceptance/rejection/rollback
+tests, helper Ruff and compilation also pass.
+
+Source now implements one-time state copies per desktop build/source checkout,
+a successful-installed-state pointer, private new Qt preferences and scoped
+credential loading before packaged startup. The launcher's separate
+`last-prepared-test.json` carries settings only to strictly newer numeric test
+versions after a complete snapshot, before the child starts. It records
+preparation, not application or physical-test success; exact older scopes remain
+independent. Existing frozen Qt window/trace registry preferences remain shared.
+User-selected project documents retain their versioned schema behavior, and
+explicit deployment overrides remain explicit.
+
+The complete local Windows Python 3.14 run (`pytest -q -n 4`) passes
+**8,590 tests / 44 skipped** in 715.40 seconds. Collection preceded the two new
+packaged-entry tests; the separate entry/deployment/state run passes **23 tests /
+1 Windows permission skip**, covering the final credential-ordering change and
+explicit process overrides. Repository Ruff, compileall and whitespace checks
+pass on the final source. Full Windows Python 3.10/3.12 compatibility CI and
+source integration remain pending at this local checkpoint. Live recovery,
+permanent-launcher installation and interactive regular-EXE startup are complete.
+
 ## Windows installer long paths — verified (2026-10-16)
 
 [PR #52](https://github.com/lukelave-boop/E3/pull/52) repairs Windows packaging

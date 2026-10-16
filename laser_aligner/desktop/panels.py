@@ -18,6 +18,7 @@ from .columns import configure_resizable_columns
 from .controls import AxisPositionReadout, MeasurementSpinBox, NumericDoubleSpinBox, NumericSpinBox
 from .machine_state import ControllerUiState, project_machine_state
 from .mainboard_z import MainboardZPanel
+from .preferences import desktop_preferences
 from .qt import require_qt
 from .speed_controls import PercentageSpeedSpinBox, format_speed_percent, speed_tooltip
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
@@ -1400,7 +1401,7 @@ class TracePanel(QtWidgets.QWidget):
         self._calibration_ready = False
         self._generate_enabled = True
         self._machine_ui_state = project_machine_state(None)
-        self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
+        self._trace_settings = desktop_preferences("PositioningSystem")
         layout = _panel_layout(self)
 
         heading = QtWidgets.QLabel("Trace objects")

@@ -311,9 +311,34 @@ def _path_entry_is_in_windows_bundle(entry: str, bundle_root: str) -> bool:
 
 def _windows_installer_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    original_text = environment.get("E3_STATE_ORIGINAL_ENV", "")
+    if original_text:
+        try:
+            original = strict_json_loads(original_text)
+        except (ValueError, TypeError) as exc:
+            raise UpdateError("Cannot restore the installer's original user environment") from exc
+        allowed = {"LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_DATA_HOME"}
+        if not isinstance(original, dict) or set(original) != allowed or any(
+            value is not None and not isinstance(value, str) for value in original.values()
+        ):
+            raise UpdateError("Cannot restore the installer's original user environment")
+        for key, value in original.items():
+            for existing in tuple(environment):
+                if existing.casefold() == key.casefold():
+                    environment.pop(existing)
+            if value is not None:
+                environment[key] = value
     for key in tuple(environment):
         normalized = key.casefold()
-        if normalized == "e3_dev_test" or normalized.startswith("e3_dev_test_"):
+        if (
+            normalized == "e3_dev_test"
+            or normalized.startswith(("e3_dev_test_", "e3_state_"))
+            or normalized in {
+                "e3_user_state_dir", "e3_config_path", "e3_bridge_token_file",
+                "e3_bridge_token", "laser_aligner_config",
+                "e3_build_info",
+            }
+        ):
             environment.pop(key, None)
     bundle_value = getattr(sys, "_MEIPASS", None)
     if bundle_value is None:

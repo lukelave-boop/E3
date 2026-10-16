@@ -385,7 +385,7 @@ def test_start_feature_process_uses_exact_detached_popen_contract(
 
     monkeypatch.setattr(
         dev_test_launcher,
-        "feature_environment",
+        "prepare_feature_environment",
         lambda received, *, launcher_path: environment,
     )
     monkeypatch.setattr(
@@ -420,6 +420,76 @@ def test_start_feature_process_uses_exact_detached_popen_contract(
         )
     ]
     assert dll_directory_calls == [None, r"C:\launcher-bundle"]
+
+
+def test_launcher_isolates_existing_frozen_builds_and_keeps_each_scope(
+    tmp_path: Path,
+) -> None:
+    local = tmp_path / "real-local"
+    production = local / "E3 Positioning System"
+    (production / "config").mkdir(parents=True)
+    (production / "data").mkdir()
+    (production / "data" / "calibration.json").write_bytes(b"calibration evidence")
+    source_config = production / "config" / "network-local.json"
+    source_config.write_text(json.dumps({
+        "app": {"data_dir": str(production / "data")},
+        "machine": {"allow_motion": False},
+    }), encoding="utf-8")
+    before = source_config.read_bytes()
+    source = {"LOCALAPPDATA": str(local), "APPDATA": str(tmp_path / "real-roaming"),
+              "USERPROFILE": str(tmp_path / "real-home"),
+              "E3_CONFIG_PATH": str(source_config), "E3_USER_STATE_DIR": str(production)}
+    launcher = tmp_path / "permanent" / "E3 DEV TEST.exe"
+    first = FeatureBuild("First", FEATURE_VERSION, FEATURE_BRANCH, "a" * 40,
+                         _write_build(tmp_path, "first", revision="a" * 40))
+    second = FeatureBuild("Second", FEATURE_VERSION, FEATURE_BRANCH, "b" * 40,
+                          _write_build(tmp_path, "second", revision="b" * 40))
+    first_env = dev_test_launcher.prepare_feature_environment(first, launcher_path=launcher, source=source)
+    first_config = Path(first_env["E3_CONFIG_PATH"])
+    first_root = Path(first_env["E3_USER_STATE_DIR"])
+    assert first_root != production
+    assert Path(first_env["LOCALAPPDATA"]) / "E3 Positioning System" == first_root
+    assert json.loads(first_config.read_text())["app"]["data_dir"] == str(first_root / "data")
+    assert (first_root / "data" / "calibration.json").read_bytes() == b"calibration evidence"
+    first_config.write_text('{"newer_setting": true}', encoding="utf-8")
+    second_env = dev_test_launcher.prepare_feature_environment(second, launcher_path=launcher, source=first_env)
+    assert second_env["E3_USER_STATE_DIR"] != first_env["E3_USER_STATE_DIR"]
+    assert "newer_setting" not in Path(second_env["E3_CONFIG_PATH"]).read_text()
+    reopened = dev_test_launcher.prepare_feature_environment(first, launcher_path=launcher, source=source)
+    assert reopened["E3_CONFIG_PATH"] == str(first_config)
+    assert first_config.read_text() == '{"newer_setting": true}'
+    assert source_config.read_bytes() == before
+    assert source["E3_USER_STATE_DIR"] == str(production)
+    assert json.loads(first_env["E3_STATE_ORIGINAL_ENV"])["HOME"] is None
+    private_metadata = json.loads(Path(first_env["E3_BUILD_INFO"]).read_text())
+    assert private_metadata["manifest_url"] == ""
+    assert private_metadata["version"] == first.version
+    assert private_metadata["revision"] == first.revision
+    assert json.loads((first.exe.parent / "build-info.json").read_text())["manifest_url"]
+
+
+def test_scope_preparation_failure_never_starts_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    feature = FeatureBuild(FEATURE_NAME, FEATURE_VERSION, FEATURE_BRANCH,
+                           FEATURE_REVISION, _write_build(tmp_path, "feature"))
+    def fail(*args: object, **kwargs: object) -> dict[str, str]:
+        raise DevTestLauncherError("private settings unavailable")
+    monkeypatch.setattr(dev_test_launcher, "prepare_feature_environment", fail)
+    with pytest.raises(DevTestLauncherError, match="private settings unavailable"):
+        start_feature_process(feature, launcher_path=tmp_path / "launcher.exe",
+                              popen=lambda *args, **kwargs: pytest.fail("must not launch"),
+                              platform="win32")
+
+
+@pytest.mark.parametrize("version,revision", [("../escape", "a" * 40), ("0.7.1", "../escape")])
+def test_private_scope_rejects_unvalidated_identity(
+    tmp_path: Path, version: str, revision: str,
+) -> None:
+    feature = FeatureBuild("Bad", version, FEATURE_BRANCH, revision, tmp_path / "E3.exe")
+    with pytest.raises(DevTestLauncherError, match="invalid feature identity"):
+        dev_test_launcher.feature_state_root(feature, launcher_path=tmp_path / "launcher.exe",
+                                             source={"LOCALAPPDATA": str(tmp_path)})
 
 
 @pytest.mark.parametrize(
