@@ -42,6 +42,7 @@ from .planner_limits import (
     STREAM_COMMAND_RESERVE,
 )
 from .raster_asset import RasterAssetMetadata, probe_raster_asset
+from .raster_scan import project_scan_angle, scan_cos_sin
 
 if TYPE_CHECKING:
     from ..calibration.support import HoneycombCoordinateFrame
@@ -805,15 +806,14 @@ def _bounded_scan_has_serialized_motion(
     ],
     *,
     fill_rule: PathFillRule,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
 ) -> bool | None:
     """Classify exact linear scan spans, or defer when bounded work is exceeded."""
     interval = _finite_number(layer.line_interval_mm)
     angle_degrees = _finite_number(layer.scan_angle_deg)
     if interval is None or interval <= 0.0 or angle_degrees is None:
         return None
-    angle = math.radians(angle_degrees)
-    cosine = math.cos(angle)
-    sine = math.sin(angle)
+    cosine, sine = scan_cos_sin(project_scan_angle(layer, coordinate_frame))
     scan_polygons = tuple(
         tuple(
             (
@@ -975,6 +975,11 @@ def _object_has_potential_nonzero_output(
                 layer,
                 serialized_design,
                 fill_rule=PathFillRule.EVENODD,
+                coordinate_frame=(
+                    context.coordinate_frame
+                    if document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
+                    else None
+                ),
             )
         return True
 
@@ -1046,6 +1051,11 @@ def _object_has_potential_nonzero_output(
             layer,
             serialized_design,
             fill_rule=geometry.fill_rule,
+            coordinate_frame=(
+                context.coordinate_frame
+                if document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
+                else None
+            ),
         )
 
     if layer.mode is not LayerMode.LINE:
@@ -1082,10 +1092,12 @@ def _object_has_potential_nonzero_output(
     return None if deferred else False
 
 
-def _image_scan_counts(item: SceneObject, layer: OperationLayer) -> tuple[int, int]:
-    angle = math.radians(layer.scan_angle_deg)
-    cosine = math.cos(angle)
-    sine = math.sin(angle)
+def _image_scan_counts(
+    item: SceneObject,
+    layer: OperationLayer,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
+) -> tuple[int, int]:
+    cosine, sine = scan_cos_sin(project_scan_angle(layer, coordinate_frame))
     scan_points = tuple(
         (x * cosine + y * sine, -x * sine + y * cosine)
         for x, y in _rectangle_corners(item)
@@ -1871,7 +1883,13 @@ def _build_job_preflight_report(
             and type(layer.passes) is int
             and layer.passes >= 1
         ):
-            row_count, column_count = _image_scan_counts(item, layer)
+            row_count, column_count = _image_scan_counts(
+                item,
+                layer,
+                context.coordinate_frame
+                if document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
+                else None,
+            )
             aggregate_rows += row_count * layer.passes
             aggregate_samples += row_count * column_count
             power_percent = _finite_number(layer.power_percent)

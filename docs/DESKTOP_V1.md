@@ -290,6 +290,13 @@ editable starting points, not physically verified material guarantees; saved
 projects retain their own layers unchanged.
 Fill and raster layers generate scanline toolpaths. Their quick editor exposes
 line interval and scan angle; raster additionally exposes laser-off overscan.
+Raster scan angles are relative to machine X: 0° keeps Y constant throughout
+each sweep, then advances to the next row. The artwork still follows the
+calibrated honeycomb placement and its own rotation or mirror settings. Nonzero
+raster angles select another machine scan direction. Fill scan angles remain
+relative to project X. These meanings also apply to material recipes and newly
+generated jobs from existing projects; generate and review a fresh preview.
+Prepared and running programs keep their original scan direction.
 Imported PNG, JPEG, and BMP images are alpha-composited onto white,
 area-prefiltered when the physical raster pitch minifies the source, and use
 deterministic 8x8 ordered dithering at the operation's maximum power. TIFF is

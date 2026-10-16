@@ -1683,7 +1683,7 @@ def test_image_raster_uses_contiguous_serpentine_rows_and_off_overscan(
     assert preflight.lines[-1] == "M5"
 
 
-def test_honeycomb_local_raster_rows_are_sampled_locally_then_rigidly_placed():
+def test_honeycomb_local_raster_rows_follow_machine_x_at_calibrated_placement():
     document = ProjectDocument.new(
         "Local raster",
         Bounds(0, 0, 100, 100),
@@ -1715,10 +1715,10 @@ def test_honeycomb_local_raster_rows_are_sampled_locally_then_rigidly_placed():
 
     powered = [move for move in job.plan.moves if move.laser_on]
     assert powered
-    # Local horizontal rows become vertical machine rows under this +90-degree frame.
-    assert all(move.start_x == pytest.approx(move.end_x) for move in powered)
-    assert sorted({move.start_x for move in powered}) == pytest.approx([70.0, 80.0])
-    assert all(abs(move.end_y - move.start_y) == pytest.approx(20.0) for move in powered)
+    # The artwork rotates +90 degrees, while scan rows remain machine-horizontal.
+    assert all(move.start_y == pytest.approx(move.end_y) for move in powered)
+    assert sorted({move.start_y for move in powered}) == pytest.approx([60.0, 70.0])
+    assert all(abs(move.end_x - move.start_x) == pytest.approx(20.0) for move in powered)
 
 
 def test_honeycomb_local_raster_overscan_is_checked_after_placement():
@@ -1746,7 +1746,7 @@ def test_honeycomb_local_raster_overscan_is_checked_after_placement():
             document,
             LaserSettings(boundary_margin_mm=0),
             coordinate_frame=honeycomb_frame(),
-            machine_work_area=WorkArea(0, 120, 0, 75),
+            machine_work_area=WorkArea(0, 85, 0, 160),
         )
 
 
@@ -1851,9 +1851,11 @@ def test_honeycomb_local_image_raster_preserves_local_sampling(tmp_path: Path):
 
     powered = [move for move in job.plan.moves if move.laser_on]
     assert powered
-    assert all(move.start_x == pytest.approx(move.end_x) for move in powered)
-    assert sorted({move.start_x for move in powered}) == pytest.approx([69.5, 70.5])
-    assert all(abs(move.end_y - move.start_y) == pytest.approx(4.0) for move in powered)
+    assert all(move.start_y == pytest.approx(move.end_y) for move in powered)
+    assert sorted({move.start_y for move in powered}) == pytest.approx(
+        [68.5, 69.5, 70.5, 71.5]
+    )
+    assert all(abs(move.end_x - move.start_x) == pytest.approx(2.0) for move in powered)
 
 
 def test_image_source_top_matches_canvas_machine_y_with_mirrors_and_rotation(

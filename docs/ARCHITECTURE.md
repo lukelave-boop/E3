@@ -1255,10 +1255,12 @@ schema-1 files migrate as machine-coordinate projects. A honeycomb-local project
 local geometry; the movable support pose remains calibration state. Camera
 rectification maps each local output pixel through the rigid support pose and
 the complete bed/lens mapping. Project generation performs the inverse boundary
-operation: it plans vectors and raster rows locally, validates them against the
-support, rigidly places them in machine coordinates, applies laser-spot
-correction, and validates both desired-beam and controller paths against the
-selected execution authority. Ordinary jobs use the guarded machine rectangle;
+operation: it plans vectors and fill rows in the project frame. Raster scan
+angles are machine-relative, so raster construction subtracts the support pose's
+rotation from the requested angle before sampling local artwork. The resulting
+geometry is validated against the support, rigidly placed in machine coordinates,
+and laser-spot corrected. Both desired-beam and controller paths are validated
+against the selected execution authority. Ordinary jobs use the guarded machine rectangle;
 an execution-bound honeycomb job may use the separately configured fixed convex
 polygon. Generated G-code remains absolute machine millimetres.
 
@@ -2295,12 +2297,19 @@ Preview but cannot submit a job directly. Start Here remains a non-executing
 replacement operation and the replacement enters the same exact-preview gate.
 
 The desktop supports line, fill, and raster operation layers. Fill and binary
-vector raster convert closed silhouettes into angled scanlines. Imported images
-are alpha-composited onto white, sampled on an exact physical-pitch lattice at
-the operation's angle in the active project frame, area-prefiltered when
-that lattice minifies the source, and converted with deterministic 8x8 ordered
-grayscale dithering. The source top edge follows the
-same positive-project-Y, mirror, and rotation transform shown by the canvas.
+vector raster convert closed silhouettes into angled scanlines. Raster angles
+are measured from machine X, while fill angles retain the active project frame.
+A honeycomb-local raster subtracts the support rotation during local planning;
+the later rigid placement restores the requested machine direction. At 0° each
+sweep holds machine Y constant even when the support or artwork is rotated.
+Imported images are alpha-composited onto white, sampled on that exact
+physical-pitch lattice, area-prefiltered when the lattice minifies the source,
+and converted with deterministic 8x8 ordered grayscale dithering. The source
+top edge follows the same positive-project-Y, mirror, and rotation transform
+shown by the canvas. This changes raster sampling orientation, not artwork
+placement. Existing numeric raster angles acquire this machine-relative meaning
+when a job is regenerated; project serialization and already prepared immutable
+programs are unchanged. The browser single-SVG pipeline is unaffected.
 One shared PNG/JPEG/BMP contract bounds encoded bytes, dimensions, bit depth,
 channels, and conservative decoded bytes before decode; TIFF is rejected. The
 pre-import scan uses that encoded-payload/metadata contract without decoding

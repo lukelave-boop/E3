@@ -54,6 +54,15 @@ The orange boundary encloses job movement after that approach, including raster
 run-up/run-out and row transfers. Full travel extents still drive fitting and
 safety validation; generated motion, power, calibration and settings are unchanged.
 
+## Raster scan direction
+
+Desktop raster jobs use machine-relative scan angles: **0° scans along machine
+X**, with Y held constant through each sweep and advancing between rows. Artwork
+still follows the calibrated honeycomb's position and rotation. Nonzero raster
+angles remain selectable relative to machine X; fill angles remain relative to
+project X. Generate a fresh preview to use this behavior for a saved project.
+Existing prepared or running programs keep their original motion.
+
 ## Raster surface and verified travel
 
 An explicitly confirmed calibrated surface can now be recorded as a separate

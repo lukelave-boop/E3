@@ -104,13 +104,29 @@ def _result(*, has_alpha: bool = True) -> Any:
     )
 
 
+def _delete_dialog(
+    dialog: RasterVectorizationDialog,
+    application: QtWidgets.QApplication,
+) -> None:
+    destroyed: list[bool] = []
+    dialog.destroyed.connect(lambda *_args: destroyed.append(True))
+    dialog.deleteLater()
+    # processEvents alone does not deliver DeferredDelete in this manual loop.
+    # Scope delivery to our dialog; other modules may own unrelated Qt objects.
+    QtCore.QCoreApplication.sendPostedEvents(
+        dialog,
+        QtCore.QEvent.Type.DeferredDelete,
+    )
+    assert destroyed == [True]
+    application.processEvents()
+
+
 def _close_dialog(
     dialog: RasterVectorizationDialog,
     application: QtWidgets.QApplication,
 ) -> None:
     dialog.reject()
-    dialog.deleteLater()
-    application.processEvents()
+    _delete_dialog(dialog, application)
 
 
 def _overlay_sample(dialog: RasterVectorizationDialog) -> QtGui.QColor:
@@ -200,8 +216,7 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     assert dialog.accepted_options is not None
     assert dialog.accepted_options.threshold == 91
     assert dialog.accepted_options.detection_mode == RasterDetectionMode.MANUAL_THRESHOLD
-    dialog.deleteLater()
-    qt_application.processEvents()
+    _delete_dialog(dialog, qt_application)
 
 
 def test_quick_preview_is_responsive_and_independent_of_slow_verified_fit(
@@ -487,8 +502,7 @@ def test_dialog_accepts_only_the_direct_authoritative_geometry(
         == direct.project_path_geometry()
     )
     assert dialog.vectorization_result.metadata() == direct.metadata()
-    dialog.deleteLater()
-    qt_application.processEvents()
+    _delete_dialog(dialog, qt_application)
 
 
 def test_preview_work_is_bounded_to_one_running_and_one_latest_pending(
@@ -618,8 +632,7 @@ def test_cancel_during_quick_stage_has_no_accepted_result(
     assert dialog.result() == QtWidgets.QDialog.DialogCode.Rejected
     assert dialog.vectorization_result is None
     assert dialog.accepted_options is None
-    dialog.deleteLater()
-    qt_application.processEvents()
+    _delete_dialog(dialog, qt_application)
 
     release_quick.set()
     _wait_until(qt_application, callback_finished.is_set)

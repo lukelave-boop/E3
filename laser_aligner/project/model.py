@@ -273,6 +273,7 @@ class OperationLayer:
     power_percent: float = 10.0
     passes: int = 1
     line_interval_mm: float = 0.10
+    # Raster: machine X reference; fill: active project X reference.
     scan_angle_deg: float = 0.0
     overscan_percent: float = 2.5
     vector_power_correction: float = 0.0

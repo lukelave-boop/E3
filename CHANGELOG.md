@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - machine-axis raster scans (2026-10-16)
+
+- Interpret desktop raster scan angles relative to machine X. The default 0°
+  keeps Y constant during each sweep even when the calibrated honeycomb is rotated.
+- Preserve calibrated artwork placement and object transforms; sample images and
+  closed vector raster silhouettes in the requested machine scan direction.
+- Keep fill scan angles relative to the project frame and retain existing travel,
+  powered-surface and command-budget checks. Prepared/running programs are unchanged;
+  saved projects use the new direction when a fresh job is generated.
+
 ## Unreleased - managed local build storage
 
 - Route normal Windows, Home and DEV TEST launcher build outputs, caches and

@@ -1,5 +1,83 @@
 # Current repository state
 
+## Machine-axis raster generation (2026-10-16)
+
+Branch `codex/machine-x-raster` retains the integrated surface-travel and
+upload/pause/Start work. Integration PR #46 is merged; raster
+[PR #47](https://github.com/lukelave-boop/E3/pull/47) now targets `main`, whose
+integrated source tree matches the prior `6d078f3` base. Runtime revision
+`47b381bc05cce422f49e50edff2d8e4bc9d30d0e` generates raster scan angles relative
+to machine X: 0 degrees holds Y constant through each sweep while image/vector
+artwork retains calibrated honeycomb placement. Explicit nonzero raster angles
+remain selectable. Fill stays project-relative. Persisted values/schema and
+already prepared or running programs are unchanged. The browser single-SVG
+pipeline is unaffected.
+
+A shared angle resolver feeds exact image/vector sampling, aggregate limits,
+and advisory preflight. Exact cardinal trigonometry retains boundary rows;
+placed cardinal rows share one perpendicular coordinate to avoid output-rounding
+micro-steps. Real direction mismatches reject. Local, placed, spot-corrected,
+verified-surface and travel-envelope checks remain authoritative, as do laser-off
+runout and existing machine execution gates.
+
+Local Windows Python 3.14 verification passed 174 toolpath/machine-axis tests
+and 118 advisory-preflight tests. Raster/surface/continuity/golden/power coverage
+passed 276 checks; its historical-angle fixture was adjusted explicitly and
+verified in the subsequent 105-check surface/desktop/preflight run, including
+offscreen widgets. These suite counts overlap. Repository Ruff and application
+compileall passed. Independent static review found no actionable issues.
+
+Offline regeneration of the latest saved project with its saved calibration
+and configuration produced 1,681 alternating raster rows at 0.100 mm pitch.
+All 1,216,331 sweep segments had exactly zero Y change. The digest of all 2,274
+powered cut segments matched the baseline, and input/model hashes were unchanged.
+Commands changed from 1,223,350 to 1,223,660 (+0.0253%); bytes from 37,042,686 to
+37,323,927 (+0.759%). Baseline/feature timings were 112.28/107.40 seconds during
+concurrent packaging and do not establish a speed improvement. This is offline
+regeneration, not inspection of the exact program currently running.
+
+The frozen **0.7.267** bundle matches runtime revision `47b381bc`: 192 archived
+E3 modules, its entrypoint, three packaged resources and build metadata passed
+exact committed-source verification. EXE SHA-256 is
+`8a52d48444b74fef7e49c0116dd3436faca40decbe5a61c60c6ed9204b443106`.
+An isolated Python child imported the archived code and bundled native Qt 6.11.2
+extensions successfully. This import smoke constructed no QApplication/runtime,
+opened no QSettings and requested no hardware or network access. The canonical
+EXE and full frozen GUI were not launched: native QSettings are shared with the
+current application, and this packaged entrypoint ignores CLI flags.
+
+PyInstaller completed the bundle, but Inno Setup failed while compressing the
+long Qt QML `QmlAssetDownloaderPrivateplugin_init.cpp.obj` path with "The system
+cannot find the path specified." Both collected Debug/RelWithDebInfo files exist;
+installer publication is not verified. The failed managed-build lease is not
+reported as successful or removed. This installer failure is separate from the
+verified direct EXE used by DEV TEST; no packaging guard was bypassed.
+
+The permanent **E3 DEV TEST** pointer was selected through
+`packaging/set_dev_test_feature.py` and its validated atomic readback matches
+version 0.7.267, runtime revision `47b381bc`, and this exact target:
+`C:\Users\lukel\.codex\worktrees\machine-x-raster\E3\.e3-builds\windows-windows-74fb916504dc4676bcbe689659f1dd75\dist\E3\E3.exe`.
+Selection applies to the next launcher invocation only. No EXE was launched,
+no current process was replaced, and the current job remains untouched.
+
+[Compatibility run 38912570992](https://github.com/lukelave-boop/E3/actions/runs/38912570992)
+passed Windows Python 3.10, repository lint and POSIX checks. Its initial
+Windows Python 3.12 desktop job failed with a native Qt access violation in
+`test_raster_vectorize_dialog.py::test_dialog_previews_controls_stats_and_acceptance_contract`
+after 8,458 passed and 65 skipped tests. A test-only cleanup change now delivers
+DeferredDelete to each owned dialog while QApplication remains alive; all ten
+focused dialog tests pass with zero surviving dialogs, and 28 related checks
+pass. That does not establish
+the cause of the CI crash. The complete compatibility merge gate for the final
+test/documentation head is tracked by PR #47; no full-green claim is made here.
+The frozen application retains runtime revision `47b381bc` because subsequent
+changes concern test cleanup and evidence only.
+
+Interactive GUI, real camera, controller, laser and physical engraving
+acceptance remain pending. No active machine configuration, calibration, Pi
+software or running application was changed. Use E3 DEV TEST after the current
+job has finished to test the selected build.
+
 ## Integration context (2026-10-16)
 
 Draft integration PR: https://github.com/lukelave-boop/E3/pull/46.
