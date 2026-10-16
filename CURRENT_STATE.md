@@ -1,5 +1,43 @@
 # Current repository state
 
+## Detailed-path command streaming fix (2026-10-15)
+
+The video slowdown is consistent with command starvation: the saved raster
+contains 173,663 G1 moves at the same F6000, mostly 0.1 mm segments, while the
+previous sender imposed a 10 ms quiet interval and receive-thread handoff after
+each acknowledgement. Offline full-queue-timeout measurements reproduced only
+32.35-32.42 admitted moves/s. This is software evidence, not calibrated motion.
+
+Consecutive canonical G1 runs now use continuous receive ownership, lossless
+modal wire encoding, and bounded FIFO acknowledgement accounting. Only strict
+handshake OPT capacity evidence permits multiple outstanding commands; unknown
+capacity keeps one pending line. All other commands remain fences. Original
+immutable program validation and per-write safety checks remain authoritative;
+Stop/session/motion/hardware/authorization gates are checked again after input
+draining immediately before a physical write. Oversized stream lines reject
+before Start can arm, Home or move focus. See [command streaming](docs/COMMAND_STREAMING.md).
+
+Verification so far: the original focused regression batch passed 453 checks;
+two old wire-format expectations were updated without weakening cancellation
+assertions. The combined stream/encoding/session group passed 160 checks; six
+additional admission-race/capacity checks passed. Repository Ruff and compileall
+pass. Full Windows local and exact-commit compatibility CI are pending. POSIX
+PTY cases explicitly skip on Windows; Linux execution remains pending. Tests
+use fake controllers or PTYs, not physical controllers or laser output.
+
+The Pi was read-only inspected: disconnected, unarmed, no active job or client
+owner; its three-file predecessor matches the pinned aac45cd source hashes.
+The new companion installer defaults to dry run, validates all hashes before
+replacement, requires the service inactive for apply, and retains backups.
+Deployment and physical motion/Stop qualification remain pending. No machine
+settings, calibration, firmware or baud changes are part of this fix.
+
+The existing Windows image-editor DEV TEST selection remains active
+(0.7.211, ca6af327); network execution is on the Pi and requires this companion
+update. No replacement Windows executable is required. Serial bandwidth and
+controller acceleration can still constrain F6000 on dense patterns; steady
+physical speed at every setting is not yet verified.
+
 ## Development 0.7.220 published and verified (2026-10-15)
 
 [PR #44](https://github.com/lukelave-boop/E3/pull/44) was merged into main at

@@ -1,5 +1,10 @@
 # Primary GRBL session authority
 
+Consecutive canonical G1 moves now use the bounded stream ownership described
+in [command streaming](COMMAND_STREAMING.md). The quiet boundary remains at
+each stream fence and every ordinary transaction. The historical one-line
+transaction description below applies outside that explicit motion stream.
+
 This is implementation step 1 of the September 2026 whole-application audit.
 It changes the primary controller lifecycle. Desktop/Pi snapshot reporting,
 automatic Home on Start, secondary Air Assist recovery, and independent cooling

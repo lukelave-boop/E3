@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — continuous GRBL command streaming
+
+- Remove per-pixel acknowledgement quiet delays from contiguous guarded G1 runs.
+  Use bounded FIFO streaming only with reported controller capacity; otherwise
+  retain one outstanding command inside the continuous receive session.
+- Compress redundant wire words without changing coordinates, power, feed,
+  image sampling or immutable program bytes. Retain strict fences, live write
+  authorization, fault quarantine and priority Stop/laser-off cleanup.
+- Add simulator and POSIX transport regressions. Physical feed and engraving
+  acceptance remain separate from automated verification; see
+  [command streaming](docs/COMMAND_STREAMING.md).
+
 ## Development 0.7.220 — published 2026-10-15
 
 PR #44 is merged and the accumulated changes through `30f23b2a652f` are available

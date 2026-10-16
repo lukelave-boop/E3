@@ -1,5 +1,12 @@
 # Architecture
 
+MachineService owns continuous GRBL G1 streams. ControllerReceiver temporarily
+gives the job worker exclusive receive pumping with bounded FIFO byte credit;
+ordinary commands retain individual transactions and quiet fences. The pure
+`machine/grbl_stream.py` encoder removes only redundant modal wire words after
+the original immutable program is validated. Both execution pipelines share
+these guards; see [command streaming](COMMAND_STREAMING.md).
+
 The development publisher reuses the complete Compatibility CI workflow from
 its own commit before either package build. Publication requires that gate and
 both packages; only the publication job can write repository contents. See

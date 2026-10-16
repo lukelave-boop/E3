@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+GRBL jobs use continuous command streaming for consecutive linear moves, with
+lossless wire compression and guarded FIFO acknowledgements. This removes the
+per-segment quiet delay in detailed raster areas while preserving Stop, focus,
+arming and program bounds. Pi-owned jobs require the matching Pi companion.
+Serial bandwidth can still limit requested feed; see [command streaming](docs/COMMAND_STREAMING.md).
+
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.
 

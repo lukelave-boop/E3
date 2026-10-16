@@ -1,5 +1,13 @@
 # Roadmap
 
+## Continuous command streaming
+
+Implemented for verification: bounded GRBL G1 streaming, exact modal wire
+compression, and original Stop/arming/session guards. Remaining acceptance is
+the matched Pi installation and supervised physical feed/Stop validation on the
+actual controller. Serial bandwidth still bounds dense-pattern throughput;
+see [command streaming](docs/COMMAND_STREAMING.md).
+
 Release preparation now gates packaging and publication on exact-commit Windows
 compatibility, Ruff and POSIX controller checks. Physical run-up, placement and
 installed-update handoff qualification remain separate; see [release review](docs/RELEASE_REVIEW.md).

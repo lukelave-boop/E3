@@ -65,6 +65,7 @@ from .controller_session import (
     ControllerState,
 )
 from .focus_bounds import FocusXYBounds
+from .grbl_stream import GrblStreamCompactor, canonical_linear_move, parse_stream_window
 from .io_diagnostics import thread_snapshot
 from .job_focus import binding_id as focus_binding_id
 from .job_focus import check_context as check_job_focus_context
@@ -3132,6 +3133,7 @@ class MachineService:
 
     def _record_ack_timeout_evidence(
         self, session: ControllerSession, sequence: int | None, timeout: float,
+        *, command: str | None = None,
     ) -> None:
         # Observe the exact failed generation BEFORE end()/quarantine/close.
         # This sends no query, consumes no input, and grants no authority.
@@ -3144,7 +3146,7 @@ class MachineService:
                 "endpoint": session.resolved_endpoint,
                 "protocol": session.dialect.id,
                 "sequence": sequence,
-                "command": diagnostics["last_tx_command"],
+                "command": diagnostics["last_tx_command"] if command is None else command,
                 "timeout_seconds": timeout,
                 "last_success": diagnostics["last_successful_transaction"],
                 "transcript": diagnostics["transcript"][-8:],
@@ -6013,6 +6015,8 @@ class MachineService:
                     )
                 if authorization_phrase.strip() != self.ARM_PHRASE:
                     raise SafetyError("Arming phrase did not match")
+            if requested_session is not None:
+                self._require_program_stream_window(program, requested_session)
             selected_focus = self._selected_job_focus(program)
             if selected_focus is not None and self._laser_focus.requires_clearance:
                 self.focus_control("clearance", confirmed=True,
@@ -6070,6 +6074,7 @@ class MachineService:
         start_stop_epoch: int,
     ) -> dict[str, Any]:
         with self._lock:
+            self._require_program_stream_window(program, self._require_session())
             if self._laser_focus.requires_clearance:
                 raise SafetyError("Return Z to focus clearance before starting a job")
             focus_plan = self._selected_job_focus(program)
@@ -6303,6 +6308,8 @@ class MachineService:
         command: str,
         *,
         track_transaction: bool = True,
+        stream_write: Callable[[Callable[[], None]], bool] | None = None,
+        wire_command: str | None = None,
     ) -> bool:
         """Execute one job line; return whether the primary controller was written."""
 
@@ -6339,21 +6346,52 @@ class MachineService:
             transaction_started = time.monotonic()
             sequence = (
                 context.session.diagnostics.next_command(command)
-                if track_transaction
+                if track_transaction and stream_write is None
                 else None
             )
             try:
-                if sequence is not None:
+                if stream_write is not None:
+                    if not track_transaction or wire_command is None:
+                        raise MachineError("Invalid streamed motion transaction")
+
+                    def write_stream_line() -> None:
+                        nonlocal sequence, transaction_started
+                        # Admission drains queued input first. STOP may have
+                        # latched during that drain, before receiver retirement.
+                        # Do not acquire the service lock while RX ingress is
+                        # owned: session retirement sets this event first.
+                        if job_stop.is_set():
+                            raise MachineError("Job stopped")
+                        self._raise_session_failure(context.session)
+                        if self.settings.allow_motion is not True:
+                            raise SafetyError("Motion commands are disabled in machine.allow_motion")
+                        if self.hardware_enabled is not True:
+                            raise SafetyError("Hardware control is not enabled for this process")
+                        if context.status.powered and not self._job_laser_authorized:
+                            raise SafetyError("Powered job authorization was revoked")
+                        if (
+                            not self._same_controller_session(self._session, context.session)
+                            or self._controller_state is not ControllerState.JOB_RUNNING
+                        ):
+                            raise MachineError("Controller job session was superseded")
+                        transaction_started = time.monotonic()
+                        sequence = context.session.diagnostics.next_command(wire_command)
+                        context.session.transport.write_line(wire_command)
+
+                    if not stream_write(write_stream_line):
+                        return False
+                    self._job_context.last_stream_transaction = (sequence, transaction_started)
+                elif sequence is not None:
                     self._begin_session_transaction(
                         context.session, sequence,
                         lambda: context.session.transport.write_line(command),
                     )
                 else:
                     context.session.transport.write_line(command)
-                self._append_log("TX", command)
+                self._append_log("TX", wire_command if stream_write is not None else command)
             except Exception as exc:
                 write_error = exc
-            if sequence is not None:
+            if sequence is not None and stream_write is None:
                 self._job_context.pending_transaction = (
                     context.session,
                     sequence,
@@ -6368,6 +6406,116 @@ class MachineService:
                 f"Job command {command!r} failed while writing: {write_error}"
             ) from write_error
         return True
+
+    @staticmethod
+    def _require_program_stream_window(
+        program: ValidatedProgram, session: ControllerSession,
+    ) -> None:
+        """Reject unstreamable runs before Start can arm, Home or move focus."""
+        if session.receiver is None or session.dialect is not GRBL_DIALECT:
+            return
+        window = parse_stream_window(session.diagnostics.snapshot()["firmware_identity"])
+        capacity = window.rx_bytes or 127
+        lines = program.lines
+        index = 0
+        while index < len(lines):
+            if (not canonical_linear_move(lines[index]) or index + 1 >= len(lines)
+                    or not canonical_linear_move(lines[index + 1])):
+                index += 1
+                continue
+            compactor = GrblStreamCompactor()
+            while index < len(lines) and canonical_linear_move(lines[index]):
+                if len(compactor.encode(lines[index]).encode("ascii")) + 1 > capacity:
+                    raise SafetyError(
+                        f"Program line {index + 1} exceeds the controller stream "
+                        f"byte window ({capacity} bytes including newline)"
+                    )
+                index += 1
+
+    def _stream_running_job_moves(
+        self, context: _JobRunContext, lines: list[str], start: int, *, timeout: float,
+    ) -> int:
+        """Stream one contiguous canonical G1 run, fencing every other command.
+
+        Validation and authorization always use the original immutable program.
+        Only redundant modal words/decimal spelling are removed on the wire.
+        Unknown controller capacity permits just one outstanding line; it still
+        avoids the per-pixel quiet delay and background-reader lock handoff.
+        """
+        session = context.session
+        receiver = session.receiver
+        if receiver is None or session.dialect is not GRBL_DIALECT:
+            raise MachineError("Continuous motion streaming requires a GRBL receive owner")
+        window = parse_stream_window(session.diagnostics.snapshot()["firmware_identity"])
+        # One line does not require an assumed controller RX capacity. Known
+        # capacity is bounded again by the receive owner, counting the newline.
+        capacity = window.rx_bytes or 127
+        token = start + 1
+        pending: deque[tuple[int, int, float, str]] = deque()
+        compactor = GrblStreamCompactor()
+
+        def acknowledge() -> None:
+            source_index, sequence, started, wire_command = pending[0]
+            while True:
+                self._raise_session_failure(session)
+                if context.stop_event.is_set():
+                    raise MachineError("Job stopped")
+                self._raise_if_secondary_faulted()
+                remaining = started + timeout - time.monotonic()
+                if remaining <= 0:
+                    self._record_ack_timeout_evidence(session, sequence, timeout, command=wire_command)
+                    raise MachineError(f"Controller did not acknowledge streamed motion within {timeout:g} seconds")
+                reply = receiver.stream_read_ack(token, timeout=min(0.05, remaining))
+                if reply is None:
+                    continue
+                owner, response = reply
+                if owner != source_index:
+                    raise MachineError("Controller stream acknowledgement ownership mismatch")
+                self._classify_and_record_rx(session, sequence, response)
+                session.diagnostics.record_success(
+                    sequence, started_monotonic=started,
+                    terminal_classification=CommandResponseKind.ACKNOWLEDGEMENT.value,
+                )
+                pending.popleft()
+                with self._lock:
+                    if self._active_job_context is context:
+                        context.status.completed_lines = source_index + 1
+                return
+
+        receiver.begin_stream(token)
+        index = start
+        # A failed exchange stays owned until the existing exact-session abort
+        # retires it. Never release an ambiguous stream for another command.
+        while index < len(lines) and canonical_linear_move(lines[index]):
+            command = lines[index]
+            wire = compactor.encode(command)
+            byte_count = len(wire.encode("ascii")) + 1
+            if byte_count > capacity:
+                raise MachineError("Motion command exceeds the controller stream byte window")
+            while True:
+                if pending and (len(pending) >= window.max_pending
+                                or time.monotonic() >= pending[0][2] + timeout):
+                    acknowledge()
+                    continue
+                accepted = self._write_running_job_line(
+                    command, wire_command=wire,
+                    stream_write=lambda write, source_index=index, size=byte_count: receiver.stream_write(
+                        token, source_index, size, write, capacity=capacity,
+                    ),
+                )
+                if accepted:
+                    sequence, started = self._job_context.last_stream_transaction
+                    pending.append((index, sequence, started, wire))
+                    break
+                if not pending:
+                    raise MachineError("Controller stream window cannot admit a motion line")
+                acknowledge()
+            index += 1
+        while pending:
+            acknowledge()
+        receiver.finish_stream(token, quiet_interval=_POST_TERMINAL_QUIET_SECONDS, timeout=timeout)
+        self._job_context.last_stream_transaction = None
+        return index
 
     def _selected_job_focus(self, program):
         if material_surface_binding(program.lines) is not None:
@@ -6513,7 +6661,10 @@ class MachineService:
             active_focus_mode = "CUT"
             if context.focus_plan is not None:
                 self._move_job_focus(context, clearance=True)
+            streamed_through = 0
             for index, line in enumerate(lines, start=1):
+                if index <= streamed_through:
+                    continue
                 if parse_raster_boundary(line) is not None:
                     continue
                 if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
@@ -6548,6 +6699,15 @@ class MachineService:
                                                       timeout=job_ack_timeout)
                     self._move_job_focus(context, clearance=False, focus_mode=active_focus_mode)
                     focused = True
+                if (context.session.dialect is GRBL_DIALECT
+                        and context.session.receiver is not None
+                        and (context.focus_plan is None or focused)
+                        and canonical_linear_move(line)
+                        and index < len(lines) and canonical_linear_move(lines[index])):
+                    streamed_through = self._stream_running_job_moves(
+                        context, lines, index - 1, timeout=job_ack_timeout,
+                    )
+                    continue
                 primary_written = self._write_running_job_line(line)
                 # GRBL may delay an acknowledgement while its planner is full or
                 # while a standalone laser-state command synchronizes queued
@@ -6720,6 +6880,7 @@ class MachineService:
                 )
             self._job_context.current = None
             self._job_context.pending_transaction = None
+            self._job_context.last_stream_transaction = None
 
     def request_stop(self, emergency: bool = False, *, _recover: bool = True) -> None:
         """Quarantine the exact session and issue bounded priority laser-off.

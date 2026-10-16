@@ -11,13 +11,21 @@ from pathlib import Path
 
 import pytest
 
+from scripts import package_pi_control_priority as packager
 from scripts.package_pi_control_priority import PREVIOUS, PREVIOUS_PACKAGE, PREVIOUS_REVISION, ROOT, package
 from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 from scripts.package_z_setup_speed import PREVIOUS as COMPLETE_PREVIOUS
+from tests.historical_companion import require_exact, selected_source
 
 CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
 
 CURRENT_FILES = {**COMPLETE_PREVIOUS, **CURRENT_DEPENDENCIES}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def historical_sources(tmp_path_factory):
+    with selected_source(packager, tmp_path_factory.mktemp("historical-priority-sources")) as tree:
+        yield tree
 
 
 def load_installer(bundle):
@@ -51,7 +59,7 @@ def kit(tmp_path, monkeypatch):
     return installer, project, bundle, originals
 
 
-def test_current_upgrade_includes_capability_implementation_and_preserves_operator_data(kit):
+def test_historical_upgrade_includes_capability_implementation_and_preserves_operator_data(kit):
     installer, project, bundle, originals = kit
     preserved = ("config/pi-hardware.json", "config/pi-hardware.json.laser-focus.json",
                  "config/pi-hardware.json.z-limits.json", "config/pi-hardware.json.laser-focus.json.z-retention.json",
@@ -170,7 +178,7 @@ def test_package_contains_exact_paths_and_reviewable_idle_installation_commands(
     assert {path.relative_to(bundle).as_posix() for path in (bundle / "laser_aligner").rglob("*")
             if path.is_file()} == CURRENT_FILES.keys()
     for entry in manifest["files"]:
-        assert (bundle / entry["path"]).read_bytes() == (ROOT / entry["path"]).read_bytes().replace(b"\r\n", b"\n")
+        assert (bundle / entry["path"]).read_bytes() == (packager.ROOT / entry["path"]).read_bytes().replace(b"\r\n", b"\n")
     guide = (bundle / "INSTALL.md").read_text(encoding="utf-8")
     assert str(bundle.resolve()).replace("'", "''") in guide
     assert f"e3_priority=/home/greenhouse-climate/{bundle.name}" in guide
@@ -188,17 +196,18 @@ def require_predecessor_git():
         pytest.skip("The pinned 671b235 Git revision is required for real predecessor verification")
 
 
-def test_explicit_revision_packages_exact_git_payload(tmp_path):
+def test_explicit_revision_packages_exact_git_payload(tmp_path, monkeypatch):
     require_predecessor_git()
+    monkeypatch.setattr(packager, "ROOT", ROOT)
     bundle = package(tmp_path / "dist", revision=PREVIOUS_REVISION)
     manifest = json.loads((bundle / "manifest.json").read_bytes())
     assert manifest["source_revision"] == PREVIOUS_REVISION
     assert {entry["path"]: entry["sha256_lf"] for entry in manifest["files"]} == PREVIOUS
 
 
-def test_current_package_needs_no_git_history(tmp_path, monkeypatch):
+def test_historical_selected_source_package_needs_no_git_history(tmp_path, monkeypatch):
     def reject_history(*args, **kwargs):
-        raise AssertionError("Current source packaging must work in a shallow checkout")
+        raise AssertionError("Selected source packaging must work in a shallow checkout")
     monkeypatch.setattr(subprocess, "check_output", reject_history)
     bundle = package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
@@ -206,7 +215,7 @@ def test_current_package_needs_no_git_history(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("name", [*CURRENT_DEPENDENCIES, "laser_aligner/machine/service.py"])
-def test_current_capability_dependencies_reject_unknown_edits_before_replacement(kit, name):
+def test_historical_capability_dependencies_reject_unknown_edits_before_replacement(kit, name):
     installer, project, bundle, _ = kit
     path = project / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -217,7 +226,8 @@ def test_current_capability_dependencies_reject_unknown_edits_before_replacement
     assert snapshot(project) == before
 
 
-def test_real_installed_workpiece_predecessor_upgrades_and_imports_without_hardware(tmp_path, monkeypatch):
+def test_real_installed_workpiece_predecessor_upgrades_and_imports_without_hardware(tmp_path, monkeypatch, historical_sources):
+    require_exact(historical_sources)
     require_predecessor_git()
     source = subprocess.check_output(["git", "archive", "--format=zip", PREVIOUS_REVISION, "laser_aligner"], cwd=ROOT)
     project = (tmp_path / "pinned-workpiece").resolve()

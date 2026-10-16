@@ -314,7 +314,7 @@ def test_default_stop_or_disarm_aborts_an_inflight_powered_move(
         transport.synchronize_input = None  # type: ignore[method-assign]
         # Keep an accepted powered move in flight with no acknowledgement. The
         # following powered move must never be written after cancellation.
-        transport.set_next_timeout("G1 X2 Y2 F100")
+        transport.set_next_timeout("G1X2Y2F100")
         program = machine.preflight_program(
             POWERED_PROGRAM.replace(
                 "G1 X2 Y2 F100\n", "G1 X2 Y2 F100\nG1 X3 Y3 F100\n"
@@ -325,7 +325,7 @@ def test_default_stop_or_disarm_aborts_an_inflight_powered_move(
             f"{action}-inflight.gcode",
             authorization_phrase=machine.ARM_PHRASE,
         )
-        wait_until(lambda: ("line", "G1 X2 Y2 F100") in transport.events)
+        wait_until(lambda: ("line", "G1X2Y2F100") in transport.events)
         before_stop = len(transport.events)
 
         started = time.monotonic()
@@ -354,6 +354,7 @@ def test_default_stop_or_disarm_aborts_an_inflight_powered_move(
             kind == "line" and value == "M5"
             for kind, value in events[reset_index + 1 : close_index]
         )
+        assert ("line", "X3Y3") not in transport.events
         assert ("line", "G1 X3 Y3 F100") not in transport.events
         status = machine.status()
         assert status["job"]["error"] is not None

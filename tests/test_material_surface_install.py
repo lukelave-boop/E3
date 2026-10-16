@@ -14,6 +14,7 @@ import pytest
 
 from scripts import package_material_surface as packager
 from scripts.package_source_dependencies import RUNTIME_PREDECESSORS
+from tests.historical_companion import require_exact, source_tree
 
 
 def snapshot(root):
@@ -21,12 +22,12 @@ def snapshot(root):
 
 
 @pytest.fixture
-def bundle(tmp_path, monkeypatch):
+def bundle(tmp_path, monkeypatch, historical_sources):
     # Unit-test payload comes from an explicit snapshot. Production package()
     # always calls git show on one resolved commit; no working-tree fallback.
     names = (*packager.SOURCE_FILES, *RUNTIME_PREDECESSORS, "scripts/install_workpiece_focus.py", "docs/MATERIAL_HEIGHT.md",
              "docs/PRECISION_PLACEMENT.md")
-    source_snapshot = {name: (packager.ROOT / name).read_bytes().replace(b"\r\n", b"\n") for name in names}
+    source_snapshot = {name: (historical_sources / name).read_bytes().replace(b"\r\n", b"\n") for name in names}
     calls = []
     def source(revision, name):
         calls.append((revision, name))
@@ -38,6 +39,11 @@ def bundle(tmp_path, monkeypatch):
     spec.loader.exec_module(installer)
     monkeypatch.setattr(installer, "inactive", lambda: None)
     return folder, installer, calls
+
+
+@pytest.fixture(scope="module")
+def historical_sources(tmp_path_factory):
+    return source_tree(tmp_path_factory.mktemp("historical-material-sources"))
 
 
 @pytest.fixture(params=list(packager.PREDECESSORS))
@@ -89,7 +95,7 @@ def test_complete_pinned_manifest_and_exact_committed_source_contract(bundle):
     assert (folder / "PRECISION_PLACEMENT.md").read_bytes() == (packager.ROOT / "docs/PRECISION_PLACEMENT.md").read_bytes().replace(b"\r\n", b"\n")
 
 
-def test_upgrade_all_predecessors_preserves_data_backups_and_current_sources(kit):
+def test_upgrade_all_predecessors_preserves_data_backups_and_selected_sources(kit):
     folder, installer, project, originals, baseline = kit
     before = snapshot(project)
     assert installer.install(project, bundle=folder)["applied"] is False
@@ -134,7 +140,8 @@ def test_retry_current_files_and_reject_active_service(kit, monkeypatch):
 
 
 @pytest.mark.parametrize("installed_preview", [False, True])
-def test_exact_installed_stop_recovery_predecessor_upgrades_and_imports(tmp_path, bundle, installed_preview):
+def test_exact_installed_stop_recovery_predecessor_upgrades_and_imports(tmp_path, bundle, installed_preview, historical_sources):
+    require_exact(historical_sources)
     folder, installer, _ = bundle
     revision = packager.STOP_RECOVERY_REVISION
     result = subprocess.run(["git", "cat-file", "-e", revision], cwd=packager.ROOT, capture_output=True)
