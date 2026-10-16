@@ -1,5 +1,11 @@
 # Architecture
 
+Desktop update progress uses the exact package size from the validated manifest.
+The UI-neutral downloader reports byte counts after writing each available chunk.
+A locked counter transfers worker progress to a 250 ms GUI timer, which renders
+percentage and a rolling three-second byte rate without queuing one Qt event per
+chunk. Completion still requires exact size, SHA-256 and atomic cache promotion.
+
 ## Desktop version state
 
 `state_scope.py` is a Qt/HTTP-neutral, launch-time snapshot boundary. Importing

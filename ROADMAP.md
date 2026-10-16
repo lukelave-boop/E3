@@ -1,5 +1,10 @@
 # Roadmap
 
+## Update download progress (2026-10-16)
+
+Implemented: manifest-sized progress, downloaded/total bytes and a recent transfer
+rate, followed by an explicit verification status. See [verification](CURRENT_STATE.md).
+
 ## Independent desktop version state (2026-10-16)
 
 Implemented: one-time state copies per installed version/revision and source

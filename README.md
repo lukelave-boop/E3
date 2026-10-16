@@ -1,5 +1,8 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop updates show the package size before download, then downloaded/total bytes,
+percentage and current transfer speed. See [updates](docs/UPDATES.md).
+
 Desktop builds now keep independent copies of machine settings, calibration,
 materials and recovery data. The permanent **E3 DEV TEST** launcher prepares a
 private copy for each exact test version/revision, including older frozen test
