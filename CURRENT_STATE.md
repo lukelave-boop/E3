@@ -51,6 +51,27 @@ The correction passes 71 focused metadata/gate/runbook checks and nine real
 Inno/helper checks, including relative and long PE paths and both PowerShell
 versions. Independent review, Ruff, compilation and whitespace checks pass.
 
+Corrected candidate `063a6b5` passed both real Windows and Linux package checks,
+both Windows core runs (7,100 passed/169 skipped), both POSIX runs (1,502
+passed/two skipped) and lint. Its PR desktop run passed 8,663 tests with 69
+skips, but its manual exact-head run reproduced the native raster-dialog crash
+(8,662 passed/69 skipped/one failed). This remains a blocking result, despite
+the passing PR run; neither attempt was retried or cancelled.
+
+Investigation identified the documented PySide 6.12.0 nested-layout ownership
+regression [PYSIDE-3479](https://github.com/qtproject/pyside-pyside-setup/commit/34adf9a2b0229f7f314de49347a7647485c647c8).
+The raster dialog used the affected populate-then-attach construction pattern.
+Its two empty inner layouts now attach to the dialog's outer layout before
+adding their groups, avoiding that faulty ownership-transfer path. Regression
+coverage inspects original group wrappers before any hierarchy query can repair
+ownership. This source-level match does not by itself prove the native crash's
+cause; fresh complete Qt 6.12 CI and package validation remain required. No
+dependency pin, worker retry, assertion removal or test skip is introduced.
+All 11 dialog tests, including the ownership regression and ten unchanged
+preview/acceptance/worker tests, pass with installed Python 3.14/Qt 6.11.2.
+Repository Ruff, compilation and whitespace checks pass. These local results
+do not replace the pending Qt 6.12 compatibility run.
+
 Review also found that Linux updater restart inherited the previous build's
 state overrides. Both platforms now prepare a fresh update-process environment,
 preserving the genuine user profile while removing prior per-launch state,

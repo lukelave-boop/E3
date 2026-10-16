@@ -10,6 +10,8 @@
   previous build's settings rather than inheriting its process overrides.
 - Reject release publication when the Windows installer, platform package
   metadata and update manifest disagree on version or exact revision.
+- Parent raster-dialog layouts before adding their controls, avoiding the
+  documented PySide 6.12.0 nested-widget ownership regression.
 
 ## Unreleased - update download progress (2026-10-16)
 

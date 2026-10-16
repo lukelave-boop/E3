@@ -342,7 +342,9 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
 
+        # Parent nested layouts before populating them (PySide PYSIDE-3479).
         previews = QtWidgets.QHBoxLayout()
+        layout.addLayout(previews, 1)
         original_group, self.original_preview = _image_group(
             "Original raster",
             "Decoding bounded source…",
@@ -358,12 +360,11 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         previews.addWidget(original_group, 1)
         previews.addWidget(mask_group, 1)
         previews.addWidget(overlay_group, 1)
-        layout.addLayout(previews, 1)
 
         controls = QtWidgets.QHBoxLayout()
+        layout.addLayout(controls)
         controls.addWidget(self._build_detection_group(), 3)
         controls.addWidget(self._build_output_group(), 2)
-        layout.addLayout(controls)
 
         self.status_label = QtWidgets.QLabel("Waiting to build preview…")
         self.status_label.setObjectName("mutedLabel")
