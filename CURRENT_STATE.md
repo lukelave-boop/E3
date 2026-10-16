@@ -1,5 +1,27 @@
 # Current repository state
 
+## Cleaned-image tracing correction (2026-10-16)
+
+Isolated branch codex/cleaned-image-trace starts from integrated main 3070d56.
+Automatic preview snapshots the current cleaned grayscale image rather than the
+original source. Both outline modes use bounded subpixel mask boundaries, preserving
+diagonal foreground connectivity without retracing thin pixel features. Existing
+native fitting and intersection rejection remain mandatory. Invalid edits block
+both previews. No schema, browser SVG, machine or Pi behavior changes.
+
+Windows Python 3.14 verification passes 183 focused tests, including all
+marching-square cases, nested holes/islands, frame edges, noisy masks, one-pixel
+whiskers, work limits, cancellation and an actual offscreen automatic-preview
+button click on a cleaned gray-background image, image/outline persistence,
+linked vectors and raster integration. Repository Ruff, application compileall
+and whitespace checks pass. Both actual offscreen preview buttons on the unchanged
+operator JPEG produce valid two-contour / 1,790-segment outlines (barrel and
+remaining shadow) with unchanged native topology validation. Preview does not
+accept the candidate or modify source bytes. Frozen build and compatibility CI
+are pending. Read-only packaging preflight reports the eight-GiB pool blocked
+by 2.50 GiB of measured files plus three old two-GiB reservations.
+No interactive operator or physical hardware acceptance is claimed.
+
 ## Desktop UI clarity — integrated and DEV TEST selected (2026-10-16)
 
 Permanent **E3 DEV TEST** selects **Desktop UI clarity**, version **0.7.283**,

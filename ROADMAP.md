@@ -1,5 +1,12 @@
 # Roadmap
 
+## Cleaned-image tracing (2026-10-16)
+
+Implemented: automatic outlines use the current cleaned grayscale image. Both
+preview modes use bounded subpixel mask boundaries before native curve fitting.
+Source assets and manual refinements remain unchanged until explicit acceptance.
+See [current state](CURRENT_STATE.md) for verification and operator-test status.
+
 ## Desktop UI clarity (2026-10-16)
 
 Implemented: shared control affordances, named drawing/job controls, clearer

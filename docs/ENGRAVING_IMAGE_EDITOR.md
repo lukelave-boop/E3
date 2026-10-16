@@ -35,6 +35,10 @@ separate shadow locally preserves the grayscale grain and lettering in the subje
 Open **Outline**. Set **Background tolerance**, **Detail error**, **Edge smoothing**,
 **Smallest area**, and optional **Include interior holes**, then choose
 **Preview automatic outline**.
+Automatic tracing uses the current cleaned grayscale preview, including background
+cleanup, local exclusions/restorations, the outline mask and inversion. It never
+reverts to the hidden original background. **Show original** is only a comparison
+view and does not change the trace input. Invalid edits must be corrected first.
 Tolerance is distance from white: higher values exclude darker background pixels.
 Detail is fitting tolerance in source pixels; smaller values retain finer detail.
 Smoothing can change boundaries. Minimum component area removes small disconnected
@@ -57,6 +61,12 @@ inspect it, and explicitly replace the outline. This clears the baked-in region
 list in that new draft and is undoable. It can approximate boundaries according
 to the selected detail, smoothing, component and hole settings. Existing manual
 curves are preserved until that explicit replacement.
+
+Both preview modes extract boundaries between foreground and background pixels,
+so thin one-pixel features do not become retraced edges. Diagonal foreground
+pixels remain connected. The subpixel boundary then goes through the existing
+bounded curve fitting and intersection checks; ambiguous fitted curves still
+reject. Pixel boundary placement has approximately half-pixel sampling uncertainty.
 
 **Keep only the area inside the outline** in **Clean image** can disable the outline mask without deleting its nodes.
 Local exclusion regions remain active. **Reset edits** clears editor edits;
