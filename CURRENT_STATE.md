@@ -1,11 +1,11 @@
 # Current repository state
 
-## Pause / resume implementation in progress (2026-10-15)
+## Pause / resume feature verification (2026-10-15)
 
 Isolated branch codex/job-pause-resume starts from authoritative main 7e86608
 and retains the selected engraving editor from e768590/d21145c while preserving
-main's newer raster-travel and streaming behavior. The shared working tree and
-existing launcher selection remain untouched during development.
+main's newer raster-travel and streaming behavior. Unrelated changes in the
+shared working tree are preserved.
 
 Desktop/Pi pause uses GRBL 1.1 laser-mode suspend, requires reported $32=1 and
 verified motor holding, and retains the exact job/stream/ACK ownership. The
@@ -14,17 +14,25 @@ Transition/status watchdogs, stale job/session/revision checks and independent
 STOP fail-off remain active. Explicit reattachment to an unowned paused job
 claims control without serial reset. See docs/JOB_PAUSE.md.
 
-Latest focused Windows 3.14 run: 376 tests passed, covering pause/continuation,
+Latest focused Windows 3.14 run: 396 tests passed, covering pause/continuation,
 STOP races, controller/session/stream regressions, authenticated Pi reattachment,
-offscreen controls and exact companion installer behavior. Repository Ruff passes.
-The earlier broader run passed 540 checks with one new loopback fixture failure;
-that case now passes with monitoring and no-reset paused-job reattachment.
+offscreen controls, secondary-controller STOP and exact companion installer
+behavior. Repository Ruff and compileall pass. Initial CI exposed a primary
+STOP lock held across a secondary ACK wait; separate admission locking fixes
+that regression. The corrected POSIX serial/session CI passes. Full Windows
+3.10/3.12 compatibility results are pending in run 38836371578.
 
-Initial Windows 3.14 fake-controller/offscreen regression run: 540 passed and
-one new loopback fixture failed. Corrected the missing monitor startup and
-implemented the subsequently exposed paused-job reattachment path. Final
-verification, frozen build, companion installation and physical acceptance
-remain pending; no hardware output or new physical verification is claimed.
+Frozen version 0.7.230, source ea091da791acd02fede0f27bdc17a3ef017e10c1,
+passes exact comparison of 191 application modules and three resources against
+the commit. The frozen offscreen saved-profile startup smoke constructs and
+shows the main window without an error modal. It uses an unavailable synthetic
+serial port, disabled motion/camera and isolated persistence with registry
+writes denied. This is not interactive GUI, camera or physical hardware testing.
+
+Matching Pi companion e3-pi-job-pause-cf2b147a passes the installed-source
+preflight against predecessor 34902b8. Installation is deferred while the
+controller is connected. The Windows installer and permanent launcher selection
+remain pending. No hardware output or new physical verification is claimed.
 
 
 ## Streaming fix merged into main (2026-10-15)
