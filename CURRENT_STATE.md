@@ -41,6 +41,19 @@ relevant process lacked inspectable metadata. Read-only inspection found transie
 Python children belonging to tests; no process was terminated or guard bypassed.
 Packaging will be retried after the process-heavy local suite has stopped.
 
+The diagnostic desktop run reached 97% without a recorded failure but captured a
+60-second stack in application.setStyleSheet during new theme fixture setup.
+Repeated global restyling was repolishing widgets retained by preceding modules;
+the test eventually passed. The theme render/interaction assertions now run in a
+bounded fresh Python process with isolated Qt settings. All twelve probe checks
+pass; the collected wrapper passes, and an ordered 76-test control/navigation run
+passes. The runtime UI source is unchanged from `2e4ae9c`. Final CI is required.
+The failed packaging attempts also overlap another checkout's active managed
+build; a read-only guard check refused a changing container inventory. The empty
+failed lease is retained. A short-path build checkout is prepared at
+`C:\Users\lukel\.codex\worktrees\ui\E3` to avoid the known Inno path-length issue;
+no guard state, process protection or budget was bypassed.
+
 ## Machine-axis raster generation (2026-10-16)
 
 Branch `codex/machine-x-raster` retains the integrated surface-travel and
