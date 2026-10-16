@@ -588,18 +588,17 @@ def test_workflow_is_scrollable_and_apply_remains_visible_in_small_window(app, s
     from laser_aligner.desktop.theme import DARK_STYLESHEET
 
     _, payload, _ = source
-    old_sheet, old_palette, old_font = app.styleSheet(), app.palette(), app.font()
     font_id = -1
     if sys.platform == "win32":
         font_path = os.path.join(os.environ["WINDIR"], "Fonts", "segoeui.ttf")
         font_id = QtGui.QFontDatabase.addApplicationFont(font_path)
     dialog = None
     try:
-        # Layout coverage needs the stylesheet, not the application-wide
-        # confirmation event filter installed by apply_dark_theme.
-        app.setStyleSheet(DARK_STYLESHEET)
-        app.setFont(QtGui.QFont("Segoe UI", 9))
+        # Scope layout styling to this owned dialog so unrelated widgets
+        # are never repolished by this test.
         dialog = ImageEditorDialog(payload, {}, 64, 48)
+        dialog.setStyleSheet(DARK_STYLESHEET)
+        dialog.setFont(QtGui.QFont("Segoe UI", 9))
         dialog.resize(900, 640)
         dialog.show()
         app.processEvents()
@@ -618,8 +617,5 @@ def test_workflow_is_scrollable_and_apply_remains_visible_in_small_window(app, s
     finally:
         if dialog is not None:
             _dispose_editor(dialog, app)
-        app.setStyleSheet(old_sheet)
-        app.setPalette(old_palette)
-        app.setFont(old_font)
         if font_id >= 0:
             QtGui.QFontDatabase.removeApplicationFont(font_id)

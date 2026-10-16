@@ -67,6 +67,13 @@ This task's failed lease windows-53d8a8f697e5425eb10a20167b300e99 has an empty
 output root, absent generated paths and an exited owner. Recovery review is
 prepared separately; no lease, artifact or existing DEV TEST selection is changed.
 
+The later complete desktop attempt reached 97% without recorded failures but
+was interrupted during slow shared-Qt layout testing. The new navigation checks
+also now run in a fresh application process, preserving all seven assertions;
+the collected wrapper passes. The editor compact-layout test styles only its
+own dialog; all 32 editor checks pass. These are test-isolation changes only.
+A new diagnostic complete desktop run and final-head CI are required.
+
 ## Transparency DEV TEST handoff and integration (2026-10-16)
 
 Permanent **E3 DEV TEST** selects **Selected-object transparency**, version
