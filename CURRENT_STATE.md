@@ -1,5 +1,33 @@
 # Current repository state
 
+## Remaining Start-delay diagnosis (2026-10-15)
+
+Read-only authenticated status for the operator's subsequent running job
+7ebb0aa5-e01e-4579-ab3d-92ebd869226b reports 399,777 lines / 12,148,801 bytes,
+verification_seconds=43.805338 and start_latency_seconds=7.287502. Record creation
+to prepared is 47.571357 seconds, leaving approximately 3.766 seconds for upload
+and timing-boundary overhead. Creation to local started_at is 55.168391 seconds.
+The job was observed streaming with Pause available; this is software status,
+not physical pause/laser-off verification. No controller actions were requested.
+
+The verification timer covers finalize lock acquisition, uploaded-file hashing,
+full preflight, canonical-byte comparison and durable commit. Source audit and
+an offline profile identify substantial per-command parser, powered-endpoint and
+travel-bound computation. The retained older 729,269-line job performs 45.98
+million Python calls; uninstrumented local validation is 5.17 seconds wall/CPU.
+Instrumented shares are about 29% validator loop, 26% raster parser, 20% powered
+endpoint checks; 2.17 million polygon and 1.45 million travel-point calls occur.
+These local older-job profile shares are not a live Pi CPU breakdown.
+
+Start reuses prepared full validation, but still rereads/hashes canonical bytes
+and repeatedly scans immutable material/focus/raster metadata. Windows remote
+preflight also validates the complete program twice, before and after attaching
+focus. That desktop stage was not timed for this job; the filename timestamp is
+generation/preview time, not a Start-click timestamp. started_at precedes worker
+clearance/approach/focus moves, so it is not first laser output. Further Pi journal
+reads timed out; exact CPU/storage/lock and hardware-preparation shares remain
+unmeasured. No runtime changes or new feature build were made in this diagnosis.
+
 ## Faster upload and preparation follow-up (2026-10-15)
 
 The operator requested removal of upload delay as well as the earlier Start fix.
