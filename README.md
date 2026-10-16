@@ -1,5 +1,15 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop builds now keep independent copies of machine settings, calibration,
+materials and recovery data. The permanent **E3 DEV TEST** launcher prepares a
+private copy for each exact test version/revision, including older frozen test
+executables. Newer test versions can inherit prior test settings; returning to
+an initialized version reuses its own saved state. New installed builds use the same separation and import a prior successful
+installed version only on their first launch. Install application updates from
+regular E3; test launches keep the updater disabled and use the permanent
+launcher for build selection. See [version state and recovery](docs/UPDATES.md#independent-version-state)
+and [current verification](CURRENT_STATE.md).
+
 Image-editor automatic outlines use the current cleaned image, including background
 cleanup and local edits. Both outline previews preserve thin pixel features without
 retracing their edges. See the [image editor guide](docs/ENGRAVING_IMAGE_EDITOR.md).
@@ -1111,8 +1121,10 @@ native Windows error dialog with rebuild/reinstall guidance.
 
 Windows feature builds use the separate permanent **E3 DEV TEST** launcher.
 Its stable executable and Desktop shortcut remain visually and taskbar-distinct
-from production E3, while `current-feature.json` selects the exact frozen build
-without changing machine or project behavior. See
+from production E3, while `current-feature.json` selects the exact frozen build.
+The launcher gives that build its own settings and calibration copy before it
+starts, preserving the installed application's files. Project files selected
+explicitly remain shared documents with their existing schema checks. See
 [the feature-test launcher workflow](docs/DEV_TEST_LAUNCHER.md).
 
 GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,

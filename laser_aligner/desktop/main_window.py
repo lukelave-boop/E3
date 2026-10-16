@@ -152,6 +152,7 @@ from .panels import (
     TracePanel,
     TransformPanel,
 )
+from .preferences import desktop_preferences
 from .qt import require_qt
 from .raster_vectorize_dialog import RasterVectorizationDialog
 from .runtime_strip import RuntimeSafetyStrip
@@ -7188,7 +7189,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._safety_on_own_row = own_row
 
     def _reset_window_size(self) -> None:
-        settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings = desktop_preferences()
         settings.remove("mainWindow/geometry-v7")
         settings.remove("mainWindow/geometry-v6")
         settings.remove("mainWindow/geometry-v5")
@@ -7198,7 +7199,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._ensure_window_visible(reset_size=True)
 
     def _reset_workspace_layout(self) -> None:
-        settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings = desktop_preferences()
         settings.remove("mainWindow/state-v7")
         settings.remove("mainWindow/state-v6")
         settings.remove("mainWindow/state-v5")
@@ -7224,7 +7225,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.show_notice("Workspace layout reset")
 
     def _restore_window_state(self) -> None:
-        settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings = desktop_preferences()
         geometry = settings.value("mainWindow/geometry-v7")
         if geometry is None:
             geometry = settings.value("mainWindow/geometry-v6")
@@ -7261,7 +7262,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._ensure_window_visible(reset_size=not restored_geometry)
 
     def _save_window_state(self) -> None:
-        settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings = desktop_preferences()
         settings.setValue("mainWindow/geometry-v7", self.saveGeometry())
         settings.setValue("mainWindow/state-v7", self.saveState(7))
         if hasattr(self, "inspector_tabs"):

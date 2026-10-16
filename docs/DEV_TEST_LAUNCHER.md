@@ -1,9 +1,11 @@
 # Permanent Windows feature-test launcher
 
 `E3 DEV TEST` is the stable entry point for operator testing of frozen Windows
-feature builds. It is intentionally distinct from the installed production E3
-application and does not change project data, configuration, machine authority,
-motion, arming, laser output, STOP, or any other hardware behavior.
+feature builds. It is distinct from the installed production E3 application.
+Before starting the selected executable, it prepares an independent copy of
+machine settings, calibration and other writable application data for that exact
+version/revision. Machine authority, motion, arming, laser output and STOP retain
+the selected build's existing guards.
 
 ## Permanent files
 
@@ -78,6 +80,61 @@ available, it records the original exception and runtime context in the
 per-user `logs/startup-error.log` and displays a native Windows error dialog.
 That diagnostic is part of the selected E3 build, not the permanent launcher.
 
+## Independent test state
+
+The launcher stores each test build's state beside the permanent launcher:
+
+```text
+<launcher directory>\state\<version>-<revision>\local\E3 Positioning System\
+```
+
+For the permanent installation, the launcher directory is
+`C:\Users\lukel\Documents\E3 Dev Test`. These writable state directories are
+separate from the selected frozen application bundle and from regular E3's
+LocalAppData state.
+
+The first test scope starts from the regular application's existing state.
+A strictly newer numeric test version can copy the latest prepared test scope,
+carrying forward settings and calibration saved during testing. Later launches
+of an exact version/revision reuse its own copy, even after another build has run.
+Selecting another version never refreshes or overwrites an existing copy.
+
+`state/last-prepared-test.json` records that import source after a complete
+snapshot has been prepared, before the child application starts. It records
+preparation only, not successful application startup or hardware qualification.
+An unseen older version, another revision with the same version, or an
+unorderable version uses the regular-app seed rather than importing newer state.
+The launcher never strips unknown settings or performs a schema downgrade.
+Existing exact scopes can open independently of a damaged or busy import pointer.
+A failed import stops the launch; it never falls back to writing regular state.
+
+The copy includes machine profiles, camera/bed calibration, configuration
+sidecars, credentials, material recipes, templates and local recovery data.
+SQLite databases use a consistent backup. Only copied configuration data-directory
+paths are rebased; calibration evidence, machine values and safety limits stay
+unchanged. Download caches and other version copies are excluded. A
+`state-scope.json` manifest records the source and rebased data locations.
+
+The launcher supplies `E3_USER_STATE_DIR`, `E3_CONFIG_PATH` and a scoped
+credential-file path. It also redirects the child process's profile directories
+so older frozen builds' material, autosave and legacy file paths stay private.
+This works without rebuilding the selected E3 executable. Test launches also
+receive private build metadata with the original version/revision and an empty
+update-manifest URL. The existing updater therefore stays disabled, including
+in older frozen builds. Install application updates from regular E3; select test
+builds through the permanent launcher. The original executable and adjacent
+`build-info.json` are unchanged.
+
+An older build still requires settings it understands; the launcher does not discard unknown safety
+settings or downgrade a newer schema. Recovery of an already affected build
+uses a verified compatible backup after preserving the newer state separately.
+
+New E3 source stores Qt preferences in its own version directory. Older frozen
+executables still share their original Windows Qt registry keys for window and
+trace preferences; those UI preferences are separate from the isolated machine
+settings and calibration files. User-selected `.e3laser` files remain explicit
+shared documents and retain normal schema compatibility checks.
+
 ## Runtime identity
 
 The launcher supplies:
@@ -90,13 +147,12 @@ E3_DEV_TEST_BRANCH=<pointer branch>
 E3_DEV_TEST_REVISION=<pointer revision>
 ```
 
-E3 consumes the first three only for visible/build identity. In that explicit
-mode its title begins `E3 DEV TEST — <feature> — v<version>`, it uses the orange
-DEV window icon, and it assigns `E3.DevTest` before Qt creates any UI. Without
-the exact activation value `E3_DEV_TEST=1`, the existing production title, icon,
-and implicit AppUserModelID path are unchanged. QSettings organization/name,
-user data, project schemas, configuration loading, and machine behavior do not
-change in either mode.
+The title begins `E3 DEV TEST — <feature> — v<version>`, the window uses the
+orange DEV icon, and E3 assigns `E3.DevTest` before Qt creates any UI. These
+identity values are separate from the private state paths described above.
+Without `E3_DEV_TEST=1`, the production title, icon and implicit AppUserModelID
+remain unchanged. State isolation does not change project schemas or machine
+execution behavior.
 
 The launcher and selected application declare the Windows API return value with
 `ctypes.c_long`, which is available across the supported Windows Python versions.
@@ -126,6 +182,13 @@ cannot select an older launcher from `launcher-dist`.
 The installer script copies the one-file launcher and pointer to the permanent
 Documents location and recreates only `Desktop\E3 DEV TEST.lnk`. It does not
 create or alter a taskbar pin and does not touch production E3.
+
+The 2026-10-16 state-isolation repair updated only the permanent launcher and
+retained its prior executable under `launcher-backups/`. It did not rebuild the
+selected feature executable or the installed regular application. That launcher
+passed a frozen-process isolation probe; the unchanged regular 0.7.153 also
+opened interactively after its compatible settings were restored. Exact hashes,
+backup locations and remaining verification are in [current state](../CURRENT_STATE.md).
 
 ## Feature-build report
 

@@ -173,6 +173,9 @@ def read_bridge_token() -> str | None:
 def resolve_launch_profile() -> LaunchProfile:
     """Choose the configured machine state for the single normal E3 launch path."""
 
+    from .state_scope import prepare_runtime_state
+
+    prepare_runtime_state()
     explicit = os.environ.get("E3_CONFIG_PATH", "").strip()
     if explicit:
         path = Path(explicit).expanduser().resolve()
