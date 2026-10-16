@@ -1,10 +1,50 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Normal packaging commands now share a [build storage guard](docs/LOCAL_ARTIFACT_RETENTION.md).
+Local Windows, Home and launcher builds place all new outputs, caches and
+temporary files in managed directories under a shared eight-GiB admission budget.
+It includes concurrent reservations, preserves selected/running/rollback outputs,
+and allows verified reuse. Historical storage remains unknown and outside this
+budget; the physical free-space floor still includes its disk impact. Builders
+use installed dependencies and print exact output paths. Private installers use
+metadata-only accounting; cleanup remains a separate approved action.
+
+Large Pi-owned jobs use negotiated lossless upload compression and larger bounded
+chunks with the matching companion. Validation reuses fixed polygon geometry and
+avoids unnecessary stream encoding passes. Exact bytes, bounds, arming and Start
+checks remain required. Older nodes retain the original upload path. See
+[job preparation](docs/NETWORK_MACHINE.md#faster-bounded-job-preparation).
+
+Start preparation removes a second desktop preflight when focus
+attachment leaves the program unchanged, reuses validated immutable job metadata,
+and reduces repeated raster endpoint checks and parser allocations. Current
+policy, material, focus, session and arming checks still run. Offline validation
+of the retained 729,269-line job was about 28.5% faster; this is a local Windows
+measurement, not total Pi Start time. The recorded benchmark preceded matching-
+companion installation; it does not establish physical pause/resume acceptance.
+See [current state](CURRENT_STATE.md) for dated verification and the supplied
+integration context.
+
+## Pause and continue a job
+
+The desktop now supports **Pause / Resume** for compatible GRBL laser-mode
+jobs with the matching Pi companion. Wait for **JOB PAUSED**, then Resume to
+continue the retained controller queue. Separate Air Assist keeps its state;
+primary GRBL coolant follows firmware suspension and restoration.
+See [Pause / Resume](docs/JOB_PAUSE.md) for controller requirements, reconnect
+behavior and supervised physical acceptance. Operator qualification is pending.
+
+
 GRBL jobs use continuous command streaming for consecutive linear moves, with
 lossless wire compression and guarded FIFO acknowledgements. This removes the
 per-segment quiet delay in detailed raster areas while preserving Stop, focus,
 arming and program bounds. Pi-owned jobs require the matching Pi companion.
 Serial bandwidth can still limit requested feed; see [command streaming](docs/COMMAND_STREAMING.md).
+
+Large-job Start reuses a completed stream-size check for the exact immutable
+commands and controller capacity, avoiding an expensive repeat after arming.
+Raster validation also avoids unused legacy-area calculations. Upload and
+full safety validation still take time for very dense images.
 
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.
@@ -15,6 +55,14 @@ run-up/run-out and row transfers. Full travel extents still drive fitting and
 safety validation; generated motion, power, calibration and settings are unchanged.
 
 ## Raster surface and verified travel
+
+An explicitly confirmed calibrated surface can now be recorded as a separate
+carriage-travel polygon alongside the existing verified rectangle. This permits
+full-size images when their complete motion fits those verified regions. Records
+bind the exact calibration and laser offset; transfers can use a verified overlap
+waypoint. Overscan beyond both regions still rejects. Matching desktop and Pi
+support and reviewed configuration are required; see the
+[surface-travel proposal workflow](docs/RASTER_OVERSCAN.md).
 
 Desktop raster generation now requires a separately recorded, verified carriage
 travel envelope. The calibrated engraving surface remains the powered-output
@@ -29,6 +77,17 @@ ordered-dither stage. The planner keeps at least the requested percent of the
 original row width and the configured acceleration-model distance. The model is
 not physical qualification at every feed. See [raster overscan](docs/RASTER_OVERSCAN.md)
 for settings and operator validation, and [measured performance](docs/RASTER_PERFORMANCE.md).
+## Engraving image editor
+
+Select an image and open **Objects → Image → Edit image for engraving…** for
+local shadow removal, reversible grayscale masks, automatic or manual Bézier
+outlines, node editing, and aligned vector snapshots with physical offsets.
+New vectors start with output disabled and power zero. Project schema 6 retains
+edits and explicit transform links. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
+
+The editor build also reads existing verified raster-travel records in saved
+machine profiles. It preserves their values and enforcement; see
+[configuration compatibility](docs/RASTER_TRAVEL_COMPATIBILITY.md).
 
 Image background cleanup is available under **Objects → Image → Clean background…**
 for one selected image. Enable it, adjust tolerance (start at 5), compare

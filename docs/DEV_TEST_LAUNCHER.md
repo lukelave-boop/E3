@@ -63,6 +63,13 @@ Changing this JSON is the only normal launcher update. The pinned executable
 and Desktop shortcut remain stable.
 
 Feature builds must be produced with `packaging/build_windows.ps1`. The build
+now checks shared storage capacity and protects selected, running and pinned
+output trees before replacing its own generated files. Keep using the same
+command. If legacy or protected outputs already occupy the checkout, the build
+uses a fresh `.e3-builds/<mode>-<build-id>` output directory and prints its exact
+paths. Select that new build's `dist/E3/E3.exe` explicitly; the build itself does
+not change the launcher pointer. See [local build storage](LOCAL_ARTIFACT_RETENTION.md)
+for admission checks and the separate dry-run cleanup inventory. The build
 sanitizes foreign ICU/OpenSSL directories from the PyInstaller environment and
 rejects known conflicting root-level native libraries before a build can be
 selected.
@@ -104,8 +111,13 @@ icon changes:
 ```powershell
 .\packaging\build_dev_test_launcher.ps1
 .\packaging\install_dev_test_launcher.ps1 `
+  -LauncherSource '<exact launcher EXE path printed by the build>' `
   -PointerSource '.\path\to\validated-current-feature.json'
 ```
+
+The launcher build also uses a fresh managed output directory when its old
+outputs need preservation. Pass the printed path explicitly so installation
+cannot select an older launcher from `launcher-dist`.
 
 The installer script copies the one-file launcher and pointer to the permanent
 Documents location and recreates only `Desktop\E3 DEV TEST.lnk`. It does not

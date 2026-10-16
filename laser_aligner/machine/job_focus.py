@@ -4,13 +4,16 @@ from __future__ import annotations
 import copy
 import re
 from contextlib import contextmanager
+from dataclasses import dataclass
+from itertools import islice
 
 from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
 from ..errors import MachineError, SafetyError
 from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
+from ..operation_focus import mode as operation_focus_mode
 from ..operation_focus import target_z, validate_targets
 from ..raster_safety import PREFIX as RASTER_BOUNDARY_PREFIX
-from ..raster_safety import program_raster_boundary
+from ..raster_safety import RasterBoundary, program_raster_boundary
 from .focus_bounds import FocusXYBounds
 from .mainboard import parse_status, validate_max_z
 from .material_surface import PREFIX as MATERIAL_SURFACE_PREFIX
@@ -51,33 +54,61 @@ def attach(text: str, plan: dict | None) -> str:
     return directive + "\n" + text
 
 
-def selected_plan(machine, program):
-    token = program_binding(program.lines)
+@dataclass(frozen=True, slots=True)
+class FocusProgramMetadata:
+    """Immutable program facts only; never stores live focus/session authority."""
+
+    token: str | None
+    mode_lines: tuple[str, ...]
+    raster_boundary: RasterBoundary | None
+    first_move: tuple[float, float] | None
+
+
+def program_metadata(lines) -> FocusProgramMetadata:
+    token = program_binding(lines)
+    modes = {operation_focus_mode(line) for line in lines} - {None}
+    boundary = program_raster_boundary(lines)
+    first_move = None
+    # Raster Start also needs the actual initial segment without a focus token.
+    # Preserve a zero-length first move: it may be a required approach waypoint.
+    if token is not None or boundary is not None:
+        from ..gcode.preview import parse_words
+        for line in islice(lines, 1, None):
+            if line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX,
+                                OPERATION_FOCUS_PREFIX, RASTER_BOUNDARY_PREFIX)):
+                continue
+            words = {word.letter: word.value for word in parse_words(line)}
+            if words.get("G") in (0, 1):
+                first_move = (words["X"], words["Y"])
+                break
+    return FocusProgramMetadata(token, tuple(f"{OPERATION_FOCUS_PREFIX} {mode}" for mode in sorted(modes)),
+                                boundary, first_move)
+
+
+def selected_plan(machine, program, *, _metadata: FocusProgramMetadata | None = None):
+    # Only MachineService supplies cached facts after exact-program integrity.
+    # Other callers retain full parsing. Current selection is always rechecked.
+    metadata = program_metadata(program.lines) if _metadata is None else _metadata
+    token = metadata.token
     if token is None:
         if program.requires_laser_authorization and machine.settings.backend == "serial":
-            validate_targets(program.lines, None)
+            validate_targets(metadata.mode_lines, None)
         if program.requires_laser_authorization and machine._laser_focus.job_focus_required:
             machine._laser_focus.require_job_focus()
             raise SafetyError("Powered job is missing its measured workpiece focus binding; prepare the job again")
         return None
     plan = selection_snapshot(machine, token)
-    validate_targets(program.lines, plan)
+    validate_targets(metadata.mode_lines, plan)
     # A first-move endpoint check alone cannot validate travel from the measured spot.
-    from ..gcode.preview import parse_words
-    raster_boundary = program_raster_boundary(program.lines)
-    for line in program.lines[1:]:
-        if line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX, OPERATION_FOCUS_PREFIX, RASTER_BOUNDARY_PREFIX)):
-            continue
-        words = {w.letter: w.value for w in parse_words(line)}
-        if words.get("G") in (0, 1):
-            if raster_boundary is not None:
-                raster_boundary.require_travel_point(tuple(plan["xy"]), label="Measured-focus transfer start")
-                raster_boundary.require_travel_point((words["X"], words["Y"]), label="Measured-focus transfer end")
-                break
+    if metadata.first_move is not None:
+        if metadata.raster_boundary is not None:
+            metadata.raster_boundary.require_travel_segment(
+                tuple(plan["xy"]), metadata.first_move, label="Measured-focus transfer",
+            )
+        else:
             bounds = FocusXYBounds(machine.settings.work_area, program.guarded_output_polygon_mm)
-            if not bounds.contains_segment(tuple(plan["xy"]), (words["X"], words["Y"])):
+            if not bounds.contains_segment(tuple(plan["xy"]), metadata.first_move):
                 raise SafetyError("Travel from the measured spot to the job start leaves the positioning area")
-            break
     return plan
 
 

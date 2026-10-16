@@ -96,7 +96,7 @@ jobs:
   posix-controller-session:
     name: POSIX serial and controller-session recovery
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -143,3 +143,28 @@ jobs:
           tests/test_pi_owned_job_e2e.py
           tests/test_remote_machine_service.py
           tests/test_remote_node.py
+          tests/test_grbl_stream_posix.py
+          tests/test_grbl_stream.py
+          tests/test_machine_streaming.py
+          tests/test_job_pause.py
+          tests/test_compressed_upload.py
+          tests/test_pi_job_store.py
+          tests/test_large_job_preparation.py
+          tests/test_program_metadata_proof.py
+          tests/test_remote_preflight_reuse.py
+          tests/test_validation_endpoint_reuse.py
+          tests/test_prepared_polygon.py
+          tests/test_job_focus.py
+          tests/test_raster_safety.py
+          tests/test_raster_safety_focus.py
+          tests/test_raster_overscan_envelope.py
+          tests/test_surface_travel_planner.py
+          tests/test_surface_travel_proposal.py
+          tests/test_verified_surface_runtime.py
+          tests/test_verified_surface_travel.py
+          tests/test_image_editor_raster_travel.py
+          tests/test_artifact_retention.py
+          tests/test_build_storage_guard.py
+          tests/test_build_storage_inventory.py
+          tests/test_managed_build_outputs.py
+          tests/test_managed_storage_policy.py

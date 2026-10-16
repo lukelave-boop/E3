@@ -12,7 +12,8 @@ machine_probe = helpers.machine_probe
 
 
 @pytest.mark.parametrize("stop_descent", [False, True])
-def test_measured_raster_focus_finishes_before_zero_power_runup(focus_machine, monkeypatch, stop_descent):
+@pytest.mark.parametrize("routed_approach", [False, True])
+def test_measured_raster_focus_finishes_before_zero_power_runup(focus_machine, monkeypatch, stop_descent, routed_approach):
     machine, focus, primary = focus_machine
     plan = automatic(machine, focus)["job_focus"]
     descent = f"G1 Z{target_z(plan, 'RASTER'):.3f} F600"
@@ -29,6 +30,7 @@ def test_measured_raster_focus_finishes_before_zero_power_runup(focus_machine, m
         monkeypatch.setattr(device, "write_line", write)
     text = "\n".join((
         "G21", "G90", "M5", "E3OPFOCUS RASTER",
+        *(("G0 X90 Y95 F1000",) if routed_approach else ()),
         "G0 X95 Y100 F1000", "M4 S0", "G1 X100 Y100 F500 S0",
         "G1 X105 Y100 F500 S100", "G1 X110 Y100 F500 S0", "M5",
     ))
@@ -48,5 +50,7 @@ def test_measured_raster_focus_finishes_before_zero_power_runup(focus_machine, m
     runup = events.index(("xy", "G1X100Y100F500S0"))
     powered = events.index(("xy", "X105S100"))
     assert approach < lowered < mode < runup < powered
+    if routed_approach:
+        assert events.index(("xy", "G0 X90 Y95 F1000")) < approach
     assert ("xy", machine._session.dialect.motion_barrier_command) not in events[mode:powered]
     assert all(label != "z" for label, _line in events[mode:powered])

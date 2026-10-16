@@ -186,6 +186,15 @@ class RemoveLayerCommand(Command):
         )
         document.get_layer(self.fallback_id)
         self.object_ids = [item.id for item in document.objects if item.layer_id == layer_id]
+        from .image_outline import validate_outline_metadata
+
+        if reassign_to is None and document.get_layer(self.fallback_id).output_enabled and any(
+            validate_outline_metadata(document.get_object(object_id)) is not None
+            for object_id in self.object_ids
+        ):
+            raise ValueError(
+                "Assign the image outline to a reviewed operation explicitly before removing its layer"
+            )
         self.description = description
 
     def redo(self) -> None:
@@ -312,6 +321,9 @@ class RemoveObjectsCommand(Command):
         self.object_ids = list(dict.fromkeys(object_ids))
         self.description = description
         self._removed: list[tuple[SceneObject, int]] = []
+        from .image_outline import source_removal_detachments
+
+        self._detached_links = source_removal_detachments(document, self.object_ids)
 
     def redo(self) -> None:
         if not self._removed:
@@ -319,6 +331,8 @@ class RemoveObjectsCommand(Command):
                 (self.document.get_object(object_id), self.document.objects.index(self.document.get_object(object_id)))
                 for object_id in self.object_ids
             ]
+            for object_id in self._detached_links:
+                self.document.get_object(object_id).metadata["image_outline"]["linked"] = False
             for item, index in sorted(records, key=lambda record: record[1], reverse=True):
                 self.document.objects.pop(index)
                 self._removed.append((item, index))
@@ -326,6 +340,10 @@ class RemoveObjectsCommand(Command):
             if self._removed:
                 self.document.touch()
             return
+        for item, _ in self._removed:
+            self.document.get_object(item.id)
+        for object_id in self._detached_links:
+            self.document.get_object(object_id).metadata["image_outline"]["linked"] = False
         for item, _ in sorted(self._removed, key=lambda record: record[1], reverse=True):
             self.document.remove_object(item.id)
 
@@ -333,6 +351,8 @@ class RemoveObjectsCommand(Command):
         self.document.validate_object_additions(item for item, _ in self._removed)
         for item, index in self._removed:
             self.document.add_object(item, index)
+        for object_id, metadata in self._detached_links.items():
+            self.document.get_object(object_id).metadata = copy.deepcopy(metadata)
 
 
 class ReplaceObjectsCommand(Command):
@@ -355,6 +375,9 @@ class ReplaceObjectsCommand(Command):
         self.description = description
         self._removed: list[tuple[SceneObject, int]] = []
         self._insertion_index: int | None = None
+        from .image_outline import source_removal_detachments
+
+        self._detached_links = source_removal_detachments(document, self.removed_ids)
 
     def redo(self) -> None:
         if not self._removed:
@@ -377,6 +400,8 @@ class ReplaceObjectsCommand(Command):
             self.items,
             replacing_ids=(item.id for item, _ in self._removed),
         )
+        for object_id in self._detached_links:
+            self.document.get_object(object_id).metadata["image_outline"]["linked"] = False
         for item, _ in reversed(self._removed):
             self.document.remove_object(item.id)
         insertion = min(
@@ -395,6 +420,8 @@ class ReplaceObjectsCommand(Command):
             self.document.remove_object(item.id)
         for item, index in self._removed:
             self.document.add_object(item, index)
+        for object_id, metadata in self._detached_links.items():
+            self.document.get_object(object_id).metadata = copy.deepcopy(metadata)
 
 
 class UpdateObjectPropertiesCommand(Command):
@@ -466,9 +493,21 @@ class UpdateObjectShapeCommand(Command):
 
         self.after_transform = validated.transform.copy()
         self.after_geometry = copy.deepcopy(validated.geometry)
+        from .image_outline import linked_transform_updates
+
+        self._linked_after = linked_transform_updates(
+            document, {self.object_id: self.after_transform},
+        )
+        self._linked_before = {
+            linked_id: document.get_object(linked_id).transform.copy()
+            for linked_id in self._linked_after
+        }
         self.description = description
 
-    def _apply(self, transform: Transform, geometry: Mapping[str, Any]) -> None:
+    def _apply(
+        self, transform: Transform, geometry: Mapping[str, Any],
+        linked_transforms: Mapping[str, Transform],
+    ) -> None:
         item = self.document.get_object(self.object_id)
         transform_changed = item.transform.to_dict() != transform.to_dict()
         geometry_changed = item.geometry != geometry
@@ -484,13 +523,16 @@ class UpdateObjectShapeCommand(Command):
         )
         item.transform = validated.transform.copy()
         item.geometry = copy.deepcopy(validated.geometry)
+        for linked_id, linked_transform in linked_transforms.items():
+            if linked_id != self.object_id:
+                self.document.get_object(linked_id).transform = linked_transform.copy()
         self.document.touch()
 
     def redo(self) -> None:
-        self._apply(self.after_transform, self.after_geometry)
+        self._apply(self.after_transform, self.after_geometry, self._linked_after)
 
     def undo(self) -> None:
-        self._apply(self.before_transform, self.before_geometry)
+        self._apply(self.before_transform, self.before_geometry, self._linked_before)
 
 
 class UpdateTransformCommand(Command):
@@ -505,13 +547,14 @@ class UpdateTransformCommand(Command):
         self.object_id = object_id
         self.before = document.get_object(object_id).transform.copy()
         self.after = new_transform.copy()
+        self._command = UpdateTransformsCommand(document, {object_id: new_transform})
         self.description = description
 
     def redo(self) -> None:
-        self.document.update_transform(self.object_id, self.after.copy())
+        self._command.redo()
 
     def undo(self) -> None:
-        self.document.update_transform(self.object_id, self.before.copy())
+        self._command.undo()
 
 
 class UpdateTransformsCommand(Command):
@@ -522,7 +565,9 @@ class UpdateTransformsCommand(Command):
         description: str = "Transform objects",
     ) -> None:
         self.document = document
-        self.after = {object_id: transform.copy() for object_id, transform in transforms.items()}
+        from .image_outline import linked_transform_updates
+
+        self.after = linked_transform_updates(document, transforms)
         self.before = {
             object_id: document.get_object(object_id).transform.copy()
             for object_id in self.after

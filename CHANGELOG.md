@@ -1,5 +1,67 @@
 # Changelog
 
+## Unreleased - managed local build storage
+
+- Route normal Windows, Home and DEV TEST launcher build outputs, caches and
+  temporary files into managed containers under a shared eight-GiB admission
+  budget, including two-GiB reservations and a two-GiB physical free-space floor.
+- Preserve historical outputs and report their total as unknown. New builds no
+  longer require a complete legacy census. Keep exact ownership, selected/running
+  output protection, source concurrency checks and failed reservations.
+- Require existing local build dependencies instead of automatically upgrading
+  packages or installing a compiler. No automatic deletion is enabled. See
+  [local build storage](docs/LOCAL_ARTIFACT_RETENTION.md).
+
+## Unreleased - confirmed calibrated surface travel (2026-10-16)
+
+- Allow an explicitly recorded calibrated surface to qualify carriage travel
+  alongside the unchanged independently verified rectangle.
+- Bind the record to calibration and laser offset; validate complete segments
+  and route laser-off transfers through verified overlap when necessary.
+- Preserve powered image samples, legacy profile/directive formats and outside
+  runout rejection. Require matching Pi capability and local record.
+- Add a proposal-only helper with source hashes; no configuration is applied.
+
+## Unreleased — remove repeated Start validation (2026-10-15)
+
+- Reuse desktop preflight when focus attachment leaves the exact program
+  unchanged; changed bytes still receive full validation.
+- Retain immutable focus/material/raster facts with the local program proof,
+  while rechecking current policy, material, focus, session and arming authority.
+- Reduce raster parser allocations and reuse successful endpoint proofs within
+  one analysis, preserving offsets, tolerances and power-transition checks.
+- Measure about 28.5% faster local validation of the retained 729,269-line job
+  with identical output. This is not a Pi or total Start benchmark. Matching Pi
+  installation remains pending; the running job was left untouched.
+
+## Faster job upload and preparation (2026-10-15)
+
+- Negotiate bounded lossless compressed uploads, reducing the operator's 22 MB
+  raster from 338 upload requests to 22 and 3.53 MB of compressed data.
+- Retain exact decoded bytes, durable offsets, digest validation, cancellation
+  and explicit Start; older nodes use the original raw upload path.
+- Prepare fixed validation geometry once and use original line lengths to avoid
+  full compaction when every eligible source line already fits the controller.
+  Long eligible lines still receive the exact stateful scan.
+
+## Job pause / resume (2026-10-15)
+
+- Add controller-confirmed Pause / Resume to the desktop and Pi-owned job protocol.
+- Retain queued motion and ACK ownership; suspend ACK deadlines while maintaining
+  transition/status watchdogs and STOP/session/authorization checks.
+- Require a GRBL handshake, observed laser mode and verified motor holding; keep unsupported
+  controllers and old Pi nodes disabled. Reattach explicitly to an unowned paused job.
+- Preserve current main streaming fixes and the selected engraving image editor.
+  Physical behavior remains pending operator validation; see docs/JOB_PAUSE.md.
+- Support the installed controller's omitted optional identity payload, with
+  explicit operator approval, an established GRBL handshake and observed $32=1.
+  Contradictory reported versions reject; Resume still requires confirmed suspend.
+- Avoid repeating the completed immutable stream-size check after arming,
+  which could expire the grant on a dense raster. Recheck changed source/capacity.
+  Skip unused legacy-area predicates during raster-envelope validation without
+  changing travel or powered-endpoint rejection.
+
+
 ## Unreleased — continuous GRBL command streaming
 
 - Remove per-pixel acknowledgement quiet delays from contiguous guarded G1 runs.
@@ -47,6 +109,23 @@ safety validation; generated motion, power, calibration and settings are unchang
   in exact Preview, including Start Here. Boundary failures identify needed clearance.
 - Add a call-count regression for the earlier large-job parser duplication fix and
   an offline, reproducible pipeline benchmark with ranked findings.
+## Engraving image editor — development
+
+- Fixed startup with saved `machine.raster_travel_envelope` records by including
+  their existing strict parser, job identity and coupled travel/output checks.
+  No saved machine setting or calibration is removed or rewritten by the repair.
+
+- Added reversible local rectangle/ellipse/lasso/brush exclusion and restore,
+  original comparison, undo/redo, automatic candidate tracing and manual Bézier
+  outline editing in the desktop project workspace.
+- Added schema-6 edit persistence and explicit transform-linked vector snapshots;
+  derived cutting layers start at zero power with output off. Source image edits
+  never rewrite existing vector geometry. Invalid offsets and contours reject.
+- Shared the portable image pipeline with canvas and raster output; conservative
+  eligibility gating prevents excluded pixels from producing power after
+  inversion, resampling and dithering. Commits invalidate prepared jobs.
+- See [usage and limitations](docs/ENGRAVING_IMAGE_EDITOR.md). No hardware behavior
+  or configuration was physically verified by these software changes.
 
 ## Image background cleanup (2026-10-15)
 

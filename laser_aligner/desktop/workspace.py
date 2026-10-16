@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -345,10 +346,12 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         layer: OperationLayer,
         move_callback: Any | None = None,
         parent: QtWidgets.QGraphicsItem | None = None,
+        move_preview_callback: Any | None = None,
     ) -> None:
         super().__init__(parent)
         self.object_id = scene_object.id
         self._move_callback = move_callback
+        self._move_preview_callback = move_preview_callback
         self._start_position = QtCore.QPointF()
         self._syncing = False
         self._raster_image: QtGui.QImage | None = None
@@ -357,6 +360,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         self._raster_source_size: tuple[int, int] | None = None
         self._raster_asset_reference: str | None = None
         self._cleanup_tolerance: int | None = None
+        self._image_edit_json: str | None = None
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -438,6 +442,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         *,
         use_cache: bool = True,
         cleanup_tolerance: int | None = None,
+        image_edit_json: str | None = None,
     ) -> tuple[
         str,
         QtGui.QImage | None,
@@ -458,15 +463,27 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         key = (resolved, identity.sha256)
         if cleanup_tolerance is not None:
             key = (*key, cleanup_tolerance)
+        if image_edit_json is not None:
+            key = (*key, "image_edit", image_edit_json)
         cached = cls._image_cache.get(key) if use_cache else None
         if cached is not None:
             cls._image_cache.move_to_end(key)
             return resolved, cached, identity.sha256, source_size_px
 
-        if cleanup_tolerance is not None:
+        if cleanup_tolerance is not None or image_edit_json is not None:
             from .background_cleanup import cleanup_preview_image
+            from .image_processing import edited_preview_image
 
-            image = cleanup_preview_image(payload, cleanup_tolerance)
+            if image_edit_json is not None:
+                geometry = {"image_edit": json.loads(image_edit_json)}
+                if cleanup_tolerance is not None:
+                    geometry["background_cleanup"] = {"enabled": True, "tolerance": cleanup_tolerance}
+                try:
+                    image = edited_preview_image(payload, geometry)
+                except ValueError:
+                    return resolved, None, None, source_size_px
+            else:
+                image = cleanup_preview_image(payload, cleanup_tolerance)
             budget = cls._preview_pixel_budget()
             if image.width() * image.height() > budget:
                 scale = math.sqrt(budget / (image.width() * image.height()))
@@ -524,9 +541,13 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
     @property
     def raster_cache_key(self) -> tuple | None:
         identity = self.raster_preview_identity
-        if identity is None or self._cleanup_tolerance is None:
-            return identity
-        return (*identity, self._cleanup_tolerance)
+        if identity is None:
+            return None
+        if self._cleanup_tolerance is not None:
+            identity = (*identity, self._cleanup_tolerance)
+        if self._image_edit_json is not None:
+            identity = (*identity, "image_edit", self._image_edit_json)
+        return identity
 
     def refresh_raster_snapshot(self) -> bool:
         reference = self._raster_asset_reference
@@ -537,7 +558,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             self._raster_image,
             self._raster_identity_sha,
             self._raster_source_size,
-        ) = self._load_raster_snapshot(reference, cleanup_tolerance=self._cleanup_tolerance)
+        ) = self._load_raster_snapshot(
+            reference, cleanup_tolerance=self._cleanup_tolerance, image_edit_json=self._image_edit_json
+        )
         self.update()
         return self._raster_image is not None
 
@@ -658,8 +681,11 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
 
                 enabled, tolerance = cleanup_settings(scene_object.geometry)
                 cleanup_tolerance = tolerance if enabled else None
+                image_edit_json = (json.dumps(scene_object.geometry["image_edit"], sort_keys=True, separators=(",", ":"))
+                                   if "image_edit" in scene_object.geometry else None)
                 if (asset_reference != self._raster_asset_reference
-                        or cleanup_tolerance != self._cleanup_tolerance):
+                        or cleanup_tolerance != self._cleanup_tolerance
+                        or image_edit_json != self._image_edit_json):
                     (
                         self._raster_source,
                         self._raster_image,
@@ -667,11 +693,12 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                         self._raster_source_size,
                     ) = (
                         self._load_raster_snapshot(
-                            asset_reference, cleanup_tolerance=cleanup_tolerance
+                            asset_reference, cleanup_tolerance=cleanup_tolerance, image_edit_json=image_edit_json
                         )
                     )
                     self._raster_asset_reference = asset_reference
                     self._cleanup_tolerance = cleanup_tolerance
+                    self._image_edit_json = image_edit_json
             else:
                 self._raster_source = ""
                 self._raster_image = None
@@ -679,6 +706,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 self._raster_source_size = None
                 self._raster_asset_reference = None
                 self._cleanup_tolerance = None
+                self._image_edit_json = None
             self.setPath(self._path_for_object(scene_object, transform))
             stock_boundary = is_stock_boundary(scene_object)
             color = (
@@ -706,6 +734,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             else:
                 self.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             self.setPos(transform.x_mm, -transform.y_mm)
+            linked_outline = scene_object.metadata.get("image_outline", {}).get("linked", False)
+            self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                         not scene_object.locked and not linked_outline)
             self.setRotation(-transform.rotation_deg)
             item_transform = QtGui.QTransform()
             item_transform.scale(
@@ -726,6 +757,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                     if scene_object.kind == ObjectKind.IMAGE
                     else ""
                 )
+                + ("\nLinked to image; detach in Objects for independent transforms" if linked_outline else "")
             )
         finally:
             self._syncing = False
@@ -749,6 +781,13 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
         self._start_position = self.pos()
         super().mousePressEvent(event)
+
+    def itemChange(self, change, value):
+        result = super().itemChange(change, value)
+        if (change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
+                and not self._syncing and self._move_preview_callback is not None):
+            self._move_preview_callback(self.object_id, WorkspaceScene.scene_to_machine(self.pos()))
+        return result
 
     def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
         super().mouseReleaseEvent(event)
@@ -2872,7 +2911,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         try:
             raster_sources = {
                 (str(item.geometry.get("asset", "")).strip(),
-                 repr(item.geometry.get("background_cleanup")))
+                 repr(item.geometry.get("background_cleanup")),
+                 repr(item.geometry.get("image_edit")))
                 for item in document.objects
                 if item.kind == ObjectKind.IMAGE
                 and str(item.geometry.get("asset", "")).strip()
@@ -2918,6 +2958,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                         scene_object,
                         layer,
                         move_callback=self._item_move_finished,
+                        move_preview_callback=self._item_move_preview,
                     )
                     self.workspace_scene.addItem(item)
                 else:
@@ -2974,7 +3015,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             )
             if image.width() * image.height() >= desired_pixels:
                 continue
-            groups.setdefault((reference, item._cleanup_tolerance), []).append(item.object_id)
+            groups.setdefault((reference, item._cleanup_tolerance, item._image_edit_json), []).append(item.object_id)
         self._raster_restore_queue = [
             (reference, tuple(object_ids), pixel_budget)
             for reference, object_ids in groups.items()
@@ -2987,7 +3028,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._raster_restore_timer.stop()
             return
         variant, object_ids, expected_budget = self._raster_restore_queue.pop(0)
-        reference, cleanup_tolerance = variant
+        reference, cleanup_tolerance, image_edit_json = variant
         if (
             expected_budget != self._raster_preview_pixel_budget
             or expected_budget != ObjectGraphicsItem._preview_pixel_budget()
@@ -3000,6 +3041,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             if (item := self._items_by_id.get(object_id)) is not None
             and item._raster_asset_reference == reference
             and item._cleanup_tolerance == cleanup_tolerance
+            and item._image_edit_json == image_edit_json
         ]
         if group:
             (
@@ -3011,6 +3053,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 reference,
                 use_cache=False,
                 cleanup_tolerance=cleanup_tolerance,
+                image_edit_json=image_edit_json,
             )
             if (
                 image is not None
@@ -3089,7 +3132,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def refresh_raster_previews(self, paths: tuple[str, ...]) -> bool:
         pending = set(paths)
-        by_path: dict[tuple[str, int | None], list[ObjectGraphicsItem]] = {}
+        by_path: dict[tuple[str, int | None, str | None], list[ObjectGraphicsItem]] = {}
         for item in self._items_by_id.values():
             identity = item.raster_preview_identity
             candidate = (
@@ -3102,9 +3145,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 )
             )
             if candidate in pending:
-                by_path.setdefault((candidate, item._cleanup_tolerance), []).append(item)
+                by_path.setdefault((candidate, item._cleanup_tolerance, item._image_edit_json), []).append(item)
         refreshed = set()
-        for (path, _tolerance), items in by_path.items():
+        for (path, _tolerance, _edit), items in by_path.items():
             primary = items[0]
             if not primary.refresh_raster_snapshot():
                 continue
@@ -3120,6 +3163,21 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         )
         return refreshed == pending
 
+    def _item_move_preview(self, object_id: str, position: tuple[float, float]) -> None:
+        if self._document is None or self._syncing_document:
+            return
+        source = self._document.get_object(object_id)
+        if source.kind is not ObjectKind.IMAGE:
+            return
+        transform = source.transform.copy(x_mm=position[0], y_mm=position[1])
+        # Preview only linked paths: the source is already being dragged by Qt.
+        for item in self._document.objects:
+            link = item.metadata.get("image_outline", {})
+            if link.get("linked") and link.get("source_id") == object_id:
+                target = self._items_by_id.get(item.id)
+                if target is not None:
+                    target.preview_transform(item, self._document.get_layer(item.layer_id), transform)
+
     def _preview_object_transform(self, object_id: str, transform: Transform) -> None:
         """Update canvas geometry while leaving the document untouched."""
 
@@ -3128,9 +3186,18 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         item = self._items_by_id.get(object_id)
         if item is None:
             return
-        scene_object = self._document.get_object(object_id)
-        layer = self._document.get_layer(scene_object.layer_id)
-        item.preview_transform(scene_object, layer, transform)
+        from ..project.image_outline import linked_transform_updates
+
+        try:
+            updates = linked_transform_updates(self._document, {object_id: transform})
+        except ValueError:
+            return
+        for target_id, updated in updates.items():
+            scene_object = self._document.get_object(target_id)
+            layer = self._document.get_layer(scene_object.layer_id)
+            target = self._items_by_id.get(target_id)
+            if target is not None:
+                target.preview_transform(scene_object, layer, updated)
 
     def _clear_object_transform_overlay(self) -> None:
         overlay = self._object_transform_overlay
@@ -3153,6 +3220,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         item = self._items_by_id.get(object_id)
         if (
             scene_object.locked
+            or scene_object.metadata.get("image_outline", {}).get("linked", False)
             or not scene_object.visible
             or item is None
             or item.scene() is not self.workspace_scene

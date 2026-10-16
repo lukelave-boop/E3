@@ -9,7 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6 import QtCore, QtTest, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.workspace import WorkspaceView
@@ -153,7 +153,21 @@ def test_polygon_initial_angle_snaps_without_changing_radius_and_stays_frozen(ca
     view.set_creation_tool("polygon")
     QtTest.QTest.mouseClick(view.viewport(), QtCore.Qt.MouseButton.LeftButton,
                            pos=view.mapFromScene(view.workspace_scene.machine_to_scene(50, 50)))
-    QtTest.QTest.mouseMove(view.viewport(), view.mapFromScene(pointer(view, 68)))
+    # QTest.mouseMove uses the shared OS cursor, which may already occupy this
+    # point or be moved by another xdist worker. Deliver the same unpressed
+    # mouse event through the viewport so Qt dispatches it deterministically.
+    position = view.mapFromScene(pointer(view, 68))
+    QtWidgets.QApplication.sendEvent(
+        view.viewport(),
+        QtGui.QMouseEvent(
+            QtCore.QEvent.Type.MouseMove,
+            QtCore.QPointF(position),
+            QtCore.QPointF(view.viewport().mapToGlobal(position)),
+            QtCore.Qt.MouseButton.NoButton,
+            QtCore.Qt.MouseButton.NoButton,
+            NONE,
+        ),
+    )
     radius, angle = view._polygon_radius_mm, view._polygon_angle_deg
     assert angle == pytest.approx(68, abs=1)
     QtTest.QTest.keyPress(view, QtCore.Qt.Key.Key_Control)

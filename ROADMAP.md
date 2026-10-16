@@ -1,5 +1,37 @@
 # Roadmap
 
+## Confirmed surface travel (2026-10-16)
+
+Implemented in source: exact calibrated surface authority alongside
+the existing carriage rectangle, complete segment checks, contained transfer
+routing, calibration/offset invalidation, matching Pi capability and a proposal-only
+configuration helper. Full 191 x 191 image coverage with contained runout and the
+reported high-Y raster are covered offline. The source candidate record preceded
+paired installation; see [current state](CURRENT_STATE.md) for the supplied
+installation context and dated evidence. This integration changes no active limits
+and establishes no new physical qualification.
+
+Compressed upload and repeated-geometry/stream-size optimizations are implemented.
+Inert upload timing is verified: 58.922 to 6.346 seconds for the same 22 MB job.
+Preparation removes unchanged desktop duplicate preflight and
+repeated immutable metadata/endpoint checks. Local validator timing improves
+about 28.5%; the original benchmark preceded matching-companion installation.
+Pi verification and Start timing require separate measurements. Physical
+pause/resume qualification remains separate from transfer and software
+preparation timing.
+
+## Job pause / resume
+
+Implemented desktop and Pi-owned controller-confirmed pause/resume with retained
+queue, stale-request rejection and fail-off coverage. Complete supervised
+zero-power, powered raster, resume-alignment and paused-STOP qualification before
+claiming physical acceptance. See [Pause / Resume](docs/JOB_PAUSE.md).
+
+Dense-job Start now avoids a repeated scan after arming and unused raster-area
+calculations. Confirm actual Pi Start timing with the matched companion; the
+offline timing improvement does not establish physical-machine performance.
+
+
 ## Continuous command streaming
 
 Implemented for verification: bounded GRBL G1 streaming, exact modal wire
@@ -31,8 +63,22 @@ companion deployment and Windows compatibility CI remain release gates. No
 historical X-only travel record or provisional Y235 value qualifies a whole envelope.
 
 The measured performance follow-ups are ranked in
-[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md); raster caching and removal of
-the remote wrapper's unchanged-text duplicate preflight are separate future work.
+[RASTER_PERFORMANCE.md](docs/RASTER_PERFORMANCE.md). The remote wrapper's
+unchanged-text duplicate preflight is now removed; broader raster caching remains
+future work.
+## Engraving image workspace
+
+Startup compatibility with existing raster-travel profiles now includes their
+complete validation and job-policy contract; it does not infer new travel limits.
+
+First-stage implementation adds local reversible cleanup, foreground trace
+preview, native pen/node/handle editing, mask persistence, and explicit linked
+cut-path snapshots. Inversion is included; broader tonal and retouching tools
+remain deferred. Next candidates are magic wand/background selection,
+brightness/contrast, levels/gamma, artwork threshold, crop/straighten/flip,
+sharpening/despeckle, tonal curves, and clone/heal. These should extend the shared
+portable image-edit pipeline and ordered history rather than introduce another
+canvas/export/planner processing path. See [first-stage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
 
 ## Image background cleanup
 

@@ -380,6 +380,10 @@ class PosixSerial:
             raise MachineError(message)
 
     def write_raw(self, data: bytes) -> None:
+        self.write_raw_guarded(data, lambda: None)
+
+    def write_raw_guarded(self, data: bytes, guard) -> None:
+        """Recheck exact-session authority after acquiring the physical TX gate."""
         with self._write_lock:
             fd = self._fd
             if fd is None:
@@ -388,6 +392,7 @@ class PosixSerial:
             deadline = time.monotonic() + _SERIAL_WRITE_TIMEOUT_SECONDS
             while view:
                 try:
+                    guard()
                     self._write_progress.mark("write_wait", requested_bytes=len(view))
                     written = os.write(fd, view)
                     self._write_progress.mark(

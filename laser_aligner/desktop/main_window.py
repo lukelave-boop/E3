@@ -1212,6 +1212,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.layer_panel.choose_color
         )
         self.object_panel.backgroundCleanupRequested.connect(self.clean_image_background)
+        self.object_panel.imageEditorRequested.connect(self.edit_image_for_engraving)
+        self.object_panel.detachImageOutlineRequested.connect(self.detach_image_outline)
         self.object_panel.rasterVectorizeRequested.connect(
             self.vectorize_raster_image
         )
@@ -1893,13 +1895,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             for member in members
         }
-        self.history.execute(
-            UpdateTransformsCommand(
-                self.document,
-                transforms,
-                description="Move group" if item.group_id else "Move object",
+        try:
+            self.history.execute(
+                UpdateTransformsCommand(
+                    self.document,
+                    transforms,
+                    description="Move group" if item.group_id else "Move object",
+                )
             )
-        )
+        except ValueError as exc:
+            self._refresh_document([member.id for member in members])
+            self.show_notice(str(exc))
+            return
         self.workspace.select_objects([member.id for member in members])
 
     def _object_transform_committed(
@@ -1940,7 +1947,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         current = self.document.get_object(object_id).transform
         if current.to_dict() == transform.to_dict():
             return
-        self.history.execute(UpdateTransformCommand(self.document, object_id, transform))
+        try:
+            self.history.execute(UpdateTransformCommand(self.document, object_id, transform))
+        except ValueError as exc:
+            self._refresh_document([object_id])
+            self.show_notice(str(exc))
+            return
         self.workspace.select_objects([object_id])
 
     def _rectangle_shape_edited(
@@ -2436,6 +2448,87 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.show_notice(
             "Imported grayscale raster image with deterministic ordered dithering"
         )
+
+    def detach_image_outline(self, object_id: str) -> None:
+        from ..project.image_outline import DetachOutlineCommand
+
+        try:
+            if self.document.get_object(object_id).locked:
+                raise ValueError("Unlock the outline before detaching it")
+            self.history.execute(DetachOutlineCommand(self.document, object_id))
+        except Exception as exc:
+            self.show_error(f"Could not detach image outline: {exc}")
+
+    def edit_image_for_engraving(self, object_id: str) -> None:
+        from ..project.image_edit import offset_outline
+        from ..project.image_outline import AddOutlineCommand
+        from .image_editor import ImageEditorDialog
+
+        dialog = None
+        try:
+            source = self.document.get_object(object_id)
+            if (self.workspace.selected_object_ids() != [object_id]
+                    or source.kind is not ObjectKind.IMAGE or source.locked):
+                raise ValueError("Select one unlocked image to edit")
+            identity = self.workspace.raster_preview_identity_for_object(object_id)
+            if identity is None:
+                raise ValueError("The image needs a readable, verified canvas preview")
+            asset = source.geometry["asset"]
+            payload = read_raster_asset_payload(asset, expected_source_sha256=identity[1])
+            if payload.identity.path != identity[0]:
+                raise ValueError("The image source differs from its canvas preview")
+            before = source.to_dict()
+            dialog = ImageEditorDialog(payload, source.geometry,
+                                       source.transform.width_mm, source.transform.height_mm, self)
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            read_raster_asset_payload(asset, expected_source_sha256=payload.identity.sha256)
+            if self.document.get_object(object_id).to_dict() != before:
+                raise ValueError("The image changed during review; reopen the image editor")
+            geometry = dict(source.geometry)
+            geometry["image_edit"] = dialog.settings
+            commands = []
+            if geometry != source.geometry:
+                commands.append(UpdateObjectShapeCommand(
+                    self.document, object_id, source.transform, geometry,
+                    description="Edit image for engraving",
+                ))
+            if dialog.create_vector:
+                outline = offset_outline(
+                    dialog.vector_outline, source.transform.width_mm, source.transform.height_mm,
+                    dialog.offset_mm, include_holes=dialog.include_holes,
+                )
+                commands.append(AddOutlineCommand(
+                    self.document, object_id, outline, linked=dialog.link_vector,
+                    offset_mm=dialog.offset_mm, include_holes=dialog.include_holes,
+                ))
+            if not commands:
+                return
+
+            def redo() -> None:
+                completed = []
+                try:
+                    for command in commands:
+                        command.redo()
+                        completed.append(command)
+                except Exception:
+                    for command in reversed(completed):
+                        command.undo()
+                    raise
+
+            def undo() -> None:
+                for command in reversed(commands):
+                    command.undo()
+
+            self.history.execute(FunctionalCommand("Edit image for engraving", redo, undo))
+            self.workspace.select_objects([object_id])
+        except Exception as exc:
+            self.show_error(f"Could not apply image edits: {exc}")
+        finally:
+            if dialog is not None:
+                # History commands retain copied model data, not this parented
+                # dialog's decoded images, draft history, and graphics scene.
+                dialog.deleteLater()
 
     def clean_image_background(self, object_id: str) -> None:
         from .background_cleanup import BackgroundCleanupDialog

@@ -3175,9 +3175,18 @@ class DesktopController(QtCore.QObject):
         )
 
     def pause_resume(self) -> None:
-        self.errorOccurred.emit(
-            "Pause/resume is reserved in the desktop UI but will remain disabled "
-            "until the Falcon controller's realtime hold/resume behavior is tested."
+        machine = self.runtime.context.machine
+        status = machine.status()
+        pause = status.get("job_pause") or {}
+        resume = pause.get("state") == "paused"
+        self._run(
+            lambda: machine.request_pause(
+                resume=resume, expected_run_id=pause.get("run_id"),
+                expected_pause_revision=pause.get("revision"),
+            ),
+            on_success=lambda _result: self._machine_changed("Resume requested" if resume else "Pause requested"),
+            label="Resume job" if resume else "Pause job",
+            requires_controller=True,
         )
 
     def emergency_stop(self) -> None:

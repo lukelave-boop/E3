@@ -99,6 +99,7 @@ from .power_correction import (
 from .raster_asset import (
     RasterAssetIdentity,
     decode_raster_grayscale,
+    decode_raster_payload_planes,
     probe_raster_asset,
     read_raster_asset_payload,
     verify_raster_asset_identities,
@@ -137,6 +138,18 @@ def _toolpath_cancel_requested() -> bool:
 def _raise_if_toolpath_cancelled() -> None:
     if _toolpath_cancel_requested():
         raise ToolpathGenerationCancelled("Toolpath generation was cancelled")
+
+
+def _validate_image_outline_output(document: ProjectDocument) -> None:
+    from .image_edit import validate_outline
+
+    for item in document.visible_output_objects():
+        if "image_outline" not in item.metadata:
+            continue
+        errors = validate_outline(item.path_geometry(), width_mm=item.transform.width_mm,
+                                  height_mm=item.transform.height_mm)
+        if errors:
+            raise ValueError(f"Invalid image cutting outline {item.name}: {'; '.join(errors)}")
 
 
 @dataclass(slots=True)
@@ -1128,6 +1141,12 @@ def _prepare_raster_clearance(
 def _validate_raster_travel_points(points: np.ndarray, envelope: RasterTravelEnvelope) -> None:
     if not np.isfinite(points).all():
         raise SafetyError("Machine carriage travel contains non-finite coordinates")
+    if envelope.surface is not None:
+        for point in points:
+            envelope.require_travel_point(
+                (float(point[0]), float(point[1])), label="Machine carriage travel boundary",
+            )
+        return
     minimum, maximum = points.min(axis=0), points.max(axis=0)
     clearances = (
         ("X minimum", envelope.x_min - minimum[0]),
@@ -1148,6 +1167,17 @@ def _validate_raster_travel_points(points: np.ndarray, envelope: RasterTravelEnv
 
 
 def _validate_raster_travel_paths(paths: list[Polyline], envelope: RasterTravelEnvelope) -> None:
+    if envelope.surface is not None:
+        for path in paths:
+            _raise_if_toolpath_cancelled()
+            points = path.points
+            if len(points) == 1:
+                envelope.require_travel_point(tuple(map(float, points[0])), label="Raster carriage travel")
+            for start, end in zip(points, points[1:], strict=False):
+                envelope.require_travel_segment(
+                    tuple(map(float, start)), tuple(map(float, end)), label="Raster carriage travel",
+                )
+        return
     for offset in range(0, len(paths), 4096):
         _raise_if_toolpath_cancelled()
         _validate_raster_travel_points(np.vstack([path.points for path in paths[offset:offset + 4096]]), envelope)
@@ -1159,8 +1189,8 @@ def _validate_exact_raster_plan(
     output_polygon: tuple[tuple[float, float], ...] | None, work_area: WorkArea,
 ) -> None:
     # Every serialized segment, including the initial approach, row/layer/pass
-    # transfers, is tested at both ends. Rectangular/convex domains then contain
-    # the entire straight segment. Use configured physical offset, not rounded
+    # transfers, is tested across its entire segment. The union of independently
+    # verified surface and rectangle can be non-convex. Use physical offset, not rounded
     # display metadata, to reconstruct the actual beam.
     display_offset = np.array([plan.spot_offset_x, plan.spot_offset_y])
     physical_offset = np.array([laser.spot_offset_x_mm, laser.spot_offset_y_mm])
@@ -1170,7 +1200,14 @@ def _validate_exact_raster_plan(
         controller = np.array([
             point for move in batch for point in ((move.start_x, move.start_y), (move.end_x, move.end_y))
         ]) - display_offset
-        _validate_raster_travel_points(controller, envelope)
+        if envelope.surface is None:
+            _validate_raster_travel_points(controller, envelope)
+        else:
+            for start, end in controller.reshape(-1, 2, 2):
+                envelope.require_travel_segment(
+                    tuple(map(float, start)), tuple(map(float, end)),
+                    label="Serialized raster carriage travel",
+                )
         mask = np.repeat([move.laser_on and move.power > 0 for move in batch], 2)
         powered = controller[mask] + physical_offset
         if len(powered):
@@ -2208,6 +2245,49 @@ def _ordered_dither_thresholds(width: int) -> np.ndarray:
     ) * (255.0 / 64.0)
 
 
+def _image_mask_cell_gate(
+    excluded_integral: np.ndarray,
+    scan_boundaries: np.ndarray,
+    row_position: float,
+    pitch: float,
+    item: SceneObject,
+    scan_to_machine: np.ndarray,
+) -> np.ndarray:
+    """Admit only cells whose whole source footprint contains no excluded pixel.
+
+    The source-space bounding rectangle is deliberately conservative under
+    rotation. A summed-area table makes this independent of brush complexity
+    and avoids interpolating an exclusion mask into engraving power.
+    """
+    height, width = np.array(excluded_integral.shape) - 1
+    centers = (scan_boundaries[:-1] + scan_boundaries[1:]) * 0.5
+    source = _scan_points_source_coordinates(
+        np.column_stack([centers, np.full(centers.size, row_position)]),
+        item, scan_to_machine, int(width), int(height),
+    )
+    reference = _scan_points_source_coordinates(
+        np.array([[0., 0.], [1., 0.], [0., 1.]]),
+        item, scan_to_machine, int(width), int(height),
+    )
+    horizontal = np.abs(reference[1] - reference[0])
+    vertical = np.abs(reference[2] - reference[0])
+    half_extents = (np.diff(scan_boundaries)[:, None] * horizontal + pitch * vertical) * 0.5
+    # G-code serializes controller coordinates to 0.001 mm. Its half-step
+    # rounding error can rotate back into either source axis (including a
+    # honeycomb frame and laser offset), so reserve a full 0.001 mm per scan
+    # axis before admitting a cell adjacent to excluded artwork.
+    half_extents += (horizontal + vertical) * 0.001
+    lower = np.floor(source - half_extents + 0.5 + 1e-7).astype(np.int64)
+    upper = np.ceil(source + half_extents + 0.5 - 1e-7).astype(np.int64)
+    inside = ((lower[:, 0] >= 0) & (lower[:, 1] >= 0)
+              & (upper[:, 0] <= width) & (upper[:, 1] <= height))
+    left, top = np.clip(lower[:, 0], 0, width), np.clip(lower[:, 1], 0, height)
+    right, bottom = np.clip(upper[:, 0], 0, width), np.clip(upper[:, 1], 0, height)
+    excluded = (excluded_integral[bottom, right] - excluded_integral[top, right]
+                - excluded_integral[bottom, left] + excluded_integral[top, left])
+    return inside & (excluded == 0) & (right > left) & (bottom > top)
+
+
 def _ordered_dither_row(
     image: np.ndarray,
     row_index: int,
@@ -2282,14 +2362,31 @@ def _image_raster_rows(
         source = raster_sources[source_path]
     except KeyError as exc:
         raise ValueError(f"Raster source was not included in project preflight: {asset}") from exc
-    if source.image is None or source.identity is None:
+    edit = item.geometry.get("image_edit")
+    if edit is not None and source.source_allowed is None:
+        payload = read_raster_asset_payload(asset, metadata=source.metadata)
+        image, source_allowed = decode_raster_payload_planes(payload)
+        image.setflags(write=False)
+        source_allowed.setflags(write=False)
+        source.image, source.identity, source.source_allowed = image, payload.identity, source_allowed
+    elif source.image is None or source.identity is None:
         image, identity = decode_raster_grayscale(asset, metadata=source.metadata)
         image.setflags(write=False)
         source.image = image
         source.identity = identity
-    from .raster_cleanup import clean_background
+    from .image_edit import process_image
 
-    image = clean_background(source.image, item.geometry)
+    if edit is not None and (
+        edit["source_sha256"] != source.identity.sha256
+        or edit["source_size"] != [source.identity.width, source.identity.height]
+    ):
+        raise ValueError(f"Original image changed; its saved edits cannot be used: {item.name}")
+    image, allowed = process_image(source.image, item.geometry,
+                                   source_allowed=source.source_allowed if edit is not None else None)
+    excluded_integral = (
+        cv2.integral((~allowed.astype(bool)).astype(np.uint8), sdepth=cv2.CV_32S)
+        if edit is not None and not np.all(allowed) else None
+    )
     identity = source.identity
     image = _area_prefilter_raster(
         image,
@@ -2339,9 +2436,13 @@ def _image_raster_rows(
             interpolation=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_REPLICATE,
         )[0]
-        runs = _enabled_runs(
-            _ordered_dither_row(sampled_row, row_index, dither_thresholds)
-        )
+        enabled = _ordered_dither_row(sampled_row, row_index, dither_thresholds)
+        if excluded_integral is not None:
+            enabled &= _image_mask_cell_gate(
+                excluded_integral, scan_boundaries, float(row_position),
+                layer.line_interval_mm, item, scan_to_machine,
+            )
+        runs = _enabled_runs(enabled)
         if not runs:
             continue
         row_start, row_end = row_interval
@@ -2550,6 +2651,39 @@ def _layer_has_powered_output(
     return any(_points_have_motion(path.points) for path in operation.paths)
 
 
+def _emit_laser_off_travel(
+    lines: list[str],
+    current: np.ndarray,
+    target: np.ndarray,
+    feed_mm_min: float,
+    envelope: RasterTravelEnvelope | None,
+    *,
+    current_is_emitted: bool = False,
+) -> float:
+    """Emit a transfer within the verified domain, including any safe waypoint."""
+
+    route_start = tuple(float(_fmt(value)) for value in current) if current_is_emitted else tuple(current)
+    route_target = tuple(float(_fmt(value)) for value in target)
+    route = (
+        envelope.travel_route(route_start, route_target, label="Laser-off transfer")
+        if envelope is not None and envelope.surface is not None
+        else (tuple(target),)
+    )
+    distance = 0.0
+    position = current
+    for index, waypoint in enumerate(route):
+        _raise_if_toolpath_cancelled()
+        destination = np.asarray(waypoint, dtype=np.float64)
+        metric_destination = target if index == len(route) - 1 else destination
+        distance += float(np.linalg.norm(metric_destination - position))
+        lines.append(
+            f"G0 X{_fmt(destination[0])} Y{_fmt(destination[1])} "
+            f"F{_fmt(feed_mm_min)}"
+        )
+        position = metric_destination
+    return distance
+
+
 def _emit_raster_row(
     lines: list[str],
     row: RasterRow,
@@ -2559,6 +2693,9 @@ def _emit_raster_row(
     power_max: int,
     current: np.ndarray,
     air_assist: _AirAssistEmitter,
+    travel_envelope: RasterTravelEnvelope | None = None,
+    *,
+    current_is_emitted: bool = False,
 ) -> tuple[np.ndarray, float, float, int, int]:
     """Emit one scan row and return position, cut/travel, points, and paths."""
 
@@ -2567,17 +2704,16 @@ def _emit_raster_row(
     row_start = row.points[0]
     row_end = row.points[-1]
     lead_end = motion[-1]
-    route_travel = float(np.linalg.norm(lead_start - current))
-    off_travel = route_travel
+    off_travel = 0.0
     cut = 0.0
     point_count = 0
     path_count = 0
     lead_in_mm = float(np.linalg.norm(row_start - lead_start))
     lead_out_mm = float(np.linalg.norm(lead_end - row_end))
     lines.append(e3_metadata_line("path", {"name": row.source_tag}))
-    lines.append(
-        f"G0 X{_fmt(lead_start[0])} Y{_fmt(lead_start[1])} "
-        f"F{_fmt(laser.travel_feed_mm_min)}"
+    off_travel += _emit_laser_off_travel(
+        lines, current, lead_start, laser.travel_feed_mm_min, travel_envelope,
+        current_is_emitted=current_is_emitted,
     )
     powered_row = power > 0 and any(_points_have_motion(span.points) for span in row.spans)
     if powered_row:
@@ -2707,6 +2843,7 @@ def _generate_project_gcode(
     if raster_requested and (raster_travel_envelope is not None or require_verified_raster_travel_limits):
         raster_travel_envelope = require_verified_raster_travel(raster_travel_envelope)
     expanded_raster_travel = raster_requested and raster_travel_envelope is not None
+    _validate_image_outline_output(document)
     scene_revision = project_scene_revision(document)
     controller_power_max = int(power_max or laser.power_max)
     prepared_object_paths: dict[str, tuple[Polyline, ...]] = {}
@@ -2767,6 +2904,20 @@ def _generate_project_gcode(
     engraving_surface = normalize_convex_polygon(
         _place_points(surface_corners, coordinate_frame).tolist(), label="calibrated engraving surface",
     ) if expanded_raster_travel else None
+    if expanded_raster_travel and raster_travel_envelope.surface is not None:
+        if coordinate_frame is None:
+            raise SafetyError("Verified surface travel requires the matching calibrated coordinate frame")
+        # Use the same canonical arithmetic as the physical confirmation record;
+        # matrix placement can differ in the last floating-point bit.
+        engraving_surface = normalize_convex_polygon(
+            coordinate_frame.corners_machine_mm,
+            label="calibrated engraving surface",
+        )
+        raster_travel_envelope.surface.require_match(
+            engraving_surface,
+            (laser.spot_offset_x_mm, laser.spot_offset_y_mm),
+            coordinate_frame_digest=coordinate_frame.provenance_digest,
+        )
 
     all_paths: list[Polyline] = []
     all_controller_paths: list[Polyline] = []
@@ -3122,6 +3273,7 @@ def _generate_project_gcode(
         ]
     current = start.copy()
     travel_length = 0.0
+    current_is_emitted = False
     cut_length = 0.0
     point_count = 0
     path_count = 0
@@ -3251,7 +3403,10 @@ def _generate_project_gcode(
                         controller_power_max,
                         current,
                         air_assist,
+                        raster_travel_envelope if expanded_raster_travel else None,
+                        current_is_emitted=current_is_emitted,
                     )
+                    current_is_emitted = True
                     layer_cut += row_cut
                     cut_length += row_cut
                     layer_travel += row_travel
@@ -3302,14 +3457,17 @@ def _generate_project_gcode(
                         e3_metadata_line("path", {"name": path.source_tag})
                     )
                     travel_target = points[0]
-                    travel = float(np.linalg.norm(travel_target - current))
+                    travel = _emit_laser_off_travel(
+                        lines,
+                        current,
+                        travel_target,
+                        laser.travel_feed_mm_min,
+                        raster_travel_envelope if expanded_raster_travel else None,
+                        current_is_emitted=current_is_emitted,
+                    )
                     planned_order_travel += travel
                     layer_travel += travel
                     travel_length += travel
-                    lines.append(
-                        f"G0 X{_fmt(travel_target[0])} Y{_fmt(travel_target[1])} "
-                        f"F{_fmt(laser.travel_feed_mm_min)}"
-                    )
                     if power > 0:
                         if layer.air_assist:
                             air_assist.turn_on(lines)
@@ -3358,6 +3516,7 @@ def _generate_project_gcode(
                     path_count += 1
                     layer_path_count += 1
                     current = points[-1]
+                    current_is_emitted = True
         summaries.append(
             {
                 "layer_id": layer.id,

@@ -83,9 +83,27 @@ def click(view, x, y):
     QtTest.QTest.mouseClick(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point(view, x, y))
 
 
+def hover(view, x, y):
+    # QTest.mouseMove may deliver nothing when the shared OS cursor already
+    # occupies the target (including after another test/xdist worker moves it).
+    # Route an unpressed move through Qt's viewport, without bypassing the view.
+    position = point(view, x, y)
+    QtWidgets.QApplication.sendEvent(
+        view.viewport(),
+        QtGui.QMouseEvent(
+            QtCore.QEvent.Type.MouseMove,
+            QtCore.QPointF(position),
+            QtCore.QPointF(view.viewport().mapToGlobal(position)),
+            QtCore.Qt.MouseButton.NoButton,
+            QtCore.Qt.MouseButton.NoButton,
+            QtCore.Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+
+
 def freeze(view):
     click(view, 50, 50)
-    QtTest.QTest.mouseMove(view.viewport(), point(view, 70, 60))
+    hover(view, 70, 60)
     click(view, 70, 60)
     assert view._polygon_prompt is not None
     return view._polygon_prompt
@@ -94,16 +112,22 @@ def freeze(view):
 def test_second_click_locks_size_and_live_typing_keeps_center_and_orientation(canvas):
     view, document = canvas
     commits = []
+    cursor_positions = []
     view.polygonDrawCommitted.connect(lambda *args: commits.append(args))
+    view.cursorPositionChanged.connect(lambda *args: cursor_positions.append(args))
     click(view, 50, 50)
     assert view._polygon_prompt is None
-    QtTest.QTest.mouseMove(view.viewport(), point(view, 70, 60))
+    hover(view, 70, 60)
+    assert cursor_positions == [pytest.approx((70, 60), abs=0.2)]
     assert view._polygon_preview_item is not None
     assert document.objects == []
     click(view, 70, 60)
     prompt = view._polygon_prompt
     fixed = (view._polygon_center_mm, view._polygon_radius_mm, view._polygon_angle_deg)
-    QtTest.QTest.mouseMove(view.viewport(), point(view, 90, 10))
+    cursor_positions.clear()
+    hover(view, 90, 10)
+    assert cursor_positions == [pytest.approx((90, 10), abs=0.2)]
+    assert (view._polygon_center_mm, view._polygon_radius_mm, view._polygon_angle_deg) == fixed
     before = view._polygon_preview_item.path()
     prompt.sides_edit.selectAll()
     QtTest.QTest.keyClicks(prompt.sides_edit, "3")
@@ -311,7 +335,7 @@ def test_escape_cancels_authoring_without_changing_project_or_sending_stop(appli
         host.actions["polygon"].trigger()
         if mode == "polygon_sizing":
             click(view, 20, 20)
-            QtTest.QTest.mouseMove(view.viewport(), point(view, 30, 30))
+            hover(view, 30, 30)
     elif mode == "rectangle":
         host.actions["rectangle"].trigger()
         QtTest.QTest.mousePress(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point(view, 20, 20))

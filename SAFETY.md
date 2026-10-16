@@ -1,5 +1,30 @@
 # Safety requirements
 
+Compressed uploads are inert transport data. Input frames, compressed pieces,
+expanded chunks and total job size are bounded independently. Only exact decoded
+bytes enter the durable store; digest, whole-program validation and explicit Start
+remain required. Prepared polygon edges and source-length stream bounds avoid
+repeated computation without changing output/travel tolerances or authority.
+
+Preparation may reuse only this process's exact validated immutable program
+facts. Changed text receives full preflight; current policy, material, focus,
+session and arming authority are rechecked independently of cached metadata.
+Powered endpoint proofs are local to one analysis and include the physical spot;
+laser-off travel does not establish a powered proof. Reusing a preceding travel
+endpoint is valid for the convex rectangle fast path; schema-2 surface travel
+still checks every complete segment against the exact verified union. The
+canonical parser's 256-character decimal grammar guarantees finite parsed
+magnitudes; other syntax and computed coordinates retain their existing finite
+and bounds checks.
+
+Pause / Resume is a job-continuation feature, not an emergency stop or a
+safety-rated control. It requires a GRBL handshake, observed laser mode and verified
+motor holding. The app requests suspension and waits for controller status;
+neither that status nor the UI proves physical laser-off or a safe work area.
+STOP, disarm, disconnect and failure retain their existing reset/M5 cleanup.
+See [Pause / Resume](docs/JOB_PAUSE.md) for implementation and physical-test limits.
+
+
 Continuous GRBL G1 streaming retains per-write motion, process, arming, focus
 and session checks against original validated commands. Pending bytes and
 acknowledgements are bounded; unknown receive capacity permits one outstanding
@@ -12,26 +37,47 @@ recorded; see [command streaming](docs/COMMAND_STREAMING.md).
 ## Separate raster engraving and carriage travel
 
 New desktop raster programs require an explicit verified machine carriage
-travel envelope. Laser-off motion may leave the calibrated engraving surface
-only under that independent authority; it does not enlarge powered output.
+travel envelope. An optional separately confirmed surface record authorizes
+the exact calibrated surface in carriage coordinates, accounting for the laser
+spot offset. Travel may use the union of that polygon and the unchanged verified
+carriage rectangle. It must not use the union's enclosing rectangle. Laser-off
+motion outside the surface remains limited to the independent rectangle;
+surface confirmation does not establish external overscan clearance or enlarge powered output.
 Positive output remains inside the exact calibrated surface and the configured
 output authority with beam/head offset checks. Every straight serialized segment,
-including row transfers and initial approach, is travel-bounded. Positive mode
+including row transfers and initial approach, must be wholly contained in the
+verified union. Valid endpoints alone are insufficient when the union is
+nonconvex. Generated laser-off transfers may route through its verified overlap;
+each resulting segment remains checked. Positive mode
 changes and inline power words are checked at the segment start as well as end.
 
 The `E3RASTER` directive is immutable application data intercepted before the
 controller; local and Pi guards reject missing, unverified or mismatched travel.
+Surface records require schema 2 and the matching `pi-raster-surface-travel-v2`
+capability. They bind exact surface corners, calibration provenance and spot
+offset; changes invalidate prepared jobs. Records without a surface preserve
+their original schema-1 behavior and digest. Existing project schemas are unchanged.
 Homing, zero-work-offset checks, motion permission, temporary arming, standalone
 M5 bracketing and stop/disconnect/failure cleanup remain required. Old programs
 without this directive retain the stricter original output-boundary checks.
 
-Travel evidence is a recorded operator physical test, not an automatic hardware
-qualification. Historical X travel and provisional Y235 are insufficient for a
-current whole carriage envelope. Do not load wider settings until the current
+Travel evidence is recorded operator physical verification, not an automatic
+hardware qualification. The proposal helper writes only a new review artifact;
+it does not apply settings or perform a physical test. Historical X travel and
+provisional Y235 are insufficient for a current whole carriage envelope. Do not
+load wider settings until the current
 controller, firmware, coordinate reference, configuration and entire cable/fixture
 path have been physically verified. The acceleration model is only a planning
 estimate; validate adequate run-up/run-out at intended speeds. These controls
 are not safety-rated. See [raster validation](docs/RASTER_OVERSCAN.md).
+
+Saved raster-travel records are parsed strictly and remain separate from the
+calibrated engraving surface. Expanded laser-off travel requires the existing
+explicit verification record; positive output remains within the surface and
+guarded authority. Exact program metadata, current envelope digest, controller
+offsets and matching companion capability are checked. Image masks still gate
+powered spans after dithering, before laser-off clearance is constructed.
+This compatibility repair does not establish new physical travel verification.
 
 Camera address aliases preserve calibration only after authenticated stable
 camera identity and optical settings match an enrolled mapping. They do not

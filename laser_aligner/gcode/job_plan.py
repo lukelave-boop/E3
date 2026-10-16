@@ -512,10 +512,21 @@ def _restart_program_from_move(
             "; Laser spot offset (spot = controller + offset): "
             f"X{plan.spot_offset_x:g} Y{plan.spot_offset_y:g}"
         )
-    lines.append(
-        f"G0 X{controller_start_x:.3f} Y{controller_start_y:.3f} "
-        f"F{selected.feed_mm_min:.3f}"
+    approach = (
+        plan.raster_boundary.travel_route(
+            (actual_start_x, actual_start_y),
+            (float(f"{controller_start_x:.3f}"), float(f"{controller_start_y:.3f}")),
+            label="Start Here laser-off approach",
+        )
+        if plan.raster_boundary is not None
+        and plan.raster_boundary.travel_surface_polygon_mm is not None
+        else ((controller_start_x, controller_start_y),)
     )
+    for approach_x, approach_y in approach:
+        lines.append(
+            f"G0 X{approach_x:.3f} Y{approach_y:.3f} "
+            f"F{selected.feed_mm_min:.3f}"
+        )
     active_context: tuple[str, int, str] | None = None
     active_layer: tuple[str, str] | None = None
     active_power = 0.0

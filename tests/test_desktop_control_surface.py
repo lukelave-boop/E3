@@ -102,7 +102,7 @@ def test_camera_focus_controls_are_present_and_persistent():
     assert "cameraFocusChanged.connect" in main_window
 
 
-def test_machine_controls_expose_guarded_jogging_and_keep_pause_disabled():
+def test_machine_controls_expose_guarded_jogging_and_runtime_pause():
     panels = source("panels.py")
     runtime = source("runtime_strip.py")
     controller = source("controller.py")
@@ -112,5 +112,6 @@ def test_machine_controls_expose_guarded_jogging_and_keep_pause_disabled():
     assert "self._machine_ui_state" in panels
     assert "self.runtime.context.machine.jog" in controller
     assert "def jog(" in service
-    assert "self.pause_button.setEnabled(False)" in runtime
+    assert "self.pause_button" in runtime
+    assert "def pause_resume(" in controller
     assert "self.pause_button" not in panels

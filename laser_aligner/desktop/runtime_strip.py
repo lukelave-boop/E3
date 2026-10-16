@@ -76,7 +76,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.pause_button.setObjectName("runtimePauseButton")
         self.pause_button.setAccessibleName("Pause or resume machine job")
         self.pause_button.setToolTip(
-            "Disabled until Falcon realtime hold/resume is validated."
+            "Pause / Resume requires a supported active job and current controller status."
         )
         for button in (
             self.connect_button,
@@ -211,9 +211,28 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             if state.can_disconnect
             else state.blocked_reason("Disconnect")
         )
-        # Pause/resume remains presentation-only and unavailable until the
-        # controller's realtime hold behavior is physically validated.
-        self.pause_button.setEnabled(False)
+        pause = self._machine_status.get("job_pause") or {}
+        phase = pause.get("state")
+        if (state.remote and state.status_trusted and not state.can_control and not state.control_in_use
+                and not self._busy and state.controller_state == "JOB_RUNNING" and phase == "paused"
+                and pause.get("available") is True):
+            self.connect_button.setEnabled(True)
+            self.connect_button.setToolTip("Take control of this paused job without resetting its controller.")
+        self.pause_button.setText({
+            "paused": "Resume", "pausing": "Pausing…", "resuming": "Resuming…",
+        }.get(phase, "Pause"))
+        self.pause_button.setEnabled(
+            not self._busy and state.status_trusted and state.can_control and state.controller_state == "JOB_RUNNING"
+            and pause.get("available") is True and phase in {"running", "paused"}
+        )
+        self.pause_button.setToolTip(
+            "Continue this suspended job from its retained controller queue."
+            if phase == "paused" else
+            "Suspend motion and laser output; wait for Paused confirmation. "
+            "Separate Air Assist stays on; GRBL coolant follows firmware suspension."
+            if pause.get("available") is True else
+            "Pause requires the updated Pi companion, GRBL 1.1 with $32=1, and an active toolpath."
+        )
 
     def _render_status(self) -> None:
         state: ControllerUiState = self._ui_state.with_busy(self._busy)
@@ -253,6 +272,11 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             if state.remote and not state.status_trusted
             else f"Authoritative controller state: {state.controller_state}."
         )
+        pause = self._machine_status.get("job_pause") or {}
+        if state.status_trusted and state.controller_state == "JOB_RUNNING":
+            connection_text = {
+                "paused": "JOB PAUSED", "pausing": "PAUSING JOB", "resuming": "RESUMING JOB",
+            }.get(pause.get("state"), connection_text)
         if state.status_trusted and not state.can_control:
             connection_description += " " + state.control_reason
         if state.submission_visible:

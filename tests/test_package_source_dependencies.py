@@ -116,6 +116,10 @@ def test_streaming_payload_requires_all_three_modules(missing):
 def test_streaming_payload_rejects_receiver_or_codec_without_the_required_api(old_module):
     root = Path(__file__).resolve().parents[1]
     sources = {name: (root / name).read_bytes() for name in COMMAND_STREAMING_FILES}
+    # Exercise the historical three-module contract, before pause added another
+    # coupled module. The actual current source rejection has separate coverage.
+    sources[COMMAND_STREAMING_FILES[2]] = b"from .grbl_stream import GrblStreamCompactor\n"
+    require_command_streaming_sources(sources)
     sources[old_module] = b"# predecessor module without streaming API\n"
     with pytest.raises(ValueError, match="incompatible source API"):
         require_command_streaming_sources(sources)

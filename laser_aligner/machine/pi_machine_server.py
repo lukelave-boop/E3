@@ -19,19 +19,24 @@ from typing import Any
 from ..errors import MachineError, SafetyError
 from ..identity import application_version, build_revision
 from ..raster_safety import CAPABILITY as RASTER_TRAVEL_CAPABILITY
+from ..raster_safety import SURFACE_CAPABILITY as RASTER_SURFACE_TRAVEL_CAPABILITY
 from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
     ACTION_JOB_CHUNK,
+    ACTION_JOB_CHUNK_COMPRESSED,
     ACTION_JOB_DELETE,
     ACTION_JOB_FINALIZE,
     ACTION_JOB_LATEST,
+    ACTION_JOB_PAUSE,
     ACTION_JOB_RESULT,
+    ACTION_JOB_RESUME,
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_COMPRESSED_UPLOAD,
     CAPABILITY_PI_CONTROL_OWNER,
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
@@ -52,6 +57,7 @@ from .pi_job_protocol import (
     AuthenticatedChannel,
     PiJobProtocolError,
     authenticate_server,
+    decode_compressed_upload_chunk,
     decode_upload_chunk,
     validate_boot_id,
     validate_client_id,
@@ -109,7 +115,10 @@ MACHINE_ACTIONS = frozenset(
 )
 
 SERVER_CAPABILITIES = (
+    CAPABILITY_PI_COMPRESSED_UPLOAD,
+    "pi-job-pause-v1",
     RASTER_TRAVEL_CAPABILITY,
+    RASTER_SURFACE_TRAVEL_CAPABILITY,
     MATERIAL_SURFACE_CAPABILITY,
     "pi-mainboard-z-v1",
     "pi-laser-focus-v1",
@@ -239,6 +248,11 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
         "optional": (),
         "response": ("job",),
     },
+    ACTION_JOB_CHUNK_COMPRESSED: {
+        "required": ("job_id", "offset", "data_b64"),
+        "optional": (),
+        "response": ("job",),
+    },
     ACTION_JOB_FINALIZE: {
         "required": (
             "job_id",
@@ -295,6 +309,16 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
         "response": ("job",),
         "priority": "bypasses ordinary operation serialization",
     },
+    ACTION_JOB_PAUSE: {
+        "required": ("job_id", "expected_run_id", "expected_pause_revision"),
+        "optional": (),
+        "response": ("status",),
+    },
+    ACTION_JOB_RESUME: {
+        "required": ("job_id", "expected_run_id", "expected_pause_revision"),
+        "optional": (),
+        "response": ("status",),
+    },
     ACTION_JOB_DELETE: {
         "required": ("job_id",),
         "optional": (),
@@ -326,6 +350,8 @@ _CONTROL_LEASE_SECONDS = 30.0
 
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_JOB_PAUSE,
+        ACTION_JOB_RESUME,
         ACTION_MACHINE_MAINBOARD,
         ACTION_MACHINE_FOCUS,
         ACTION_MACHINE_PROBE_Z,
@@ -974,11 +1000,12 @@ class PiMachineServer:
                 ),
             )
             return {"job": job}
-        if action == ACTION_JOB_CHUNK:
+        if action in {ACTION_JOB_CHUNK, ACTION_JOB_CHUNK_COMPRESSED}:
             job = self.service.append_upload_chunk(
                 validate_job_id(request.get("job_id")),
                 validate_upload_offset(request.get("offset")),
-                decode_upload_chunk(request.get("data_b64")),
+                (decode_compressed_upload_chunk if action == ACTION_JOB_CHUNK_COMPRESSED
+                 else decode_upload_chunk)(request.get("data_b64")),
             )
             return {"job": job}
         if action == ACTION_JOB_FINALIZE:
@@ -1024,6 +1051,14 @@ class PiMachineServer:
             }
         if action == ACTION_JOB_LATEST:
             return {"job": self.service.latest_result()}
+        if action in {ACTION_JOB_PAUSE, ACTION_JOB_RESUME}:
+            return {"status": self.service.pause(
+                validate_job_id(request.get("job_id")),
+                resume=action == ACTION_JOB_RESUME,
+                expected_run_id=validate_session_generation(request.get("expected_run_id"), label="expected_run_id"),
+                expected_pause_revision=validate_session_generation(request.get("expected_pause_revision"), label="expected_pause_revision"),
+                expected_session_generation=expected_generation,
+            )}
         if action == ACTION_JOB_STOP:
             raw_job_id = request.get("job_id")
             requested_job_id = (

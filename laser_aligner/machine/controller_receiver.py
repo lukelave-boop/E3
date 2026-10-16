@@ -31,12 +31,14 @@ class ControllerReceiver:
         on_failure: Callable[[str], None],
         on_idle: Callable[[str], None],
         owner_alive: Callable[[], bool],
+        on_realtime: Callable[[str], bool] | None = None,
     ) -> None:
         self._transport = transport
         self._dialect = dialect
         self._on_failure = on_failure
         self._on_idle = on_idle
         self._owner_alive = owner_alive
+        self._on_realtime = on_realtime
         self._ingress = threading.Lock()
         self._condition = threading.Condition()
         self._ingress_waiters = 0
@@ -168,8 +170,9 @@ class ControllerReceiver:
         if kind is CommandResponseKind.MALFORMED:
             raise MachineError(f"Controller returned a malformed response frame: {response!r}")
         if kind is CommandResponseKind.REALTIME_STATUS:
+            expected_suspend = self._on_realtime(response) if self._on_realtime else False
             state = response[1:-1].split("|", 1)[0].split(":", 1)[0].casefold()
-            if state in {"alarm", "sleep", "door", "hold"}:
+            if state in {"alarm", "sleep", "hold"} or (state == "door" and not expected_suspend):
                 raise MachineError(f"Controller state invalidated the session: {response}")
         with self._condition:
             if self._stream is not None:
@@ -187,6 +190,13 @@ class ControllerReceiver:
                 self._on_idle(response)
                 return
             if self._transaction is not None:
+                if kind is CommandResponseKind.REALTIME_STATUS and expected_suspend:
+                    # Pause has already observed and validated this Door frame.
+                    # Its ordinary reply consumer is suspended: keep telemetry
+                    # in diagnostics without filling the bounded ACK/payload
+                    # queue. Resume status and every command reply stay queued.
+                    self._on_idle(response)
+                    return
                 if len(self._pending) >= 512:
                     raise MachineError("Controller receive transaction exceeded its bounded queue")
                 self._pending.append(response)
@@ -305,6 +315,14 @@ class ControllerReceiver:
                 is CommandResponseKind.REALTIME_STATUS
             )
         raise MachineError("Controller stream input did not reach a bounded boundary")
+
+    def poll_suspended(self, timeout: float = 0.02) -> None:
+        """Dispatch input without consuming a transaction or streaming ACK."""
+        with self._consumer_ingress():
+            self.raise_if_faulted()
+            response = self._read_transport(timeout=timeout)
+            if response:
+                self._dispatch(response)
 
     def stream_write(
         self, token: int, sequence: int, byte_count: int,
