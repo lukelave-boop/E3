@@ -17,16 +17,34 @@ Stop/session/motion/hardware/authorization gates are checked again after input
 draining immediately before a physical write. Oversized stream lines reject
 before Start can arm, Home or move focus. See [command streaming](docs/COMMAND_STREAMING.md).
 
-Verification so far: the original focused regression batch passed 453 checks;
-two old wire-format expectations were updated without weakening cancellation
-assertions. The combined stream/encoding/session group passed 160 checks; six
-additional admission-race/capacity checks passed. Repository Ruff and compileall
-pass. Full Windows local and exact-commit compatibility CI are pending. POSIX
-PTY cases explicitly skip on Windows; Linux execution remains pending. Tests
-use fake controllers or PTYs, not physical controllers or laser output.
+Verification so far: 573 Windows start/focus/cancellation/stream tests pass;
+111 Pi ownership/failure/focus tests pass; 803 Linux controller/Pi tests pass,
+including the new actual serial-backend PTY cases. Packaging regressions passed
+205 checks plus 48 focused checks and three explicit historical/shallow fixture
+checks. Repository Ruff and compileall pass. Tests use fake controllers or PTYs,
+not physical controllers or laser output. Desktop coverage is automated/offscreen;
+no interactive GUI or camera test was performed for this fix.
+
+The initial local full run produced 7,562 passed, 38 skipped and 25 failed.
+Failures exposed stale compact-wire test expectations and premature size-check
+ordering; fixtures now preserve canonical program bytes while asserting actual
+wire bytes, and the original focus/STOP/disarm guard precedence is restored.
+Three unrelated local failures were changing Git-derived identity during the
+run and a loaded watchdog timing check; all six diagnostic checks passed on
+rerun without changing product timeouts. Initial CI also exposed one shallow
+historical-fixture assertion, now split from exact implementation verification.
+The corrected exact-commit full Windows compatibility run remains pending.
+
+The immediate-ACK benchmark at the earlier 2f58d9c candidate measured median
+8,212 moves/s with unknown capacity and 7,078 moves/s with advertised capacity
+for 100 moves, versus 32.36 moves/s previously. Synthetic motion bytes fell from
+2,100 to 590 without changing endpoints/feed. These are software-admission and
+synthetic encoding measurements, not physical speed or actual-job compression.
 
 The Pi was read-only inspected: disconnected, unarmed, no active job or client
 owner; its three-file predecessor matches the pinned aac45cd source hashes.
+The candidate imported on the Pi's Python 3.13.5 from an isolated source copy;
+the installation preview accepted all three files without runtime changes.
 The new companion installer defaults to dry run, validates all hashes before
 replacement, requires the service inactive for apply, and retains backups.
 Deployment and physical motion/Stop qualification remain pending. No machine

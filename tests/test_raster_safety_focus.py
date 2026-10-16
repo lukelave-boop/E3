@@ -38,14 +38,15 @@ def test_measured_raster_focus_finishes_before_zero_power_runup(focus_machine, m
     if stop_descent:
         assert machine._job.error is not None
         assert ("xy", "M4 S0") not in events
-        assert ("xy", "G1 X105 Y100 F500 S100") not in events
+        assert ("xy", "G1X100Y100F500S0") not in events
+        assert ("xy", "X105S100") not in events
         return
     assert machine._job.error is None
     approach = events.index(("xy", "G0 X95 Y100 F1000"))
     lowered = events.index(("z", descent))
     mode = events.index(("xy", "M4 S0"))
-    runup = events.index(("xy", "G1 X100 Y100 F500 S0"))
-    powered = events.index(("xy", "G1 X105 Y100 F500 S100"))
+    runup = events.index(("xy", "G1X100Y100F500S0"))
+    powered = events.index(("xy", "X105S100"))
     assert approach < lowered < mode < runup < powered
     assert ("xy", machine._session.dialect.motion_barrier_command) not in events[mode:powered]
     assert all(label != "z" for label, _line in events[mode:powered])

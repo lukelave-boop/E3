@@ -6074,7 +6074,6 @@ class MachineService:
         start_stop_epoch: int,
     ) -> dict[str, Any]:
         with self._lock:
-            self._require_program_stream_window(program, self._require_session())
             if self._laser_focus.requires_clearance:
                 raise SafetyError("Return Z to focus clearance before starting a job")
             focus_plan = self._selected_job_focus(program)
@@ -6104,6 +6103,7 @@ class MachineService:
             # before this exact immutable program can become active.
             self._prepare_secondary_air_assist_for_start(program)
             controller_session = self._require_session()
+            self._require_program_stream_window(program, controller_session)
             lines = list(program.lines)
             raster_boundary = program_raster_boundary(lines)
             if (

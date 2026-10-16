@@ -93,8 +93,10 @@ _POWERED_PROGRAM = "\n".join(
         "M5",
     )
 )
-_GATED_COMMAND = "G1 X20 Y20 F500"
-_LATER_COMMAND = "G1 X30 Y30 F500"
+# The immutable program above keeps complete words. Consecutive G1 commands
+# use the lossless modal wire spelling below; fault gates must intercept TX.
+_GATED_COMMAND = "G1X20Y20F500"
+_LATER_COMMAND = "X30Y30"
 
 
 class RecordingGatedTransport(SimulatedTransport):
@@ -1264,7 +1266,8 @@ def test_high_level_job_logs_are_bounded_and_omit_authorization_and_gcode(
     assert any(job_id[:8] in message for message in messages)
     assert all(len(message) <= 256 for message in messages)
     assert all(MachineService.ARM_PHRASE not in message for message in messages)
-    assert all("G1 X" not in message and _TOKEN not in message for message in messages)
+    assert all("G1 X" not in message and _GATED_COMMAND not in message
+               and _LATER_COMMAND not in message and _TOKEN not in message for message in messages)
 
 
 def test_duplicate_start_never_reruns_and_replay_cache_echoes_request_id(

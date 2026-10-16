@@ -39,6 +39,8 @@ from tests.fakes.simulator_transport import SimulatedTransport
 
 _TOKEN = "pi-owned-e2e-token-0123456789abcdef"
 _GATED_COMMAND = "G1 X20 Y20 F500"
+# Source/durable job bytes remain canonical; intercept the actual compact TX.
+_GATED_WIRE_COMMAND = "G1X20Y20F500"
 _POWERED_PROGRAM = "\n".join(
     (
         "G21",
@@ -72,7 +74,7 @@ class GatedRecordingTransport(SimulatedTransport):
     def write_line(self, line: str) -> None:
         command = line.strip().upper()
         self.commands.append(command)
-        if command == _GATED_COMMAND:
+        if command == _GATED_WIRE_COMMAND:
             with self._pending_lock:
                 self._pending_line = line
             self.gated.set()
@@ -251,7 +253,7 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
         assert transport.commands[air_on_index:] == [
             "M8",
             "M4 S10",
-            _GATED_COMMAND,
+            _GATED_WIRE_COMMAND,
         ]
         assert b"!\x18" not in getattr(transport, "raw_writes", [])
 
@@ -313,7 +315,7 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
         _wait_until(lambda: store.get(job_id)["state"] == "complete")
         assert "M9" in transport.commands[air_on_index:]
         assert transport.commands.index("M9", air_on_index) > transport.commands.index(
-            _GATED_COMMAND,
+            _GATED_WIRE_COMMAND,
             air_on_index,
         )
         _wait_until(

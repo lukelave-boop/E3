@@ -15,6 +15,7 @@ from scripts import package_pi_control_priority as packager
 from scripts.package_pi_control_priority import PREVIOUS, PREVIOUS_PACKAGE, PREVIOUS_REVISION, ROOT, package
 from scripts.package_source_dependencies import MATERIAL_PREDECESSORS, RUNTIME_PREDECESSORS
 from scripts.package_z_setup_speed import PREVIOUS as COMPLETE_PREVIOUS
+from tests import historical_companion
 from tests.historical_companion import require_exact, selected_source
 
 CURRENT_DEPENDENCIES = {**MATERIAL_PREDECESSORS, **RUNTIME_PREDECESSORS}
@@ -40,8 +41,7 @@ def snapshot(project):
             for path in project.rglob("*") if path.is_file()}
 
 
-@pytest.fixture
-def kit(tmp_path, monkeypatch):
+def make_kit(tmp_path, monkeypatch):
     bundle = package(tmp_path / "dist")
     installer = load_installer(bundle)
     manifest = json.loads((bundle / "manifest.json").read_bytes())
@@ -59,7 +59,12 @@ def kit(tmp_path, monkeypatch):
     return installer, project, bundle, originals
 
 
-def test_historical_upgrade_includes_capability_implementation_and_preserves_operator_data(kit):
+@pytest.fixture
+def kit(tmp_path, monkeypatch):
+    return make_kit(tmp_path, monkeypatch)
+
+
+def assert_upgrade_preserves_sources_and_operator_data(kit):
     installer, project, bundle, originals = kit
     preserved = ("config/pi-hardware.json", "config/pi-hardware.json.laser-focus.json",
                  "config/pi-hardware.json.z-limits.json", "config/pi-hardware.json.laser-focus.json.z-retention.json",
@@ -91,7 +96,30 @@ def test_historical_upgrade_includes_capability_implementation_and_preserves_ope
     again = installer.install(project, bundle=bundle, apply=True)
     assert all(entry["status"] == "already_current" for entry in again["files"])
     assert len(list(project.rglob("*.e3-backup-*"))) == len(originals)
-    assert b"validate_program_binding" in (project / "laser_aligner/machine/service.py").read_bytes()
+
+
+def test_historical_upgrade_preserves_selected_sources_and_operator_data(kit):
+    assert_upgrade_preserves_sources_and_operator_data(kit)
+
+
+def test_shallow_history_fixture_preserves_installer_guards_without_claiming_implementation(tmp_path, monkeypatch):
+    calls = []
+
+    def missing_history(command, **kwargs):
+        calls.append(command)
+        assert command == ["git", "show", f"{historical_companion.REVISION}:{historical_companion.SERVICE}"]
+        return subprocess.CompletedProcess(command, 128, b"", b"Missing object in shallow fixture")
+
+    with monkeypatch.context() as missing:
+        missing.setattr(historical_companion.subprocess, "run", missing_history)
+        tree = historical_companion.source_tree(tmp_path / "shallow-selected-source")
+    assert len(calls) == 1
+    assert (tree / historical_companion.SERVICE).read_bytes() == historical_companion.REPRESENTATIVE
+    assert b"validate_program_binding" not in historical_companion.REPRESENTATIVE
+    with pytest.raises(pytest.skip.Exception, match="exact pre-streaming service source is unavailable"):
+        require_exact(tree)
+    monkeypatch.setattr(packager, "ROOT", tree)
+    assert_upgrade_preserves_sources_and_operator_data(make_kit(tmp_path, monkeypatch))
 
 
 @pytest.mark.parametrize("name", PREVIOUS)
@@ -246,6 +274,7 @@ def test_real_installed_workpiece_predecessor_upgrades_and_imports_without_hardw
     result = installer.install(project, bundle=bundle, apply=True)
     assert result["compatible_predecessors"] == [PREVIOUS_PACKAGE]
     assert not result["service_started"]
+    assert b"validate_program_binding" in (project / "laser_aligner/machine/service.py").read_bytes()
     assert all((project / name).read_bytes() == data for name, data in before.items() if name not in CURRENT_FILES)
     modules = [name.removesuffix(".py").replace("/", ".") for name in CURRENT_FILES]
     subprocess.run([sys.executable, "-c", "import " + ", ".join([*modules, "laser_aligner.remote_node"])],
