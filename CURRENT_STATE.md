@@ -53,12 +53,19 @@ serial port, disabled motion/camera and isolated persistence with registry
 writes denied. It includes the approved identity compatibility and Start fixes.
 This is not interactive GUI, camera or physical hardware testing.
 
-Matching Pi companion e3-pi-job-pause-fbd51fa7 passes the installed-source
-preflight against predecessor 34902b8 and is staged on the Pi. Installation is
-deferred while the controller is connected (last observed idle, disarmed,
-READY_HOME_REQUIRED). Both Pause and the Pi-side Start fix require installation;
-the currently running node still lacks the pause capability. The operator has
-been asked to Disconnect and close E3 before the guarded idle-only update.
+Matching Pi companion e3-pi-job-pause-fbd51fa7 is installed on the Pi after
+the operator reported E3 disconnected and closed. The first preflight rejected
+a retained idle controller connection without changing files or restarting.
+No client, owner or active job remained; normal session-bound connect claimed
+the existing session without resetting it, then normal disconnect closed it.
+The guarded idle-only installer then updated seven files (streaming dependency
+already matched), retained backups, verified all eight exact source hashes, and
+restarted the service. Authenticated capability discovery confirms pi-job-pause-v1;
+post-install status is disconnected, disarmed, unowned and without an active job.
+Configuration and systemd drop-in hashes are unchanged. No motion was requested;
+normal disconnect performed its existing output-off cleanup. Both Pause and the
+Pi-side Start fix are now installed. Upload speed is unchanged; new total Pi
+preparation time and physical pause/continuation still require operator testing.
 The canonical Windows installer completed and the permanent E3 DEV TEST pointer
 now selects version 0.7.232 at this worktree's dist/E3/E3.exe. Adjacent build-info
 and pointer match e649a22d62020dc751656d6a8f78a09b4c55cc96; EXE SHA-256 is
