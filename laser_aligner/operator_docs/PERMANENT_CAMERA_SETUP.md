@@ -26,7 +26,7 @@ Honeycomb height is the bare-bed height relative to the black border. Older
 technical descriptions call it the datum. Copying the average does not save it.
 
 
-Applies to E3 Positioning System `0.7.x`, its existing calibration tabs,
+Applies to E3 Positioning System `0.8.x`, its existing calibration tabs,
 read-only **Coordinate Audit**, **Z / laser focus**, and guided precision setup.
 
 Use this runbook's Steps 1–5 to establish the camera and support mapping. In

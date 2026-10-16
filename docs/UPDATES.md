@@ -6,6 +6,9 @@ Release checks require the Windows installer product version, Windows and Linux
 bundle metadata, and update manifest to agree on version and exact revision.
 The package validation workflows build and inspect artifacts without starting
 E3. Publication remains gated on the full compatibility workflow.
+The Windows PE reader removes only Inno Setup's documented trailing ASCII-space
+padding and records the raw resource value in CI. Other whitespace and all
+JSON identity fields remain subject to the exact comparison.
 
 ## Persistent state
 

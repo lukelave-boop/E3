@@ -84,7 +84,8 @@ def test_both_embedded_identities_are_required_before_manifest_publication():
         assert f"--build-info {platform}-x86_64" in check["run"]
         assert f"build-info-{platform}.json" in steps[upload]["with"]["path"]
         if platform == "windows":
-            assert "VersionInfo.ProductVersion" in check["run"]
+            assert r". .\packaging\inno_setup.ps1" in check["run"]
+            assert "Get-E3InstallerProductVersion -InstallerPath installer-dist/E3-Setup.exe -Verbose" in check["run"]
             assert "if ($LASTEXITCODE -ne 0) { throw" in check["run"]
         else:
             assert "--appimage-extract usr/bin/E3/build-info.json" in check["run"]

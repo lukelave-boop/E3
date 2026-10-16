@@ -155,7 +155,9 @@ def test_manifest_requires_every_identity_field(verifier, tmp_path: Path, field:
         )
 
 
-@pytest.mark.parametrize("installer_version", ["0.7.999", "0.8.0.0", "0.8.0 ", "", 8])
+@pytest.mark.parametrize("installer_version", [
+    "0.7.999", "0.8.0.0", "0.8.0 ", " 0.8.0", "0.8.0\t", "0.8.0\n", "0.8.0\u00a0", "", 8,
+])
 def test_installer_product_version_is_exact(verifier, tmp_path: Path, installer_version: object) -> None:
     path = _write(tmp_path / "build-info.json", _metadata())
     with pytest.raises(verifier.MetadataError, match="installer ProductVersion"):

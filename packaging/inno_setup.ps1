@@ -40,11 +40,35 @@ function Get-E3InnoCompiler {
 }
 
 # Inno 7 converts source paths itself, but long OutputDir values still need an
-# explicit prefix. Keep this representation inside the compiler invocation only.
+# explicit prefix. Keep this representation inside compiler calls and PE reads.
 function ConvertTo-E3InnoPath {
     param([string]$Path)
     $absolute = [IO.Path]::GetFullPath($Path)
     if ($absolute.StartsWith('\\?\')) { return $absolute }
     if ($absolute.StartsWith('\\')) { return '\\?\UNC\' + $absolute.Substring(2) }
     return '\\?\' + $absolute
+}
+
+function ConvertFrom-E3InnoProductVersion {
+    param([AllowEmptyString()][string]$ProductVersion)
+    # Inno's fixed-width ProductVersion resource retains trailing ASCII spaces.
+    # Do not remove leading spaces or other whitespace: identity checks reject it.
+    # https://github.com/jrsoftware/issrc/blob/is-7_1_0/Projects/Res/SetupLdr.version.rc
+    # https://github.com/jrsoftware/issrc/blob/is-7_1_0/Projects/Src/Compiler.ExeUpdateFunc.pas
+    return $ProductVersion.TrimEnd([char]0x20)
+}
+
+function Get-E3InstallerProductVersion {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$InstallerPath)
+
+    # Resolve relative paths in PowerShell's location, then support long PE paths.
+    $installer = Get-Item -LiteralPath $InstallerPath -ErrorAction Stop
+    $readPath = ConvertTo-E3InnoPath -Path $installer.FullName
+    $raw = [string][Diagnostics.FileVersionInfo]::GetVersionInfo($readPath).ProductVersion
+    $rawJson = ConvertTo-Json -InputObject $raw -Compress
+    $codepoints = @($raw.ToCharArray() | ForEach-Object { [int]$_ })
+    Write-Verbose ('Installer ProductVersion raw={0} length={1} codepoints=[{2}]' -f
+        $rawJson, $raw.Length, ($codepoints -join ','))
+    return ConvertFrom-E3InnoProductVersion -ProductVersion $raw
 }

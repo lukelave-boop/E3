@@ -34,6 +34,23 @@ changed-test compilation, and whitespace checks passed. The initial package-test
 attempt hit sandbox temporary-directory setup errors; an explicit writable
 workspace base directory resolved those setup errors without test changes.
 
+The first remote candidate `e250d65` ran both PR and manual exact-head checks.
+Both POSIX runs passed 1,502 tests with two skips; both Linux AppImages compiled
+and passed their embedded 0.8.0/revision checks. Both Windows core runs reported
+7,093 passed, 169 skipped and one failure: the setup runbook still named 0.7.x.
+That applicability label is now 0.8.x. Both Windows installers compiled, but
+the new identity gate rejected Inno Setup's fixed-width ProductVersion padding.
+Read-only inspection of an existing Inno 7.1 installer and the compiler source
+confirmed trailing ASCII spaces; the shared PE reader removes only that padding
+and logs the raw value. JSON identity checks stay strict. These failed attempts
+remain recorded; fresh full CI and package checks are required for the correction.
+Both first desktop runs on Python 3.12/Qt 6.12 completed with 8,656 passed,
+69 skipped and only the same runbook assertion; neither reproduced the earlier
+native crash. No failed run was retried or cancelled to obtain these results.
+The correction passes 71 focused metadata/gate/runbook checks and nine real
+Inno/helper checks, including relative and long PE paths and both PowerShell
+versions. Independent review, Ruff, compilation and whitespace checks pass.
+
 Review also found that Linux updater restart inherited the previous build's
 state overrides. Both platforms now prepare a fresh update-process environment,
 preserving the genuine user profile while removing prior per-launch state,

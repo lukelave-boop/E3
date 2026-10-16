@@ -76,7 +76,8 @@ jobs:
             throw 'Canonical build did not return its installer and build metadata.'
           }
           $embeddedMetadata = Join-Path (Split-Path -Parent $build.Executable) 'build-info.json'
-          $installerVersion = (Get-Item -LiteralPath $build.Installer).VersionInfo.ProductVersion
+          . .\packaging\inno_setup.ps1
+          $installerVersion = Get-E3InstallerProductVersion -InstallerPath $build.Installer -Verbose
           .\.venv\Scripts\python.exe packaging/verify_release_metadata.py `
             --revision "$env:GITHUB_SHA" --channel development `
             --build-info windows-x86_64 "$metadata" `

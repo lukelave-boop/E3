@@ -74,7 +74,8 @@ jobs:
       - name: Verify Windows package identity
         shell: pwsh
         run: |
-          $installerVersion = (Get-Item -LiteralPath installer-dist/E3-Setup.exe).VersionInfo.ProductVersion
+          . .\packaging\inno_setup.ps1
+          $installerVersion = Get-E3InstallerProductVersion -InstallerPath installer-dist/E3-Setup.exe -Verbose
           .\.venv\Scripts\python.exe packaging/verify_release_metadata.py `
             --revision "$env:GITHUB_SHA" --channel "$env:E3_UPDATE_CHANNEL" `
             --build-info windows-x86_64 build-info.json `
