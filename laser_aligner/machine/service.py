@@ -879,6 +879,7 @@ class MachineService:
         self._transport_write_lock = threading.RLock()
         # Admission may wait for secondary ACKs; never block primary STOP cleanup.
         self._job_pause_write_lock = threading.RLock()
+        self._validated_stream_window: tuple[tuple[str, ...], int] | None = None
         # STOP never waits for a secondary acknowledgement.  This gate spans
         # only the actual auxiliary serial write so STOP can order an already
         # authorized ON before its independently queued OFF cleanup.
@@ -3340,9 +3341,13 @@ class MachineService:
         responses = execute(policy.settings_query_command)
         if session is not None:
             identity = session.diagnostics.snapshot()["firmware_identity"]
-            # Observation only: never change laser mode to enable this feature.
+            versions = [line for line in identity if line.startswith("[VER:")]
+            # The established GRBL handshake permits an omitted optional $I
+            # payload (including the installed controller). Require observed
+            # laser mode, reject contradictory versions, and confirm Door:0
+            # before allowing any resume. Never change $32 to enable Pause.
             if ([line.strip() for line in responses if line.strip().startswith("$32=")] == ["$32=1"]
-                    and any(re.match(r"\[VER:1\.1[a-z][.:]", line) for line in identity)):
+                    and all(re.match(r"\[VER:1\.1[a-z][.:]", line) for line in versions)):
                 self._pause_session_generation = session.generation
         current = self._reported_grbl_step_idle_delay(responses)
         if current is None:
@@ -5526,7 +5531,10 @@ class MachineService:
                     and math.hypot(new_x - x, new_y - y)
                     > _NONZERO_OUTPUT_MOTION_EPSILON_MM
                 )
-                controller_allowed = (
+                # Raster travel has its own envelope; powered raster endpoints
+                # are checked by require_powered_point below. Do not compute
+                # these legacy-area predicates when their results are unused.
+                controller_allowed = raster_boundary is not None or (
                     convex_polygon_contains_normalized(
                         (new_x, new_y), guarded_polygon
                     )
@@ -5555,7 +5563,7 @@ class MachineService:
                     )
                 spot_x = new_x + float(self.laser_settings.spot_offset_x_mm)
                 spot_y = new_y + float(self.laser_settings.spot_offset_y_mm)
-                spot_allowed = (
+                spot_allowed = raster_boundary is not None or (
                     convex_polygon_contains_normalized(
                         (spot_x, spot_y), guarded_polygon
                     )
@@ -6370,7 +6378,7 @@ class MachineService:
                 raise SafetyError("Pause identity/revision must be nonnegative integers")
         context = self._active_job_context
         if context is None or not self._pause_supported(context):
-            raise MachineError("Pause requires an active GRBL 1.1 job with reported $32=1")
+            raise MachineError("Pause requires an active laser-mode GRBL job with reported $32=1")
         # Serialize line admission, then primary writes; STOP uses neither
         # the admission gate nor the secondary controller's ACK wait.
         with self._job_pause_write_lock, self._transport_write_lock:
@@ -6538,9 +6546,8 @@ class MachineService:
             ) from write_error
         return True
 
-    @staticmethod
     def _require_program_stream_window(
-        program: ValidatedProgram, session: ControllerSession,
+        self, program: ValidatedProgram, session: ControllerSession,
     ) -> None:
         """Reject unstreamable runs before Start can arm, Home or move focus."""
         if session.receiver is None or session.dialect is not GRBL_DIALECT:
@@ -6548,6 +6555,13 @@ class MachineService:
         window = parse_stream_window(session.diagnostics.snapshot()["firmware_identity"])
         capacity = window.rx_bytes or 127
         lines = program.lines
+        with self._lock:
+            cached = self._validated_stream_window
+        # This check depends only on immutable source lines and byte capacity.
+        # Reuse a completed check before/after arming, never a partial scan.
+        # All current policy, session and authorization checks remain separate.
+        if cached is not None and lines is cached[0] and capacity == cached[1]:
+            return
         index = 0
         while index < len(lines):
             if (not canonical_linear_move(lines[index]) or index + 1 >= len(lines)
@@ -6562,6 +6576,8 @@ class MachineService:
                         f"byte window ({capacity} bytes including newline)"
                     )
                 index += 1
+        with self._lock:
+            self._validated_stream_window = (lines, capacity)
 
     def _stream_running_job_moves(
         self, context: _JobRunContext, lines: list[str], start: int, *, timeout: float,

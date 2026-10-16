@@ -10,6 +10,22 @@ unchanged. Marlin and noncanonical commands retain their existing exchanges.
 
 ## Ownership and limits
 
+Start checks every compacted stream line against the controller's byte capacity
+before arming or motion. A successful check is retained for only the same
+immutable line tuple and byte capacity, so the final Start check does not repeat
+the entire scan while the temporary arming timer runs. New commands or a changed
+capacity recheck; a failed or partial scan is never cached. Current authorization,
+policy, session, coordinate and per-write checks remain independent.
+
+For raster-envelope programs, validation skips legacy work-area predicates whose
+results were unused. Travel-envelope and both powered endpoint checks remain.
+An observed 729,269-command/22,099,480-byte job spent about 59 seconds uploading,
+173 seconds in Pi validation and 105 seconds in Start before its grant expired.
+Offline Windows comparison of those same bytes reduced validation from 10.9 to
+8.3 seconds and the repeated stream check from 2.8 seconds to below 1 ms, with
+identical validated output. These are diagnostic timings, not a promised Pi
+startup duration; physical-machine timing and acceptance still need testing.
+
 Only a strict, unambiguous `[OPT:flags,planner,rx]` response from the existing
 session handshake permits multiple outstanding commands. The window is at
 most 127 bytes including every newline, reserves one advertised RX slot, and

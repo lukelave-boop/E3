@@ -2,9 +2,10 @@
 
 ## Pause and continue a job
 
-The desktop now supports **Pause / Resume** for supported GRBL 1.1 laser-mode
+The desktop now supports **Pause / Resume** for compatible GRBL laser-mode
 jobs with the matching Pi companion. Wait for **JOB PAUSED**, then Resume to
-continue the retained controller queue. Air Assist retains its current state.
+continue the retained controller queue. Separate Air Assist keeps its state;
+primary GRBL coolant follows firmware suspension and restoration.
 See [Pause / Resume](docs/JOB_PAUSE.md) for controller requirements, reconnect
 behavior and supervised physical acceptance. Operator qualification is pending.
 
@@ -14,6 +15,11 @@ lossless wire compression and guarded FIFO acknowledgements. This removes the
 per-segment quiet delay in detailed raster areas while preserving Stop, focus,
 arming and program bounds. Pi-owned jobs require the matching Pi companion.
 Serial bandwidth can still limit requested feed; see [command streaming](docs/COMMAND_STREAMING.md).
+
+Large-job Start reuses a completed stream-size check for the exact immutable
+commands and controller capacity, avoiding an expensive repeat after arming.
+Raster validation also avoids unused legacy-area calculations. Upload and
+full safety validation still take time for very dense images.
 
 Preview playback identifies direction and laser state: amber means laser on,
 cyan means laser off. Bidirectional raster output is unchanged.

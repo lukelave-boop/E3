@@ -5,10 +5,17 @@
 - Add controller-confirmed Pause / Resume to the desktop and Pi-owned job protocol.
 - Retain queued motion and ACK ownership; suspend ACK deadlines while maintaining
   transition/status watchdogs and STOP/session/authorization checks.
-- Require observed GRBL 1.1 laser mode and verified motor holding; keep unsupported
+- Require a GRBL handshake, observed laser mode and verified motor holding; keep unsupported
   controllers and old Pi nodes disabled. Reattach explicitly to an unowned paused job.
 - Preserve current main streaming fixes and the selected engraving image editor.
   Physical behavior remains pending operator validation; see docs/JOB_PAUSE.md.
+- Support the installed controller's omitted optional identity payload, with
+  explicit operator approval, an established GRBL handshake and observed $32=1.
+  Contradictory reported versions reject; Resume still requires confirmed suspend.
+- Avoid repeating the completed immutable stream-size check after arming,
+  which could expire the grant on a dense raster. Recheck changed source/capacity.
+  Skip unused legacy-area predicates during raster-envelope validation without
+  changing travel or powered-endpoint rejection.
 
 
 ## Unreleased — continuous GRBL command streaming

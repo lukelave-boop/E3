@@ -37,7 +37,7 @@ class PauseTransport(StreamingTransport):
         if command == "$$":
             return (f"$1={self.step_idle_delay_ms}", f"$32={self.laser_mode}", "ok")
         if command == "$I":
-            return (self.identity, *((self.options,) if self.options else ()), "ok")
+            return (*((self.identity,) if self.identity else ()), *((self.options,) if self.options else ()), "ok")
         return super()._default_response(command)
 
     def write_raw_guarded(self, data, guard):
@@ -145,9 +145,24 @@ def test_unsupported_controller_rejects_without_pause_bytes(paused_machine, kwar
     machine, transport = paused_machine(**kwargs)
     _start(machine, _program())
     transport.wait_for_motion(1)
-    with pytest.raises(MachineError, match="GRBL 1.1"):
+    with pytest.raises(MachineError, match="laser-mode GRBL"):
         request(machine)
     assert ("raw", b"\x84") not in transport.writes
+
+
+def test_optional_identity_absent_still_requires_confirmed_suspend(paused_machine):
+    machine, transport = paused_machine(identity=None, options="")
+    _, worker = _start(machine, _program())
+    transport.wait_for_motion(1)
+    assert machine.status()["job_pause"]["available"] is True
+    with pytest.raises(MachineError, match="confirmed paused"):
+        request(machine, resume=True)
+    pause(machine)
+    request(machine, resume=True)
+    wait_for(lambda: machine.status()["job_pause"]["state"] == "running")
+    transport.release_all()
+    assert _finish(machine, worker)["phase"] == "complete"
+    assert len(transport.motion_lines) == 20
 
 
 def test_stale_requests_and_early_resume_are_rejected(paused_machine):
@@ -227,8 +242,9 @@ def test_revocation_wins_when_resume_waits_for_physical_write(paused_machine, re
     assert _finish(machine, worker)["phase"] == "failed"
 
 
-def test_pause_transition_timeout_fails_off(paused_machine, monkeypatch):
-    machine, transport = paused_machine()
+@pytest.mark.parametrize("identity", ["[VER:1.1h.test:PAUSE]", None])
+def test_pause_transition_timeout_fails_off(paused_machine, monkeypatch, identity):
+    machine, transport = paused_machine(identity=identity, options="" if identity is None else "[OPT:V,16,128]")
     _, worker = _start(machine, _program())
     transport.wait_for_motion(1)
     transport.suspend_status = "Door:2"
@@ -236,6 +252,7 @@ def test_pause_transition_timeout_fails_off(paused_machine, monkeypatch):
     request(machine)
     assert _finish(machine, worker)["phase"] == "failed"
     assert ("raw", b"!\x18") in transport.writes
+    assert ("raw", b"~") not in transport.writes
 
 
 def test_spindle_report_blocks_paused_claim():

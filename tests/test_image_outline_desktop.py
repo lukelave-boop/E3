@@ -49,7 +49,8 @@ def linked_view(app, tmp_path):
     workspace.workspace_scene.selectionChanged.disconnect(workspace._emit_selection)
     workspace.close()
     workspace.deleteLater()
-    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    # Destroy only this fixture's view; other tests may own pending deletions.
+    QtCore.QCoreApplication.sendPostedEvents(workspace, QtCore.QEvent.Type.DeferredDelete)
     app.processEvents()
 
 

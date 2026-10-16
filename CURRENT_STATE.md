@@ -7,27 +7,45 @@ and retains the selected engraving editor from e768590/d21145c while preserving
 main's newer raster-travel and streaming behavior. Unrelated changes in the
 shared working tree are preserved.
 
-Desktop/Pi pause uses GRBL 1.1 laser-mode suspend, requires reported $32=1 and
+Desktop/Pi pause uses GRBL laser-mode suspend, requires reported $32=1 and
 verified motor holding, and retains the exact job/stream/ACK ownership. The
 original job authorization survives suspension only for that immutable job.
 Transition/status watchdogs, stale job/session/revision checks and independent
 STOP fail-off remain active. Explicit reattachment to an unowned paused job
 claims control without serial reset. See docs/JOB_PAUSE.md.
 
-Latest focused Windows 3.14 run: 396 tests passed, covering pause/continuation,
+The operator explicitly approved support for the installed controller's omitted
+optional firmware identity. The existing GRBL handshake and reported laser mode
+remain required, contradictory reported versions reject, and Resume requires
+confirmed Door:0. Exact physical firmware identity remains unknown.
+
+The operator's subsequent dense-job Start failure was traced using read-only Pi
+logs and the retained program: 729,269 commands/22,099,480 bytes, about 59 seconds
+upload, 173 seconds validation, then 105 seconds Start and expired authorization.
+Start repeated its stream-size scan after arming. It now reuses only a completed
+check of the same immutable commands/capacity; changed inputs still recheck.
+Unused legacy-area raster predicates are skipped, preserving powered endpoint
+and travel checks. Offline exact-file validation improved 10.9 to 8.3 seconds;
+the repeated stream check improved 2.8 seconds to below 1 ms. Pi timing unverified.
+
+Latest focused Windows 3.14 run: 422 tests passed, covering pause/continuation,
 STOP races, controller/session/stream regressions, authenticated Pi reattachment,
 offscreen controls, secondary-controller STOP and exact companion installer
 behavior. Repository Ruff and compileall pass. Initial CI exposed a primary
 STOP lock held across a secondary ACK wait; separate admission locking fixes
-that regression. The corrected POSIX serial/session CI passes. Full Windows
-3.10/3.12 compatibility results are pending in run 38836371578.
+that regression. CI run 38837488585 passes Windows 3.10, POSIX and Ruff;
+Windows 3.12 reports 7,726 passed and one native Qt teardown crash. The outline
+fixture now drains only its own deferred deletion instead of all tests' objects;
+18 outline/confirmation offscreen tests pass. Final compatibility CI is pending.
 
-Frozen version 0.7.230, source ea091da791acd02fede0f27bdc17a3ef017e10c1,
+Earlier candidate 0.7.230, source ea091da791acd02fede0f27bdc17a3ef017e10c1,
 passes exact comparison of 191 application modules and three resources against
 the commit. The frozen offscreen saved-profile startup smoke constructs and
 shows the main window without an error modal. It uses an unavailable synthetic
 serial port, disabled motion/camera and isolated persistence with registry
-writes denied. This is not interactive GUI, camera or physical hardware testing.
+writes denied. It is superseded by the approved identity compatibility and Start
+fixes, which need a new freeze. This is not interactive GUI, camera or physical
+hardware testing.
 
 Matching Pi companion e3-pi-job-pause-cf2b147a passes the installed-source
 preflight against predecessor 34902b8. Installation is deferred while the

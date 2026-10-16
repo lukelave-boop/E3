@@ -1,7 +1,7 @@
 # Safety requirements
 
 Pause / Resume is a job-continuation feature, not an emergency stop or a
-safety-rated control. It requires observed GRBL 1.1 laser mode and verified
+safety-rated control. It requires a GRBL handshake, observed laser mode and verified
 motor holding. The app requests suspension and waits for controller status;
 neither that status nor the UI proves physical laser-off or a safe work area.
 STOP, disarm, disconnect and failure retain their existing reset/M5 cleanup.

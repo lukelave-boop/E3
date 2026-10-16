@@ -7,6 +7,10 @@ queue, stale-request rejection and fail-off coverage. Complete supervised
 zero-power, powered raster, resume-alignment and paused-STOP qualification before
 claiming physical acceptance. See [Pause / Resume](docs/JOB_PAUSE.md).
 
+Dense-job Start now avoids a repeated scan after arming and unused raster-area
+calculations. Confirm actual Pi Start timing with the matched companion; the
+offline timing improvement does not establish physical-machine performance.
+
 
 ## Continuous command streaming
 

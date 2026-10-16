@@ -9,10 +9,14 @@ restoration, so its air output can stop while paused. Keep the workpiece and
 axes stationary.
 
 The matching Pi companion must advertise `pi-job-pause-v1`. Support requires
-a GRBL 1.1 identity, an observed `$32=1` laser-mode setting, a current homed
+a successful GRBL handshake, an observed `$32=1` laser-mode setting, a current homed
 coordinate reference and the existing verified `$1=255` motor-hold policy.
 The application never changes `$32` to enable Pause. Other controllers and
-older Pi nodes leave Pause unavailable. Pause is available while streaming
+older Pi nodes leave Pause unavailable. Optional `$I` identity may be absent,
+as on the installed controller; a contradictory reported version rejects support.
+Omitted identity is not evidence of a particular firmware version. Resume still
+requires confirmed `Door:0`; an ignored suspend request times out and fails off.
+Pause is available while streaming
 or draining the toolpath, and unavailable during Z focus, Home and park.
 
 Pause sends GRBL's realtime safety-door suspend byte (0x84), which retains its
