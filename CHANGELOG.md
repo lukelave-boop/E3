@@ -89,6 +89,10 @@ safety validation; generated motion, power, calibration and settings are unchang
   an offline, reproducible pipeline benchmark with ranked findings.
 ## Engraving image editor — development
 
+- Fixed startup with saved `machine.raster_travel_envelope` records by including
+  their existing strict parser, job identity and coupled travel/output checks.
+  No saved machine setting or calibration is removed or rewritten by the repair.
+
 - Added reversible local rectangle/ellipse/lasso/brush exclusion and restore,
   original comparison, undo/redo, automatic candidate tracing and manual Bézier
   outline editing in the desktop project workspace.

@@ -6,13 +6,15 @@ avoids unnecessary stream encoding passes. Exact bytes, bounds, arming and Start
 checks remain required. Older nodes retain the original upload path. See
 [job preparation](docs/NETWORK_MACHINE.md#faster-bounded-job-preparation).
 
-The next Start preparation update removes a second desktop preflight when focus
+Start preparation removes a second desktop preflight when focus
 attachment leaves the program unchanged, reuses validated immutable job metadata,
 and reduces repeated raster endpoint checks and parser allocations. Current
 policy, material, focus, session and arming checks still run. Offline validation
 of the retained 729,269-line job was about 28.5% faster; this is a local Windows
-measurement, not total Pi Start time. The matching companion update is pending;
-the currently running Pi job has not been interrupted.
+measurement, not total Pi Start time. The recorded benchmark preceded matching-
+companion installation; it does not establish physical pause/resume acceptance.
+See [current state](CURRENT_STATE.md) for dated verification and the supplied
+integration context.
 
 ## Pause and continue a job
 
@@ -65,6 +67,10 @@ local shadow removal, reversible grayscale masks, automatic or manual Bézier
 outlines, node editing, and aligned vector snapshots with physical offsets.
 New vectors start with output disabled and power zero. Project schema 6 retains
 edits and explicit transform links. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
+
+The editor build also reads existing verified raster-travel records in saved
+machine profiles. It preserves their values and enforcement; see
+[configuration compatibility](docs/RASTER_TRAVEL_COMPATIBILITY.md).
 
 Image background cleanup is available under **Objects → Image → Clean background…**
 for one selected image. Enable it, adjust tolerance (start at 5), compare

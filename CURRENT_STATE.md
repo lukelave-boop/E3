@@ -1,5 +1,25 @@
 # Current repository state
 
+## Integration context (2026-10-16)
+
+This integration combines current main with the remaining feature work.
+Merge-wide verification, the exact pushed-head CI result and publication outcome
+must be recorded separately; the dated branch results below are historical
+snapshots, not a claim that this integration has passed or been published.
+
+The operator-supplied context identifies the installed desktop/Pi pair as
+DEV TEST 0.7.237 with surface-travel revision
+`e067cf04361fa20cd9238a9be6538dfddf8bce8b`, including pause/upload/Start runtime
+`99544e44ae0e50f37101fba4053a584d3b723942`. This integration has not independently
+inspected that installation or changed calibration, launcher selection, Pi
+software or hardware. Older handoff statements below refer to their recorded
+revision and date, not to the current selected build.
+
+Newer versions must continue opening projects from every older supported schema.
+Saving schema 6 is allowed; older binaries are not required to open schema 6.
+Main's exact-commit compatibility gate, gated release publisher and preview
+metadata contract remain authoritative.
+
 ## Remove redundant validation work (2026-10-15)
 
 The operator requested a fix and E3 DEV TEST build without interrupting the
@@ -684,6 +704,27 @@ companion, then perform supervised physical acceptance. See
 [RASTER_OVERSCAN.md](docs/RASTER_OVERSCAN.md). Physical validation remains pending.
 The branch is pushed and retained without main integration while the known
 baseline desktop failure and operator acceptance remain unresolved.
+
+## Historical engraving editor startup repair (2026-10-15)
+
+The editor branch repaired startup with existing saved
+`machine.raster_travel_envelope` records by retaining the strict parser and
+coupled job/policy validation. Read-only validation accepted the saved config
+and three profiles while preserving all 39 protected file hashes. The exact
+0.7.211 build at `ca6af32752c95c4e8c5f02c20f6fa50bc58a1af4` passed isolated
+frozen offscreen startup; the same fixture detected the old 0.7.209 failure.
+These were software checks, not physical acceptance.
+
+That branch's compatibility run 38818112075 failed 16 Windows 3.10 checks and
+17 Windows 3.12 checks; its POSIX tier passed 652 tests and Ruff passed. A later
+expectation-only correction passed 49 focused checks with two known cases
+deselected, without a full CI rerun. Those historical counts do not establish
+integration readiness. The branch added preview metadata expectations that
+current main intentionally omits; the current main contract is retained here.
+The exact build hashes, test records, prior launcher targets and original
+handoff text are preserved in the
+[historical startup record](docs/history/ENGRAVING_EDITOR_STARTUP_2026-10-15.md).
+
 ## Engraving image editor development (2026-10-15)
 
 Active branch codex/engraving-editor was created from committed background-cleanup
@@ -714,8 +755,13 @@ baseline aggregate-budget cases deselected.
 Final UI hardening releases closed dialogs and their decoded image planes,
 owns the initial fit timer, and clears or rejects stale node selections after
 reset, undo/redo and outline replacement. All 486 focused tests pass after this
-hardening, along with repository Ruff and compileall. A fresh frozen build
-and compatibility run follow these changes. Source
+hardening, along with repository Ruff and compileall. Final-commit compatibility
+run 38814874623 completed: Windows Python 3.10 had 5882 passed, 144 skipped and
+the same three baseline failures; Windows Python 3.12 desktop had 7374 passed,
+54 skipped and the same four baseline failures. Lint and the POSIX controller
+tier passed. No new compatibility failures were introduced; full CI remains red.
+The branch is pushed and retained for operator verification and separate baseline
+repairs before integration. Source
 fixtures are synthetic barrel-like grayscale with lettering and separate shadow;
 no original barrel asset is claimed. Core 0.8MP benchmark median: committed mask
 render 1.075 ms; unique node change plus render 2.081 ms; automatic rectangular
@@ -724,6 +770,22 @@ inside edit rendering. Offscreen Qt event measurements on a 1.57MP synthetic ima
 p95 1.343 ms / commit 7.877 ms; 192-node editing p95 4.284 ms / commit
 40.398 ms. Movement caused zero full-image processing and zero job generation.
 Interactive operator latency is not yet verified.
+
+Ignored demonstration project: build/editor-demo/engraving-editor-demo.e3laser,
+with its original PNG under build/editor-demo/assets and a local README.txt.
+It has original and edited synthetic images side by side at 100 x 75 mm, all
+layers output off and power zero, and no cutting paths or prepared jobs. Two
+save/reopen roundtrips preserve source bytes, asset references and retained
+grain/lettering pixels exactly. Keep this local demo folder in place because
+the existing importer stores absolute asset references.
+
+Records in the feature checkout include build/final-hardened-validation.log,
+build/frozen-verification.json, build/engraving-editor-frozen-smoke.json,
+build/windows-build.log, build/editor-responsiveness.json,
+build/image-editor-performance.json and build/engraving-editor-dialog.png.
+Final CI logs are build/ci-final-windows310.log and build/ci-final-windows312.log;
+the retained-Z baseline reproduction is build/baseline-machine-layout.log.
+The usage guide and deferred tools are in docs/ENGRAVING_IMAGE_EDITOR.md.
 
 No camera/controller/laser test, machine setting or calibration change, Pi
 installation, motion or laser output was performed. This feature remains under

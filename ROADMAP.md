@@ -2,11 +2,12 @@
 
 Compressed upload and repeated-geometry/stream-size optimizations are implemented.
 Inert upload timing is verified: 58.922 to 6.346 seconds for the same 22 MB job.
-The next preparation update removes unchanged desktop duplicate preflight and
+Preparation removes unchanged desktop duplicate preflight and
 repeated immutable metadata/endpoint checks. Local validator timing improves
-about 28.5%; install its matching companion when the running job is finished,
-then measure Pi verification and Start separately. Physical pause/resume
-qualification remains separate from transfer and software preparation timing.
+about 28.5%; the original benchmark preceded matching-companion installation.
+Pi verification and Start timing require separate measurements. Physical
+pause/resume qualification remains separate from transfer and software
+preparation timing.
 
 ## Job pause / resume
 
@@ -55,6 +56,9 @@ The measured performance follow-ups are ranked in
 unchanged-text duplicate preflight is now removed; broader raster caching remains
 future work.
 ## Engraving image workspace
+
+Startup compatibility with existing raster-travel profiles now includes their
+complete validation and job-policy contract; it does not infer new travel limits.
 
 First-stage implementation adds local reversible cleanup, foreground trace
 preview, native pen/node/handle editing, mask persistence, and explicit linked

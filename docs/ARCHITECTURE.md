@@ -68,6 +68,19 @@ low-level generator's absent-envelope compatibility path retains its former
 restrictive surface/output checks and never grants expanded travel. The browser
 single-SVG pipeline remains separate and unchanged. See
 [RASTER_OVERSCAN.md](RASTER_OVERSCAN.md) for configuration and verification limits.
+
+## Saved raster-travel compatibility
+
+The image-editor build includes the existing strict raster_safety contract used
+by configuration, saved profiles, MachineService and the remote/Pi policy identity.
+The planner gates image eligibility after dithering, then constructs laser-off
+clearance around the surviving spans. E3RASTER metadata binds the surface and
+verified carriage envelope to the exact program; it is never a controller command.
+Desktop preparation/restart/cache identity includes the envelope so changed
+evidence invalidates prepared output. The startup compatibility repair preserves
+release workflows, deployment tools and preview display behavior. See
+[the compatibility boundary](RASTER_TRAVEL_COMPATIBILITY.md).
+
 ## Engraving image editor
 
 Schema 6 adds strict IMAGE geometry.image_edit (version 1, original SHA256/size,
