@@ -13,7 +13,7 @@ def test_pause_bundle_contains_complete_exact_sources_without_git(tmp_path, monk
     monkeypatch.setattr(packager.subprocess, "check_output", lambda *a, **kw: pytest.fail("Unexpected Git/network call"))
     bundle = packager.package(tmp_path / "dist")
     manifest = json.loads((bundle / "manifest.json").read_bytes())
-    assert len(manifest["files"]) == 8
+    assert len(manifest["files"]) == 11
     assert {entry["path"] for entry in manifest["files"]} == packager.PREVIOUS.keys()
     for entry in manifest["files"]:
         raw = (bundle / entry["path"]).read_bytes()
@@ -47,7 +47,7 @@ def test_pause_installer_rejects_unknown_and_preserves_backups(tmp_path, monkeyp
     bad.write_bytes(b"# unknown edits\n")
     with pytest.raises(ValueError, match="unknown local changes"):
         installer.install(project, bundle=bundle, apply=True)
-    assert not (project / "laser_aligner/machine/job_pause.py").exists()
+    assert (project / "laser_aligner/machine/job_pause.py").read_bytes() == originals["laser_aligner/machine/job_pause.py"]
     bad.write_bytes(originals["laser_aligner/machine/service.py"])
     assert not installer.install(project, bundle=bundle)["applied"]
     result = installer.install(project, bundle=bundle, apply=True)

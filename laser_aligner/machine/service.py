@@ -31,6 +31,7 @@ from ..geometry.polygon import (
     ConvexPolygon,
     convex_polygon_contains_normalized,
     normalize_convex_polygon,
+    prepared_convex_polygon_contains,
 )
 from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
 from ..operation_focus import mode as operation_focus_mode
@@ -5428,15 +5429,22 @@ class MachineService:
                 label="Initial Home / park transfer",
             )
 
+        raster_contains = (prepared_convex_polygon_contains(raster_boundary.engraving_polygon_mm)
+                           if raster_boundary is not None else None)
+        guarded_contains = (prepared_convex_polygon_contains(guarded_polygon)
+                            if guarded_polygon is not None else None)
+
         def require_powered_point(px: float, py: float, line_number: int) -> None:
             assert raster_boundary is not None
             spot = (px + float(self.laser_settings.spot_offset_x_mm),
                     py + float(self.laser_settings.spot_offset_y_mm))
-            raster_boundary.require_powered_point(spot, label=f"Line {line_number}")
+            assert raster_contains is not None
+            if not raster_contains(spot):
+                raster_boundary.require_powered_point(spot, label=f"Line {line_number}")
             for point, kind in (((px, py), "controller"), (spot, "physical beam")):
                 allowed = (
-                    convex_polygon_contains_normalized(point, guarded_polygon)
-                    if guarded_polygon is not None
+                    guarded_contains(point)
+                    if guarded_contains is not None
                     else self.settings.work_area.contains(*point, self.laser_settings.boundary_margin_mm)
                 )
                 if not allowed:
@@ -6561,6 +6569,14 @@ class MachineService:
         # Reuse a completed check before/after arming, never a partial scan.
         # All current policy, session and authorization checks remain separate.
         if cached is not None and lines is cached[0] and capacity == cached[1]:
+            return
+        # The exact decimal compactor only removes characters. If every
+        # eligible source line already fits, encoding the whole raster again
+        # cannot add information. Long eligible lines retain the exact scan.
+        if all((len(line) < capacity and line.isascii()) or not canonical_linear_move(line)
+               for line in lines):
+            with self._lock:
+                self._validated_stream_window = (lines, capacity)
             return
         index = 0
         while index < len(lines):

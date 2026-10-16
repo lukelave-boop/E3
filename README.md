@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Large Pi-owned jobs use negotiated lossless upload compression and larger bounded
+chunks with the matching companion. Validation reuses fixed polygon geometry and
+avoids unnecessary stream encoding passes. Exact bytes, bounds, arming and Start
+checks remain required. Older nodes retain the original upload path. See
+[job preparation](docs/NETWORK_MACHINE.md#faster-bounded-job-preparation).
+
 ## Pause and continue a job
 
 The desktop now supports **Pause / Resume** for compatible GRBL laser-mode

@@ -48,7 +48,6 @@ from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
-    ACTION_JOB_CHUNK,
     ACTION_JOB_FINALIZE,
     ACTION_JOB_PAUSE,
     ACTION_JOB_RESULT,
@@ -57,18 +56,20 @@ from .pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_COMPRESSED_UPLOAD,
     CAPABILITY_PI_CONTROL_OWNER,
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     CAPABILITY_PI_STRUCTURED_ERRORS,
+    MAX_EXPANDED_CHUNK_BYTES,
     MAX_JOB_BYTES,
     MAX_UPLOAD_CHUNK_BYTES,
     PROTOCOL_VERSION,
     PiJobProtocolError,
     authenticate_client,
-    encode_upload_chunk,
+    encode_upload_piece,
     request_response,
     validate_job_name,
 )
@@ -2802,26 +2803,31 @@ class RemoteMachineService:
                 self._commit_current_response(begin, action=ACTION_JOB_BEGIN)
                 self._cache_job_record(self._response_mapping(begin, "job"))
                 offset = 0
+                compressed_upload = CAPABILITY_PI_COMPRESSED_UPLOAD in (self._node_capabilities or ())
+                piece_limit = MAX_EXPANDED_CHUNK_BYTES if compressed_upload else MAX_UPLOAD_CHUNK_BYTES
                 while offset < len(canonical):
                     self._require_operation_current(generation)
-                    chunk = canonical[offset : offset + MAX_UPLOAD_CHUNK_BYTES]
+                    chunk_action, encoded_chunk, chunk_size = encode_upload_piece(
+                        canonical[offset : offset + piece_limit], compressed=compressed_upload,
+                    )
+                    self._require_operation_current(generation)
                     chunk_response = self._rpc(
-                        ACTION_JOB_CHUNK,
+                        chunk_action,
                         {
                             "job_id": job_id,
                             "offset": offset,
-                            "data_b64": encode_upload_chunk(chunk),
+                            "data_b64": encoded_chunk,
                         },
                     )
                     self._require_operation_current(generation)
                     self._commit_current_response(
                         chunk_response,
-                        action=ACTION_JOB_CHUNK,
+                        action=chunk_action,
                     )
                     self._cache_job_record(
                         self._response_mapping(chunk_response, "job")
                     )
-                    offset += len(chunk)
+                    offset += chunk_size
                     self._submission_progress(job_id, received_size=offset)
                 upload_seconds = max(0.0, time.monotonic() - upload_started)
                 self._record_client_diagnostics(

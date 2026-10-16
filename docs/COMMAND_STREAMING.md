@@ -10,6 +10,18 @@ unchanged. Marlin and noncanonical commands retain their existing exchanges.
 
 ## Ownership and limits
 
+The first stream-size check uses the original ASCII line length as an upper
+bound: the lossless compactor only removes characters. If all eligible original
+lines already fit, a full encoding pass is unnecessary. Any longer eligible line
+retains the complete stateful compaction scan, preserving acceptance and rejection
+for padded numbers and changing controller capacity. Actual streaming still
+checks every encoded line before admission.
+
+Dense raster validation prepares fixed polygon edges once and checks each point
+using the reference predicate's same arithmetic and tolerance. Inside travel
+points take the direct rectangle check; rejection retains detailed clearance
+diagnostics. Output, beam-offset, travel and policy checks remain authoritative.
+
 Start checks every compacted stream line against the controller's byte capacity
 before arming or motion. A successful check is retained for only the same
 immutable line tuple and byte capacity, so the final Start check does not repeat

@@ -1,5 +1,9 @@
 # Roadmap
 
+Compressed upload and repeated-geometry/stream-size optimizations are implemented.
+Verify actual Pi transfer and preparation timing with the matched companion;
+physical pause/resume qualification remains separate from inert upload timing.
+
 ## Job pause / resume
 
 Implemented desktop and Pi-owned controller-confirmed pause/resume with retained

@@ -12,8 +12,8 @@ from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.machine import pi_job_store as store_module
 from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
+    MAX_EXPANDED_CHUNK_BYTES,
     MAX_JOB_BYTES,
-    MAX_UPLOAD_CHUNK_BYTES,
 )
 from laser_aligner.machine.pi_job_store import (
     MAX_METADATA_RECORDS,
@@ -241,7 +241,7 @@ def test_chunk_requires_exact_bytes_and_sequential_resume_offset(tmp_path: Path)
         store.append_chunk(
             job_id,
             offset=4,
-            data=b"x" * (MAX_UPLOAD_CHUNK_BYTES + 1),
+            data=b"x" * (MAX_EXPANDED_CHUNK_BYTES + 1),
         )
     with pytest.raises(PiJobStoreError, match="chunk must contain"):
         store.append_chunk(job_id, offset=4, data=bytearray(b"efgh"))  # type: ignore[arg-type]

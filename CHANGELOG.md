@@ -1,5 +1,15 @@
 # Changelog
 
+## Faster job upload and preparation (2026-10-15)
+
+- Negotiate bounded lossless compressed uploads, reducing the operator's 22 MB
+  raster from 338 upload requests to 22 and 3.53 MB of compressed data.
+- Retain exact decoded bytes, durable offsets, digest validation, cancellation
+  and explicit Start; older nodes use the original raw upload path.
+- Prepare fixed validation geometry once and use original line lengths to avoid
+  full compaction when every eligible source line already fits the controller.
+  Long eligible lines still receive the exact stateful scan.
+
 ## Job pause / resume (2026-10-15)
 
 - Add controller-confirmed Pause / Resume to the desktop and Pi-owned job protocol.

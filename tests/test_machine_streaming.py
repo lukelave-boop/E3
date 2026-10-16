@@ -541,9 +541,19 @@ def test_slow_stream_preparation_does_not_repeat_after_arming(stream_machine, mo
         **{**vars(time), "monotonic": lambda: real_monotonic() + elapsed[0]},
     ))
     monkeypatch.setattr(service_module.GrblStreamCompactor, "encode", slow_validation)
-    _proof, worker = _start(machine, _program(powered=True))
+    # Force exact compaction of long source lines that become short on the wire.
+    text = _program(powered=True).replace("F600.000", "F" + "0" * 140 + "600.000")
+    _proof, worker = _start(machine, text)
     assert _finish(machine, worker)["error"] is None
     assert len(checked) == 20
+
+
+def test_short_source_window_check_does_not_encode_whole_raster(stream_machine, monkeypatch):
+    machine, _transport = stream_machine()
+    program = machine.preflight_program(_program(200, powered=True))
+    monkeypatch.setattr(service_module.GrblStreamCompactor, "encode",
+                        lambda *_args: pytest.fail("Short source already bounds compacted bytes"))
+    machine._require_program_stream_window(program, machine._session)
 
 
 def test_stream_window_cache_rechecks_changed_capacity_and_source(stream_machine):

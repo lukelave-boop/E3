@@ -21,12 +21,14 @@ from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
     ACTION_JOB_CHUNK,
+    ACTION_JOB_CHUNK_COMPRESSED,
     ACTION_JOB_FINALIZE,
     ACTION_JOB_RESULT,
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_COMPRESSED_UPLOAD,
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
@@ -35,6 +37,7 @@ from laser_aligner.machine.pi_job_protocol import (
     ERROR_SAFETY_REJECTED,
     PROTOCOL_VERSION,
     PiJobProtocolError,
+    decode_compressed_upload_chunk,
 )
 from laser_aligner.machine.pi_job_service import (
     EXECUTION_POLICY_DIAGNOSTIC_SCHEMA,
@@ -242,11 +245,13 @@ class FakePi:
                 ),
             }
             return self._response(request, job=copy.deepcopy(self.jobs[job_id]))
-        if action == ACTION_JOB_CHUNK:
+        if action in {ACTION_JOB_CHUNK, ACTION_JOB_CHUNK_COMPRESSED}:
             job_id = request["job_id"]
             upload = self.uploads[job_id]
             assert request["offset"] == len(upload)
-            upload.extend(base64.b64decode(request["data_b64"], validate=True))
+            upload.extend(decode_compressed_upload_chunk(request["data_b64"])
+                          if action == ACTION_JOB_CHUNK_COMPRESSED
+                          else base64.b64decode(request["data_b64"], validate=True))
             self.jobs[job_id]["received_size"] = len(upload)
             return self._response(request, job=copy.deepcopy(self.jobs[job_id]))
         if action == ACTION_JOB_FINALIZE:
@@ -480,6 +485,28 @@ def test_new_controller_metadata_wakes_monitor_without_granting_authority(monkey
     assert service.status()["status_stale"] is True
     service._refresh_once()
     assert service.status()["status_stale"] is False
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_negotiated_compression_preserves_program_and_stop(monkeypatch, cancel):
+    fake = FakePi()
+    fake.capabilities.append(CAPABILITY_PI_COMPRESSED_UPLOAD)
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    program = service.preflight_program("G21\nG90\nM5\n" + "G1 X2 Y2 F100\n" * 9000 + "M5")
+    if cancel:
+        def stop_during_chunk(action, request):
+            if action == ACTION_JOB_CHUNK_COMPRESSED:
+                service.request_stop()
+        fake.before_request = stop_during_chunk
+        with pytest.raises(MachineError):
+            service.start_preflighted_program(program)
+        assert ACTION_JOB_START not in [request["action"] for request in fake.requests]
+    else:
+        assert service.start_preflighted_program(program)["accepted"]
+        chunks = [request for request in fake.requests if request["action"] == ACTION_JOB_CHUNK_COMPRESSED]
+        assert len(chunks) == 1
+        assert bytes(fake.uploads[chunks[0]["job_id"]]) == canonical_program_bytes(program)
 
 
 def test_exact_upload_finalize_start_lifecycle_and_diagnostics(

@@ -1,10 +1,33 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 Point = tuple[float, float]
 ConvexPolygon = tuple[Point, ...]
+
+
+def prepared_convex_polygon_contains(polygon: ConvexPolygon) -> Callable[[Point], bool]:
+    """Prepare fixed edges once for repeated default-tolerance point checks.
+
+    Keep the same subtraction, cross product and division as the reference
+    predicate; only geometry independent of the checked point is precomputed.
+    """
+    normalized = normalize_convex_polygon(polygon)
+    edges = tuple((a[0], a[1], b[0] - a[0], b[1] - a[1],
+                   math.hypot(b[0] - a[0], b[1] - a[1]))
+                  for a, b in zip(normalized, normalized[1:] + normalized[:1], strict=True))
+
+    def contains(point: Point) -> bool:
+        x, y = float(point[0]), float(point[1])
+        if not math.isfinite(x) or not math.isfinite(y):
+            return False
+        for ax, ay, dx, dy, length in edges:
+            if -(dx * (y - ay) - dy * (x - ax)) / length > 1e-6:
+                return False
+        return True
+
+    return contains
 
 
 def normalize_convex_polygon(

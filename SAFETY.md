@@ -1,5 +1,11 @@
 # Safety requirements
 
+Compressed uploads are inert transport data. Input frames, compressed pieces,
+expanded chunks and total job size are bounded independently. Only exact decoded
+bytes enter the durable store; digest, whole-program validation and explicit Start
+remain required. Prepared polygon edges and source-length stream bounds avoid
+repeated computation without changing output/travel tolerances or authority.
+
 Pause / Resume is a job-continuation feature, not an emergency stop or a
 safety-rated control. It requires a GRBL handshake, observed laser mode and verified
 motor holding. The app requests suspension and waits for controller status;

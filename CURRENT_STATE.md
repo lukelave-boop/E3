@@ -1,5 +1,24 @@
 # Current repository state
 
+## Faster upload and preparation follow-up (2026-10-15)
+
+The operator requested removal of upload delay as well as the earlier Start fix.
+The exact 22,099,480-byte raster used 338 fresh authenticated requests and durable
+chunk writes. Negotiated compression now uses 22 chunks and 3,531,069 compressed
+bytes (0.31 seconds local compression), preserving original bytes and offsets.
+Compressed input is bounded at 256 KiB, expansion at 1 MiB, frames at 512 KiB;
+raw legacy chunks remain 64 KiB. Finalization and explicit Start remain required.
+
+Prepared polygon edges preserve reference arithmetic and tolerances. The stream
+size check now proves already-fitting ASCII source lines without full compaction;
+long eligible source still takes the exact stateful scan. On the operator's exact
+file, offline original/new validation was 12.505/6.704 seconds with identical
+validated output, and the first stream check was 3.818/0.045 seconds. These are
+local timings; live Pi upload measurement was deferred when E3 reconnected.
+Focused protocol/store/server/remote tests: 194 passed; codec/remote: 92 passed;
+stream/geometry/codec: 145 passed. Final checks, updated build and installation
+are pending. The installer now includes eleven files, pinned to installed e649a22.
+
 ## Pause / resume feature verification (2026-10-15)
 
 Isolated branch codex/job-pause-resume starts from authoritative main 7e86608

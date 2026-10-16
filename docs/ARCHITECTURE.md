@@ -1,5 +1,11 @@
 # Architecture
 
+Pi job upload negotiates bounded compressed chunks through `pi_job_protocol`.
+The server expands each complete bounded stream before passing original bytes
+to `PiJobStore`; storage durability, finalization and MachineService ownership
+are unchanged. Pure geometry predicates prepare immutable polygon edges for
+whole-program validation. See [node transport](NETWORK_MACHINE.md).
+
 MachineService owns continuous GRBL G1 streams. ControllerReceiver temporarily
 gives the job worker exclusive receive pumping with bounded FIFO byte credit;
 ordinary commands retain individual transactions and quiet fences. The pure

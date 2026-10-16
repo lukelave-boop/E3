@@ -24,6 +24,7 @@ from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
     ACTION_JOB_CHUNK,
+    ACTION_JOB_CHUNK_COMPRESSED,
     ACTION_JOB_DELETE,
     ACTION_JOB_FINALIZE,
     ACTION_JOB_LATEST,
@@ -34,6 +35,7 @@ from .pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_COMPRESSED_UPLOAD,
     CAPABILITY_PI_CONTROL_OWNER,
     CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
@@ -54,6 +56,7 @@ from .pi_job_protocol import (
     AuthenticatedChannel,
     PiJobProtocolError,
     authenticate_server,
+    decode_compressed_upload_chunk,
     decode_upload_chunk,
     validate_boot_id,
     validate_client_id,
@@ -111,6 +114,7 @@ MACHINE_ACTIONS = frozenset(
 )
 
 SERVER_CAPABILITIES = (
+    CAPABILITY_PI_COMPRESSED_UPLOAD,
     "pi-job-pause-v1",
     RASTER_TRAVEL_CAPABILITY,
     MATERIAL_SURFACE_CAPABILITY,
@@ -238,6 +242,11 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
         "response": ("job",),
     },
     ACTION_JOB_CHUNK: {
+        "required": ("job_id", "offset", "data_b64"),
+        "optional": (),
+        "response": ("job",),
+    },
+    ACTION_JOB_CHUNK_COMPRESSED: {
         "required": ("job_id", "offset", "data_b64"),
         "optional": (),
         "response": ("job",),
@@ -989,11 +998,12 @@ class PiMachineServer:
                 ),
             )
             return {"job": job}
-        if action == ACTION_JOB_CHUNK:
+        if action in {ACTION_JOB_CHUNK, ACTION_JOB_CHUNK_COMPRESSED}:
             job = self.service.append_upload_chunk(
                 validate_job_id(request.get("job_id")),
                 validate_upload_offset(request.get("offset")),
-                decode_upload_chunk(request.get("data_b64")),
+                (decode_compressed_upload_chunk if action == ACTION_JOB_CHUNK_COMPRESSED
+                 else decode_upload_chunk)(request.get("data_b64")),
             )
             return {"job": job}
         if action == ACTION_JOB_FINALIZE:

@@ -1,5 +1,24 @@
 # E3 Raspberry Pi hardware node
 
+## Faster bounded job preparation
+
+Nodes advertising `pi-compressed-upload-v1` accept `job.chunk.compressed`.
+The desktop sends independent zlib streams, at most 256 KiB compressed and
+1 MiB expanded per chunk. Incompressible pieces are shortened to fit; small
+pieces and older nodes use the original 64 KiB raw chunks. The bounded JSON
+frame ceiling is 512 KiB; larger frames are sent only after capability discovery.
+The measured 22,099,480-byte raster requires 22 requests and 3,531,069 compressed
+bytes, compared with 338 raw requests. Compression took 0.31 seconds locally;
+network/disk throughput and total Pi preparation time need separate measurement.
+
+Decoded bytes retain original offsets, total-size limits, durable writes,
+idempotent exact-byte retry checks, SHA-256 finalization and full Pi validation.
+Truncated/concatenated/trailing streams, noncanonical base64 and expansion beyond
+1 MiB reject before storage. No upload authorizes motion; STOP/cancellation,
+session binding and explicit Start remain unchanged. Reserved STOP admission is
+unchanged. The companion includes storage and geometry dependencies as well as
+the complete pause implementation, pinned to installed revision e649a22.
+
 ## LAN and Tailscale camera addresses
 
 The same-machine Duplicate option retains camera/calibration profile IDs. Open
