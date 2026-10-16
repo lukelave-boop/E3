@@ -18,9 +18,8 @@ import numpy as np
 
 from ..geometry.foreground import (
     clean_foreground_components,
-    contour_depth,
-    extract_foreground_contours,
 )
+from .image_mask_contours import mask_contours
 from .path_geometry import (
     NativePathGeometry,
     PathAffineTransform,
@@ -357,7 +356,14 @@ def outline_from_mask(
     cancel_check: Callable[[], bool] | None = None,
 ) -> NativePathGeometry:
     """Fit editable lines/Béziers using the existing shared authoritative fitter."""
-    from .raster_vectorize import fit_physical_contours_to_native_path
+    from .raster_vectorize import (
+        RasterVectorizationCancelledError,
+        fit_physical_contours_to_native_path,
+    )
+
+    def checkpoint():
+        if cancel_check is not None and cancel_check():
+            raise RasterVectorizationCancelledError("Image outline cancelled")
 
     options = trace_settings(settings)
     binary = np.asarray(mask, dtype=bool).astype(np.uint8) * 255
@@ -365,23 +371,16 @@ def outline_from_mask(
     binary, _count = clean_foreground_components(
         binary, minimum_component_area_px=options["minimum_component_area"],
         minimum_hole_area_px=0, maximum_components=1024,
+        cancellation_checkpoint=checkpoint,
     )
-    contours, hierarchy = extract_foreground_contours(
-        binary, maximum_contours=4096,
-        retrieval_mode=cv2.RETR_TREE if options["include_holes"] else cv2.RETR_EXTERNAL,
+    contours, parents = mask_contours(
+        binary, include_holes=options["include_holes"], cancel_check=cancel_check,
     )
-    # Parents must precede children for the shared fitter.
-    order = sorted(range(len(contours)), key=lambda index: (contour_depth(index, hierarchy), index))
-    indices = {original: current for current, original in enumerate(order)}
     height, width = binary.shape
     physical: list[np.ndarray] = []
-    parents: list[int | None] = []
-    for index in order:
-        points = np.asarray(contours[index], dtype=np.float64).reshape(-1, 2)
-        if len(points) < 3 or cv2.contourArea(contours[index]) <= 0:
-            raise ValueError("Mask contains a degenerate component; increase small-component filtering")
+    for contour in contours:
+        points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
         physical.append(np.column_stack((points[:, 0] + 0.5 - width / 2, height / 2 - points[:, 1] - 0.5)))
-        parents.append(indices.get(int(hierarchy[0, index, 3])))
     result = fit_physical_contours_to_native_path(
         physical, parents, source_pixel_spacing_mm=(1.0, 1.0),
         fitting_tolerance_mm=options["detail"], smoothing_mm=options["smoothing"],
