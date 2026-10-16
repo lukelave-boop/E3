@@ -1,5 +1,39 @@
 # Current repository state
 
+## Browser CI subprocess completion (2026-10-16)
+
+PR #47 merged as `fc9a0e369d7a9f05a1770b8f8b892205a7832300`. Its
+[publisher run 38918868217](https://github.com/lukelave-boop/E3/actions/runs/38918868217)
+passed its compatibility gate and published Windows/Linux packages. Separate
+[main CI 38918868369](https://github.com/lukelave-boop/E3/actions/runs/38918868369)
+failed the Windows Python 3.12 browser placement test at its 20-second Node
+subprocess deadline after 8,458 passed and 65 skipped tests. The same timeout
+predates PR #47 (see the PR #44 outcome in `docs/RELEASE_REVIEW.md`).
+
+The failed log stops while Python joins a stdout pipe reader. Its displayed
+return code 1 is recorded after timeout termination, not evidence of a JavaScript
+assertion failure. It does not establish whether Node startup, child execution,
+or pipe completion stalled. Seventy-two unchanged local harness runs passed;
+the lower-level cause of that historical timeout remains unproven.
+
+An injected unresolved Promise exposed a separate confirmed defect: the original
+return-code-only harness could pass without finishing its asynchronous assertions.
+The test now requires an explicit completion marker and a natural zero exit,
+rejects unfinished/rejected scenarios, and records Node version/start, elapsed
+time, process status before termination and bounded cleanup diagnostics. File
+captures remove the Windows pipe-reader EOF dependency. The 20-second deadline
+and every original browser scenario assertion remain unchanged. Real-child and
+injected cleanup-failure regressions cover the timeout/reaping contract.
+
+The revised original scenario passed another 60 local serial/concurrent runs on
+Windows Python 3.14.4 / Node 24.19.0. Seven focused placement/numeric-entry tests,
+repository Ruff and application compileall passed. Independent diff/safety review
+passed. Full Windows 3.10/3.12 plus POSIX CI results are tracked by the fix PR.
+These local checks do not
+establish the historical timeout cause or replace the supported CI tier.
+This change affects only test infrastructure and this evidence record; runtime,
+project formats, machine configuration and the selected DEV TEST are unchanged.
+
 ## Machine-axis raster generation (2026-10-16)
 
 Branch `codex/machine-x-raster` retains the integrated surface-travel and
