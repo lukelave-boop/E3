@@ -112,6 +112,23 @@ controller safety assertions. PR #57 separately corrects product updater
 operations with bounded and cancellable behavior. Two Qt 6.12 runs without the
 native crash do not establish its cause or prove an intermittent fault eliminated.
 
+Candidate `8929f5a` passed its complete manual compatibility run: Windows core
+7,100 passed/169 skipped, desktop 8,664 passed/69 skipped, POSIX 1,502 passed/two
+skipped, and lint. All four real package checks passed. Its PR core, POSIX and
+lint checks passed, but the desktop run had one browser-placement harness
+timeout (8,663 passed/69 skipped). Node remained alive after 20.047 seconds;
+file-backed stdout/stderr were empty, including the first JavaScript startup
+marker. The runtime version and slow phase are unknown. That positive scenario
+now has a bounded 60-second process allowance, retaining natural zero exit,
+exact completion and all behavior assertions. The helper's default 20 seconds
+and deliberate hang/negative tests remain unchanged. This is not a proven
+Node hang repair and changes no browser product code. Neither full desktop
+run had a native Qt failure. All these results precede the PR #57 reconciliation
+and do not validate the new combined tree.
+All six browser-harness checks pass locally with Python 3.14/Node 24.19,
+including the unchanged real 20-second hung-child rejection and cleanup.
+Independent review, Ruff, compilation and whitespace checks pass.
+
 Review also found that Linux updater restart inherited the previous build's
 state overrides. Both platforms now prepare a fresh update-process environment,
 preserving the genuine user profile while removing prior per-launch state,
