@@ -96,7 +96,7 @@ def configure_windows_app_user_model_id(
 
         function = ctypes.WinDLL("shell32", use_last_error=True).SetCurrentProcessExplicitAppUserModelID
         function.argtypes = (wintypes.LPCWSTR,)
-        function.restype = wintypes.HRESULT
+        function.restype = ctypes.c_long
         setter = function
     result = int(setter(DEV_TEST_APP_USER_MODEL_ID))
     if result < 0:

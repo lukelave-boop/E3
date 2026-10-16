@@ -1,5 +1,23 @@
 # Current repository state
 
+## DEV TEST startup compatibility - in verification (2026-10-16)
+
+Selecting the latest UI build exposed a Windows Python 3.12 startup defect in
+DEV TEST identity setup: `ctypes.wintypes.HRESULT` is unavailable there (and on
+Python 3.13). Both application and launcher now declare the Win32 result as
+`ctypes.c_long`, preserving signed HRESULT checking and existing error types.
+The permanent launcher executable is unchanged. Focused Windows Python 3.12
+and 3.14 validation passes all 40 identity/launcher tests, including real
+shell32 calls in isolated child processes and signed native failure results.
+Application compileall passes. A fresh canonical Windows build and full
+compatibility CI are in progress; no new build has been selected yet.
+
+Explicit user-approved recovery removed only the two exited UI/tracing build
+reservations (37ab0dd... and 6790c59...), retaining all 8,423 files and the
+current launcher selection. The exact prior state is backed up under
+`E3 Build Storage/state-before-ui-trc-reservation-recovery-472e2949669d8e8d.json`.
+All retained files still count toward the unchanged eight-GiB budget.
+
 ## Windows installer long paths — verified (2026-10-16)
 
 [PR #52](https://github.com/lukelave-boop/E3/pull/52) repairs Windows packaging

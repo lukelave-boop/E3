@@ -98,6 +98,10 @@ and implicit AppUserModelID path are unchanged. QSettings organization/name,
 user data, project schemas, configuration loading, and machine behavior do not
 change in either mode.
 
+The launcher and selected application declare the Windows API return value with
+`ctypes.c_long`, which is available across the supported Windows Python versions.
+This avoids a startup failure in DEV TEST mode on Python 3.10 through 3.13.
+
 The launcher also resets PyInstaller's child-process environment, removes only
 its own temporary bundle-rooted `PATH` entries, and temporarily restores normal
 Windows DLL lookup while it creates the separately frozen E3 process. It is a
