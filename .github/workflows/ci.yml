@@ -144,8 +144,12 @@ jobs:
           tests/test_remote_machine_service.py
           tests/test_remote_node.py
           tests/test_grbl_stream_posix.py
+          tests/test_grbl_stream.py
+          tests/test_machine_streaming.py
           tests/test_job_pause.py
           tests/test_compressed_upload.py
+          tests/test_pi_job_store.py
+          tests/test_large_job_preparation.py
           tests/test_program_metadata_proof.py
           tests/test_remote_preflight_reuse.py
           tests/test_validation_endpoint_reuse.py
@@ -158,3 +162,4 @@ jobs:
           tests/test_surface_travel_proposal.py
           tests/test_verified_surface_runtime.py
           tests/test_verified_surface_travel.py
+          tests/test_image_editor_raster_travel.py

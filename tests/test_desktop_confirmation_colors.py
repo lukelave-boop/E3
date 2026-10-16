@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 from collections import Counter
 
@@ -14,12 +15,32 @@ from laser_aligner.desktop.dialogs import install_confirmation_button_colors
 from laser_aligner.desktop.theme import apply_dark_theme
 
 
+@pytest.fixture(scope="session")
+def application():
+    # The application owns native event filters. Keep its Python wrapper alive
+    # until pytest finishes instead of collecting it between parameter cases.
+    yield QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
 @pytest.fixture
-def app():
-    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+def app(application):
     previous = application.styleSheet()
+    previous_filter = application.property("e3ConfirmationButtonColorFilter")
+    existing_widgets = set(application.topLevelWidgets())
     apply_dark_theme(application)
     yield application
+    # close() only hides a widget. Destroy our native dialogs while both the
+    # application and its event filter are still alive, including after failure.
+    for widget in set(application.topLevelWidgets()) - existing_widgets:
+        widget.close()
+        widget.deleteLater()
+    application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    if previous_filter is None:
+        event_filter = application.property("e3ConfirmationButtonColorFilter")
+        application.removeEventFilter(event_filter)
+        application.setProperty("e3ConfirmationButtonColorFilter", None)
+        event_filter.deleteLater()
+        application.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     application.setStyleSheet(previous)
     application.processEvents()
 
@@ -85,3 +106,23 @@ def test_custom_yes_no_roles_and_unrelated_buttons(app, widget_type):
 
 def test_filter_installation_is_idempotent(app):
     assert install_confirmation_button_colors(app) is install_confirmation_button_colors(app)
+
+
+def test_filter_and_dialogs_survive_collection_and_explicit_destruction(app):
+    event_filter = install_confirmation_button_colors(app)
+    destroyed = []
+    for _ in range(3):
+        dialog = QtWidgets.QMessageBox()
+        dialog.destroyed.connect(lambda: destroyed.append(True))
+        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes)
+        dialog.show()
+        app.processEvents()
+        gc.collect()
+        assert install_confirmation_button_colors(app) is event_filter
+        button = dialog.button(QtWidgets.QMessageBox.StandardButton.Yes)
+        assert button.property("confirmationAnswer") == "yes"
+        QtCore.QTimer.singleShot(0, button.click)
+        assert dialog.exec() == int(QtWidgets.QMessageBox.StandardButton.Yes)
+        dialog.deleteLater()
+        app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    assert destroyed == [True, True, True]
