@@ -360,8 +360,11 @@ def entrypoint_fixture(tmp_path: Path):
     environment_stub = tmp_path / "environment-stub.py"
     environment_stub.write_text(ENVIRONMENT_STUB, encoding="utf-8")
     log = tmp_path / "calls.jsonl"
+    # Python 3.10 forwards duplicate Windows environment keys unchanged. Remove
+    # inherited casings before selecting the fixture-only compiler directory.
     env = {
-        **os.environ,
+        **{name: value for name, value in os.environ.items()
+           if name.casefold() != "programfiles(x86)"},
         "STORAGE_TEST_LOG": str(log),
         "STORAGE_TEST_STATE": str(tmp_path / "private-storage-state.json"),
         "STORAGE_TEST_PYTHON": sys.executable,
@@ -409,6 +412,33 @@ def begin_arguments(log: Path) -> list[str]:
     assert len(recorded) == 1, recorded
     assert recorded[0][:2] == ["storage", "begin"]
     return recorded[0][2:]
+
+
+@pytest.mark.parametrize("inherited_names", [
+    ("PROGRAMFILES(X86)",),
+    ("programfiles(x86)",),
+    ("pRoGrAmFiLeS(x86)",),
+    ("PROGRAMFILES(X86)", "ProgramFiles(x86)"),
+])
+def test_synthetic_compiler_overrides_inherited_environment_case_insensitively(
+    tmp_path: Path, monkeypatch, request, inherited_names: tuple[str, ...],
+) -> None:
+    inherited = {name: value for name, value in os.environ.items()
+                 if name.casefold() != "programfiles(x86)"}
+    original_programs = str(tmp_path / "inherited-programs")
+    inherited.update(dict.fromkeys(inherited_names, original_programs))
+    # A plain mapping preserves duplicate spellings so this covers Windows
+    # environment construction on every supported Python version.
+    monkeypatch.setattr(os, "environ", inherited)
+    root, log, env, run = request.getfixturevalue("entrypoint_fixture")
+    result = run("build_windows.ps1", "-Revision", "abcdef")
+    assert result.returncode != 0
+    assert "synthetic storage admission denied" in result.stderr
+    args = begin_arguments(log)
+    assert Path(args[args.index("--worktree") + 1]) == root
+    assert [name for name in env if name.casefold() == "programfiles(x86)"] == ["ProgramFiles(x86)"]
+    assert Path(env["ProgramFiles(x86)"]) == tmp_path / "programs"
+    assert all(os.environ[name] == original_programs for name in inherited_names)
 
 
 @pytest.mark.parametrize("fresh", [False, True])
