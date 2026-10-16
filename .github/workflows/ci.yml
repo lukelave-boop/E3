@@ -163,3 +163,8 @@ jobs:
           tests/test_verified_surface_runtime.py
           tests/test_verified_surface_travel.py
           tests/test_image_editor_raster_travel.py
+          tests/test_artifact_retention.py
+          tests/test_build_storage_guard.py
+          tests/test_build_storage_inventory.py
+          tests/test_managed_build_outputs.py
+          tests/test_managed_storage_policy.py
