@@ -74,6 +74,12 @@ the collected wrapper passes. The editor compact-layout test styles only its
 own dialog; all 32 editor checks pass. These are test-isolation changes only.
 A new diagnostic complete desktop run and final-head CI are required.
 
+Final global-control review also found the trace-slider numeric fields
+clipped by a fixed 78-pixel cap. They now use font/style-aware Qt sizing;
+all 18 isolated theme/control checks and ten existing raster-vectorization
+dialog checks pass. The ordered shared-Qt regression group passes 93 checks.
+Runtime source is now frozen for final verification.
+
 ## Transparency DEV TEST handoff and integration (2026-10-16)
 
 Permanent **E3 DEV TEST** selects **Selected-object transparency**, version

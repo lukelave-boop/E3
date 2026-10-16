@@ -13,6 +13,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 from shiboken6 import isValid
 
 from laser_aligner.desktop.controls import InspectorTabs, NumericDoubleSpinBox, NumericSpinBox
+from laser_aligner.desktop.raster_vectorize_dialog import _slider_row
 from laser_aligner.desktop.selection_transparency import SelectionTransparencyBar
 from laser_aligner.desktop.theme import DARK_STYLESHEET, apply_dark_theme
 
@@ -218,6 +219,23 @@ def test_transparency_percent_and_mixed_label_fit_themed_editor(app, font_points
         edit = bar.spin.lineEdit()
         assert edit.width() >= edit.fontMetrics().horizontalAdvance(text) + 4
         assert bar.spin.width() <= bar.spin.sizeHint().width()
+
+
+@pytest.mark.parametrize("font_points", [9, 13])
+@pytest.mark.parametrize("maximum,suffix", [(255, ""), (100, " %")])
+def test_trace_slider_values_fit_themed_editor(app, font_points, maximum, suffix):
+    app.setStyleSheet(DARK_STYLESHEET + f"\nQWidget {{ font-size: {font_points}pt; }}")
+    row, slider, spin = _slider_row(0, maximum, maximum)
+    spin.setSuffix(suffix)
+    row.resize(300, 50)
+    row.show()
+    app.processEvents()
+    edit = spin.lineEdit()
+    assert edit.width() >= edit.fontMetrics().horizontalAdvance(spin.text()) + 4
+    spin.setValue(0)
+    assert slider.value() == 0
+    slider.setValue(maximum)
+    assert spin.value() == maximum
 
 
 @pytest.mark.parametrize("position", [QtWidgets.QTabWidget.TabPosition.North,
