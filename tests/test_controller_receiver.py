@@ -9,6 +9,7 @@ import pytest
 from laser_aligner.errors import MachineError
 from laser_aligner.machine.controller_dialects import GRBL_DIALECT
 from laser_aligner.machine.controller_receiver import ControllerReceiver
+from laser_aligner.machine.job_pause import JobPause
 
 
 class _QueuedTransport:
@@ -263,3 +264,87 @@ def test_retired_receiver_does_not_report_its_delayed_close_as_a_new_failure() -
     finally:
         close_read.set()
         _join_receiver(receiver)
+
+
+@pytest.mark.parametrize("terminal_reply", ["ok", "error:2"])
+def test_suspended_telemetry_preserves_ordinary_replies_without_filling_queue(terminal_reply):
+    transport = _QueuedTransport()
+    pause = JobPause()
+    recorded = []
+    receiver = ControllerReceiver(
+        transport, GRBL_DIALECT, on_failure=lambda _: None,
+        on_idle=recorded.append, owner_alive=lambda: True, on_realtime=pause.observe,
+    )
+    receiver.begin(1, lambda: None)
+    pause.request(resume=False)
+    status = "<Door:0|MPos:1,1,0|FS:0,0>"
+    replies = ("$1=255", "[GC:G0 G54 G17 G21 G90 G94 M5]", terminal_reply)
+
+    def receive(line):
+        transport.input.put(line)
+        receiver.poll_suspended(timeout=0)
+
+    for index in range(1024):
+        if index in (100, 500, 900):
+            receive(replies[(100, 500, 900).index(index)])
+        receive(status)
+    assert pause.state == "paused"
+    assert receiver.failure is None
+    assert receiver.diagnostic_snapshot()["ownership"]["pending_lines"] == len(replies)
+    assert recorded == [status] * 1024
+
+    pause.request(resume=True)
+    resumed = "<Run|MPos:1,1,0|FS:0,0>"
+    receive(resumed)
+    assert pause.state == "running"
+    assert [receiver.read_line(timeout=0) for _ in range(4)] == [*replies, resumed]
+    receiver.end(1)
+    assert not receiver.has_transaction
+    assert receiver.failure is None
+
+
+@pytest.mark.parametrize("frame,detail", [
+    ("<Door:0|MPos:1,1,0", "malformed"),
+    ("<Door:0|MPos:1,1,0|A:S>", "spindle"),
+    ("<Door:1|MPos:1,1,0>", "door state changed"),
+    ("<Run|MPos:1,1,0>", "without an explicit Resume"),
+    ("ALARM:1", "alarm"),
+    ("Grbl 1.1h ['$' for help]", "restarted"),
+])
+def test_suspended_telemetry_still_latches_faults_before_reply_delivery(frame, detail):
+    transport = _QueuedTransport()
+    pause = JobPause()
+    recorded = []
+    receiver = ControllerReceiver(
+        transport, GRBL_DIALECT, on_failure=lambda _: None,
+        on_idle=recorded.append, owner_alive=lambda: True, on_realtime=pause.observe,
+    )
+    receiver.begin(1, lambda: None)
+    pause.request(resume=False)
+    transport.input.put("<Door:0|MPos:1,1,0|FS:0,0>")
+    receiver.poll_suspended(timeout=0)
+    transport.input.put("ok")
+    receiver.poll_suspended(timeout=0)
+    transport.input.put(frame)
+    with pytest.raises(MachineError, match=detail):
+        receiver.poll_suspended(timeout=0)
+    assert recorded[-1] == frame
+    with pytest.raises(MachineError, match=detail):
+        receiver.read_line(timeout=0)
+
+
+def test_suspended_ordinary_reply_queue_keeps_its_existing_bound():
+    transport = _QueuedTransport()
+    pause = JobPause()
+    receiver = ControllerReceiver(
+        transport, GRBL_DIALECT, on_failure=lambda _: None,
+        on_idle=lambda _: None, owner_alive=lambda: True, on_realtime=pause.observe,
+    )
+    receiver.begin(1, lambda: None)
+    pause.request(resume=False)
+    for _ in range(512):
+        transport.input.put("$1=255")
+        receiver.poll_suspended(timeout=0)
+    transport.input.put("$1=255")
+    with pytest.raises(MachineError, match="exceeded its bounded queue"):
+        receiver.poll_suspended(timeout=0)

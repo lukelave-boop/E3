@@ -2,6 +2,28 @@
 
 ## Integration context (2026-10-16)
 
+Draft integration PR: https://github.com/lukelave-boop/E3/pull/46.
+The integration preserves all three remaining remote histories and the exact
+surface candidate, with a narrow receiver fix found during independent review:
+validated paused Door telemetry no longer fills an ordinary command's bounded
+reply queue during a long pause. ACKs, payloads, resume status, malformed/fault
+handling and the queue bound remain intact. Simulated long-pause Resume/STOP and
+receiver tests pass 45 checks, including eleven new regression cases. No physical
+pause behavior is established by these tests.
+
+Five static project fixtures were produced by the original schema 1-5 serializers;
+25 new tests cover forward reading, data/geometry preservation, explicit saves,
+backups and autosave. Together with current project IO/model tests, 156 checks
+pass on local Windows Python 3.14.4. Canonical preview goldens pass all 36 checks
+without changing main's expected files. These focused/local results are not the
+required full Windows Python 3.10/3.12 or expanded POSIX CI result.
+
+The main CI investigation also found fragile Qt test lifetimes and shared OS
+cursor dependence. Tests now explicitly destroy dialogs while their application
+and event filter live, and deliver the same polygon mouse event deterministically.
+All 51 focused offscreen widget tests pass locally; the Qt 6.12 CI crash was not
+reproduced on local Qt 6.11.2, so final exact-head CI remains mandatory.
+
 This integration combines current main with the remaining feature work.
 Merge-wide verification, the exact pushed-head CI result and publication outcome
 must be recorded separately; the dated branch results below are historical

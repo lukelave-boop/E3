@@ -190,6 +190,13 @@ class ControllerReceiver:
                 self._on_idle(response)
                 return
             if self._transaction is not None:
+                if kind is CommandResponseKind.REALTIME_STATUS and expected_suspend:
+                    # Pause has already observed and validated this Door frame.
+                    # Its ordinary reply consumer is suspended: keep telemetry
+                    # in diagnostics without filling the bounded ACK/payload
+                    # queue. Resume status and every command reply stay queued.
+                    self._on_idle(response)
+                    return
                 if len(self._pending) >= 512:
                     raise MachineError("Controller receive transaction exceeded its bounded queue")
                 self._pending.append(response)

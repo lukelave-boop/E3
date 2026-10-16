@@ -140,6 +140,53 @@ def test_pause_ordinary_ack_and_repeated_cycles(paused_machine):
     assert _finish(machine, worker)["phase"] == "complete"
 
 
+@pytest.mark.parametrize("finish", ["resume", "stop"])
+def test_long_ordinary_ack_pause_retains_resume_and_stop(paused_machine, monkeypatch, finish):
+    machine, transport = paused_machine()
+    program, worker = _start(machine, "G21\nG90\nM5\nG1 X2 Y2 F100\nM5")
+    transport.wait_for_motion(1)
+    pause(machine)
+    receiver = machine._active_job_context.session.receiver
+    assert receiver.diagnostic_snapshot()["ownership"]["transaction"] is not None
+    before = list(transport.motion_lines)
+    final_status = "<Door:0|MPos:2,2,0|FS:0,0>"
+    last_recorded = threading.Event()
+    record = receiver._on_idle
+
+    def record_status(line):
+        record(line)
+        if line == final_status:
+            last_recorded.set()
+
+    monkeypatch.setattr(receiver, "_on_idle", record_status)
+    for _ in range(1024):
+        transport.queue_response("<Door:0|MPos:1,1,0|FS:0,0>")
+    transport.queue_response(final_status)
+    assert last_recorded.wait(4)
+    assert worker.is_alive() and receiver.failure is None
+    assert machine.status()["job_pause"]["state"] == "paused"
+    assert transport.motion_lines == before
+    assert receiver.diagnostic_snapshot()["ownership"]["pending_lines"] < 512
+
+    if finish == "stop":
+        machine.request_stop(_recover=False)
+        job = _finish(machine, worker)
+        assert job["phase"] == "failed"
+        assert ("raw", b"!\x18") in transport.writes
+        with pytest.raises((MachineError, SafetyError)):
+            request(machine, resume=True)
+        assert ("raw", b"~") not in transport.writes
+        assert transport.motion_lines == before
+    else:
+        request(machine, resume=True)
+        wait_for(lambda: machine.status()["job_pause"]["state"] == "running")
+        transport.release_all()
+        job = _finish(machine, worker)
+        assert job["phase"] == "complete", job
+        assert job["completed_lines"] == len(program.lines)
+        assert transport.motion_lines == before
+
+
 @pytest.mark.parametrize("kwargs", [{"laser_mode": "0"}, {"laser_mode": "bad"}, {"identity": "[VER:0.9j:OLD]"}])
 def test_unsupported_controller_rejects_without_pause_bytes(paused_machine, kwargs):
     machine, transport = paused_machine(**kwargs)
