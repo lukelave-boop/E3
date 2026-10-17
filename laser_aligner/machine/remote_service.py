@@ -46,6 +46,7 @@ from .network_transport import bridge_token_from_environment, parse_bridge_uri
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
+    ACTION_JOB_CANCEL,
     ACTION_JOB_FINALIZE,
     ACTION_JOB_PAUSE,
     ACTION_JOB_RESULT,
@@ -145,6 +146,7 @@ _CLIENT_POLICY_MISMATCH_ERROR = (
 )
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_JOB_CANCEL,
         ACTION_JOB_PAUSE,
         ACTION_JOB_RESUME,
         ACTION_MACHINE_PROBE_Z,
@@ -1058,6 +1060,7 @@ class RemoteMachineService:
         status["ender_z_telemetry"] = _validated_ender_z_telemetry(status.get("ender_z_telemetry"))
         with self._state_lock:
             boot_changed = False
+            status["job_controls_supported"] = "pi-job-controls-v1" in (self._node_capabilities or ())
             old_pause = self._status_cache.get("job_pause")
             new_pause = status.get("job_pause")
             if (isinstance(old_pause, Mapping) and isinstance(new_pause, Mapping)
@@ -3069,6 +3072,31 @@ class RemoteMachineService:
         }, timeout=3.0)
         self._require_operation_current(generation)
         self._commit_current_response(response, action=action)
+        status = self._response_mapping(response, "status")
+        with self._state_lock:
+            record = copy.deepcopy(self._status_cache.get("job"))
+        self._cache_remote_status(status, job_record=record, response=response)
+        return self.status()
+
+    def request_cancel(self, *, expected_run_id: int, expected_pause_revision: int,
+                       finish_buffered: bool = False) -> dict[str, Any]:
+        self._require_hardware_authority()
+        generation = self._operation_stop_epoch()
+        self._require_capabilities()
+        self._require_controller_session_capability()
+        with self._state_lock:
+            if "pi-job-controls-v1" not in (self._node_capabilities or ()):
+                raise MachineError("Update the Pi companion to enable normal Stop job")
+            job_id = self._accepted_job_id
+            if job_id is None:
+                raise MachineError("Stop job requires an accepted Pi-owned job")
+        self._require_operation_current(generation)
+        response = self._rpc(ACTION_JOB_CANCEL, {
+            "job_id": job_id, "expected_run_id": expected_run_id,
+            "expected_pause_revision": expected_pause_revision, "finish_buffered": finish_buffered,
+        }, timeout=3.0)
+        self._require_operation_current(generation)
+        self._commit_current_response(response, action=ACTION_JOB_CANCEL)
         status = self._response_mapping(response, "status")
         with self._state_lock:
             record = copy.deepcopy(self._status_cache.get("job"))

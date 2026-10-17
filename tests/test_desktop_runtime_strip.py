@@ -415,6 +415,7 @@ def test_chrome_mode_is_one_line_compact_and_keeps_safety_meaning(
         strip.connect_button,
         strip.disconnect_button,
         strip.pause_button,
+        strip.cancel_button,
         strip.stop_button,
     )
     assert all(
@@ -458,6 +459,7 @@ def test_chrome_mode_controls_stay_inside_900px_toolbar_with_large_font(
         strip.connect_button,
         strip.disconnect_button,
         strip.pause_button,
+        strip.cancel_button,
         strip.stop_button,
     ):
         mapped = QtCore.QRect(control.mapTo(toolbar, QtCore.QPoint()), control.size())

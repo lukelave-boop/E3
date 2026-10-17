@@ -948,6 +948,8 @@ class PiJobService:
                     error = job.get("error")
                     if was_stopped:
                         self._update_terminal(job_id, "stopped", job=job)
+                    elif job.get("phase") == "stopped" and error is None:
+                        self._update_terminal(job_id, "stopped", job=job)
                     elif job.get("phase") == "complete" and error is None:
                         self._update_terminal(job_id, "complete", job=job)
                     else:
@@ -1192,6 +1194,21 @@ class PiJobService:
             status = self.machine.request_pause(
                 resume=resume, expected_run_id=expected_run_id,
                 expected_pause_revision=expected_pause_revision,
+            )
+            self._set_machine_status(status)
+            return status
+
+    def cancel(self, job_id: str, *, expected_run_id: int, expected_pause_revision: int,
+               finish_buffered: bool, expected_session_generation: int | None) -> dict[str, Any]:
+        self.require_accepting_requests("stop a job normally")
+        with self._ordinary_lock:
+            self._require_session_generation(expected_session_generation)
+            with self._state_lock:
+                if self._active_job_id != job_id or self._stop_requested_for == job_id:
+                    raise PiJobServiceError("Stop job requires the exact active job")
+            status = self.machine.request_cancel(
+                expected_run_id=expected_run_id, expected_pause_revision=expected_pause_revision,
+                finish_buffered=finish_buffered,
             )
             self._set_machine_status(status)
             return status
@@ -1468,17 +1485,17 @@ class PiJobService:
         *,
         expected_session_generation: int | None = None,
     ) -> dict[str, Any]:
-        # Explicit operator reattachment to a paused job claims only the server
+        # Explicit operator reattachment to an active job claims only the server
         # control lease. It must never call connect/reset on the retained serial
         # session. The server still rejects an owner held by another desktop.
         with self._state_lock:
             active = self._active_job_id is not None and self._stop_requested_for != self._active_job_id
         if active:
             with self._ordinary_lock:
-                self.require_accepting_requests("reattach to a paused job")
+                self.require_accepting_requests("reattach to an active job")
                 self._require_session_generation(expected_session_generation)
                 status = self.machine.status()
-                if ((status.get("job_pause") or {}).get("state") == "paused"
+                if ((status.get("job_pause") or {}).get("state") in {"running", "paused", "pausing", "resuming"}
                         and (status.get("job_pause") or {}).get("available") is True):
                     self._set_machine_status(status)
                     return status

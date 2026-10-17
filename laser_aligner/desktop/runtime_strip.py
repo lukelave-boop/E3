@@ -34,6 +34,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
     disconnectRequested = QtCore.Signal()
     pauseRequested = QtCore.Signal()
     stopRequested = QtCore.Signal()
+    cancelRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -78,10 +79,14 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.pause_button.setToolTip(
             "Pause / Resume requires a supported active job and current controller status."
         )
+        self.cancel_button = QtWidgets.QPushButton("Stop job")
+        self.cancel_button.setObjectName("runtimeCancelJobButton")
+        self.cancel_button.setAccessibleName("Stop job after buffered moves")
         for button in (
             self.connect_button,
             self.disconnect_button,
             self.pause_button,
+            self.cancel_button,
         ):
             button.setAutoDefault(False)
             button.setDefault(False)
@@ -105,6 +110,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.connect_button.clicked.connect(self._connect_clicked)
         self.disconnect_button.clicked.connect(self.disconnectRequested)
         self.pause_button.clicked.connect(self.pauseRequested)
+        self.cancel_button.clicked.connect(self.cancelRequested)
         self.stop_button.clicked.connect(self.stopRequested)
         self._reflow_layout()
 
@@ -214,10 +220,11 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         pause = self._machine_status.get("job_pause") or {}
         phase = pause.get("state")
         if (state.remote and state.status_trusted and not state.can_control and not state.control_in_use
-                and not self._busy and state.controller_state == "JOB_RUNNING" and phase == "paused"
+                and not self._busy and state.controller_state == "JOB_RUNNING" and phase in {"running", "paused", "pausing", "resuming"}
                 and pause.get("available") is True):
             self.connect_button.setEnabled(True)
-            self.connect_button.setToolTip("Take control of this paused job without resetting its controller.")
+            self.connect_button.setText("Take control")
+            self.connect_button.setToolTip("Take control of this active job without resetting its controller.")
         self.pause_button.setText({
             "paused": "Resume", "pausing": "Pausing…", "resuming": "Resuming…",
         }.get(phase, "Pause"))
@@ -226,12 +233,30 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             and pause.get("available") is True and phase in {"running", "paused"}
         )
         self.pause_button.setToolTip(
+            state.control_reason if not state.can_control else
+            "Wait for current machine operation." if self._busy else
+            "Refresh machine status before pausing." if not state.status_trusted else
             "Continue this suspended job from its retained controller queue."
             if phase == "paused" else
             "Suspend motion and laser output; wait for Paused confirmation. "
             "Separate Air Assist stays on; GRBL coolant follows firmware suspension."
             if pause.get("available") is True else
             "Pause requires the updated Pi companion, GRBL 1.1 with $32=1, and an active toolpath."
+        )
+
+        cancelling = pause.get("cancelling") is True
+        self.cancel_button.setText("Stopping job…" if cancelling else "Stop job")
+        self.cancel_button.setEnabled(
+            not self._busy and state.status_trusted and state.can_control
+            and self._machine_status.get("job_controls_supported") is True
+            and pause.get("cancel_available") is True and phase in {"running", "paused"}
+        )
+        self.cancel_button.setToolTip(
+            state.control_reason if not state.can_control else
+            "Update the Pi companion to enable normal Stop job."
+            if self._machine_status.get("job_controls_supported") is not True else
+            "Stop sending new work, finish buffered moves, then turn the laser off and lift to clearance. "
+            "Buffered moves can still emit laser output. Wait for Job stopped before editing and starting again."
         )
 
     def _render_status(self) -> None:
@@ -277,6 +302,10 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             connection_text = {
                 "paused": "JOB PAUSED", "pausing": "PAUSING JOB", "resuming": "RESUMING JOB",
             }.get(pause.get("state"), connection_text)
+        if state.status_trusted and pause.get("cancelling") is True:
+            connection_text = "STOPPING JOB"
+        elif state.status_trusted and (self._machine_status.get("job") or {}).get("phase") == "stopped":
+            connection_text = "JOB STOPPED"
         if state.status_trusted and not state.can_control:
             connection_description += " " + state.control_reason
         if state.submission_visible:
@@ -401,6 +430,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             self.connect_button,
             self.disconnect_button,
             self.pause_button,
+            self.cancel_button,
             self.stop_button,
         )
         for widget in widgets:
@@ -418,10 +448,11 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             self._layout.addWidget(self.mode_label, 0, 0, 1, 4)
             self._layout.addWidget(self.connection_label, 0, 4, 1, 4)
             self._layout.addWidget(self.motion_label, 0, 8, 1, 4)
-            self._layout.addWidget(self.connect_button, 1, 0, 1, 3)
-            self._layout.addWidget(self.disconnect_button, 1, 3, 1, 3)
-            self._layout.addWidget(self.pause_button, 1, 6, 1, 3)
-            self._layout.addWidget(self.stop_button, 1, 9, 1, 3)
+            self._layout.addWidget(self.connect_button, 1, 0, 1, 2)
+            self._layout.addWidget(self.disconnect_button, 1, 2, 1, 2)
+            self._layout.addWidget(self.pause_button, 1, 4, 1, 2)
+            self._layout.addWidget(self.cancel_button, 1, 6, 1, 2)
+            self._layout.addWidget(self.stop_button, 1, 8, 1, 4)
             return
 
         self._layout.addWidget(self.heading, 0, 0)
@@ -432,7 +463,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._layout.addWidget(self.connect_button, 0, 5)
         self._layout.addWidget(self.disconnect_button, 0, 6)
         self._layout.addWidget(self.pause_button, 0, 7)
-        self._layout.addWidget(self.stop_button, 0, 8)
+        self._layout.addWidget(self.cancel_button, 0, 8)
+        self._layout.addWidget(self.stop_button, 0, 9)
 
     def _set_compact(self, compact: bool) -> None:
         compact = bool(compact)
