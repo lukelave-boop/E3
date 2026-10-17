@@ -1,5 +1,32 @@
 # Current repository state
 
+## Pause retains the active Pi controller session (2026-10-17)
+
+A 0.8.19 operator screenshot reports Pause failing with "Cannot connect to the
+controller while Pi-owned job ... is active". The desktop worker called
+ensure_connected before every Pause/Resume; the remote facade issued Connect,
+which the Pi correctly rejects during running execution. Pause/Resume now skips
+that connection step while retaining the worker gate, operation/STOP generation,
+request-time boot/session/state checks and the job run/pause-revision binding.
+The Pi pause RPC and all controller, arming and laser behavior are unchanged.
+
+Seven real-worker regressions cover running/paused requests, rejected RPCs without
+retry, and queued requests invalidated by boot, controller session or state changes.
+All four valid-session regression variants fail against unchanged 0.8.19 code.
+Focused Windows offscreen/reconnect/pause/setup/focus coverage: 153 passed.
+Ruff, compileall and whitespace checks pass. Full Windows CI and a new combined
+frozen DEV TEST handoff are pending. Existing combined feature behavior is retained.
+
+Read-only checks using the selected 0.8.19 profile authenticate to the Pi and camera.
+Four Pi status requests succeed in 0.044-0.109 s and initially report no active job
+and a disconnected controller. Four camera statuses show advancing frames aged
+0.007-0.041 s; an actual 1920x1080 image arrives in 0.353 s. Logs show the service
+started at 10:29 MDT and a subsequent successful operator controller connection.
+These observations do not reproduce or resolve the reported intermittent camera
+loss or establish that the desktop live overlay is enabled. No service restart,
+connection request, pause/resume, settings change, motion or laser operation was
+performed by this investigation. Interactive/physical acceptance remains pending.
+
 ## Combined completed desktop fixes (2026-10-17)
 
 Completed probe-selection refresh, faster raster/vector generation, arc recovery/

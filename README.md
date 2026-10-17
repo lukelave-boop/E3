@@ -1,5 +1,8 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Pause and Resume retain the active job's controller session and do not issue a
+Connect request first. Session changes and stale pause revisions still reject.
+
 The combined desktop update includes probe selection refresh, faster toolpath
 generation, arc recovery/Fit arc, movable linked image/vector pairs and native
 Windows folder access in DEV TEST. See [verification](CURRENT_STATE.md).

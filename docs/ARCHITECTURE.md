@@ -1,5 +1,13 @@
 # Architecture
 
+## Active-job Pause/Resume dispatch
+
+Desktop workers keep Pause/Resume bound to the request-time controller authority,
+operation generation and serialized worker gate. They skip ensure_connected for
+these retained-session operations: remote Connect is a lifecycle request that the
+Pi rejects while running a job. The existing job/run/pause-revision RPC remains
+authoritative and is not retried on rejection or timeout.
+
 Daily probe selection temporarily requests corrected-frame refreshes through
 DesktopController without changing the Live overlay preference. Placement
 review is released by explicit selection; other review holds and single-flight

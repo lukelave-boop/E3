@@ -1,5 +1,8 @@
 # Roadmap
 
+- Implemented retained-session Pause/Resume dispatch after the 0.8.19 operator
+  report; focused software coverage passes, frozen/operator verification pending.
+
 ## Completed-feature integration (2026-10-17)
 
 Probe selection, generation speedups, arc tools, linked-pair manipulation and
