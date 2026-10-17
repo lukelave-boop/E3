@@ -26,8 +26,40 @@ rectangle gesture test. The complete editor module passes all 36 cases in an
 isolated process. The final shared-handle/rectangle cohort also passes 24 tests.
 Repository Ruff, application compileall and whitespace checks pass. Evidence:
 build/linked-pair-focused-final.xml and build/linked-pair-editor-isolated.xml.
-Hosted packaging and Windows compatibility results remain pending. No application
-launch, controller operation or physical verification is part of this repair.
+[Hosted packaging run 39027084738](https://github.com/lukelave-boop/E3/actions/runs/39027084738)
+passes on exact runtime revision `b45be6e022f7e99395f83d540b0ecf24b3341b92`.
+The canonical Python 3.12 bundle is **0.8.7**. Its frozen verifier checks all
+**198 application modules**, the actual entrypoint and **11 resources**, plus
+normal/private Qt folder equality and private E3 state paths. The downloaded
+EXE hash and every reported resource match; the local native-library guard passes.
+Target:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-b45be6e\E3.exe
+```
+
+EXE SHA-256: `d1d21aeb266333d97de6d5f3719c515b73a874211a2d01a74da4e33c055c38c7`.
+This uses the documented hosted-bundle handoff, preserving managed accounting,
+older bundles and both permanent launchers. Evidence is retained under
+build/linked-pair-handoff/. An offscreen paired-selection resize/rotation capture
+was visually inspected; its aligned preview and shared handles are correct.
+The synthetic source and images remain ignored under build/linked-pair-qa/.
+
+[Compatibility run 39027085053](https://github.com/lukelave-boop/E3/actions/runs/39027085053)
+passes on the exact runtime revision: Windows Python 3.12 desktop **9,055
+passed, 69 skipped**; Windows Python 3.10 core **7,448 passed, 186 skipped**;
+POSIX transport/recovery **1,502 passed, 2 skipped**; repository Ruff passes.
+The supported Windows compatibility gate is green; the local Python 3.14 Qt
+worker crash above remains recorded rather than claimed fixed.
+
+The canonical atomic setter selects **Arc tools - movable image/vector pairs**,
+version **0.8.7**, branch `codex/arc-recovery`, at the exact revision and EXE above.
+The previous pointer is backed up in build/linked-pair-handoff/; validated
+readback matches and the permanent launcher hash is unchanged. The operator
+should save and close the current test instance, then reopen the permanent
+**E3 DEV TEST** shortcut. No E3 EXE, hardware service or installer was launched
+by this verification; interactive operator acceptance and physical verification
+remain separate. The feature branch remains pending operator review.
 
 ## Arc DEV TEST native file browsing follow-up (2026-10-17)
 
@@ -89,7 +121,7 @@ C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-0ee7f
 
 EXE SHA-256: `a9828d0c8a44ade1bbcc566f953c7873ee23e37473aef0245639a329a4d1755f`.
 No installer was run; local managed accounting and all earlier artifacts remain
-unchanged. The canonical atomic setter now selects **Arc recovery and Fit arc -
+unchanged. That handoff selected **Arc recovery and Fit arc -
 Windows browsing fixed**, version **0.8.5**, branch `codex/arc-recovery`, at that
 exact runtime revision and EXE. Selection is for native file browsing and arc UI
 operator testing. The previous pointer is backed up in
