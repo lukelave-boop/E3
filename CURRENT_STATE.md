@@ -1,5 +1,25 @@
 # Current repository state
 
+## DEV TEST native file browsing correction (2026-10-16)
+
+The earlier Desktop junction only removed the missing-folder error. The
+launcher's redirected USERPROFILE and AppData still made the native file picker
+show an isolated home with incomplete Explorer navigation. Scope-aware startup
+now restores the launcher's validated original profile environment while keeping
+E3_USER_STATE_DIR, configuration, credentials and build identity private. Frozen
+startup performs this before importing the desktop and creating QApplication.
+Legacy executables retain their existing launcher isolation until rebuilt.
+
+Focused Windows Python 3.14 verification passes 89 tests with one expected
+Windows symlink-permission skip. This includes two independent Qt subprocesses
+confirming normal and DEV TEST Home/Desktop/Documents/Downloads/Pictures/AppData
+locations match, state/private-storage checks, malformed-profile rejection,
+launcher compatibility, packaged-entry ordering and startup/recovery checks.
+Scoped Ruff, application compileall and whitespace checks pass. Initial test
+setup lacked its temporary parent directory, and one new test used an incorrect
+helper name; both were corrected before the passing runs. No hardware behavior
+or machine values changed. Frozen build and interactive validation are pending.
+
 ## 0.8.0 integration candidate (2026-10-16)
 
 The confirmed three-chat scope combines update download progress `986525a` and
