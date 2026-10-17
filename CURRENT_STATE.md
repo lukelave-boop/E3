@@ -2,6 +2,42 @@
 
 ## Toolpath generation performance (2026-10-17, feature verification)
 
+**Operator handoff:** permanent `E3 DEV TEST` selects version **0.8.2**, exact
+implementation **5aaf7f02fb5881367bbb06a30abc919a61f088db**, from
+`.codex-worktrees/toolpath-speed/build/hosted-5aaf7f0/E3.exe` in the shared E3
+checkout. The canonical hosted Windows packaging run **39031824505** passed;
+the installer was extracted without installation. Its 196 archived application
+modules, entrypoint and ten resources match the commit. Bundled Qt 6.12 controls
+and the complete 726,664-move workspace/dialog canvases pass offscreen checks.
+The pointer was updated atomically with `packaging/set_dev_test_feature.py`;
+the normal installation and previous test bundle were preserved.
+
+Final archived-code benchmarks use isolated Windows CPython 3.12.10 with the
+bundle's dependencies, synthetic placement/travel authority, surface binding
+and desktop cancellation callbacks. Three runs each report:
+
+| Workload | Preparation median | Maximum |
+| --- | ---: | ---: |
+| Retained 726,664-move emblem | 6.174 s | 6.190 s |
+| Dense 811,800-move raster | 6.688 s | 6.834 s |
+| 3,136-contour / 228,928-move vector grid | 2.825 s | 2.848 s |
+
+All timestamp-normalized command hashes match the comparison programs.
+Preparation includes snapshot/preflight, exact generation/indexing, summary
+preparation and asset verification; drawing, upload and Start are separate.
+One further archived-code offscreen run takes 6.237 seconds to prepare the emblem
+and 2.930 seconds to build both complete preview canvases (9.168 seconds combined).
+This is not canonical EXE/full application startup, interactive or physical
+camera/controller/laser verification. Compatibility CI **39031820668** passes
+Windows 3.10, POSIX recovery and Ruff. Windows 3.12 reports **8,983 passed,
+69 skipped and one failure**: the unchanged secondary-channel isolation test
+exhausted its 20 ms simulated query deadline while establishing the unchanged
+10 ms quiet boundary. Both that test and all 146 controller-session tests pass
+locally. The test-only follow-up gives that isolation query 500 ms scheduling
+margin; it does not change production timing, quiet-boundary rejection or any
+application module in the selected 5aaf7f0 binary. Fresh full CI is required on
+the test/documentation follow-up. PR60 stays draft pending CI/operator acceptance.
+
 Isolated `codex/toolpath-speed` starts from released main a7d2dae and preserves
 all unrelated work in the shared setup-wizard checkout. Desktop raster coordinate
 operations, rectangle/polygon bounds checks and vector containment candidate
@@ -51,9 +87,8 @@ golden previews, numeric-cache/modal transitions, signed-zero/NaN extrema and
 geometry-reuse offset/rejection paths. Ruff, compilation and whitespace checks
 pass. Python 3.12.10 with packaged dependencies and desktop cancellation enabled
 takes 8.596 / 9.536 / 9.601 seconds for the 811,800-move dense raster, with the
-same timestamp-normalized program hash. Fresh full CI and final rebuilt-package
-verification remain pending; the first revision's CI is not evidence for the
-follow-up tree.
+same timestamp-normalized program hash. Final rebuilt-package verification is
+recorded above; the first revision's CI remains separate evidence.
 No interactive GUI, camera, controller or laser verification is claimed.
 Ignored evidence is under build/toolpath-speed in the isolated checkout.
 See docs/TOOLPATH_PERFORMANCE.md for reproducible measurement and scope.

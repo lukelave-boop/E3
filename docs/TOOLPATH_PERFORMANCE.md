@@ -79,4 +79,25 @@ and the hosted package's dependencies takes 8.596 / 9.536 / 9.601 seconds for th
 811,800-move dense raster, including desktop cancellation callbacks, surface
 binding, exact indexing and preview preparation. Its program hash remains
 `c728dd6f301d4d8ad6ca0b93dc020867bb01bceaa2c812d08736f661277ecdae`.
-This is a source/dependency check; the final rebuilt archive needs its own check.
+These source/dependency checks precede the final archive verification below.
+
+## Final archived-code measurements
+
+Canonical hosted build 0.8.2 / `5aaf7f02fb5881367bbb06a30abc919a61f088db`
+passes archive identity and bundled-Qt offscreen verification. Its archived code
+and bundled dependencies, executed with isolated Windows CPython 3.12.10,
+produce these three-run results with surface binding and desktop cancellation:
+
+| Workload | Median preparation | Maximum preparation |
+| --- | ---: | ---: |
+| Retained 726,664-move emblem | 6.174 s | 6.190 s |
+| Dense 811,800-move raster | 6.688 s | 6.834 s |
+| 3,136 contours / 228,928 moves | 2.825 s | 2.848 s |
+
+Command hashes match the comparison programs after removing only the timestamp.
+The baseline table above uses Python 3.14 source; do not interpret cross-runtime
+ratios as a controlled Python-version comparison. In a separate offscreen run,
+emblem preparation takes 6.237 seconds and both complete preview canvases take
+another 2.930 seconds: 9.168 seconds combined. This does not verify full EXE
+startup, real interactive timing, upload, Start or physical execution. Synthetic
+placement and travel authority remain the measurement boundary.

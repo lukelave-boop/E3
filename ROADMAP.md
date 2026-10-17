@@ -3,14 +3,14 @@
 ## Toolpath generation under ten seconds (2026-10-17)
 
 Implemented on `codex/toolpath-speed`: dense raster batching, vector containment
-filtering and one exact preview index after surface binding. The retained
-726,664-move emblem measures 9.071 seconds median over three offline Windows
-runs, versus 42.735 seconds before; a 3,136-contour vector job measures 3.143 seconds.
-Compatibility and frozen/interactive acceptance
-remain in progress; this is not a universal timing guarantee.
-Follow-up allocation and numeric-conversion changes bring the 811,800-move dense
-raster to 9.536 seconds median / 9.601 maximum over three Python 3.12 source runs
-with packaged dependencies and desktop cancellation callbacks enabled.
+filtering, reduced allocation/parsing costs and one exact index after surface
+binding. The verified 0.8.2 archive is selected in permanent E3 DEV TEST.
+Three-run archived-code medians are 6.174 seconds for the retained 726,664-move
+emblem, 6.688 seconds for an 811,800-move dense raster, and 2.825 seconds for a
+3,136-contour vector grid. Commands are preserved. Offscreen emblem preparation
+plus both preview canvases takes 9.168 seconds in a separate check. Final full
+CI and interactive/operator acceptance remain in progress; this is not a
+universal timing guarantee or physical verification.
 See [measurement scope](docs/TOOLPATH_PERFORMANCE.md) and CURRENT_STATE.md.
 
 ## 0.8.0 integration (2026-10-16)
