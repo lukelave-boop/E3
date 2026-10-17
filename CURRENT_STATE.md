@@ -24,8 +24,35 @@ Windows offscreen widget/mapping/lifecycle coverage passes 335 cases (330 in the
 combined cohort plus all 32 metadata/review tests after adding five cases).
 Both new refresh/expired-frame regression cases fail against the unchanged
 0.8.7 implementation. Repository Ruff, application compileall and whitespace
-checks pass. Frozen handoff and compatibility CI are pending; interactive
-operator acceptance and physical behavior remain unverified.
+checks pass. Interactive operator acceptance and physical behavior remain
+unverified; the existing feature branch remains pending operator review.
+
+[Compatibility CI 39031168799](https://github.com/lukelave-boop/E3/actions/runs/39031168799)
+passes on exact runtime revision `126a91ac71e101a76c70f95c349ede17cd9a46f7`:
+Windows Python 3.12 desktop 9,062 passed / 69 skipped; Windows Python 3.10 core
+7,448 passed / 186 skipped; POSIX 1,502 passed / 2 skipped; repository Ruff passes.
+[Canonical Windows packaging 39031170403](https://github.com/lukelave-boop/E3/actions/runs/39031170403)
+passes and produces version **0.8.9**. The frozen verifier checks 198 application
+modules, the entrypoint, 11 resources, normal/private Windows folder equality
+and private E3 storage. Downloaded EXE hash/resources and native-library guard
+pass locally. EXE SHA-256:
+`d794729b53749f96838b27549cc39e800de03c9b783645688b20f81ee1dbafd5`.
+
+The canonical atomic pointer setter now selects **Probe selection refresh -
+arc tools and movable pairs**, 0.8.9, codex/arc-recovery, at that exact revision:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-126a91a\E3.exe
+```
+
+Save work, close the old test instance, and reopen the permanent **E3 DEV TEST**
+launcher. Pointer readback matches and its previous contents are backed up in
+ignored build/probe-fix. The permanent launcher hash is unchanged. No application
+or installer was launched; normal E3, Pi software and hardware state were unchanged.
+Read-only Pi diagnostics also show zero node/camera-forwarder service restarts,
+no recent USB disconnect entries, and no throttling flags. The intermittent
+camera-dropout cause remains unresolved. Evidence is under build/probe-fix.
+
 
 ## Movable linked engraving image/vector pairs (2026-10-17)
 
