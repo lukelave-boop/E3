@@ -1,7 +1,8 @@
 # Roadmap
 
 - Implemented retained-session Pause/Resume dispatch after the 0.8.19 operator
-  report; focused software coverage passes, frozen/operator verification pending.
+  report; merged as PR62 and selected as DEV TEST 0.8.22. Windows CI and frozen
+  checks pass; physical Pause/Resume acceptance remains pending.
 
 ## Completed-feature integration (2026-10-17)
 

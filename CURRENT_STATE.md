@@ -14,8 +14,11 @@ Seven real-worker regressions cover running/paused requests, rejected RPCs witho
 retry, and queued requests invalidated by boot, controller session or state changes.
 All four valid-session regression variants fail against unchanged 0.8.19 code.
 Focused Windows offscreen/reconnect/pause/setup/focus coverage: 153 passed.
-Ruff, compileall and whitespace checks pass. Full Windows CI and a new combined
-frozen DEV TEST handoff are pending. Existing combined feature behavior is retained.
+Ruff, compileall and whitespace checks pass. The fix is merged through
+[PR62](https://github.com/lukelave-boop/E3/pull/62) at
+`2f63bbb869a75cc110019f6dee73c96f2163e328`; its tree exactly matches tested candidate
+`cc13e8c7ca9db42e59afaf2449f03c067d77d925`. The completed branch was deleted locally
+and remotely. Existing combined feature behavior is retained.
 
 Read-only checks using the selected 0.8.19 profile authenticate to the Pi and camera.
 Four Pi status requests succeed in 0.044-0.109 s and initially report no active job
@@ -25,7 +28,28 @@ started at 10:29 MDT and a subsequent successful operator controller connection.
 These observations do not reproduce or resolve the reported intermittent camera
 loss or establish that the desktop live overlay is enabled. No service restart,
 connection request, pause/resume, settings change, motion or laser operation was
-performed by this investigation. Interactive/physical acceptance remains pending.
+performed by this investigation. The operator subsequently confirmed that a real
+job was running and that the camera feed was back. Interactive/physical Pause/
+Resume acceptance remains pending; the running application and job were untouched.
+
+[Compatibility CI 39049981560](https://github.com/lukelave-boop/E3/actions/runs/39049981560)
+passes: Windows Python 3.12 desktop 9,132 passed / 69 skipped; Windows Python 3.10
+core 7,509 passed / 186 skipped; POSIX recovery 1,502 passed / 2 skipped; Ruff passes.
+[Canonical packaging 39049981908](https://github.com/lukelave-boop/E3/actions/runs/39049981908)
+produces **0.8.22** at `cc13e8c7ca9db42e59afaf2449f03c067d77d925`. The frozen verifier
+checks 199 application modules, the entrypoint, 11 resources and native/private
+profile behavior. Downloaded hashes/resources/native guards and bundled Qt 6.12.0
+offscreen controls pass. EXE SHA-256:
+`3875843dbd5fd5ca8e45197edda9e8d952374fa012ede01e44ec52167adbaf61`.
+
+The permanent E3 DEV TEST pointer is atomically selected and validated: version
+0.8.22, branch main, revision `cc13e8c7ca9db42e59afaf2449f03c067d77d925`, target
+`C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-cc13e8c\E3.exe`.
+This supersedes the 0.8.19 selection below. The previous pointer and verification
+receipts remain under ignored build/pi-connection-recovery. The permanent launcher
+hash is unchanged (`2d6102c3aa1c52b11890bd4c64fb15143daa20a39d42c0d0a85b847401a605b9`).
+The operator should finish the current job before reopening E3 DEV TEST. Normal
+E3, hardware services/configuration and unrelated unfinished edits remain untouched.
 
 ## Combined completed desktop fixes (2026-10-17)
 
