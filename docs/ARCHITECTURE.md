@@ -1,5 +1,17 @@
 # Architecture
 
+Normal desktop Stop job is a separate, session/run/revision-bound job.cancel RPC,
+negotiated by pi-job-controls-v1. It ends new source-command admission under the
+existing pause/write locks. The runner drains every accepted FIFO ACK, preserves
+receive ownership, then uses the normal M5/auxiliary-off/barrier/clearance checks.
+A successful cancellation persists stopped, never complete or a success receipt;
+configuration changes require a newly generated and authorized Start. An explicit
+paused-cancel confirmation is required before cycle-start drains the retained
+tail. STOP/fault authority takes precedence and no ordinary cancellation clears a
+fault. The browser's existing STOP path is unchanged; shared runner regressions
+cover both pipelines. Active-job Connect is control-lease reattachment only when
+the exact supported job/session remains active; it sends no serial command.
+
 ## Active-job Pause/Resume dispatch
 
 Desktop workers keep Pause/Resume bound to the request-time controller authority,

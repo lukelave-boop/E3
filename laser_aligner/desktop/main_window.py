@@ -1367,6 +1367,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.controller.disconnect_machine
         )
         self.runtime_strip.pauseRequested.connect(self.controller.pause_resume)
+        self.runtime_strip.cancelRequested.connect(self._cancel_running_job)
         self.runtime_strip.stopRequested.connect(self.controller.emergency_stop)
         self.actions["generate"].changed.connect(self._sync_generate_controls)
         self._sync_generate_controls()
@@ -1414,6 +1415,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.stopInitiated.connect(self._software_stop_started)
         self.controller.jobStarted.connect(self._job_started)
         self.controller.tasksDrained.connect(self._background_tasks_drained)
+
+    def _cancel_running_job(self) -> None:
+        pause = dict(self.controller.runtime.context.machine.status().get("job_pause") or {})
+        finish_buffered = pause.get("state") == "paused"
+        if finish_buffered:
+            answer = QtWidgets.QMessageBox.question(
+                self, "Finish buffered moves and stop?",
+                "This job is paused. Normal Stop resumes only the moves already buffered "
+                "in the controller, including their laser output, then turns output off "
+                "and lifts to clearance. No more job lines will be sent.\n\n"
+                "Keep the workpiece and axes stationary. Finish those buffered moves and stop?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        self.controller.cancel_job(expected_pause=pause, finish_buffered=finish_buffered)
 
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:
         self.controller.set_workspace_coordinate_space(

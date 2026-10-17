@@ -1,5 +1,33 @@
 # Current repository state
 
+## Normal job controls and running-job reattachment (2026-10-17)
+
+The operator reported Pause was not clickable. Read-only authenticated Pi status
+showed JOB_RUNNING, job_pause.available=true and no control owner. Desktop
+reattachment admitted only paused jobs, so an unowned running job had no route
+back to Pause. The new Take control action reattaches the existing running or
+paused job without reconnecting its serial transport; another owner's lease and
+boot/session checks remain authoritative.
+
+A separate Stop job action ends command admission, drains the accepted controller
+tail, acknowledges M5/auxiliary OFF and the motion barrier, then verifies the
+existing focus-clearance lift. Successful cancellation reports stopped without
+a success receipt, reset, emergency protocol or automatic Home. It retains only
+verified position/focus authority; a fresh Start still validates and arms the
+edited program. Paused cancellation requires explicit confirmation to resume the
+buffered tail, which may emit output. Faults and the existing red STOP still
+revoke authority. Both features require the pi-job-controls-v1 companion.
+
+Implemented in isolated codex/job-controls from current main. Initial Windows
+fake-controller/offscreen coverage passes 68 existing pause/stream/widget cases,
+14 new cancellation cases, 77 authenticated ownership/UI cases and two measured
+focus cancellation/cleanup-failure cases. Broader focused checks, compatibility
+CI, frozen packaging and Pi deployment remain pending. The live job was only
+observed, never paused, stopped or changed. Exact installed Pi sources were read
+and a four-file patch staged; cooling and local restrictions are preserved.
+No physical pause, cancellation, restart or laser behavior is qualified by these
+automated checks. Existing shared-checkout edits remain untouched.
+
 ## Pause retains the active Pi controller session (2026-10-17)
 
 A 0.8.19 operator screenshot reports Pause failing with "Cannot connect to the

@@ -3193,6 +3193,20 @@ class DesktopController(QtCore.QObject):
             ensure_connection=False,
         )
 
+    def cancel_job(self, *, expected_pause: dict[str, Any], finish_buffered: bool = False) -> None:
+        machine = self.runtime.context.machine
+        self._run(
+            lambda: machine.request_cancel(
+                expected_run_id=expected_pause.get("run_id"),
+                expected_pause_revision=expected_pause.get("revision"),
+                finish_buffered=finish_buffered,
+            ),
+            on_success=lambda _result: self._machine_changed(
+                "Stopping job after buffered moves; wait for Job stopped before editing"
+            ),
+            label="Stop job", requires_controller=True, ensure_connection=False,
+        )
+
     def emergency_stop(self) -> None:
         self.stopInitiated.emit()
         try:

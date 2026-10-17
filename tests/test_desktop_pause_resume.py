@@ -58,3 +58,42 @@ def test_desktop_handler_sends_bound_request(phase, resume):
     )
     DesktopController.pause_resume(controller)
     assert requests == [{"resume": resume, "expected_run_id": 7, "expected_pause_revision": 3}]
+
+@pytest.mark.parametrize("phase", ["running", "paused", "pausing", "resuming"])
+def test_unowned_active_job_exposes_take_control(phase):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    strip = RuntimeSafetyStrip()
+    status = {
+        "backend": "serial", "port": "e3bridge://127.0.0.1:8765", "remote": True,
+        "hardware_enabled": True, "allow_motion": True, "connected": True,
+        "controller_state": "JOB_RUNNING", "job": {"running": True},
+        "control_ownership_supported": True, "control_owned": False,
+        "control_in_use": False, "job_controls_supported": True,
+        "job_pause": {"available": True, "state": phase, "cancel_available": True},
+    }
+    strip.set_status(status)
+    assert strip.connect_button.isEnabled()
+    assert strip.connect_button.text() == "Take control"
+    assert not strip.pause_button.isEnabled()
+    assert "Connect" in strip.pause_button.toolTip()
+    strip.set_status({**status, "control_owned": True})
+    assert strip.pause_button.isEnabled() == (phase in {"running", "paused"})
+    assert strip.cancel_button.isEnabled() == (phase in {"running", "paused"})
+    strip.set_status({**status, "control_in_use": True})
+    assert not strip.connect_button.isEnabled()
+    strip.close()
+    app.processEvents()
+
+
+def test_normal_stop_handler_retains_identity_and_never_connects_or_emergency_stops():
+    requests = []
+    options = []
+    machine = SimpleNamespace(request_cancel=lambda **kwargs: requests.append(kwargs))
+    def run(callback, **kwargs):
+        options.append(kwargs)
+        callback()
+    controller = SimpleNamespace(runtime=SimpleNamespace(context=SimpleNamespace(machine=machine)), _run=run)
+    DesktopController.cancel_job(controller, expected_pause={"run_id": 7, "revision": 3}, finish_buffered=True)
+    assert requests == [{"expected_run_id": 7, "expected_pause_revision": 3, "finish_buffered": True}]
+    assert options[0]["requires_controller"] is True
+    assert options[0]["ensure_connection"] is False

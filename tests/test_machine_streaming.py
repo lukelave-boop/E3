@@ -588,3 +588,49 @@ def test_isolated_canonical_move_retains_ordinary_transaction_path(stream_machin
         assert _finish(machine, worker)["error"] is None
         assert stream.call_count == 0
     assert transport.motion_lines == [move]
+
+@pytest.mark.parametrize("fail_cleanup", [False, True])
+def test_normal_cancel_preserves_measured_focus_only_after_verified_clearance(focus_machine, monkeypatch, fail_cleanup):
+    machine, focus_state, primary = focus_machine
+    plan = automatic(machine, focus_state)["job_focus"]
+    stream = machine._stream_running_job_moves
+    events = []
+    for device, label in ((primary, "xy"), (focus_state.serial, "z")):
+        original = device.write_line
+        def record(line, original=original, label=label):
+            events.append((label, line))
+            return original(line)
+        monkeypatch.setattr(device, "write_line", record)
+    # The focus fixture models GRBL/Z exchanges, not the separate pause handshake.
+    monkeypatch.setattr(machine, "_pause_supported", lambda context: context is not None)
+    cancelled = []
+    def cancel_once(context, *args, **kwargs):
+        if not cancelled:
+            cancelled.append(True)
+            machine.request_cancel(expected_run_id=context.identity,
+                                   expected_pause_revision=context.pause.revision)
+            if fail_cleanup:
+                monkeypatch.setattr(machine, "_move_job_focus",
+                                    lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("lift failed")))
+        return stream(context, *args, **kwargs)
+    monkeypatch.setattr(machine, "_stream_running_job_moves", cancel_once)
+    text = "\n".join(["G21", "G90", "M5", "G0 X100 Y100 F1000", "M4 S0",
+                      "G1 X101 Y100 F500 S100", "G1 X102 Y100 F500 S0", "M5"])
+    _, worker = _start(machine, text)
+    result = _finish(machine, worker)
+    if fail_cleanup:
+        assert result["phase"] == "failed"
+        assert machine._laser_focus.job_plan is None
+        assert not machine._coordinate_reference_ready
+        return
+    assert result["phase"] == "stopped", result
+    assert machine._laser_focus.job_plan is not None
+    assert machine._laser_focus.job_plan["xy"] == [100.0, 100.0]
+    assert focus_state.serial.z == pytest.approx(plan["clearance_z_mm"])
+    lift = max(index for index, event in enumerate(events) if event == ("z", "G1 Z30.000 F1200"))
+    assert ("xy", "M5") in events[:lift]
+    assert ("xy", "G4 P0.01") in events[:lift]
+    assert not any(line == "M112" for _kind, line in events)
+    assert not any(line in {"$H", "G28"} for _kind, line in events)
+    _, next_worker = _start(machine, text.replace("F500", "F400"))
+    assert _finish(machine, next_worker)["phase"] == "complete"

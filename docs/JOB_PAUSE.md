@@ -1,5 +1,36 @@
 # Job Pause / Resume
 
+## Taking control and stopping to edit settings
+
+If the Pi keeps running after a desktop detaches or its control lease expires,
+click **Take control**. With pi-job-controls-v1 this reattaches to the existing
+running or paused job without reconnecting/resetting its serial controller. It
+cannot take another desktop's live lease. Pause's tooltip explains ownership,
+busy and stale-status blocks.
+
+Use **Stop job** for routine edits. It stops sending new program lines, finishes
+only the moves already buffered by the controller, acknowledges laser/auxiliary
+OFF and motion completion, and performs the guarded lift to the existing measured
+clearance. These buffered moves can still emit laser output; stopping can take
+as long as those accepted moves. **STOPPING JOB** is not a stopped confirmation.
+No Home or emergency reset is requested. Wait for **JOB STOPPED**, change the
+settings, regenerate/review, then Start from the beginning with fresh authorization.
+The cancelled run has no successful-completion receipt. Focus/position are retained
+only after the existing checks succeed. A failure instead revokes authority.
+
+For an already paused job, normal Stop first asks **Finish buffered moves and
+stop?**. Choosing Yes authorizes that remaining buffered motion and its original
+laser output; No leaves the job paused. No new toolpath is sent. Resume and normal
+Stop are unavailable during transition, focus, Home or final cleanup. The red
+software STOP remains available independently and retains its reset/recovery
+behavior. For an actual emergency use the physical emergency controls.
+
+Both desktop and Pi need this update; older Pi companions leave normal Stop
+unavailable. Test running-job reattachment, normal stopping during a dense raster,
+paused-stop confirmation/refusal, changed-setting restart, and emergency STOP
+during normal cancellation. Record the exact builds/controller/firmware/settings;
+automated fake-controller tests do not establish physical behavior.
+
 Desktop Pause/Resume uses the existing job session without a preceding Connect
 request. A changed controller session, boot or queued state invalidates the request;
 the Pi also validates the run and pause revision. Rejection never causes a retry

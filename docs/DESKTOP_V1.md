@@ -1,5 +1,12 @@
 # E3 native desktop v1 foundation
 
+The runtime strip now separates **Stop job** from the red software STOP. After
+normal Stop, wait for **JOB STOPPED**, change settings, regenerate, review and
+Start a fresh job. Buffered moves finish before output-off; a paused job asks
+before resuming that tail. Measured focus is retained only after verified
+clearance. **Take control** recovers controls for an unowned running/paused Pi
+job without resetting it. See [job controls](JOB_PAUSE.md).
+
 ## Fit an arc
 
 Select one unlocked vector path or polygon, then open **Shape → Fit arc…**.

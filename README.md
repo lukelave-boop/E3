@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The runtime strip offers **Take control** for an unowned running Pi job, then
+**Pause / Resume** and a separate **Stop job**. Normal Stop finishes buffered
+moves before output-off and verified clearance; wait for **JOB STOPPED**, edit,
+regenerate and Start again. A paused stop asks before resuming its buffered tail.
+The red software STOP remains separate. See [job controls](docs/JOB_PAUSE.md).
+
 Pause and Resume retain the active job's controller session and do not issue a
 Connect request first. Session changes and stale pause revisions still reject.
 
