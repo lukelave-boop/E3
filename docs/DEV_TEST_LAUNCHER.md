@@ -134,6 +134,11 @@ compatible with older frozen builds, which retain their redirected profile until
 rebuilt with this startup correction. Creating links inside the redirected home
 does not repair the native browsing experience.
 
+When local managed build capacity is unavailable, manually dispatched Windows
+packaging validation also retains the exact portable bundle for seven days.
+It can be downloaded for DEV TEST selection without running the installer or
+replacing normal E3. Its adjacent build metadata still must match the pointer.
+
 An older build still requires settings it understands; the launcher does not discard unknown safety
 settings or downgrade a newer schema. Recovery of an already affected build
 uses a verified compatible backup after preserving the newer state separately.

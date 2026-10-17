@@ -86,11 +86,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows package identity verification failed.' }
           "installer=$($build.Installer)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "metadata=$metadata" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "bundle=$(Split-Path -Parent $build.Executable)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@v7
         with:
           name: e3-windows-installer-${{ github.sha }}
           path: |
             ${{ steps.package.outputs.installer }}
             ${{ steps.package.outputs.metadata }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain portable bundle for explicit feature-test builds
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: e3-windows-bundle-${{ github.sha }}
+          path: ${{ steps.package.outputs.bundle }}
           if-no-files-found: error
           retention-days: 7
