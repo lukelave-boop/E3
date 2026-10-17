@@ -6,9 +6,11 @@ The operator's screenshot confirms canonical arc build `8627ac0` starts, but its
 native import dialog resolves Desktop inside the launcher's redirected profile.
 Its exact private home lacked Desktop. A local directory junction now maps only
 that build's home/Desktop to the real Windows Desktop; both directory listings
-match. This restores that location without restarting the running application or
-changing its private configuration. Complete native Explorer navigation still
-requires the source correction below; interactive import success is unverified.
+match. The operator subsequently reopened v0.8.0 and reports the error is gone;
+the follow-up screenshot still shows the private home with only AppData and the
+Desktop link. That workaround does not restore normal Explorer navigation. The
+replacement below supplies the profile correction; interactive import success
+in the replacement remains unverified.
 
 The existing `codex/dev-test-file-dialog` history (`6070780`, `ca95eba`) is
 integrated into `codex/arc-recovery`. It restores the validated original Windows
@@ -18,18 +20,18 @@ The permanent launcher, normal E3 and running application are unchanged.
 
 A new local build fails read-only admission: 6,723,197,847 measured bytes plus a
 2,147,483,648-byte request exceeds the fixed 8,589,934,592-byte managed cap.
-No reservation was created and no artifact or accounting was removed. Use the
-documented manually dispatched hosted Windows packaging workflow and its exact
-portable bundle; canonical build, identity and frozen-profile verification must
-pass before changing the feature pointer.
+No reservation was created and no artifact or accounting was removed. The
+documented manually dispatched hosted Windows packaging workflow produced the
+exact portable bundle below. Canonical build, identity and frozen-profile
+verification passed before changing the feature pointer.
 
 Combined focused Windows Python 3.14 verification passes **170 tests**, with one
 expected Windows symlink-permission skip. Coverage includes state scope, launcher,
 packaged-entry ordering, preferences, deployment, startup/recovery, saved raster
 settings, arc core/dialog and downstream geometry. Repository Ruff, application
 compileall and whitespace checks pass. Independent startup/private-storage review
-found no blocking issues. Exact revised frozen-build verification is pending.
-Ignored evidence: build/arc-browsing-fix/ and build/arc-desktop-alias-repair.json.
+found no blocking issues. Ignored evidence: build/arc-browsing-fix/ and
+build/arc-desktop-alias-repair.json.
 
 Packaging now compares frozen application code/resources to the exact checkout
 and runs normal/DEV TEST profile probes using archived startup code and bundled
@@ -39,8 +41,71 @@ isolated archived-code probes and fails specifically because Desktop/Documents/
 Downloads/Pictures still resolve inside the redirected profile. Private E3 paths
 and build identity remain intact in that control. This catches the reported bug
 without starting the EXE, constructing services or writing real settings.
-Evidence: build/frozen-profile-old-control.json. Hosted corrected-build results
-and interactive file-picker acceptance remain pending.
+Evidence: build/frozen-profile-old-control.json.
+
+[Hosted Windows packaging run 39024233626](https://github.com/lukelave-boop/E3/actions/runs/39024233626)
+passes on exact runtime revision `0ee7fab141decb0bc5f173e95108421aadf916c0`.
+The canonical Python 3.12 frozen bundle is version **0.8.5**. Its archived
+**198 application modules**, actual entrypoint and **11 packaged resources**
+match source. Archived startup code plus bundled QtCore passes normal/DEV TEST
+Home, Desktop, Documents, Downloads and Pictures equality while all E3 storage
+and the disabled-updater build identity remain private. This starts no EXE,
+application services or hardware connection. The downloaded EXE SHA-256 matches
+the hosted report, packaged resources match source locally, and the local native
+library guard passes. The exact downloaded bundle is retained at:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-0ee7fab\E3.exe
+```
+
+EXE SHA-256: `a9828d0c8a44ade1bbcc566f953c7873ee23e37473aef0245639a329a4d1755f`.
+No installer was run; local managed accounting and all earlier artifacts remain
+unchanged. The canonical atomic setter now selects **Arc recovery and Fit arc -
+Windows browsing fixed**, version **0.8.5**, branch `codex/arc-recovery`, at that
+exact runtime revision and EXE. Selection is for native file browsing and arc UI
+operator testing. The previous pointer is backed up in
+build/arc-browsing-fix/previous-feature-pointer.json; pointer readback and the
+unchanged permanent launcher hash are verified in selection.json. No application
+was launched or closed. Save and close the old test application, then reopen the
+permanent **E3 DEV TEST** launcher; its first 0.8.5 start copies the prior private
+0.8.0 test state using the existing newer-version snapshot rule.
+
+[Compatibility CI run 39024231796](https://github.com/lukelave-boop/E3/actions/runs/39024231796)
+passes Windows Python 3.10 (**7,439 passed, 186 skipped**), POSIX transport/session
+recovery (**1,502 passed, 2 skipped**) and repository Ruff. The first Python 3.12
+attempt has **9,038 passed, 69 skipped and one failed** assertion in the unchanged
+millisecond duplicate-ack test. The simulated command is rejected with a missing
+quiet-boundary error and the log records session quarantine; the test expects the
+later duplicate-response rejection text. Its 20 ms transaction budget includes a
+10 ms quiet boundary, so scheduling can choose the earlier rejection. The final
+close assertion was not reached in that run. Relevant tests and controller paths
+are unchanged from both pre-feature main and the previous arc build. A focused
+local check passes both duplicate tests. The exact-revision second attempt passes
+that test but reports **9,038 passed, 69 skipped and one failed** assertion in
+`test_manual_home_failed_lift_never_homes[stop]`. Its expected error and no-`$H`
+assertions pass; `requires_clearance` is false. The test starts STOP on a daemon
+thread while the fake completes its lift immediately. Verified clearance can
+therefore finish before STOP latches; the later primary M5 is then rejected for
+its retired session, matching the CI log. All machine code, relevant fixtures and
+tests are unchanged from both `a7d2dae` and `8627ac0`. The two existing focused
+modules cover **275 cases**: 272 pass initially, and three loopback-only cases
+blocked by sandbox socket permissions pass on the narrowly elevated rerun. The
+Home acceptance/three rejection cases and existing synchronized pending-focus
+STOP check pass independently (**5 tests**). An ignored exact-lift diagnostic
+holds the Z30 acknowledgement, requests STOP after the write-entry barrier, and
+passes **5 cases** confirming an error, no Home command, M112, retained clearance
+and cleared surface. Both duplicate-response checks pass again (**2 tests**).
+These are simulator/automated checks on local Windows Python 3.14.4. No tracked
+test or controller guard was changed. Both CI attempts and all focused JUnit
+reports remain under build/arc-browsing-fix/; full Python 3.12 compatibility CI
+is not green. The selection receipt records that failure explicitly. This limited
+UI feature-test handoff does not claim release readiness or clear the compatibility
+failure; main integration remains deferred while operator review and the existing
+timing-sensitive test issues are outstanding.
+
+Interactive file-picker acceptance and real camera/controller/laser or physical
+accuracy verification remain pending; automated/frozen Qt checks do not establish
+them.
 
 ## Arc recovery and Fit arc implementation (2026-10-16)
 
@@ -97,7 +162,7 @@ the existing lock. All build files, other accounting and the fixed eight-GiB cap
 were retained. The canonical builder subsequently passed admission and completion;
 its seven generated outputs are recorded and its reservation is released.
 
-The permanent **E3 DEV TEST** launcher now selects **Arc recovery and Fit arc**,
+The initial **E3 DEV TEST** handoff selected **Arc recovery and Fit arc**,
 version **0.8.0**, branch `codex/arc-recovery`, exact frozen runtime revision
 `8627ac0a6219724b47e20932f853f7753e1aa08a`. Target:
 
