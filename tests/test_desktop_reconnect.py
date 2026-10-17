@@ -638,3 +638,91 @@ def test_status_projection_rejects_lower_same_boot_revision_and_accepts_new_boot
         "boot-a",
         "boot-b",
     ]
+
+
+@pytest.mark.parametrize("phase", ["running", "paused"])
+@pytest.mark.parametrize("reject_request", [False, True])
+def test_pause_worker_uses_retained_session_without_connect(
+    qt_application, monkeypatch, phase, reject_request,
+):
+    machine = _Machine()
+    requests = []
+    status = {
+        "connected": True, "controller_state": "JOB_RUNNING",
+        "controller_session_generation": 4, "controller_state_revision": 12,
+        "node_boot_id": "original-boot", "job": {"running": True},
+        "job_pause": {"available": True, "state": phase, "run_id": 7, "revision": 3},
+    }
+    monkeypatch.setattr(machine, "status", lambda: dict(status))
+
+    def forbidden_connect():
+        machine.calls.append("connect")
+        raise RuntimeError("Cannot connect to the controller while Pi-owned job is active")
+
+    def request_pause(**kwargs):
+        requests.append(kwargs)
+        if reject_request:
+            raise RuntimeError("Pause revision changed")
+        return dict(status)
+
+    monkeypatch.setattr(machine, "ensure_connected", forbidden_connect, raising=False)
+    monkeypatch.setattr(machine, "request_pause", request_pause, raising=False)
+    controller = _controller(machine)
+    errors, notices = [], []
+    controller.errorOccurred.connect(errors.append)
+    controller.notice.connect(notices.append)
+    controller.pause_resume()
+    _wait_for_tasks(qt_application, controller)
+
+    assert machine.calls == []
+    assert machine.scoped_generations == [7]
+    assert requests == [{"resume": phase == "paused", "expected_run_id": 7,
+                         "expected_pause_revision": 3}]
+    if reject_request:
+        assert len(errors) == 1 and "Pause revision changed" in errors[0]
+        assert notices == []
+    else:
+        assert errors == []
+        assert notices == ["Resume requested" if phase == "paused" else "Pause requested"]
+
+
+@pytest.mark.parametrize("field,replacement", [
+    ("controller_session_generation", 5),
+    ("controller_state_revision", 13),
+    ("node_boot_id", "restarted-boot"),
+])
+def test_queued_pause_rejects_changed_authority_without_connect(
+    qt_application, monkeypatch, field, replacement,
+):
+    machine = _Machine()
+    entered, release = threading.Event(), threading.Event()
+    status = {
+        "connected": True, "controller_state": "JOB_RUNNING",
+        "controller_session_generation": 4, "controller_state_revision": 12,
+        "node_boot_id": "original-boot", "job": {"running": True},
+        "job_pause": {"available": True, "state": "paused", "run_id": 7, "revision": 3},
+    }
+    monkeypatch.setattr(machine, "status", lambda: dict(status))
+
+    @contextmanager
+    def delayed_scope(generation):
+        assert generation == machine.generation
+        entered.set()
+        assert release.wait(3.0)
+        yield
+
+    monkeypatch.setattr(machine, "operation_scope", delayed_scope)
+    monkeypatch.setattr(machine, "ensure_connected", lambda: machine.calls.append("connect"), raising=False)
+    monkeypatch.setattr(machine, "request_pause", lambda **_kw: machine.calls.append("pause"), raising=False)
+    controller = _controller(machine)
+    notices = []
+    controller.notice.connect(notices.append)
+    controller.pause_resume()
+    try:
+        assert entered.wait(3.0)
+        status[field] = replacement
+    finally:
+        release.set()
+    _wait_for_tasks(qt_application, controller)
+    assert machine.calls == []
+    assert notices == []

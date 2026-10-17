@@ -1,5 +1,8 @@
 # Changelog
 
+- Fix desktop Pause/Resume incorrectly attempting Connect during a running
+  Pi-owned job; retain queued-session and job-revision guards.
+
 ## Combined desktop update (2026-10-17)
 
 - Combine probe refresh, raster/vector preparation speedups, arc tools, movable

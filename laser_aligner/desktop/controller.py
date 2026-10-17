@@ -660,6 +660,7 @@ class DesktopController(QtCore.QObject):
         label: str = "Operation",
         show_busy: bool = True,
         requires_controller: bool = False,
+        ensure_connection: bool = True,
         machine_bound: bool = False,
         serialize_controller: bool | None = None,
     ) -> FunctionTask:
@@ -765,7 +766,7 @@ class DesktopController(QtCore.QObject):
                     # Recheck the request-time session AFTER waiting, before
                     # any connect, serial write or network operation.
                     require_initial_machine_authority()
-                    if requires_controller:
+                    if requires_controller and ensure_connection:
                         machine.ensure_connected()
                         # A remote idempotent Connect can observe or adopt a
                         # session recovered after this task was queued. Never
@@ -3187,6 +3188,9 @@ class DesktopController(QtCore.QObject):
             on_success=lambda _result: self._machine_changed("Resume requested" if resume else "Pause requested"),
             label="Resume job" if resume else "Pause job",
             requires_controller=True,
+            # Keep request-time session/STOP guards, but operate on the retained
+            # job session. Connect is forbidden while the Pi is running a job.
+            ensure_connection=False,
         )
 
     def emergency_stop(self) -> None:

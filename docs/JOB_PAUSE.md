@@ -1,5 +1,10 @@
 # Job Pause / Resume
 
+Desktop Pause/Resume uses the existing job session without a preceding Connect
+request. A changed controller session, boot or queued state invalidates the request;
+the Pi also validates the run and pause revision. Rejection never causes a retry
+or reconnection. This fixes the active-job Connect error observed in build 0.8.19.
+
 During a supported toolpath, click **Pause**, wait for **JOB PAUSED**, then click
 **Resume** to continue from the controller's retained queue. No job lines are
 rewound, re-uploaded or skipped. Deceleration takes time; **Pausing…** is not a
