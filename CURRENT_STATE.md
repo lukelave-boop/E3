@@ -25,6 +25,14 @@ focus cancellation/cleanup-failure cases. Broader focused checks, compatibility
 CI, frozen packaging and Pi deployment remain pending. The live job was only
 observed, never paused, stopped or changed. Exact installed Pi sources were read
 and a four-file patch staged; cooling and local restrictions are preserved.
+Expanded local Windows verification: 746 focused machine/runner/focus/remote/desktop
+cases pass with four workers. A separate 77-case ownership/loopback cohort and
+28 final cancellation/widget checks pass, including nonmodal paused confirmation
+and emergency STOP overtaking a pending cancel/resume write. All 26 runtime-strip
+layout/action tests pass with the new control included. Ruff/compileall/diff checks
+pass. Initial loopback attempts were blocked by sandbox sockets; authorized
+unsandboxed fake-controller runs passed. Compatibility and frozen checks continue.
+
 No physical pause, cancellation, restart or laser behavior is qualified by these
 automated checks. Existing shared-checkout edits remain untouched.
 

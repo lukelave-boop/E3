@@ -82,7 +82,7 @@ JOB_ACTIONS = frozenset(
         ACTION_JOB_RESULT,
         ACTION_JOB_STOP,
         ACTION_JOB_CANCEL,
-    ACTION_JOB_PAUSE,
+        ACTION_JOB_PAUSE,
         ACTION_JOB_RESUME,
         ACTION_JOB_DELETE,
     }

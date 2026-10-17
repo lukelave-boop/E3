@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.runtime_strip import RuntimeSafetyStrip
@@ -97,3 +97,34 @@ def test_normal_stop_handler_retains_identity_and_never_connects_or_emergency_st
     assert requests == [{"expected_run_id": 7, "expected_pause_revision": 3, "finish_buffered": True}]
     assert options[0]["requires_controller"] is True
     assert options[0]["ensure_connection"] is False
+
+@pytest.mark.parametrize("answer", [QtWidgets.QMessageBox.StandardButton.Yes, QtWidgets.QMessageBox.StandardButton.No])
+def test_paused_stop_confirmation_is_nonmodal_and_keeps_original_job(answer):
+    from laser_aligner.desktop.main_window import E3MainWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = QtWidgets.QMainWindow()
+    requested = []
+    status = {"job_pause": {"state": "paused", "run_id": 5, "revision": 2}}
+    window.controller = SimpleNamespace(
+        runtime=SimpleNamespace(context=SimpleNamespace(machine=SimpleNamespace(status=lambda: status))),
+        cancel_job=lambda **kwargs: requested.append(kwargs),
+    )
+    emergency = QtWidgets.QPushButton("Software stop", window)
+    clicks = []
+    emergency.clicked.connect(lambda: clicks.append(True))
+    window.show()
+    E3MainWindow._cancel_running_job(window)
+    box = window._cancel_job_confirmation
+    assert box.windowModality() == QtCore.Qt.WindowModality.NonModal
+    app.processEvents()
+    assert QtWidgets.QApplication.activeModalWidget() is None
+    emergency.click()
+    assert clicks == [True]
+    status["job_pause"] = {"state": "running", "run_id": 6, "revision": 0}
+    box.done(answer)
+    assert requested == ([{"expected_pause": {"state": "paused", "run_id": 5, "revision": 2},
+                           "finish_buffered": True}]
+                         if answer == QtWidgets.QMessageBox.StandardButton.Yes else [])
+    assert window._cancel_job_confirmation is None
+    window.close()
+    app.processEvents()

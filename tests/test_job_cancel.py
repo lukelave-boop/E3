@@ -96,3 +96,28 @@ def test_cancel_during_focus_rejected(paused_machine):
     machine._active_job_context.status.phase = "streaming"
     transport.release_all()
     assert _finish(machine, worker)["phase"] == "complete"
+
+
+def test_stop_revokes_cancel_resume_waiting_at_physical_write(paused_machine):
+    import threading
+    machine, transport = paused_machine()
+    _, worker = _start(machine, _program(count=100, powered=True))
+    transport.wait_for_motion(1)
+    pause(machine)
+    transport.resume_release.clear()
+    errors = []
+    def request():
+        try:
+            cancel(machine, finish_buffered=True)
+        except MachineError as exc:
+            errors.append(exc)
+    requester = threading.Thread(target=request)
+    requester.start()
+    assert transport.resume_entered.wait(2)
+    machine.request_stop(emergency=True, _recover=False)
+    transport.resume_release.set()
+    requester.join(3)
+    transport.release_all()
+    assert _finish(machine, worker)["phase"] == "failed"
+    assert errors
+    assert ("raw", b"~") not in transport.writes
