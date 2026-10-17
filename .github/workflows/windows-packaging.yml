@@ -12,6 +12,7 @@ on:
       - requirements*.txt
       - tests/test_windows_installer_long_paths.py
       - tests/test_windows_packaging_workflow.py
+      - tests/test_frozen_profile_verification.py
   workflow_dispatch:
 
 permissions:
@@ -50,7 +51,7 @@ jobs:
           "E3_TEST_INNO_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Exercise real Inno Setup long-path regression
         shell: pwsh
-        run: .\.venv\Scripts\python.exe -m pytest -q tests/test_windows_installer_long_paths.py tests/test_windows_packaging_workflow.py
+        run: .\.venv\Scripts\python.exe -m pytest -q tests/test_windows_installer_long_paths.py tests/test_windows_packaging_workflow.py tests/test_frozen_profile_verification.py
       - name: Build complete Windows installer
         id: package
         shell: pwsh
@@ -86,11 +87,31 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows package identity verification failed.' }
           "installer=$($build.Installer)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "metadata=$metadata" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "bundle=$(Split-Path -Parent $build.Executable)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Verify frozen code and isolated native Windows profile
+        id: profile
+        shell: pwsh
+        run: |
+          $bundle = '${{ steps.package.outputs.bundle }}'
+          $report = Join-Path $bundle 'profile-verification.json'
+          .\.venv\Scripts\python.exe packaging/verify_frozen_profile.py `
+            --exe (Join-Path $bundle 'E3.exe') --revision "$env:GITHUB_SHA" --report $report
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen code and Windows profile verification failed.' }
+          "report=$report" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@v7
         with:
           name: e3-windows-installer-${{ github.sha }}
           path: |
             ${{ steps.package.outputs.installer }}
             ${{ steps.package.outputs.metadata }}
+            ${{ steps.profile.outputs.report }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain portable bundle for explicit feature-test builds
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: e3-windows-bundle-${{ github.sha }}
+          path: ${{ steps.package.outputs.bundle }}
           if-no-files-found: error
           retention-days: 7

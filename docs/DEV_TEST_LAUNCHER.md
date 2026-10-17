@@ -125,6 +125,26 @@ in older frozen builds. Install application updates from regular E3; select test
 builds through the permanent launcher. The original executable and adjacent
 `build-info.json` are unchanged.
 
+Updated scope-aware E3 builds restore the saved normal Windows profile before
+Qt starts. Import/save dialogs therefore open in the real user home and retain
+the normal Desktop, Documents, Downloads and Explorer navigation. E3's explicit
+private state/config/credential paths remain selected; materials, preferences
+and recovery files cannot fall back to production storage. The launcher remains
+compatible with older frozen builds, which retain their redirected profile until
+rebuilt with this startup correction. Creating links inside the redirected home
+does not repair the native browsing experience.
+
+When local managed build capacity is unavailable, manually dispatched Windows
+packaging validation also retains the exact portable bundle for seven days.
+It can be downloaded for DEV TEST selection without running the installer or
+replacing normal E3. Its adjacent build metadata still must match the pointer.
+The packaging workflow also verifies archived application code and resources
+against the checked-out revision, then compares normal and DEV TEST Windows
+folders using archived startup code and the bundled Qt libraries. This check
+keeps E3 storage private and starts no application runtime or hardware service.
+Retain its verification report and match the downloaded EXE's SHA-256 before
+selecting the hosted bundle. Native dialog interaction remains an operator check.
+
 An older build still requires settings it understands; the launcher does not discard unknown safety
 settings or downgrade a newer schema. Recovery of an already affected build
 uses a verified compatible backup after preserving the newer state separately.

@@ -337,6 +337,22 @@ def feature_state_root(
             / "E3 Positioning System").resolve()
 
 
+def restore_native_profile_environment() -> None:
+    """Restore Windows browsing paths once E3 owns its explicit state scope.
+
+    Older frozen applications still need the launcher's redirected defaults.
+    Scope-aware applications call this before Qt initializes shell dialogs;
+    their E3-specific config, credentials and storage overrides stay private.
+    """
+    if not os.environ.get("E3_STATE_ORIGINAL_ENV"):
+        return
+    original = _unscoped_environment(os.environ)
+    for key in _PROFILE_ENVIRONMENT:
+        os.environ.pop(key, None)
+        if key in original:
+            os.environ[key] = original[key]
+
+
 def prepare_feature_environment(
     feature: FeatureBuild, *, launcher_path: Path,
     source: Mapping[str, str] | None = None,

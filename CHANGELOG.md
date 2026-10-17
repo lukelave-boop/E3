@@ -9,6 +9,13 @@
 - Store accepted arcs as existing native cubic segments; project schema and
   guarded job generation remain unchanged.
 
+## DEV TEST file browsing (2026-10-16)
+
+- Restore the normal Windows profile before Qt starts in updated DEV TEST builds,
+  so import/save dialogs show the user's folders and Explorer navigation.
+- Keep configuration, credentials, materials, preferences and recovery data in
+  the existing private E3 scope. Older frozen builds retain launcher isolation.
+
 ## 0.8.0 integration (2026-10-16)
 
 - Combine the download progress and independent version-state changes below

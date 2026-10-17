@@ -8,6 +8,13 @@ preview and Undo/Redo. Significant notches, corners and unsupported curves must
 retain their observed geometry. Automated, offscreen, frozen-build and operator
 verification levels are recorded separately in [current state](CURRENT_STATE.md).
 
+## DEV TEST file browsing (2026-10-16)
+
+Implemented: scope-aware desktop startup restores native Windows profile paths
+before Qt initializes file dialogs, retaining private E3 state. Older frozen
+executables keep their existing launcher behavior. Verification and the selected
+replacement build are recorded in CURRENT_STATE.md.
+
 ## 0.8.0 integration (2026-10-16)
 
 Prepared: confirmed download progress and version-state work combined with main's

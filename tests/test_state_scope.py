@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -216,6 +219,98 @@ def test_installer_restores_original_environment_and_removes_scope(tmp_path: Pat
     assert "E3_USER_STATE_DIR" not in result
     assert "E3_CONFIG_PATH" not in result
     assert not any(key.startswith("E3_STATE_") for key in result)
+
+
+def test_test_runtime_restores_browsing_profile_without_sharing_e3_state(tmp_path, monkeypatch):
+    from laser_aligner import deployment
+    from laser_aligner.materials import database
+    from laser_aligner.project import ProjectDocument, io
+
+    original = {
+        "LOCALAPPDATA": str(tmp_path / "real-local"), "APPDATA": str(tmp_path / "real-roaming"),
+        "USERPROFILE": str(tmp_path / "real-home"), "HOME": None, "XDG_DATA_HOME": None,
+    }
+    private = tmp_path / "private"
+    paths = {
+        "E3_USER_STATE_DIR": str(private), "E3_CONFIG_PATH": str(private / "config.json"),
+        "E3_BRIDGE_TOKEN_FILE": str(private / "secrets/token.txt"),
+        "E3_BUILD_INFO": str(private / "build-info.json"),
+    }
+    for key in original:
+        monkeypatch.setenv(key, str(tmp_path / "redirected" / key))
+    for key, value in paths.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("E3_DEV_TEST", "1")
+    saved = json.dumps(original)
+    monkeypatch.setenv("E3_STATE_ORIGINAL_ENV", saved)
+
+    state_scope.prepare_runtime_state()
+    state_scope.prepare_runtime_state()  # packaged entry and desktop both call it
+
+    assert {key: os.environ.get(key) for key in original} == original
+    assert {key: os.environ.get(key) for key in paths} == paths
+    assert os.environ["E3_STATE_ORIGINAL_ENV"] == saved
+    assert storage.default_user_data_dir() == private
+    assert deployment.user_state_root() == private
+    assert database._default_database_path() == private / "materials.sqlite"
+    document = ProjectDocument()
+    assert io._default_autosave_path(document, None).parent == private / "backups"
+    assert not (tmp_path / "real-local").exists()
+
+
+@pytest.mark.parametrize("saved", ['{}', '{', '[]', '{"HOME":"first","HOME":"second"}'])
+def test_invalid_saved_profile_does_not_partially_restore_environment(tmp_path, monkeypatch, saved):
+    from laser_aligner.dev_test_launcher import DevTestLauncherError
+
+    monkeypatch.setenv("E3_USER_STATE_DIR", str(tmp_path / "private"))
+    monkeypatch.setenv("E3_DEV_TEST", "1")
+    monkeypatch.setenv("E3_STATE_ORIGINAL_ENV", saved)
+    before = dict(os.environ)
+    with pytest.raises(DevTestLauncherError, match="original profile environment"):
+        state_scope.prepare_runtime_state()
+    assert dict(os.environ) == before
+
+
+def test_normal_explicit_state_does_not_restore_test_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("E3_USER_STATE_DIR", str(tmp_path / "private"))
+    monkeypatch.delenv("E3_DEV_TEST", raising=False)
+    monkeypatch.setenv("E3_STATE_ORIGINAL_ENV", "not a test launch")
+    before = dict(os.environ)
+    state_scope.prepare_runtime_state()
+    assert dict(os.environ) == before
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shell folder regression")
+def test_windows_qt_folders_match_normal_profile_in_test_runtime(tmp_path):
+    pytest.importorskip("PySide6")
+    source = dict(os.environ)
+    keys = ("LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_DATA_HOME")
+    private = tmp_path / "private"
+    isolated = dict(source)
+    isolated.update({key: str(tmp_path / "redirected" / key) for key in keys})
+    isolated.update(E3_DEV_TEST="1", E3_USER_STATE_DIR=str(private),
+                    E3_STATE_ORIGINAL_ENV=json.dumps({key: source.get(key) for key in keys}))
+    probe = """
+import json, sys
+from pathlib import Path
+if sys.argv[1] == 'test':
+    from laser_aligner.state_scope import prepare_runtime_state
+    prepare_runtime_state()
+from PySide6.QtCore import QStandardPaths
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+names = ('HomeLocation', 'DesktopLocation', 'DocumentsLocation', 'DownloadLocation',
+         'PicturesLocation', 'AppDataLocation', 'AppLocalDataLocation')
+print(json.dumps({'home': str(Path.home()), 'qt': {
+    name: QStandardPaths.writableLocation(getattr(QStandardPaths, name)) for name in names}}))
+"""
+    results = []
+    for mode, environment in (("normal", source), ("test", isolated)):
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+        result = subprocess.run([sys.executable, "-c", probe, mode], env=environment,
+                                capture_output=True, text=True, check=True, timeout=30)
+        results.append(json.loads(result.stdout))
+    assert results[0] == results[1]
 
 
 def test_successful_update_imports_latest_state_and_old_version_reopens_its_own(tmp_path: Path, monkeypatch) -> None:

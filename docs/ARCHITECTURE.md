@@ -81,6 +81,11 @@ even an older frozen E3. Test scopes live under `state/<version>-<revision>/`
 beside the permanent launcher; the actual application state is in its
 `local/E3 Positioning System/` child. Its child environment also redirects Windows
 profile directories so pre-existing file-backed storage defaults remain isolated.
+Scope-aware desktop startup restores the saved native profile environment before
+Qt initializes, while retaining the explicit E3 state/config/credential paths.
+The storage override and isolated-state legacy-fallback guards keep material,
+autosave and Qt settings private; shell browsing uses the real Windows profile.
+Older frozen executables that lack this startup step retain their prior behavior.
 The launcher supplies private `E3_BUILD_INFO` metadata with unchanged version and
 revision, a `dev-test` channel and an empty `manifest_url`. This disables historical
 test-build updaters whose child installers would inherit redirected profiles;

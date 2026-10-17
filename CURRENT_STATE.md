@@ -1,5 +1,47 @@
 # Current repository state
 
+## Arc DEV TEST native file browsing follow-up (2026-10-17)
+
+The operator's screenshot confirms canonical arc build `8627ac0` starts, but its
+native import dialog resolves Desktop inside the launcher's redirected profile.
+Its exact private home lacked Desktop. A local directory junction now maps only
+that build's home/Desktop to the real Windows Desktop; both directory listings
+match. This restores that location without restarting the running application or
+changing its private configuration. Complete native Explorer navigation still
+requires the source correction below; interactive import success is unverified.
+
+The existing `codex/dev-test-file-dialog` history (`6070780`, `ca95eba`) is
+integrated into `codex/arc-recovery`. It restores the validated original Windows
+profile before Qt starts while retaining explicit E3 private state, config,
+credentials and build identity. Both features' documentation/history are kept.
+The permanent launcher, normal E3 and running application are unchanged.
+
+A new local build fails read-only admission: 6,723,197,847 measured bytes plus a
+2,147,483,648-byte request exceeds the fixed 8,589,934,592-byte managed cap.
+No reservation was created and no artifact or accounting was removed. Use the
+documented manually dispatched hosted Windows packaging workflow and its exact
+portable bundle; canonical build, identity and frozen-profile verification must
+pass before changing the feature pointer.
+
+Combined focused Windows Python 3.14 verification passes **170 tests**, with one
+expected Windows symlink-permission skip. Coverage includes state scope, launcher,
+packaged-entry ordering, preferences, deployment, startup/recovery, saved raster
+settings, arc core/dialog and downstream geometry. Repository Ruff, application
+compileall and whitespace checks pass. Independent startup/private-storage review
+found no blocking issues. Exact revised frozen-build verification is pending.
+Ignored evidence: build/arc-browsing-fix/ and build/arc-desktop-alias-repair.json.
+
+Packaging now compares frozen application code/resources to the exact checkout
+and runs normal/DEV TEST profile probes using archived startup code and bundled
+QtCore before uploading artifacts. Eighteen focused verifier tests and the source
+Qt profile regression pass. A real negative control against `8627ac0` reaches both
+isolated archived-code probes and fails specifically because Desktop/Documents/
+Downloads/Pictures still resolve inside the redirected profile. Private E3 paths
+and build identity remain intact in that control. This catches the reported bug
+without starting the EXE, constructing services or writing real settings.
+Evidence: build/frozen-profile-old-control.json. Hosted corrected-build results
+and interactive file-picker acceptance remain pending.
+
 ## Arc recovery and Fit arc implementation (2026-10-16)
 
 Isolated branch `codex/arc-recovery` starts from authoritative `origin/main`
@@ -85,6 +127,26 @@ application state were not changed. Ignored receipts in this worktree include
 build/approved-reservation-release.json, build/arc-windows-build-result.json,
 build/arc-frozen-qa/, and build/arc-dev-test-selection.json. Subsequent verification
 documentation does not change the exact frozen runtime revision above.
+
+## DEV TEST native file browsing correction (2026-10-16)
+
+The earlier Desktop junction only removed the missing-folder error. The
+launcher's redirected USERPROFILE and AppData still made the native file picker
+show an isolated home with incomplete Explorer navigation. Scope-aware startup
+now restores the launcher's validated original profile environment while keeping
+E3_USER_STATE_DIR, configuration, credentials and build identity private. Frozen
+startup performs this before importing the desktop and creating QApplication.
+Legacy executables retain their existing launcher isolation until rebuilt.
+
+Focused Windows Python 3.14 verification passes 89 tests with one expected
+Windows symlink-permission skip. This includes two independent Qt subprocesses
+confirming normal and DEV TEST Home/Desktop/Documents/Downloads/Pictures/AppData
+locations match, state/private-storage checks, malformed-profile rejection,
+launcher compatibility, packaged-entry ordering and startup/recovery checks.
+Scoped Ruff, application compileall and whitespace checks pass. Initial test
+setup lacked its temporary parent directory, and one new test used an incorrect
+helper name; both were corrected before the passing runs. No hardware behavior
+or machine values changed. Frozen build and interactive validation are pending.
 
 ## 0.8.0 integration candidate (2026-10-16)
 

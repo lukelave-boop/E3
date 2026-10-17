@@ -30,6 +30,10 @@ regular E3; test launches keep the updater disabled and use the permanent
 launcher for build selection. See [version state and recovery](docs/UPDATES.md#independent-version-state)
 and [current verification](CURRENT_STATE.md).
 
+Updated DEV TEST builds restore your normal Windows profile before file dialogs
+open. Desktop, Documents, Downloads and the Explorer navigation pane use your
+usual folders; E3 settings and recovery files remain in the private test scope.
+
 Image-editor automatic outlines use the current cleaned image, including background
 cleanup and local edits. Both outline previews preserve thin pixel features without
 retracing their edges. See the [image editor guide](docs/ENGRAVING_IMAGE_EDITOR.md).
