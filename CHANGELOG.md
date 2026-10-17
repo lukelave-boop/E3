@@ -71,6 +71,13 @@
 - Read available network data promptly so slow links report progress without
   waiting for a full megabyte. Size and SHA-256 rejection remain mandatory.
 
+## DEV TEST file-dialog folders (2026-10-17)
+
+- Map each isolated test home's user folders to their native Windows locations.
+- Keep per-build application settings isolated and preserve existing paths.
+- Cover successive build identities and redirected Desktop paths with tests.
+
+
 ## Unreleased - independent desktop version state (2026-10-16)
 
 - Give each installed version/revision and source checkout an independent initial

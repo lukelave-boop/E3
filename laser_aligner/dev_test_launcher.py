@@ -403,6 +403,11 @@ def prepare_feature_environment(
     })
     for name in _PROFILE_ENVIRONMENT:
         Path(environment[name]).mkdir(parents=True, exist_ok=True)
+    from .windows_user_folders import prepare_user_folder_links
+    try:
+        prepare_user_folder_links(Path(environment["USERPROFILE"]), original_home=original.get("USERPROFILE"))
+    except OSError as exc:
+        raise DevTestLauncherError(f"cannot prepare user folders for this test build: {exc}") from exc
     return environment
 
 

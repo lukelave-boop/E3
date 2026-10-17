@@ -47,6 +47,15 @@ A locked counter transfers worker progress to a 250 ms GUI timer, which renders
 percentage and a rolling three-second byte rate without queuing one Qt event per
 chunk. Completion still requires exact size, SHA-256 and atomic cache promotion.
 
+## DEV TEST user files and private state
+
+The launcher redirects application state into a version/revision scope but maps
+its private home's user document folders to Windows known-folder targets using
+native junctions. It never links AppData or config to production state. Folder
+preparation occurs before launching even older frozen E3 builds and is independent
+of the currently selected feature identity.
+
+
 ## Desktop version state
 
 Automatic update handoffs on both platforms restore the genuine user profile

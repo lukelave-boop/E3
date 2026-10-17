@@ -60,6 +60,14 @@ cause; a slow-trickle timeout defect is reproduced offline. See CURRENT_STATE.md
 Implemented: manifest-sized progress, downloaded/total bytes and a recent transfer
 rate, followed by an explicit verification status. See [verification](CURRENT_STATE.md).
 
+## DEV TEST file-dialog reliability
+
+Implemented: native user-folder mappings for every isolated build profile.
+Windows native-folder and isolation tests pass. The frozen launcher passed
+two-version native-shell verification and is installed at the permanent path.
+The selected application was not rebuilt.
+
+
 ## Independent desktop version state (2026-10-16)
 
 Implemented: one-time state copies per installed version/revision and source
