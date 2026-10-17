@@ -101,3 +101,18 @@ emblem preparation takes 6.237 seconds and both complete preview canvases take
 another 2.930 seconds: 9.168 seconds combined. This does not verify full EXE
 startup, real interactive timing, upload, Start or physical execution. Synthetic
 placement and travel authority remain the measurement boundary.
+
+## Combined feature build verification
+
+Build 0.8.19 / `8d01de7ff8e6f936495bdf7c99e3959f8f090b7c`, integrated into main
+through PR61, retains the speedups alongside probe refresh, arc editing and linked
+image/vector movement. Three runs of its exact archived code with Windows Python
+3.12.10, bundled dependencies, surface binding and desktop cancellation produce:
+
+| Workload | Median preparation | Maximum preparation |
+| --- | ---: | ---: |
+| Dense 811,800-move raster | 6.466 s | 6.760 s |
+| 3,136 contours / 228,928 moves | 2.606 s | 2.663 s |
+
+Both timestamp-normalized program hashes match the original speed build.
+The same offline scope and physical-verification limits apply.

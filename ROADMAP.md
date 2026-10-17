@@ -3,7 +3,7 @@
 ## Completed-feature integration (2026-10-17)
 
 Probe selection, generation speedups, arc tools, linked-pair manipulation and
-Windows folder repair are combined for main integration and one DEV TEST build.
+Windows folder repair are merged into main (PR61) and selected as DEV TEST 0.8.19.
 Unfinished diagnostic experiments and shared-checkout work remain separate.
 
 - Implemented probe selection refresh recovery and explicit fresh-click button

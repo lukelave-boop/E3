@@ -2,39 +2,59 @@
 
 ## Combined completed desktop fixes (2026-10-17)
 
-The operator requested one DEV TEST containing probe-selection refresh, faster
-raster/vector toolpath generation, arc recovery/Fit arc and movable linked
-image/vector pairs, followed by integration of completed recent work into main.
-The combined source also includes the completed native Windows folder repair
-already installed in the permanent launcher. Its launcher executable is preserved.
+Completed probe-selection refresh, faster raster/vector generation, arc recovery/
+Fit arc, movable linked image/vector pairs and native Windows folder repair are
+merged into main through [PR61](https://github.com/lukelave-boop/E3/pull/61), merge
+revision `95e133b128b25c343cd22ddb5df8f6d676f34144`. Its complete tree matches tested
+candidate `8d01de7ff8e6f936495bdf7c99e3959f8f090b7c` exactly. PR59 and PR60 are also
+marked merged. The four completed feature branches were deleted locally and
+remotely; their clean worktrees and build evidence remain available.
 
-The integration merges codex/toolpath-speed (729d8d7) and
-codex/dev-test-known-folders (07267db) into codex/arc-recovery (c479f2b).
-Production code merged automatically; only additive documentation overlaps needed
-manual reconciliation. Performance modules match the speed branch byte-for-byte;
-probe, arc and linked-pair modules retain the previously verified implementation.
-Newer main's updater, immutable release baseline and packaging behavior remain.
-The remaining older completed local branches are already ancestors of origin/main.
-The browser-timeout diagnostic candidate remains an unfinished draft (PR54),
-excluded under the operator's instruction to preserve unfinished work separately.
-All pre-existing shared-checkout edits, including cooling/diagnostics work, remain
-untouched. The historical feature selections below are superseded by this combined
-handoff once verification and selection complete.
+Only additive documentation conflicts needed reconciliation. Performance modules
+match the speed branch; probe, arc and linked-pair modules retain their verified
+implementations. Newer main updater/versioning behavior is preserved. Older
+completed branches are already ancestors of main. Unfinished browser diagnostics
+(PR54) and all pre-existing shared-checkout edits, including cooling/diagnostics,
+remain separate and untouched.
 
-Combined focused Windows verification covers 1,137 passing tests and one expected
-Windows symlink-privilege skip. Five initial temporary-file/junction permission
-failures were sandbox restrictions; all affected files pass outside that sandbox
-(67 passed, one skipped). Repository Ruff, compileall and whitespace checks pass.
-Offline combined-source checks with Windows Python 3.12.10 and hosted dependencies
-retain identical timestamp-normalized programs: dense raster 811,800 moves,
-11.304 s median; vector 228,928 moves, 4.577 s median (three samples each).
-These source timings differ from earlier frozen timings and are not a new
-sub-ten-second frozen-build claim. Exact archive checks remain pending.
-Full compatibility CI, exact frozen packaging, main integration and launcher
-selection are in progress. No interactive GUI or
-physical controller/laser verification is claimed; intermittent camera dropouts
-remain unexplained. No Pi code, configuration or firmware update is part of this
-integration.
+[Compatibility CI 39038626680](https://github.com/lukelave-boop/E3/actions/runs/39038626680)
+passes: Windows Python 3.12 desktop 9,125 passed / 69 skipped; Windows Python 3.10
+core 7,509 passed / 186 skipped; POSIX recovery 1,502 passed / 2 skipped; Ruff
+passes. Local focused Windows coverage has 1,137 passing cases and one expected
+symlink-privilege skip. Five initial sandbox filesystem failures pass outside the
+sandbox (all affected files: 67 passed / one skipped). Compileall and diff checks
+pass. PR packaging, Linux identity and permanent-launcher CI also pass.
+
+[Canonical retained packaging 39038848575](https://github.com/lukelave-boop/E3/actions/runs/39038848575)
+builds **0.8.19** at candidate `8d01de7ff8e6f936495bdf7c99e3959f8f090b7c`.
+Its verifier checks 199 archived application modules, the entrypoint, 11 resources,
+normal/private native Windows folder equality and private E3 storage. Downloaded
+EXE hash, resources and native-library guard pass. Bundled Qt 6.12.0 controls render
+offscreen locally; no full application runtime or hardware service is constructed.
+EXE SHA-256: `4af0df36c2e0714068e408ab0ed3596bbcd295358260d0d03d249c4ebfd30f7d`.
+
+Exact archived code with Windows Python 3.12.10, surface binding and desktop
+cancellation passes three-sample offline timing: dense 811,800-move raster median
+6.466 s / maximum 6.760 s; 228,928-move vector median 2.606 s / maximum 2.663 s.
+Timestamp-normalized program hashes match the original speed build. Earlier
+combined-source samples varied (11.304 s raster median); adjacent single-sample
+controls gave 6.176 s for original speed source and 6.104 s for combined source.
+These measurements exclude GUI painting, upload, Start and physical execution.
+
+The permanent **E3 DEV TEST** pointer was atomically selected with the canonical
+setter and validated against adjacent build-info: version 0.8.19, branch main,
+revision `8d01de7ff8e6f936495bdf7c99e3959f8f090b7c`, target
+`C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-8d01de7\E3.exe`.
+This frozen candidate is contained in main; the merge commit has identical files.
+The prior pointer is retained under ignored build/combined-fixes. Permanent
+launcher SHA-256 remains
+`2d6102c3aa1c52b11890bd4c64fb15143daa20a39d42c0d0a85b847401a605b9`.
+Normal E3, shortcuts, launcher executable and machine configuration are unchanged.
+This selection supersedes all historical separate-feature pointers below.
+
+Interactive probe/camera acceptance and physical controller/laser behavior remain
+unverified. Intermittent camera dropouts remain unexplained. No Pi configuration,
+firmware update, controller command, motion or laser operation was performed.
 
 ## Probe selection refresh recovery (2026-10-17)
 
