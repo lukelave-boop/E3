@@ -1,5 +1,40 @@
 # Camera object detection and tracing
 
+## Fit an arc on an existing vector
+
+Automatic native tracing can recognize a circular arc through small, isolated
+edge defects when enough of the surrounding edge consistently supports it. The
+exception is limited by defect height, width along the edge and total unsupported
+length. Automatic recovery also stays within the existing native fitting
+tolerance; raising that tolerance does not remove the source-pixel defect caps.
+Wider notches, substantial corners, inconsistent curvature and ambiguous
+fits retain the existing contour. In the image trace dialog, wait for the
+**Verified** result: Quick Preview still shows the provisional pixel contour.
+This reconstructs a proposed shape; it does not
+establish physical accuracy or identify the intended shape with certainty.
+
+For an explicit correction, create the traced vector, select that single unlocked
+path or polygon, and choose **Shape → Fit arc…**. Pick the span's start and end in
+the enlarged preview. Closed outlines offer the other route between the endpoints.
+Review the original span against the proposed arc and inspect its radius and
+maximum movement. The fit uses the object's physical dimensions and preserves
+endpoints and untouched contours, including holes. Unsupported selections show a
+reason and leave Apply unavailable.
+
+The manual dialog's **Edge variation** is the allowance for the main supporting
+edge. Isolated defects may be up to three times that depth and eight times
+that width, covering no more than 8% of the selected length. The preview
+reports the largest fitted edge difference. Endpoints stay fixed. No
+algorithm can distinguish an intentional tiny notch from noise of the same
+size; use the overlay and Undo to review the proposed reconstruction.
+
+**Apply** replaces the reviewed span in one normal history step. Undo restores the
+exact original object and Redo reapplies the fit. **Cancel** changes nothing.
+The action does not change the source image, camera calibration, threshold,
+project schema or execution permissions. Arcs remain native cubic Bézier segments
+and use the normal guarded job-generation path. Review the final job Preview
+before output.
+
 The desktop **Trace** inspector detects physical objects in the corrected
 camera image and converts reviewed outlines into either normal E3 vector objects
 or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
@@ -307,7 +342,8 @@ rotate or deskew camera pixels and does not change normalization, threshold
 selection, mask reconstruction, source-edge refinement, smoothing, hard-corner
 classification, or contour hierarchy. Each exact candidate partition tries a
 line, then a circle, and otherwise retains its original fitted line/cubic pieces;
-recovery never increases that partition or the complete contour's segment count.
+bounded unions across proven isolated defects are also considered. Recovery
+never increases the replaced pieces' or the complete contour's segment count.
 It does not reconcile parallel edges or impose constant width. Unsupported line or circle hypotheses,
 excessive endpoint movement, unsafe joins, and any failed frame or topology
 composition retain the original fitted line/cubic pieces.
@@ -841,9 +877,10 @@ pixel resolution floor.
 Post-fit primitive promotion is subject to that same accuracy floor. Robust
 total-least-squares lines may have any angle, and conceptual circular arcs must
 pass maximum and RMS radial error plus endpoint and join limits derived from both
-source-pixel spacing and the existing fit tolerance. Hard-corner partitions
-remain protected; an observed corner may move only to a nearby model intersection
-inside both endpoint allowances. Failed hypotheses and failed native topology
+source-pixel spacing and the existing fit tolerance. Only short, isolated defect
+runs receive the bounded exception described above; a removed partition corner
+must belong to that local defect. Retained corners may move only to a nearby
+model intersection inside both endpoint allowances. Failed hypotheses and failed native topology
 checks fall back to the already validated baseline pieces. Canonical cubic
 storage preserves the native schema, and Straighten continues to analyze the
 resulting ordinary project lines and cubics without consulting raster pixels or

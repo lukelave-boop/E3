@@ -39,6 +39,7 @@ from .primitive_recovery import (
     CircularArcHypothesis,
     LineHypothesis,
     canonical_cubic_arc_spans,
+    circular_arc_support_inliers,
     fit_circular_arc_hypothesis,
     fit_line_hypothesis,
     line_intersection,
@@ -1487,6 +1488,7 @@ class _PrimitiveCandidate:
     hard_end: bool
     line_hypothesis: LineHypothesis | None = None
     arc_hypothesis: CircularArcHypothesis | None = None
+    source_pixel_spacing_mm: tuple[float, float] | None = None
 
     @property
     def kind(self) -> str:
@@ -5205,6 +5207,18 @@ def _circle_geometry_is_supported(
             sweep_radians=hypothesis.sweep_radians,
         )
     )
+    if hypothesis.defect_count:
+        spacing = candidate.source_pixel_spacing_mm
+        return bool(
+            spacing is not None
+            and raw_maximum <= tolerance_mm
+            and model_maximum <= tolerance_mm
+            and raw_rms <= max(hypothesis.error_budget.rms_mm, 0.35 * tolerance_mm)
+            and circular_arc_support_inliers(
+                candidate.model_points, hypothesis.center, hypothesis.radius_mm,
+                tolerance_mm, spacing, closed=closed,
+            ) is not None
+        )
     return bool(
         raw_maximum <= tolerance_mm
         and raw_rms <= max(hypothesis.error_budget.rms_mm, 0.35 * tolerance_mm)
@@ -5288,6 +5302,7 @@ def _attempt_recovered_arc(
         tolerance_mm,
         source_pixel_spacing_mm,
         closed=closed,
+        allow_small_defects=True,
     )
     candidate = (
         None
@@ -5299,6 +5314,7 @@ def _attempt_recovered_arc(
             hard_start=hard_start,
             hard_end=hard_end,
             arc_hypothesis=hypothesis,
+            source_pixel_spacing_mm=source_pixel_spacing_mm,
         )
     )
     if candidate is None or not _circle_geometry_is_supported(
@@ -6244,6 +6260,108 @@ def _record_rejected_primitive_candidate(
         audit.rejected_arc_count += 1
 
 
+def _bridge_small_arc_defects(
+    groups: list[_PrimitivePieceGroup],
+    candidates: list[_PrimitiveCandidate | None],
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    spacing: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+) -> tuple[list[_PrimitivePieceGroup], list[_PrimitiveCandidate | None]]:
+    """Try longer source partitions, retaining corners unless an arc proves them.
+
+    The ordinary corner classifier stays unchanged. Up to 64 additional arc
+    hypotheses can bridge its short defect partitions; every interior sample
+    must satisfy the strict-support/isolated-defect proof. Unaccepted groups
+    keep their exact original pieces, and later compound topology is unchanged.
+    """
+
+    remaining = min(64, _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES - audit.hypothesis_count)
+    if all(candidate is not None for candidate in candidates):
+        return groups, candidates
+    while len(groups) > 2 and remaining > 0:
+        lengths = [float(np.sum(np.linalg.norm(np.diff(raw_points[group.target_indices], axis=0), axis=1))) for group in groups]
+        # Substantial proven straight runs are real partition boundaries. Tiny
+        # corner-bevel lines are still eligible. This also avoids spending the
+        # fit budget trying every union of an ordinary polygon's straight sides.
+        protected = {
+            index for index, candidate in enumerate(candidates)
+            if candidate is not None and candidate.line_hypothesis is not None
+            and candidate.line_hypothesis.support_length_mm > 8.0 * max(spacing)
+        }
+        trials: list[tuple[float, int, int]] = []
+        for start in range(len(groups)):
+            for count in range(2, len(groups)):
+                positions = [(start + offset) % len(groups) for offset in range(count)]
+                if any(index in protected for index in positions):
+                    break
+                length = sum(lengths[index] for index in positions)
+                # Bridge a local cluster first, then grow through another one.
+                # Long unrelated interiors cannot monopolize the bounded fits.
+                interior = sum(lengths[index] for index in positions[1:-1])
+                if interior > max(8.0 * max(spacing), 0.08 * length):
+                    continue
+                trials.append((length, start, count))
+        broad = sorted(trials, reverse=True)
+        local = sorted(trials, key=lambda trial: (trial[2], -trial[0], trial[1]))
+        ordered_trials: list[tuple[float, int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for pair in zip(broad, local, strict=True):
+            for trial in pair:
+                key = (trial[1], trial[2])
+                if key not in seen:
+                    seen.add(key)
+                    ordered_trials.append(trial)
+        merged = False
+        for _length, start, count in ordered_trials:
+            if remaining <= 0:
+                break
+            remaining -= 1
+            positions = [(start + offset) % len(groups) for offset in range(count)]
+            baseline = [piece for position in positions for piece in groups[position].baseline_pieces]
+            group = _primitive_piece_group(baseline)
+            if group is None:
+                continue
+            candidate = _attempt_recovered_arc(
+                group.target_indices, raw_points, evidence_points, evidence_eligible,
+                tolerance_mm, spacing, audit,
+                hard_start=group.hard_start, hard_end=group.hard_end, closed=False,
+            )
+            if candidate is None:
+                continue
+            hypothesis = candidate.arc_hypothesis
+            assert hypothesis is not None
+            if not hypothesis.defect_count:
+                continue
+            inliers = circular_arc_support_inliers(
+                candidate.model_points, hypothesis.center, hypothesis.radius_mm,
+                tolerance_mm, spacing,
+            )
+            assert inliers is not None
+            defects = candidate.model_points[~inliers] / np.asarray(spacing)
+            swallowed = [raw_points[groups[index].target_indices[-1]] / np.asarray(spacing) for index in positions[:-1]]
+            # Every removed hard corner must belong to the local defect, not
+            # merely lie somewhere on a broadly plausible circular contour.
+            if any(float(np.min(np.linalg.norm(defects - corner, axis=1))) > 4.0 for corner in swallowed):
+                continue
+            try:
+                spans = canonical_cubic_arc_spans(hypothesis)
+            except ValueError:
+                continue
+            if len(spans) > len(baseline):
+                continue
+            unconsumed = [(start + offset) % len(groups) for offset in range(count, len(groups))]
+            groups = [group, *(groups[index] for index in unconsumed)]
+            candidates = [candidate, *(candidates[index] for index in unconsumed)]
+            merged = True
+            break
+        if not merged:
+            break
+    return groups, candidates
+
+
 def _baseline_group_boundary(
     previous: _PrimitivePieceGroup,
     following: _PrimitivePieceGroup,
@@ -6562,7 +6680,36 @@ def _recover_geometric_primitives(
     ):
         return baseline, _baseline_primitive_metrics(baseline, None)
     audit = _PrimitiveRecoveryAudit()
-    if corners:
+    # Defect-created corners may partition an otherwise complete circle. Try
+    # that bounded hypothesis before choosing the ordinary open partitions.
+    whole_arc = None
+    if (
+        corners and len(corners) <= _MAXIMUM_PRIMITIVE_RECOVERY_CORNERS
+        and _baseline_piece_cycle_is_exact(baseline, len(raw_points))
+    ):
+        whole_arc = _attempt_recovered_arc(
+            np.arange(len(raw_points), dtype=np.int64), raw_points, evidence_points,
+            evidence_eligible, tolerance_mm, (spacing[0], spacing[1]), audit,
+            hard_start=False, hard_end=False, closed=True,
+        )
+        if whole_arc is not None and not whole_arc.arc_hypothesis.defect_count:
+            whole_arc = None
+        if whole_arc is not None:
+            hypothesis = whole_arc.arc_hypothesis
+            assert hypothesis is not None
+            inliers = circular_arc_support_inliers(
+                whole_arc.model_points, hypothesis.center, hypothesis.radius_mm,
+                tolerance_mm, (spacing[0], spacing[1]), closed=True,
+            )
+            assert inliers is not None
+            defects = whole_arc.model_points[~inliers] / np.asarray(spacing)
+            if any(float(np.min(np.linalg.norm(defects - raw_points[corner] / np.asarray(spacing), axis=1))) > 4.0 for corner in corners):
+                whole_arc = None
+    if whole_arc is not None:
+        groups = [_PrimitivePieceGroup(tuple(baseline), whole_arc.target_indices, False, False)]
+        candidates = [whole_arc]
+        closed_arc = True
+    elif corners:
         corners = _consolidate_supported_line_corner_chains(
             corners,
             raw_points,
@@ -6609,6 +6756,12 @@ def _recover_geometric_primitives(
         or audit.hypothesis_count > _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES
     ):
         return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+
+    if not closed_arc:
+        groups, candidates = _bridge_small_arc_defects(
+            groups, candidates, raw_points, evidence_points, evidence_eligible,
+            tolerance_mm, (spacing[0], spacing[1]), audit,
+        )
 
     boundaries_were_refined = False
     complete_candidates = [

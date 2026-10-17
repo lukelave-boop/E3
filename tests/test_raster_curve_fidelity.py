@@ -100,6 +100,7 @@ def _fit_raster_outer_contours(
     *,
     pitch_mm: float,
     threshold: int = 122,
+    recover_primitives: bool = True,
 ) -> list[_ContourFit]:
     assert cv2.imwrite(str(path), pixels)
     payload = read_raster_asset_payload(path)
@@ -167,6 +168,7 @@ def _fit_raster_outer_contours(
             classification_points=threshold_raw,
             primitive_evidence_points=primitive_evidence,
             primitive_evidence_eligible=primitive_evidence_eligible,
+            recover_primitives=recover_primitives,
         )
         results.append(
             _ContourFit(
@@ -412,6 +414,9 @@ def test_actual_coleman_p_bowl_refines_biased_long_cubic(
         tmp_path / "coleman-p-roi.png",
         _coleman_p_crop(),
         pitch_mm=_COLEMAN_PITCH_MM,
+        # This regression isolates source-edge localization and cubic
+        # centering, before the separately tested canonical-arc recovery.
+        recover_primitives=False,
     )
     assert len(fits) == 2
     bowl = max(fits, key=lambda fit: float(np.mean(fit.raw[:, 0])))
@@ -430,6 +435,7 @@ def test_actual_coleman_p_bowl_refines_biased_long_cubic(
         _COLEMAN_P_SHAPE[0] * _COLEMAN_PITCH_MM,
         fitter._ComplexityBudget(),
         source_pixel_spacing_mm=(_COLEMAN_PITCH_MM, _COLEMAN_PITCH_MM),
+        recover_primitives=False,
     )
     baseline_fit = _ContourFit(
         bowl.threshold_raw,
@@ -478,6 +484,20 @@ def test_actual_coleman_p_bowl_refines_biased_long_cubic(
     assert abs(refined_source.signed_mean_mm) <= 0.005
     assert refined_source.rms_mm <= 0.037
     assert refined_source.same_side_fraction <= 0.56
+
+
+def test_actual_coleman_p_arc_recovery_preserves_all_hard_corners(tmp_path: Path) -> None:
+    fits = _fit_raster_outer_contours(
+        tmp_path / "coleman-p-arc.png", _coleman_p_crop(), pitch_mm=_COLEMAN_PITCH_MM,
+    )
+    bowl = max(fits, key=lambda fit: float(np.mean(fit.raw[:, 0])))
+    assert bowl.fitted.primitive_recovery.recovered_arc_count == 1
+    assert bowl.fitted.primitive_recovery.maximum_residual_mm < 0.08
+    corners = fitter._corner_indices(bowl.threshold_raw, 0.065)
+    assert len(corners) == 4
+    endpoints = np.asarray([segment.start for segment in bowl.fitted.segments])
+    for index in corners:
+        assert float(np.min(np.linalg.norm(endpoints - bowl.raw[index], axis=1))) < 1e-10
 
 
 def test_actual_coleman_a_e_s_do_not_regress_against_source_edges(

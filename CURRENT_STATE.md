@@ -1,5 +1,54 @@
 # Current repository state
 
+## Arc recovery and Fit arc implementation (2026-10-16)
+
+Isolated branch `codex/arc-recovery` starts from authoritative `origin/main`
+`a7d2dae`. Existing unrelated changes in the shared checkout are preserved.
+Automatic native tracing fits circular arcs across narrowly bounded isolated
+edge defects, including across defect-created corner partitions, while retaining
+native tolerance, source-pixel limits, strong remaining support and final topology
+validation. Larger notches, corners, incompatible curvature and ambiguous fits
+fall back to the existing contour. Imported rasters and camera-native tracing
+share this stage; the browser single-SVG pipeline is unchanged.
+
+Shape → Fit arc opens a reviewed selected-span editor for one unlocked PATH or
+POLYGON. Endpoint selection, closed-outline alternate spans, physical dimensions,
+mirrors/rotation, original/proposed overlays and radius/deviation are supported.
+Apply uses one ordinary shape command with stale project/object/selection guards;
+Cancel is inert and Undo/Redo restores the exact original/reapplied object.
+The pure project operation retains endpoints, untouched segments and subpaths,
+holes, orientation and native topology. Existing native line/cubic schema and
+normal bounds/G-code/execution guards remain in force.
+
+Final combined focused verification passes **510 tests in 58.58 seconds** on
+Windows Python 3.14.4 with four workers. Coverage includes complete imported
+raster/camera pipelines, defect acceptance/rejection, closed-contour seam
+invariance, a local arc among 16 exact retained corners, the real Coleman fixture,
+manual spans, anisotropic fitting, mirrored/rotated save/load, holes and ordinary
+job-generation acceptance/rejection. Historical source-centering assertions stay
+intact with recovery explicitly disabled for that one fixture; a separate
+recovery-enabled Coleman check retains every hard corner and the fit-error bound.
+
+Offscreen Qt interaction verifies preview, Apply/Cancel, stale review guards and
+exact Undo/Redo. A hidden Windows-widget capture was visually reviewed at 960 x
+710 logical pixels / 125% DPI. The final independent reviews found no remaining
+actionable issues after adding tiny-hole clearance and closed-seam regressions.
+Repository Ruff, application compileall and whitespace checks pass. Complete
+Windows 3.10/3.12 compatibility CI remains pending on the committed branch.
+Ignored evidence is under this feature worktree's build/arc-final-stable.* and
+build/arc-fit-qa/fit-arc-preview.png. These are automated/offscreen checks only.
+No interactive operator, real camera/controller/laser or physical accuracy test
+has occurred. The supplied screenshot demonstrates the requested behavior but is
+not an original source fixture; synthetic end-to-end defect cases are used.
+
+A read-only canonical storage check currently refuses a new Windows build:
+5,610,155,173 bytes measured + 2,147,483,648 bytes already reserved +
+2,147,483,648 requested exceeds the fixed 8,589,934,592-byte shared cap.
+An earlier inventory changed during inspection; the later stable check reports
+the capacity refusal above. No existing artifact, reservation, installed E3,
+permanent launcher or feature pointer has been changed. A frozen DEV TEST build
+and operator handoff remain pending storage admission.
+
 ## 0.8.0 integration candidate (2026-10-16)
 
 The confirmed three-chat scope combines update download progress `986525a` and

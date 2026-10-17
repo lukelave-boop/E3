@@ -100,6 +100,7 @@ from ..project import (
     transform_native_path,
     verify_project_job_assets,
 )
+from ..project.arc_fit import MAX_ARC_FIT_SEGMENTS
 from ..project.polygon import create_regular_polygon
 from ..storage import atomic_write_text
 from ..templates import (
@@ -118,6 +119,7 @@ from ..vision.trace_orientation import (
     estimate_trace_orientation,
     trace_rotation_transform,
 )
+from .arc_fit_dialog import ArcFitDialog
 from .context_bar import ContextPropertyBar
 from .controller import (
     DESKTOP_SHUTDOWN_TIMEOUT_SECONDS,
@@ -1237,6 +1239,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._rectangle_shape_edited
         )
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
+        self.transform_panel.fitArcRequested.connect(self.fit_selected_arc)
         self.transform_panel.straightenRequested.connect(
             self._straighten_selected_trace_objects
         )
@@ -1998,6 +2001,65 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _assign_layer(self, object_ids: list[str], layer_id: str) -> None:
         self.history.execute(AssignLayerCommand(self.document, object_ids, layer_id))
         self.workspace.select_objects(object_ids)
+
+    def fit_selected_arc(self) -> None:
+        """Preview a selected edge; the ordinary shape command owns the commit."""
+
+        if (
+            getattr(self, "_closing", False)
+            or getattr(self, "_authoring_freeze_owner", None) is not None
+        ):
+            return
+        selected = self.workspace.selected_object_ids()
+        if len(selected) != 1:
+            self.show_notice("Select one unlocked vector to fit an arc")
+            return
+        document = self.document
+        try:
+            source = document.get_object(selected[0])
+        except KeyError:
+            self.show_notice("Select one unlocked vector to fit an arc")
+            return
+        if source.locked or source.kind not in {ObjectKind.PATH, ObjectKind.POLYGON}:
+            self.show_notice("Select one unlocked vector to fit an arc")
+            return
+        if source.path_geometry().segment_count > MAX_ARC_FIT_SEGMENTS:
+            self.show_notice("This vector has too many edge segments; simplify it before fitting an arc")
+            return
+        snapshot = copy.deepcopy(source.to_dict())
+        dialog = ArcFitDialog(source, self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        result = dialog.accepted_fit
+        if result is None:
+            self.show_notice("Choose a valid arc preview before applying")
+            return
+        if (
+            getattr(self, "_closing", False)
+            or getattr(self, "_authoring_freeze_owner", None) is not None
+            or self.document is not document
+            or self.workspace.selected_object_ids() != selected
+        ):
+            self.show_notice("The project changed; reopen Fit arc to review the current edge")
+            return
+        try:
+            current = document.get_object(source.id)
+        except KeyError:
+            current = None
+        if current is not source or current.to_dict() != snapshot:
+            self.show_notice("The vector changed; reopen Fit arc to review the current edge")
+            return
+        try:
+            self.history.execute(
+                UpdateObjectShapeCommand(
+                    document, source.id, source.transform, result.geometry.to_dict(),
+                    description="Fit arc",
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            self.show_error(f"Could not apply arc: {exc}")
+            return
+        self.workspace.select_objects(selected)
 
 
     def group_selection(self) -> None:

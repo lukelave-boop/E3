@@ -58,6 +58,7 @@ class CircularArcHypothesis:
     stability_center_mm: float
     stability_radius_mm: float
     error_budget: PrimitiveErrorBudget
+    defect_count: int = 0
 
     @property
     def arc_length_mm(self) -> float:
@@ -507,12 +508,98 @@ def _circle_subset_parameters(points: np.ndarray) -> tuple[np.ndarray, float] | 
     return _refine_circle_parameters(points, initial[0], initial[1])
 
 
+def circular_arc_support_inliers(
+    points: np.ndarray,
+    center: np.ndarray,
+    radius_mm: float,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    *,
+    closed: bool = False,
+) -> np.ndarray | None:
+    """Validate narrowly isolated defects; return the remaining circle support.
+
+    Defects may exceed the ordinary 0.6-pixel residual only within the existing
+    native tolerance and 1.5 source-normal pixels. Each bracketed run occupies
+    at most four source-tangent pixels and 5% of the arc; together they occupy
+    at most 8%. Endpoints and at least 92% of angular support remain strict.
+    This deliberately cannot infer whether a subpixel notch was intentional.
+    """
+
+    values = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    center = np.asarray(center, dtype=np.float64).reshape(2)
+    if not np.isfinite(center).all() or not math.isfinite(radius_mm) or radius_mm <= 0:
+        raise ValueError("circle center and positive radius must be finite")
+    primitive_error_budget(tolerance_mm, source_pixel_spacing_mm)
+    if len(values) < _MINIMUM_ARC_SAMPLES:
+        return None
+    offsets = values - center
+    distances = np.linalg.norm(offsets, axis=1)
+    if np.any(distances <= 1e-15) or not np.isfinite(distances).all():
+        return None
+    spacing = _finite_positive_pair(source_pixel_spacing_mm)
+    normals = offsets / distances[:, None]
+    pitch, maximum, rms, _endpoint = _radial_normal_error_limits(normals, tolerance_mm, spacing)
+    residuals = distances - radius_mm
+    inliers = np.abs(residuals) <= maximum
+    if not closed and not (inliers[0] and inliers[-1]):
+        return None
+    if np.count_nonzero(inliers) < _MINIMUM_ARC_SAMPLES:
+        return None
+    if np.any(np.abs(residuals) > np.minimum(tolerance_mm, 1.5 * pitch)):
+        return None
+    weights = _arc_length_weights(values)
+    support_weights = weights * inliers
+    weight_sum = float(np.sum(support_weights))
+    if weight_sum <= 1e-15:
+        return None
+    normalized = residuals / rms
+    if (
+        float(np.sum(support_weights * normalized**2)) > weight_sum
+        or abs(float(np.sum(support_weights * normalized))) > 0.45 * weight_sum
+    ):
+        return None
+    if np.all(inliers):
+        return inliers
+
+    # Start a closed contour in supported evidence so a seam-straddling defect
+    # is checked as one complete run, never two individually narrow fragments.
+    start = int(np.flatnonzero(inliers)[0]) if closed else 0
+    ordered = np.roll(values, -start, axis=0) if closed else values
+    good = np.roll(inliers, -start) if closed else inliers
+    if closed:
+        ordered = np.vstack((ordered, ordered[0]))
+        good = np.append(good, True)
+    angles = np.unwrap(np.arctan2(ordered[:, 1] - center[1], ordered[:, 0] - center[0]))
+    lengths = np.abs(np.diff(angles)) * radius_mm
+    total = float(np.sum(lengths))
+    changes = np.diff(np.concatenate(([True], good, [True])).astype(np.int8))
+    starts = np.flatnonzero(changes == -1)
+    ends = np.flatnonzero(changes == 1)
+    unsupported = 0.0
+    if len(starts) > 8:
+        return None
+    for first, after in zip(starts, ends, strict=True):
+        if first == 0 or after >= len(good):
+            return None
+        run_width = float(np.sum(lengths[first - 1 : after]))
+        tangent = np.asarray((-normals[(first + start) % len(values), 1], normals[(first + start) % len(values), 0]))
+        tangent_pitch = abs(float(tangent[0])) * spacing[0] + abs(float(tangent[1])) * spacing[1]
+        if run_width > min(4.0 * tangent_pitch, 0.05 * total):
+            return None
+        unsupported += run_width
+    if unsupported > 0.08 * total:
+        return None
+    return inliers
+
+
 def fit_circular_arc_hypothesis(
     points: np.ndarray,
     tolerance_mm: float,
     source_pixel_spacing_mm: tuple[float, float],
     *,
     closed: bool = False,
+    allow_small_defects: bool = False,
 ) -> CircularArcHypothesis | None:
     """Fit and conservatively validate one ordered conceptual circular arc."""
 
@@ -606,19 +693,27 @@ def fit_circular_arc_hypothesis(
             source_normal_pitch_mm=error_budget.source_normal_pitch_mm,
             representation_mm=strict_representation,
         )
-    maximum, rms, signed_mean = _weighted_metrics(residuals, weights)
+    inliers = (
+        circular_arc_support_inliers(values, center, radius, tolerance_mm, source_spacing, closed=closed)
+        if allow_small_defects
+        else np.ones(len(values), dtype=bool)
+    )
+    if inliers is None:
+        return None
+    support_weights = weights * inliers
+    maximum, rms, signed_mean = _weighted_metrics(residuals[inliers], weights[inliers])
     if maximum > error_budget.maximum_mm or rms > error_budget.rms_mm:
         return None
     if abs(signed_mean) > 0.45 * error_budget.rms_mm:
         return None
-    if np.any(np.abs(residuals) > local_maximum):
+    if np.any(np.abs(residuals[inliers]) > local_maximum[inliers]):
         return None
-    weight_sum = float(np.sum(weights))
+    weight_sum = float(np.sum(support_weights))
     if weight_sum <= 1e-15:
         return None
     normalized_residuals = residuals / local_rms
-    normalized_rms = math.sqrt(float(np.sum(weights * normalized_residuals**2)) / weight_sum)
-    normalized_bias = float(np.sum(weights * normalized_residuals)) / weight_sum
+    normalized_rms = math.sqrt(float(np.sum(support_weights * normalized_residuals**2)) / weight_sum)
+    normalized_bias = float(np.sum(support_weights * normalized_residuals)) / weight_sum
     if normalized_rms > 1.0 or abs(normalized_bias) > 0.45:
         return None
 
@@ -643,13 +738,23 @@ def fit_circular_arc_hypothesis(
     if max(stability_center, stability_radius) > stability_allowance:
         return None
 
+    if not np.all(inliers):
+        # Agreement of independent supported halves prevents a handful of
+        # rejected samples from disguising varying curvature or a true corner.
+        for half in np.array_split(values[inliers], 2):
+            half_parameters = _circle_subset_parameters(half)
+            if half_parameters is None:
+                return None
+            if max(float(np.linalg.norm(half_parameters[0] - center)), abs(half_parameters[1] - radius)) > stability_allowance:
+                return None
+
     endpoint_adjustment = max(
         abs(float(np.linalg.norm(values[0] - center) - radius)),
         abs(float(np.linalg.norm(values[-1] - center) - radius)),
     )
-    if endpoint_adjustment > error_budget.endpoint_adjustment_mm:
+    if not closed and endpoint_adjustment > error_budget.endpoint_adjustment_mm:
         return None
-    if abs(float(residuals[0])) > float(local_endpoint[0]) or abs(float(residuals[-1])) > float(local_endpoint[-1]):
+    if not closed and (abs(float(residuals[0])) > float(local_endpoint[0]) or abs(float(residuals[-1])) > float(local_endpoint[-1])):
         return None
     return CircularArcHypothesis(
         center=center.copy(),
@@ -657,14 +762,15 @@ def fit_circular_arc_hypothesis(
         start_angle_radians=start_angle,
         sweep_radians=sweep,
         support_length_mm=support_length,
-        maximum_residual_mm=maximum,
-        rms_residual_mm=rms,
+        maximum_residual_mm=float(np.max(np.abs(residuals))),
+        rms_residual_mm=_weighted_metrics(residuals, weights)[1],
         signed_mean_residual_mm=signed_mean,
         maximum_endpoint_adjustment_mm=endpoint_adjustment,
         angular_backtrack_radians=angular_backtrack,
         stability_center_mm=stability_center,
         stability_radius_mm=stability_radius,
         error_budget=error_budget,
+        defect_count=int(np.count_nonzero(np.diff(np.r_[True, inliers].astype(np.int8)) == -1)),
     )
 
 

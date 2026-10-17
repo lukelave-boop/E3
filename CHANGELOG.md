@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - arc recovery and Fit arc (2026-10-16)
+
+- Recover circular arcs across bounded isolated edge defects while retaining
+  substantial notches, corners, topology and unsupported freeform contours.
+- Add **Shape → Fit arc…** for a selected vector span, with a proposed overlay,
+  fit measurements, explicit Apply/Cancel and ordinary Undo/Redo.
+- Store accepted arcs as existing native cubic segments; project schema and
+  guarded job generation remain unchanged.
+
 ## 0.8.0 integration (2026-10-16)
 
 - Combine the download progress and independent version-state changes below

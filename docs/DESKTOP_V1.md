@@ -1,5 +1,15 @@
 # E3 native desktop v1 foundation
 
+## Fit an arc
+
+Select one unlocked vector path or polygon, then open **Shape → Fit arc…**.
+In the enlarged preview, pick the start and end of the edge to replace. For a
+closed outline, the opposite-side control chooses the other route between the
+endpoints. Review the original selected span and proposed arc, radius and maximum
+movement. **Apply** creates one normal Undo/Redo step; **Cancel** discards the
+proposal. A rejected or stale proposal cannot be applied. Images must first be
+traced to vectors. See [arc fitting](OBJECT_TRACE.md#fit-an-arc-on-an-existing-vector).
+
 The current desktop clarity pass supersedes the historical icon-only rail below:
 drawing tools and Capture / Generate / Preview show names, the Cuts editor labels
 its selectors and distinguishes job inclusion from canvas visibility, and dropdowns

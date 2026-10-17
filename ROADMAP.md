@@ -1,5 +1,13 @@
 # Roadmap
 
+## Arc recovery and reviewed Fit arc (2026-10-16)
+
+Implemented on `codex/arc-recovery`: bounded automatic recovery of circular arcs
+across small isolated contour defects and a selected-vector Fit arc dialog with
+preview and Undo/Redo. Significant notches, corners and unsupported curves must
+retain their observed geometry. Automated, offscreen, frozen-build and operator
+verification levels are recorded separately in [current state](CURRENT_STATE.md).
+
 ## 0.8.0 integration (2026-10-16)
 
 Prepared: confirmed download progress and version-state work combined with main's

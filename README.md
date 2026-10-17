@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop tracing now recognizes circular arcs across small, isolated edge defects
+when the remaining contour consistently supports the circle. Larger notches,
+corners and incompatible curves remain unchanged. For a reviewed correction,
+select one unlocked vector and use **Shape → Fit arc…**, choose the span, review
+the overlay, and Apply. The edit supports normal Undo/Redo. See
+[arc fitting](docs/OBJECT_TRACE.md#fit-an-arc-on-an-existing-vector).
+
 The 0.8 series combines desktop update progress, bounded and cancellable updates,
 and independent version state with the UI and installer improvements. See
 [versioning](docs/VERSIONING.md) and [current release verification](CURRENT_STATE.md).
@@ -948,14 +955,15 @@ After the baseline fit, the source-neutral primitive-recovery stage may replace
 compatible neighboring spans with arbitrary-angle total-least-squares lines or
 conceptual circular arcs. This is geometric fitting, not OCR, font, logo, or
 template recognition. Maximum, RMS, and endpoint/join gates are bounded
-jointly by source-pixel spacing and the existing fit tolerance, and hard-corner
-partitions remain protected. A recovered join may move an observed corner only
+jointly by source-pixel spacing and the existing fit tolerance. Only bounded
+isolated defects allow adjacent corner partitions to be joined into an arc;
+substantial straight runs and retained corners remain protected. A recovered join may move an observed corner only
 to a nearby model intersection inside both endpoint allowances; a rejected
 hypothesis, unsafe join, or failed frame or topology check keeps the original
 fitted pieces unchanged; a rejected compound result is rerun once through the
 complete baseline fit with recovery disabled. Model selection tries a line,
-then a circle, then the unchanged freeform fallback without increasing any
-candidate partition's segment count. Circular arcs are stored as bounded canonical cubic
+then a circle, then the unchanged freeform fallback, with bounded arc unions
+across proven local defects and no increase in the replaced segment count. Circular arcs are stored as bounded canonical cubic
 Bézier spans, so the native schema, existing G0/G1
 planning, and Straighten behavior do not change. The stage does not rotate or
 deskew the raster and does not change thresholding, source-edge localization,

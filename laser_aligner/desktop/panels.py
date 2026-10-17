@@ -671,6 +671,7 @@ class TransformPanel(QtWidgets.QWidget):
     rectangleShapeEdited = QtCore.Signal(str, object, float)
     assignLayerRequested = QtCore.Signal(list, str)
     straightenRequested = QtCore.Signal()
+    fitArcRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -708,6 +709,16 @@ class TransformPanel(QtWidgets.QWidget):
         self.straighten_button.setVisible(False)
         self.straighten_review.setVisible(False)
         layout.addWidget(self.straighten_review)
+
+        self.fit_arc_button = QtWidgets.QPushButton("Fit arc…")
+        self.fit_arc_button.setObjectName("fitArcButton")
+        self.fit_arc_button.setToolTip(
+            "Select one unlocked vector, then choose the part of its edge to replace "
+            "with a circular arc. Review the preview before applying; Undo restores the edge."
+        )
+        self.fit_arc_button.setEnabled(False)
+        self.fit_arc_button.clicked.connect(self.fitArcRequested)
+        layout.addWidget(self.fit_arc_button)
 
         form = _form_layout()
         self.x_spin = self._spin(-10000.0, 10000.0, " mm")
@@ -882,6 +893,11 @@ class TransformPanel(QtWidgets.QWidget):
         document: ProjectDocument,
     ) -> None:
         self._selected_ids = [item.id for item in objects]
+        self.fit_arc_button.setEnabled(
+            len(objects) == 1
+            and objects[0].kind in {ObjectKind.PATH, ObjectKind.POLYGON}
+            and not objects[0].locked
+        )
         self._object_id = objects[0].id if len(objects) == 1 else None
         self._rectangle_selected = bool(
             len(objects) == 1 and objects[0].kind == ObjectKind.RECTANGLE

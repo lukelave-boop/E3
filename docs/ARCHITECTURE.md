@@ -1,5 +1,19 @@
 # Architecture
 
+## Circular arc reconstruction
+
+The shared physical contour fitter owns automatic arc recovery for imported
+rasters and camera-native tracing. Its bounded defect exception applies only to
+circular hypotheses and retains the ordinary geometric tolerance and final
+native/topology checks. It does not change threshold masks or machine authority.
+
+`project/arc_fit.py` is the UI-neutral selected-span operation. It fits in physical
+object dimensions and returns a proposed native geometry without mutating a
+project. The desktop dialog owns selection and overlay review; Apply uses the
+ordinary object-shape command only while the original project/object/selection
+snapshot is current. Cancel has no project effect. Canonical cubic storage keeps
+existing persistence, transforms, preview and toolpath handling.
+
 Release packaging verifies a shared version and exact revision against the
 Windows installer product version, both platform bundles' metadata and the
 update manifest before the publisher can switch the offered update. The Linux
@@ -2168,14 +2182,22 @@ existing fitting tolerance jointly bound maximum and RMS residual, endpoint
 movement, and join adjustment, so a wide tolerance cannot silently promote
 resolved curvature or freeform detail.
 
-Hard-corner classifications remain immutable partition boundaries across
-recovery. The observed vertex at one of those boundaries may be replaced by a
-nearby line-line, line-circle, or circle-circle intersection only when the
-adjustment fits both endpoint allowances. Smooth joins additionally require
-tangent agreement. Each source-index-exact partition tries a line, then a
-circle, then keeps that partition's original fitted objects; one partition's
-savings cannot justify expanding another partition, and recovery never increases
-the contour's segment count. No parallel-edge, constant-width, rectangle, or
+Hard-corner classifications anchor the initial partitions. A bounded circular
+hypothesis may bridge adjacent partitions only when an isolated defect is
+identified and every removed corner lies within four source pixels of its
+rejected samples. Substantial proven straight runs remain boundaries. Defects
+are capped at the existing native tolerance and 1.5 source-normal pixels; each
+run is at most four source-tangent pixels and 5% of angular support, with at
+most eight runs and 8% total unsupported support. Independent supported halves
+must agree on the circle. Closed-circle fitting has no artificial anchored
+endpoint at the contour storage seam. Up to 64 bridge hypotheses share the
+existing 256-hypothesis ceiling; broad and local candidates share that budget.
+
+Retained joins may use a nearby model intersection only within both endpoint
+allowances, and smooth joins still require tangent agreement. Each initial
+source-index-exact partition tries a line, then a circle, then its original
+fitted objects. A proposed union must not increase the replaced segment count,
+and recovery never increases the complete contour's segment count. No parallel-edge, constant-width, rectangle, or
 symmetry constraint is applied. The resulting native sequence must still pass the
 existing frame, continuous error, self/adjacent-arc, compound-clearance,
 even-odd, and rasterized-hierarchy validators. A rejected hypothesis, unsafe
