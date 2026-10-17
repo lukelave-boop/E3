@@ -1,5 +1,8 @@
 # Roadmap
 
+- Implemented probe selection refresh recovery and explicit fresh-click button
+  transition; operator verification and intermittent-camera diagnosis remain pending.
+
 ## Linked engraving image/vector manipulation (2026-10-17)
 
 Implemented on the arc feature branch: either linked member can drive movement,

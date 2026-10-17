@@ -1,5 +1,9 @@
 # Changelog
 
+- Fixed daily Position probe losing selection mode during camera refresh delays.
+  Probe selection requests live images even with Live overlay paused, shows
+  refresh progress, and changes to Move probe here after a valid fresh click.
+
 ## Linked image/vector manipulation (2026-10-17)
 
 - Allow dragging, resizing, rotating and mirroring from either an engraving image

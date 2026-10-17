@@ -1,5 +1,32 @@
 # Current repository state
 
+## Probe selection refresh recovery (2026-10-17)
+
+Position probe now requests fresh corrected camera images while selection is
+active, even with the normal Live overlay paused or slow. It leaves placement
+capture review when explicitly selected; trace/template/calibration review
+holds remain respected. A delayed or expired frame no longer silently cancels
+the crosshair mode. The panel explains that it is refreshing; a valid fresh
+click changes the same button to Move probe here. Expired targets are cleared
+and require another click. Selection never sends motion; the separate move
+retains freshness, mapping, machine-session and normal motion checks.
+
+The supplied 0.8.7 video shows stale/unavailable image feedback. The operator
+also reports camera online/offline flapping. Twelve read-only authenticated
+camera status samples all succeeded in 0.092-0.187 s with advancing frames;
+three 1920x1080 snapshots took 0.441-0.472 s. This does not explain or repair
+intermittent network/camera dropouts. No camera restart, settings change,
+controller command, motion or laser operation was performed.
+
+Implemented on the existing isolated codex/arc-recovery branch, retaining its
+arc and movable-pair changes. The shared checkout remains untouched. Focused
+Windows offscreen widget/mapping/lifecycle coverage passes 335 cases (330 in the
+combined cohort plus all 32 metadata/review tests after adding five cases).
+Both new refresh/expired-frame regression cases fail against the unchanged
+0.8.7 implementation. Repository Ruff, application compileall and whitespace
+checks pass. Frozen handoff and compatibility CI are pending; interactive
+operator acceptance and physical behavior remain unverified.
+
 ## Movable linked engraving image/vector pairs (2026-10-17)
 
 The operator reports that creating a linked vector in Edit image for engraving

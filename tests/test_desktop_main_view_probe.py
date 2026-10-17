@@ -367,7 +367,7 @@ def test_matching_fresh_frame_does_not_revoke_queued_authority_without_marker(ha
     assert invalidated == []
 
 
-@pytest.mark.parametrize("replacement", ["unchanged", "fresh_frame", "plain_image"])
+@pytest.mark.parametrize("replacement", ["unchanged", "fresh_frame", "plain_image", "stale_then_fresh"])
 def test_daily_panel_real_viewport_click_requires_separate_guarded_move(harness, monkeypatch, replacement):
     from laser_aligner.desktop import laser_focus
     from laser_aligner.desktop.laser_focus import LaserFocusWorkspace
@@ -394,17 +394,47 @@ def test_daily_panel_real_viewport_click_requires_separate_guarded_move(harness,
         daily.panel.set_result(camera_result(surface=None))
         daily.panel.path_clear.setChecked(True)
         publish(harness)
+        if replacement == "stale_then_fresh":
+            harness.clock.value += 3.0
         daily._camera_tick()
         assert daily.panel.position_probe.isEnabled()
         harness.workspace.set_creation_tool("rectangle")
         daily.panel.position_probe.click()
         point = harness.workspace.mapFromScene(QtCore.QPointF(100.0, -100.0))
         expected = harness.workspace.workspace_scene.scene_to_machine(harness.workspace.mapToScene(point))
+        if replacement == "stale_then_fresh":
+            # A click on the expired frame is inert, but selection intent must
+            # survive the delay until a fresh corrected image arrives.
+            QtTest.QTest.mouseClick(harness.workspace.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point)
+            daily.bed_view._check_selection()
+            daily._camera_tick()
+            assert daily.panel.position_probe.isChecked()
+            assert not daily.panel.can_move_probe()
+            assert daily.panel._camera_target is None
+            assert "Refreshing" in daily.panel.camera_target.text()
+            assert not any(action == "position_probe" for action, _ in controller.machine.calls)
+            publish(harness)
+            daily._camera_tick()
         QtTest.QTest.mouseClick(harness.workspace.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point)
         assert daily.panel.can_move_probe()
+        assert daily.panel.position_probe.text() == "Move probe here"
         assert daily.panel._camera_target["target_machine_xy_mm"] == pytest.approx(expected)
         assert harness.workspace._rectangle_anchor_mm is None
         assert not any(action == "position_probe" for action, _ in controller.machine.calls)
+        if replacement == "stale_then_fresh":
+            harness.clock.value += 3.0
+            daily.panel.set_result(camera_result(surface=None))
+            daily.bed_view._check_selection()
+            daily._camera_tick()
+            assert daily.panel._camera_target is None
+            assert not daily.panel.can_move_probe()
+            assert daily.panel.position_probe.isChecked()
+            assert daily.panel.position_probe.text() == "Position probe"
+            publish(harness)
+            daily._camera_tick()
+            assert not daily.panel.can_move_probe()
+            QtTest.QTest.mouseClick(harness.workspace.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point)
+            assert daily.panel.position_probe.text() == "Move probe here"
         daily.panel.position_probe.click()
         assert daily.bed_view.selection_snapshot() is None
         assert len(controller.work) == 1
@@ -426,3 +456,29 @@ def test_daily_panel_real_viewport_click_requires_separate_guarded_move(harness,
         daily.close()
         daily.deleteLater()
         harness.app.processEvents()
+
+
+def test_probe_mode_requests_live_frames_only_while_active(harness, monkeypatch):
+    calls = []
+    monkeypatch.setattr(harness.controller, "request_camera_refresh", lambda: calls.append("refresh"), raising=False)
+    monkeypatch.setattr(harness.controller, "release_placement_capture", lambda: calls.append("release"), raising=False)
+    harness.probe.set_selection_enabled(False)
+    harness.probe._check_selection()
+    assert calls == []
+    harness.probe.set_selection_enabled(True)
+    assert calls == ["release", "refresh"]
+    calls.clear()
+    harness.clock.value += 3.0
+    harness.probe._check_selection()
+    assert calls == ["refresh"]
+    assert harness.probe.selection_snapshot() is None
+    publish(harness)
+    select(harness)
+    assert harness.probe.selection_snapshot() is not None
+    harness.probe.set_selection_enabled(False)
+    calls.clear()
+    harness.probe._check_selection()
+    assert calls == []
+    harness.probe.end()
+    harness.probe._check_selection()
+    assert calls == []

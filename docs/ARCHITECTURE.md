@@ -1,5 +1,11 @@
 # Architecture
 
+Daily probe selection temporarily requests corrected-frame refreshes through
+DesktopController without changing the Live overlay preference. Placement
+review is released by explicit selection; other review holds and single-flight
+correction remain enforced. Camera delays retain selection intent, never an
+expired motion target. Movement still requires fresh mapped evidence.
+
 ## Circular arc reconstruction
 
 The shared physical contour fitter owns automatic arc recovery for imported

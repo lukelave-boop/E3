@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Position probe keeps the crosshair active while refreshing the camera, including
+when Live overlay is paused. Click a fresh point to change it to **Move probe here**;
+that separate action retains the existing movement checks.
+
 Desktop tracing now recognizes circular arcs across small, isolated edge defects
 when the remaining contour consistently supports the circle. Larger notches,
 corners and incompatible curves remain unchanged. For a reviewed correction,
