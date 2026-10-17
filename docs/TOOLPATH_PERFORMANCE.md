@@ -4,7 +4,12 @@ The desktop Generate pipeline batches raster coordinate operations and bounds
 checks, filters vector contour candidates before exact containment tests, and
 releases encoding geometry before constructing the immutable exact preview.
 Canonical linear G-code has a fully matched preview indexing path; other syntax
-uses the existing general parser. Controller admission and execution validation
+uses the existing general parser. Immutable move records retain their named fields
+using tuple storage, with bounds reduced from those exact values. Raster run
+clipping and serialized-coordinate collection use batch arrays. Unchanged
+placement geometry and zero-offset controller geometry share read-only spans;
+nontrivial transforms retain independent coordinates. A bounded cache reuses
+coordinate formatting. Controller admission and execution validation
 remain separate and unchanged.
 
 The selected material-surface metadata is captured with the generation request
@@ -29,6 +34,8 @@ python scripts/benchmark_toolpath_generation.py --project 'C:\artwork\project.e3
 `--source-root` can point at a baseline checkout for an equivalent comparison.
 The baseline measurement reproduces the previous desktop surface binding and
 second indexing pass when the older generator lacks the new metadata argument.
+Add `--desktop-cancellation` to include the worker's cooperative cancellation
+callbacks in both generation and preview preparation.
 The deterministic raster is 180 x 180 mm at 0.2 mm pitch; vector contours fill a
 192 mm grid. Timings are measurements, not CI timing assertions.
 
@@ -48,7 +55,7 @@ it is not a universal deadline for every program below the command cap.
 See `CURRENT_STATE.md` for measurements and the distinction between source,
 offscreen, frozen-build, interactive and physical verification.
 
-## Windows source measurements, 2026-10-17
+## Initial Windows source measurements, 2026-10-17
 
 Python 3.14.4 on the operator workstation; synthetic offline authority, surface
 binding enabled, no GUI painting or controller access:
@@ -62,3 +69,14 @@ binding enabled, no GUI painting or controller access:
 Every optimized result uses three runs. The matched emblem and vector programs
 are byte-identical after removing only the generation timestamp. Keep installer,
 interactive and physical verification separate from these source measurements.
+
+## Follow-up Python 3.12 verification
+
+The first packaged Python 3.12 raster result exceeded ten seconds, so follow-up
+work reduced geometry and move-record allocations, reused parsed numeric words,
+and batched additional raster operations. The final source with Python 3.12.10
+and the hosted package's dependencies takes 8.596 / 9.536 / 9.601 seconds for the
+811,800-move dense raster, including desktop cancellation callbacks, surface
+binding, exact indexing and preview preparation. Its program hash remains
+`c728dd6f301d4d8ad6ca0b93dc020867bb01bceaa2c812d08736f661277ecdae`.
+This is a source/dependency check; the final rebuilt archive needs its own check.

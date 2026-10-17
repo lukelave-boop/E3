@@ -5,6 +5,8 @@ import time
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import lru_cache
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -220,6 +222,7 @@ _BAYER_8X8 = np.asarray(
 )
 
 
+@lru_cache(maxsize=8192)
 def _fmt(value: float) -> str:
     if abs(value) < 0.0005:
         value = 0.0
@@ -1088,6 +1091,7 @@ def _place_raster_rows(
         points = _place_points(row.points, coordinate_frame)
         if row.spans and all(len(span.points) == 2 for span in row.spans):
             span_points = np.array([span.points for span in row.spans], dtype=np.float64)
+            original_span_points = span_points
             if coordinate_frame is not None:
                 origin, axes = _coordinate_frame_matrix(coordinate_frame)
                 span_points = span_points @ axes + origin
@@ -1099,9 +1103,18 @@ def _place_raster_rows(
                         or not np.allclose(span_points[:, :, fixed_axis], coordinate, rtol=0, atol=1e-8)):
                     raise SafetyError("Placed raster row does not match its machine scan angle")
                 points[:, fixed_axis] = coordinate
+                if span_points is original_span_points:
+                    span_points = span_points.copy()
                 span_points[:, :, fixed_axis] = coordinate
-            spans = [Polyline(mapped, closed=span.closed, source_tag=span.source_tag)
-                     for mapped, span in zip(span_points, row.spans, strict=True)]
+            # Placement and emission only read spans. Preserve the original
+            # objects when the transform/canonicalization leaves every bit
+            # unchanged, including signed zero, instead of retaining another
+            # full set of tiny arrays and Python objects during encoding.
+            if np.array_equal(span_points.view(np.uint64), original_span_points.view(np.uint64)):
+                spans = row.spans
+            else:
+                spans = [Polyline(mapped, closed=span.closed, source_tag=span.source_tag)
+                         for mapped, span in zip(span_points, row.spans, strict=True)]
         else:
             spans = _place_paths(row.spans, coordinate_frame)
             if fixed_axis is not None:
@@ -1241,9 +1254,9 @@ def _validate_exact_raster_plan(
     for offset in range(0, len(plan.moves), 4096):
         _raise_if_toolpath_cancelled()
         batch = plan.moves[offset:offset + 4096]
-        controller = np.array([
-            point for move in batch for point in ((move.start_x, move.start_y), (move.end_x, move.end_y))
-        ]) - display_offset
+        controller = np.fromiter(chain.from_iterable(
+            (move.start_x, move.start_y, move.end_x, move.end_y) for move in batch
+        ), dtype=np.float64, count=len(batch) * 4).reshape(-1, 2) - display_offset
         if envelope.surface is None:
             _validate_raster_travel_points(controller, envelope)
         else:
@@ -1290,6 +1303,12 @@ def _controller_raster_rows(
     )
     if not np.isfinite(offset).all():
         raise ValueError("laser spot offsets must be finite")
+    # Downstream command emission does not mutate rows. A positive-zero offset
+    # leaves every coordinate bit intact, so share geometry when no closed span
+    # needs normalizing. Nonzero and negative-zero offsets retain subtraction.
+    if not np.any(offset.view(np.uint64)) and all(not span.closed for row in rows for span in row.spans):
+        _raise_if_toolpath_cancelled()
+        return rows
     result = []
     for row in rows:
         _raise_if_toolpath_cancelled()
@@ -2344,12 +2363,12 @@ def _ordered_dither_row(
     return darkness >= thresholds[row_index % 8]
 
 
-def _enabled_runs(enabled: np.ndarray) -> list[tuple[int, int]]:
+def _enabled_runs(enabled: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     padded = np.pad(enabled.astype(np.int8), (1, 1))
     edges = np.diff(padded)
     starts = np.flatnonzero(edges == 1)
     ends = np.flatnonzero(edges == -1)
-    return list(zip(starts.tolist(), ends.tolist(), strict=True))
+    return starts, ends
 
 
 def _image_raster_rows(
@@ -2490,24 +2509,24 @@ def _image_raster_rows(
                 excluded_integral, scan_boundaries, float(row_position),
                 layer.line_interval_mm, item, scan_to_machine,
             )
-        runs = _enabled_runs(enabled)
-        if not runs:
+        starts, ends = _enabled_runs(enabled)
+        if not len(starts):
             continue
         row_start, row_end = row_interval
-        scan_spans = [
-            ((max(row_start, float(scan_boundaries[start_column])), row_position),
-             (min(row_end, float(scan_boundaries[end_column])), row_position))
-            for start_column, end_column in runs
-            if min(row_end, float(scan_boundaries[end_column]))
-            - max(row_start, float(scan_boundaries[start_column])) > 1e-9
-        ]
-        if not scan_spans:
+        span_starts = np.maximum(row_start, scan_boundaries[starts])
+        span_ends = np.minimum(row_end, scan_boundaries[ends])
+        enabled_spans = span_ends - span_starts > 1e-9
+        span_count = np.count_nonzero(enabled_spans)
+        if not span_count:
             continue
         row_scan = np.array(
             [[row_start, row_position], [row_end, row_position]],
             dtype=np.float64,
         )
-        span_points = np.asarray(scan_spans, dtype=np.float64)
+        span_points = np.empty((span_count, 2, 2), dtype=np.float64)
+        span_points[:, 0, 0] = span_starts[enabled_spans]
+        span_points[:, 1, 0] = span_ends[enabled_spans]
+        span_points[:, :, 1] = row_position
         if row_index % 2:
             row_scan = row_scan[::-1].copy()
             span_points = span_points[::-1, ::-1]

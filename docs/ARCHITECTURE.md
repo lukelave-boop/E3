@@ -2001,6 +2001,12 @@ filters bounding boxes in arrays, then applies the original even/odd test to
 candidates. Exact preview recognizes only a full-match, bounded-decimal G0/G1
 XYF[ S] grammar; unfamiliar syntax retains the general parser. Immutable move
 metadata and timing constants are reused within their original modal scope.
+PlannedMove uses immutable named-tuple storage; named-field serialization uses
+`_asdict()` and retains the golden preview schema. Recurring canonical numeric
+words reuse parsed values within a bounded cache, independently of modal state.
+Unchanged raster spans can be shared read-only through placement and zero spot
+offsets; transformed coordinates remain independent. Raster run clipping and
+serialized-coordinate collection use arrays without per-point tuple lists.
 The desktop snapshots material-surface metadata with its request and supplies it
 to the generator before encoding is finalized and indexed, avoiding a second
 full plan after provenance insertion. Surface/capture/context checks remain live.

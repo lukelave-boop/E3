@@ -6,8 +6,9 @@ import re
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from itertools import chain
 from operator import attrgetter
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..air_assist import (
     AIR_ASSIST_DIRECTIVE_PREFIX,
@@ -56,8 +57,8 @@ def _raise_if_cancelled() -> None:
         raise JobPlanCancelled("Job plan indexing was cancelled")
 
 
-@dataclass(slots=True, frozen=True)
-class PlannedMove:
+class PlannedMove(NamedTuple):
+    """Immutable exact move; tuple construction avoids per-field frozen setters."""
     index: int
     line_number: int
     start_x: float
@@ -150,6 +151,27 @@ def _metadata(raw_line: str) -> tuple[str, dict[str, Any]] | None:
     return prefix[4:].lower(), parsed
 
 
+def _move_bounds(moves: list[PlannedMove]) -> tuple[float, float, float, float]:
+    """Reduce named fields in C without another Python loop over every move."""
+    lower, upper = [], []
+    for axis in ("x", "y"):
+        _raise_if_cancelled()
+        start, end = attrgetter(f"start_{axis}"), attrgetter(f"end_{axis}")
+        minimum = min(chain((math.inf,), map(start, moves), map(end, moves)))
+        maximum = max(chain((-math.inf,), map(start, moves), map(end, moves)))
+        # Seeded extrema ignore NaN exactly like sequential comparisons. On a
+        # zero tie retain the first interleaved endpoint's sign as before.
+        if minimum == 0.0 or maximum == 0.0:
+            zero = next(value for move in moves for value in (start(move), end(move)) if value == 0.0)
+            if minimum == 0.0:
+                minimum = zero
+            if maximum == 0.0:
+                maximum = zero
+        lower.append(minimum)
+        upper.append(maximum)
+    return lower[0], lower[1], upper[0], upper[1]
+
+
 def _build_job_plan(
     text: str,
     *,
@@ -189,20 +211,36 @@ def _build_job_plan(
     context_dirty = True
     cancel_check = _JOB_PLAN_CANCEL_CHECK.get()
     timing_feed = None
+    previous_x_word = previous_y_word = previous_feed_word = None
+    linear_x = linear_y = 0.0
+    linear_feed = feed
+    linear_powers = {"0": 0.0}
+    cut_moves = []
+    travel_moves = []
     for line_number, raw_line in enumerate(text.splitlines(), 1):
         if cancel_check is not None and cancel_check():
             raise JobPlanCancelled("Job plan indexing was cancelled")
         linear = _LINEAR_LINE.fullmatch(raw_line)
         if linear is not None:
             motion_word, x_word, y_word, feed_word, power_word = linear.groups()
-            motion = int(motion_word)
-            target_x, target_y = float(x_word), float(y_word)
-            new_x = target_x if absolute else x + target_x
-            new_y = target_y if absolute else y + target_y
-            requested_feed = float(feed_word)
-            feed = requested_feed if requested_feed > 1.0 else 1.0
+            motion = 0 if motion_word == "0" else 1
+            if x_word != previous_x_word:
+                linear_x, previous_x_word = float(x_word), x_word
+            if y_word != previous_y_word:
+                linear_y, previous_y_word = float(y_word), y_word
+            new_x = linear_x if absolute else x + linear_x
+            new_y = linear_y if absolute else y + linear_y
+            if feed_word != previous_feed_word:
+                requested_feed = float(feed_word)
+                linear_feed = requested_feed if requested_feed > 1.0 else 1.0
+                previous_feed_word = feed_word
+            feed = linear_feed
             if power_word is not None:
-                power = float(power_word)
+                power = linear_powers.get(power_word)
+                if power is None:
+                    power = float(power_word)
+                    if len(linear_powers) < 256:
+                        linear_powers[power_word] = power
             laser_on = laser_enabled and power > 0
         else:
             metadata = _metadata(raw_line)
@@ -360,11 +398,12 @@ def _build_job_plan(
             air_assist = layer.get("air_assist") is True
             context_dirty = False
         # Positional construction avoids per-field keyword bindings per motion. Keep
-        # this order aligned with the frozen PlannedMove declaration above.
+        # this order aligned with the immutable PlannedMove declaration above.
+        start_x, start_y = x + spot_offset_x, y + spot_offset_y
+        end_x, end_y = new_x + spot_offset_x, new_y + spot_offset_y
         move = PlannedMove(
             len(moves), line_number,
-            x + spot_offset_x, y + spot_offset_y,
-            new_x + spot_offset_x, new_y + spot_offset_y,
+            start_x, start_y, end_x, end_y,
             rapid, laser_on and not rapid, power if laser_on and not rapid else 0.0, feed,
             layer_id, layer_name, layer_color, layer_mode,
             pass_index, pass_count, source_name,
@@ -372,56 +411,16 @@ def _build_job_plan(
             vector_power_correction, raster_power_correction, air_assist, focus_mode,
         )
         moves.append(move)
+        (cut_moves if move.laser_on else travel_moves).append(move)
         elapsed += duration
         x, y = new_x, new_y
-
-    x_min = y_min = powered_x_min = powered_y_min = math.inf
-    x_max = y_max = powered_x_max = powered_y_max = -math.inf
-    cut_moves = []
-    travel_moves = []
-    for move in moves:
-        if cancel_check is not None and cancel_check():
-            raise JobPlanCancelled("Job plan indexing was cancelled")
-        (cut_moves if move.laser_on else travel_moves).append(move)
-        if move.start_x < x_min:
-            x_min = move.start_x
-        if move.end_x < x_min:
-            x_min = move.end_x
-        if move.start_y < y_min:
-            y_min = move.start_y
-        if move.end_y < y_min:
-            y_min = move.end_y
-        if move.start_x > x_max:
-            x_max = move.start_x
-        if move.end_x > x_max:
-            x_max = move.end_x
-        if move.start_y > y_max:
-            y_max = move.start_y
-        if move.end_y > y_max:
-            y_max = move.end_y
-        if move.laser_on:
-            if move.start_x < powered_x_min:
-                powered_x_min = move.start_x
-            if move.end_x < powered_x_min:
-                powered_x_min = move.end_x
-            if move.start_y < powered_y_min:
-                powered_y_min = move.start_y
-            if move.end_y < powered_y_min:
-                powered_y_min = move.end_y
-            if move.start_x > powered_x_max:
-                powered_x_max = move.start_x
-            if move.end_x > powered_x_max:
-                powered_x_max = move.end_x
-            if move.start_y > powered_y_max:
-                powered_y_max = move.start_y
-            if move.end_y > powered_y_max:
-                powered_y_max = move.end_y
     if moves:
-        bounds = (x_min, y_min, x_max, y_max)
+        bounds = _move_bounds(moves)
     else:
         bounds = (0.0, 0.0, 0.0, 0.0)
         warnings.append("The program contains no motion")
     _raise_if_cancelled()
+    powered_bounds = _move_bounds(cut_moves)
     return JobPlan(
         moves=tuple(moves),
         bounds_mm=bounds,
@@ -447,8 +446,8 @@ def _build_job_plan(
         air_assist_events=tuple(air_assist_events),
         air_assist_commands=air_assist_commands,
         powered_bounds_mm=(
-            (powered_x_min, powered_y_min, powered_x_max, powered_y_max)
-            if math.isfinite(powered_x_min)
+            powered_bounds
+            if math.isfinite(powered_bounds[0])
             else None
         ),
         raster_boundary=raster_boundary,

@@ -8,6 +8,9 @@ filtering and one exact preview index after surface binding. The retained
 runs, versus 42.735 seconds before; a 3,136-contour vector job measures 3.143 seconds.
 Compatibility and frozen/interactive acceptance
 remain in progress; this is not a universal timing guarantee.
+Follow-up allocation and numeric-conversion changes bring the 811,800-move dense
+raster to 9.536 seconds median / 9.601 maximum over three Python 3.12 source runs
+with packaged dependencies and desktop cancellation callbacks enabled.
 See [measurement scope](docs/TOOLPATH_PERFORMANCE.md) and CURRENT_STATE.md.
 
 ## 0.8.0 integration (2026-10-16)

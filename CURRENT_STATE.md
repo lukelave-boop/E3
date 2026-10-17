@@ -1,17 +1,22 @@
 # Current repository state
 
-## Toolpath generation performance (2026-10-17, source verification)
+## Toolpath generation performance (2026-10-17, feature verification)
 
 Isolated `codex/toolpath-speed` starts from released main a7d2dae and preserves
 all unrelated work in the shared setup-wizard checkout. Desktop raster coordinate
 operations, rectangle/polygon bounds checks and vector containment candidate
 filtering are batched. Exact preview indexing has a fully matched canonical
 linear fast path with general-parser fallback, shared metadata/timing values and
-unchanged immutable PlannedMove output. Encoder temporaries are released before
+unchanged named move values. PlannedMove now uses immutable tuple storage;
+golden serialization keeps the existing named-field schema. Bounds reductions
+and recurrent numeric words avoid repeated Python work and duplicate floats.
+Raster run clipping and serialized-coordinate collection use batch arrays.
+Unchanged spans are shared read-only, and coordinate formatting has a bounded
+cache. Encoder temporaries are released before
 preview allocation. Material-surface binding happens before the one exact index;
 request/surface/capture invalidation and execution guards remain authoritative.
 
-Windows Python 3.14.4 offline measurement of the retained 162.901 x 154.308 mm
+Initial revision 9d780bb Windows Python 3.14.4 offline measurement of the retained 162.901 x 154.308 mm
 barrel-emblem project at its original 0.1 mm pitch produces 726,664 moves.
 Three runs including snapshot/advisory preflight, surface binding, exact plan,
 preview summaries and asset verification take 8.836 / 9.071 / 9.109 seconds
@@ -26,16 +31,30 @@ A 3,136-contour, 228,928-move vector grid over 192 mm measures
 36.930-second baseline. Its program hash also matches exactly.
 Placement/travel authority and surface metadata are synthetic; no controller is
 constructed, and the retained project is unchanged. GUI drawing, upload and Start
-are excluded. Compatibility CI and frozen operator handoff remain in progress. These results meet the ten-second target for these workloads,
+are excluded. These initial source results meet the ten-second target for these workloads,
 not every possible program below the command cap.
 
-Final focused Windows source verification passes 533 tests across desktop async
+Initial focused Windows source verification passes 533 tests across desktop async
 and preview widgets, material surface, exact plan, browser/shared G-code, goldens,
 raster continuity/overscan/axes and new performance regressions. This includes
 offscreen single-index and stale-surface rejection, scalar-parser equivalence,
 chunk-boundary acceptance/rejection and temporary-geometry lifetime checks.
-Repository Ruff, compilation and whitespace checks pass. This is not a full
-compatibility pass or interactive GUI, camera, controller or laser verification.
+Revision 9d780bb also passes full Compatibility CI run 39030144674 (Windows
+3.10 core, Windows 3.12 desktop, POSIX controller/session recovery and Ruff).
+Its canonical hosted Windows package passes run 39030322851. Local read-only
+verification matches 196 archived modules, the entrypoint and ten resources to
+that commit, and bundled Qt 6.12 controls pass an offscreen widget smoke test.
+Its packaged-runtime raster benchmark exceeded ten seconds, prompting the
+additional allocation and batch changes above. Follow-up source verification
+passes 548 focused tests, including immutable-record roundtripping, unchanged
+golden previews, numeric-cache/modal transitions, signed-zero/NaN extrema and
+geometry-reuse offset/rejection paths. Ruff, compilation and whitespace checks
+pass. Python 3.12.10 with packaged dependencies and desktop cancellation enabled
+takes 8.596 / 9.536 / 9.601 seconds for the 811,800-move dense raster, with the
+same timestamp-normalized program hash. Fresh full CI and final rebuilt-package
+verification remain pending; the first revision's CI is not evidence for the
+follow-up tree.
+No interactive GUI, camera, controller or laser verification is claimed.
 Ignored evidence is under build/toolpath-speed in the isolated checkout.
 See docs/TOOLPATH_PERFORMANCE.md for reproducible measurement and scope.
 

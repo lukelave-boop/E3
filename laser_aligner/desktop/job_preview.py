@@ -80,7 +80,8 @@ def prepare_job_preview(
     rows: dict[str, dict[str, object]] = {}
     move_ends: list[float] = []
     for move in plan.moves:
-        check_cancelled()
+        if cancel_check is not None and cancel_check():
+            raise JobPreviewPreparationCancelled("Exact Preview preparation was cancelled")
         move_ends.append(move.end_seconds)
         if not move.layer_id and not move.layer_name:
             continue
@@ -95,14 +96,15 @@ def prepare_job_preview(
                 "power": 0.0, "air_assist": False,
             }
             rows[key] = row
-        row["air_assist"] = bool(row["air_assist"]) or move.air_assist
+        if move.air_assist:
+            row["air_assist"] = True
         if move.laser_on:
-            row["distance"] = float(row["distance"]) + move.distance_mm
-            row["seconds"] = float(row["seconds"]) + move.duration_seconds
+            row["distance"] += move.distance_mm
+            row["seconds"] += move.duration_seconds
             feeds = row["feeds"]
             assert isinstance(feeds, set)
-            feeds.add(float(move.feed_mm_min))
-            row["power"] = max(float(row["power"]), move.power)
+            feeds.add(move.feed_mm_min)
+            row["power"] = max(row["power"], move.power)
     check_cancelled()
     layer_rows: list[PreviewLayerRow] = []
     for row in rows.values():

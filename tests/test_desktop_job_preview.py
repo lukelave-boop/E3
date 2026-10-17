@@ -743,7 +743,7 @@ def test_unpowered_raster_preview_keeps_geometry_visible(
 ) -> None:
     plan = _plan()
     plan = replace(plan, moves=tuple(
-        replace(move, layer_mode="raster", laser_on=False, power=0) for move in plan.moves
+        move._replace(layer_mode="raster", laser_on=False, power=0) for move in plan.moves
     ))
     dialog = JobPreviewDialog(plan, (0, 100, 0, 100), "unpowered.gcode")
     assert dialog.travel_check.isChecked()

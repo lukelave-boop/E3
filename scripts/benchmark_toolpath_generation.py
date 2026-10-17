@@ -15,6 +15,7 @@ import platform
 import statistics
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +29,8 @@ def main() -> None:
     parser.add_argument('--grid', type=int, default=32)
     parser.add_argument('--iterations', type=int, default=3)
     parser.add_argument('--bind-surface', action='store_true')
+    parser.add_argument('--desktop-cancellation', action='store_true',
+                        help='Include the desktop worker cancellation callbacks')
     parser.add_argument('--work-dir', type=Path)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
@@ -105,6 +108,8 @@ def main() -> None:
         } if args.bind_surface else None
         native_binding = 'material_surface_metadata' in inspect.signature(generate_project_gcode).parameters
         laser = LaserSettings(power_max=1000)
+        cancellation = threading.Event()
+        cancel_check = cancellation.is_set if args.desktop_cancellation else None
         samples = []
         for _ in range(args.iterations):
             gc.collect()
@@ -122,6 +127,7 @@ def main() -> None:
             kwargs = {'material_surface_metadata': binding} if native_binding else {}
             job = generate_project_gcode(snapshot, laser, coordinate_frame=frame,
                                          machine_work_area=machine_area, raster_travel_envelope=envelope,
+                                         cancel_check=cancel_check,
                                          **kwargs)
             generation = time.perf_counter() - started - preflight
             if binding is not None and not native_binding:
@@ -131,7 +137,7 @@ def main() -> None:
                     acceleration_mm_s2=laser.preview_acceleration_mm_s2,
                     command_delay_ms=laser.preview_command_delay_ms,
                 )
-            prepare_job_preview(job.plan)
+            prepare_job_preview(job.plan, cancel_check=cancel_check)
             verify_project_job_assets(job)
             total = time.perf_counter() - started
             canonical = '\n'.join(line for line in job.text.splitlines() if not line.startswith('; Generated:'))
@@ -148,6 +154,7 @@ def main() -> None:
         result = dict(scope='Offline snapshot, advisory preflight, generation, exact plan, preview indexes and asset verification; excludes GUI painting, upload and Start. Synthetic placement/travel authority.',
                       python=sys.version, platform=platform.platform(), source_root=str(args.source_root.resolve()),
                       project_sha256=source_hash, bind_surface=args.bind_surface, samples=samples,
+                      desktop_cancellation=args.desktop_cancellation,
                       median_seconds=statistics.median(sample['total_seconds'] for sample in samples),
                       maximum_seconds=max(sample['total_seconds'] for sample in samples))
         if args.output:

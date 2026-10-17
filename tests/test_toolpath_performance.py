@@ -120,3 +120,30 @@ def test_batched_polygon_matches_scalar_boundary_decisions():
     with pytest.raises(ValueError, match="finite"):
         toolpath._validate_paths_in_guarded_polygon(
             [Polyline(np.array([[np.nan, 3.]]))], polygon, coordinate_label="test")
+
+
+@pytest.mark.parametrize("offset", [0.0, -0.0, 0.125, float("nan")])
+@pytest.mark.parametrize("closed", [False, True])
+def test_raster_coordinate_reuse_preserves_offsets_and_source_geometry(offset, closed):
+    points = np.array([[-0., 3.], [4., 3.]])
+    row = toolpath.RasterRow(points=points.copy(), spans=[Polyline(points.copy(), closed=closed)],
+                            source_tag="test")
+    before = row.spans[0].points.copy()
+    placed = toolpath._place_raster_rows([row], None, scan_angle_deg=0)
+    laser = LaserSettings(spot_offset_x_mm=offset)
+    if np.isnan(offset):
+        with pytest.raises(ValueError, match="finite"):
+            toolpath._controller_raster_rows(placed, laser)
+    else:
+        result = toolpath._controller_raster_rows(placed, laser)
+        expected = before - np.array([offset, 0.])
+        assert np.array_equal(result[0].spans[0].points.view(np.uint64), expected.view(np.uint64))
+        assert result[0].spans[0].closed is False
+    assert np.array_equal(row.spans[0].points.view(np.uint64), before.view(np.uint64))
+
+
+def test_cached_coordinate_format_retains_rounding_and_zero_normalization():
+    values = [-0., 0., -.0004999, .0004999, -.0005, .0005, -1.2345, 1.2345, 999999.9999]
+    for value in values * 2:
+        normalized = 0.0 if abs(value) < .0005 else value
+        assert toolpath._fmt(value) == f"{normalized:.3f}".rstrip("0").rstrip(".")
