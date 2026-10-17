@@ -1,5 +1,17 @@
 # Permanent Windows feature-test launcher
 
+## Native file-dialog folders
+
+Each isolated `home` receives native junctions for Desktop, Documents, Downloads,
+Pictures, Music and Videos when the real Windows folder is available. Targets
+come from `SHGetKnownFolderPath`, including OneDrive redirection; no real user
+folder is moved or copied. This runs on every launch and for every version/revision.
+Matching existing links are reused. Conflicting files, directories or links are
+preserved and cause a clear error rather than being replaced. AppData and all
+application-state redirection remain isolated. This fixes the recurring missing
+`home/Desktop` error without rebuilding the selected feature executable.
+
+
 `E3 DEV TEST` is the stable entry point for operator testing of frozen Windows
 feature builds. It is distinct from the installed production E3 application.
 Before starting the selected executable, it prepares an independent copy of

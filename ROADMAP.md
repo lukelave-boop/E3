@@ -1,5 +1,12 @@
 # Roadmap
 
+## DEV TEST file-dialog reliability
+
+Implemented: native user-folder mappings for every isolated build profile.
+Windows native-folder and isolation tests pass. Frozen launcher packaging and
+installation are pending; no selected application rebuild is required.
+
+
 ## Independent desktop version state (2026-10-16)
 
 Implemented: one-time state copies per installed version/revision and source

@@ -387,6 +387,11 @@ def prepare_feature_environment(
     })
     for name in _PROFILE_ENVIRONMENT:
         Path(environment[name]).mkdir(parents=True, exist_ok=True)
+    from .windows_user_folders import prepare_user_folder_links
+    try:
+        prepare_user_folder_links(Path(environment["USERPROFILE"]))
+    except OSError as exc:
+        raise DevTestLauncherError(f"cannot prepare user folders for this test build: {exc}") from exc
     return environment
 
 
@@ -483,7 +488,7 @@ def set_process_app_user_model_id(
 
     function = ctypes.WinDLL("shell32", use_last_error=True).SetCurrentProcessExplicitAppUserModelID
     function.argtypes = (wintypes.LPCWSTR,)
-    function.restype = wintypes.HRESULT
+    function.restype = ctypes.c_long
     result = int(function(app_id))
     if result < 0:
         raise DevTestLauncherError(

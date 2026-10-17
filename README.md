@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+DEV TEST preserves access to the real Windows Desktop and document folders
+inside each isolated build profile. Application settings remain per-build.
+See [the launcher guide](docs/DEV_TEST_LAUNCHER.md).
+
+
 Desktop builds now keep independent copies of machine settings, calibration,
 materials and recovery data. The permanent **E3 DEV TEST** launcher prepares a
 private copy for each exact test version/revision, including older frozen test

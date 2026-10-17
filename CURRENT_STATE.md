@@ -1,5 +1,23 @@
 # Current repository state
 
+## DEV TEST native folder repair (2026-10-17)
+
+The isolated launcher's USERPROFILE omitted Desktop, causing recurring native
+file-dialog failures for each new build identity. Launch preparation now creates
+native junctions to the user's actual Windows Desktop, Documents, Downloads,
+Pictures, Music and Videos when available, using known-folder APIs so OneDrive
+and other redirections are respected. AppData, config, calibration and legacy
+application state remain isolated. Existing conflicting paths fail without
+replacement. No per-version hard-coded folder workaround is needed.
+
+58 Windows launcher/state/folder tests pass; one pre-existing symlink test skips
+because symlink privilege is unavailable. Ruff and focused compileall pass.
+The installed 0.8.2 scope's missing Desktop junction was repaired without closing
+E3. Local build admission hit the managed pool budget; Windows CI packaging and
+frozen two-version verification are pending. This branch extends the installed
+version-state-isolation launcher and carries the ctypes HRESULT portability fix.
+
+
 ## Regular E3 0.7.153 restored; launcher isolation installed (2026-10-16)
 
 Regular E3 opens again at its existing version **0.7.153**, revision

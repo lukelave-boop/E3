@@ -1,5 +1,14 @@
 # Architecture
 
+## DEV TEST user files and private state
+
+The launcher redirects application state into a version/revision scope but maps
+its private home's user document folders to Windows known-folder targets using
+native junctions. It never links AppData or config to production state. Folder
+preparation occurs before launching even older frozen E3 builds and is independent
+of the currently selected feature identity.
+
+
 ## Desktop version state
 
 `state_scope.py` is a Qt/HTTP-neutral, launch-time snapshot boundary. Importing
