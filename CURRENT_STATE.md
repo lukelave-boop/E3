@@ -33,21 +33,58 @@ Offscreen Qt interaction verifies preview, Apply/Cancel, stale review guards and
 exact Undo/Redo. A hidden Windows-widget capture was visually reviewed at 960 x
 710 logical pixels / 125% DPI. The final independent reviews found no remaining
 actionable issues after adding tiny-hole clearance and closed-seam regressions.
-Repository Ruff, application compileall and whitespace checks pass. Complete
-Windows 3.10/3.12 compatibility CI remains pending on the committed branch.
+Repository Ruff, application compileall and whitespace checks pass. The separate
+seven raster-performance tests pass. Required Compatibility CI passes on exact
+runtime revision `8627ac0a6219724b47e20932f853f7753e1aa08a`:
+Windows Python 3.12 desktop **9,014 passed, 69 skipped**; Windows Python 3.10
+core/non-desktop **7,415 passed, 185 skipped**; POSIX transport/recovery
+**1,502 passed, 2 skipped**; repository Ruff passes. Evidence:
+[Compatibility CI run 38997560235](https://github.com/lukelave-boop/E3/actions/runs/38997560235).
 Ignored evidence is under this feature worktree's build/arc-final-stable.* and
 build/arc-fit-qa/fit-arc-preview.png. These are automated/offscreen checks only.
 No interactive operator, real camera/controller/laser or physical accuracy test
 has occurred. The supplied screenshot demonstrates the requested behavior but is
 not an original source fixture; synthetic end-to-end defect cases are used.
 
-A read-only canonical storage check currently refuses a new Windows build:
-5,610,155,173 bytes measured + 2,147,483,648 bytes already reserved +
-2,147,483,648 requested exceeds the fixed 8,589,934,592-byte shared cap.
-An earlier inventory changed during inspection; the later stable check reports
-the capacity refusal above. No existing artifact, reservation, installed E3,
-permanent launcher or feature pointer has been changed. A frozen DEV TEST build
-and operator handoff remain pending storage admission.
+The initial storage check refused packaging because an abandoned camera-roaming
+reservation consumed the remaining capacity. The user explicitly approved
+releasing only `windows-860f6bed16644f8cb4ab8718821b51fa`. After rechecking that its
+owner and related processes had exited, the exact accounting bytes were backed up
+adjacent to the state file, then that one reservation was removed atomically under
+the existing lock. All build files, other accounting and the fixed eight-GiB cap
+were retained. The canonical builder subsequently passed admission and completion;
+its seven generated outputs are recorded and its reservation is released.
+
+The permanent **E3 DEV TEST** launcher now selects **Arc recovery and Fit arc**,
+version **0.8.0**, branch `codex/arc-recovery`, exact frozen runtime revision
+`8627ac0a6219724b47e20932f853f7753e1aa08a`. Target:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\.e3-builds\windows-windows-2de4562732c34b1893522a0753e6a0c7\dist\E3\E3.exe
+```
+
+`packaging/build_windows.ps1` produced this EXE and the managed installer
+using Python 3.14.4, PyInstaller 6.22.3 and Inno Setup 7.1.0. The native-library
+guard passed. All **198 archived application modules**, the actual entrypoint,
+**ten resources** and packaged default configuration match the frozen commit;
+metadata validates as packaged Windows x86-64, schema 1, version 0.8.0. The EXE
+SHA-256 is `c71545070461f24596c582f80706d7ca91058357220e15e3a8dcf2251f6c0302`.
+
+An isolated offscreen process loaded the archived Fit arc/project code and exact
+bundled Qt 6.11.2 native libraries. Defect preview, unsuitable-span rejection,
+Apply, Cancel and exact Undo/Redo passed; its screenshot was visually reviewed.
+This does **not** constitute canonical EXE/main-window startup, interactive GUI,
+camera/controller/laser or physical accuracy verification. The check constructed
+no runtime/services or application QSettings. Operator review remains pending;
+keep the feature branch and selected bundle available for that review.
+
+The pointer was set through `packaging/set_dev_test_feature.py`, validated by
+readback against the adjacent build metadata, and the previous pointer backed up.
+The permanent launcher EXE hash is unchanged. Normal E3, shortcuts and installed
+application state were not changed. Ignored receipts in this worktree include
+build/approved-reservation-release.json, build/arc-windows-build-result.json,
+build/arc-frozen-qa/, and build/arc-dev-test-selection.json. Subsequent verification
+documentation does not change the exact frozen runtime revision above.
 
 ## 0.8.0 integration candidate (2026-10-16)
 
