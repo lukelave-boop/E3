@@ -64,3 +64,16 @@ def test_native_known_desktop_matches_windows_shell():
     result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buffer)
     assert result == 0
     assert windows_user_folders.known_user_folders()["Desktop"].samefile(Path(buffer.value))
+
+
+def test_reentered_launcher_does_not_link_to_an_old_build(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    (real / "Desktop").mkdir(parents=True)
+    old_home = tmp_path / "old-build" / "home"
+    new_home = tmp_path / "new-build" / "home"
+    new_home.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(old_home))
+    monkeypatch.setattr(windows_user_folders, "known_user_folders", lambda: {"Desktop": old_home / "Desktop"})
+    windows_user_folders.prepare_user_folder_links(new_home, original_home=str(real))
+    assert (new_home / "Desktop").samefile(real / "Desktop")
+    assert not old_home.exists()

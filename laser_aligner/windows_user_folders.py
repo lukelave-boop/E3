@@ -32,7 +32,8 @@ def known_user_folders() -> dict[str, Path]:
     for name, identifier in _FOLDERS.items():
         guid = ctypes.create_string_buffer(uuid.UUID(identifier).bytes_le)
         value = ctypes.c_void_p()
-        status = get_folder(guid, 0, None, ctypes.byref(value))
+        # Resolve even a missing folder; the caller decides whether to expose it.
+        status = get_folder(guid, 0x4000, None, ctypes.byref(value))  # KF_FLAG_DONT_VERIFY
         try:
             if status < 0 or not value.value:
                 raise OSError(f"Cannot resolve the Windows {name} folder (HRESULT {status})")
@@ -43,13 +44,24 @@ def known_user_folders() -> dict[str, Path]:
     return result
 
 
-def prepare_user_folder_links(private_home: Path) -> None:
+def prepare_user_folder_links(private_home: Path, *, original_home: str | None = None) -> None:
     """Expose user documents, never AppData or configuration, in every test home."""
     if sys.platform != "win32":
         return
     import _winapi
 
     for name, target in known_user_folders().items():
+        # A launcher re-entered from E3 still has the child's redirected profile
+        # in its own environment. Restore only profile-relative shell paths.
+        inherited_home = os.environ.get("USERPROFILE")
+        if inherited_home and original_home:
+            try:
+                relative = target.relative_to(Path(inherited_home))
+            except ValueError:
+                pass  # Absolute redirected folders (e.g. another drive) stay intact.
+            else:
+                target = Path(original_home) / relative
+        target = target.resolve()
         # An actually unavailable user folder is not an isolation alias to invent.
         if not target.is_dir():
             continue
