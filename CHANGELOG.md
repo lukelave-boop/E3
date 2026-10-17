@@ -1,5 +1,10 @@
 # Changelog
 
+## Combined desktop update (2026-10-17)
+
+- Combine probe refresh, raster/vector preparation speedups, arc tools, movable
+  linked image/vector pairs and the completed DEV TEST Windows folder repair.
+
 - Fixed daily Position probe losing selection mode during camera refresh delays.
   Probe selection requests live images even with Live overlay paused, shows
   refresh progress, and changes to Move probe here after a valid fresh click.

@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The combined desktop update includes probe selection refresh, faster toolpath
+generation, arc recovery/Fit arc, movable linked image/vector pairs and native
+Windows folder access in DEV TEST. See [verification](CURRENT_STATE.md).
+
 Position probe keeps the crosshair active while refreshing the camera, including
 when Live overlay is paused. Click a fresh point to change it to **Move probe here**;
 that separate action retains the existing movement checks.

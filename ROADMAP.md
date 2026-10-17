@@ -1,5 +1,11 @@
 # Roadmap
 
+## Completed-feature integration (2026-10-17)
+
+Probe selection, generation speedups, arc tools, linked-pair manipulation and
+Windows folder repair are combined for main integration and one DEV TEST build.
+Unfinished diagnostic experiments and shared-checkout work remain separate.
+
 - Implemented probe selection refresh recovery and explicit fresh-click button
   transition; operator verification and intermittent-camera diagnosis remain pending.
 
