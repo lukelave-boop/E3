@@ -47,14 +47,49 @@ def validate_outline_links(objects: Iterable[SceneObject]) -> None:
             raise ValueError(f"Linked outline {item.name} is misaligned with its source image")
 
 
+def _linked_families(document: ProjectDocument) -> list[list[SceneObject]]:
+    families: dict[str, list[SceneObject]] = {}
+    by_id = {item.id: item for item in document.objects}
+    for item in document.objects:
+        link = validate_outline_metadata(item)
+        if link is not None and link["linked"]:
+            source_id = link["source_id"]
+            if source_id not in families:
+                families[source_id] = [by_id[source_id]]
+            families[source_id].append(item)
+    return list(families.values())
+
+
+def linked_transform_locked_ids(document: ProjectDocument) -> set[str]:
+    """An explicit position lock on any linked member anchors the whole pair."""
+    return {
+        item.id for family in _linked_families(document)
+        if any(member.locked for member in family) for item in family
+    }
+
+
 def linked_transform_updates(
     document: ProjectDocument, transforms: Mapping[str, Transform],
+    *, allow_linked_driver: bool = False,
 ) -> dict[str, Transform]:
-    """Expand source transforms and reject independent linked-path movement."""
+    """Expand aligned transforms; only pure transforms may start at an outline.
+
+    Shape replacement retains the source-only default: changing a path's local
+    frame while editing its geometry must not silently reshape its source image.
+    """
     validate_outline_links(document.objects)
     after = {object_id: transform.copy() for object_id, transform in transforms.items()}
     for object_id in after:
         document.get_object(object_id)
+    if allow_linked_driver:
+        for family in _linked_families(document):
+            requested = [after[item.id] for item in family if item.id in after]
+            if not requested:
+                continue
+            transform = requested[0]
+            if any(other.to_dict() != transform.to_dict() for other in requested[1:]):
+                raise ValueError("A linked outline must stay aligned; detach it before transforming separately")
+            after[family[0].id] = transform.copy()
     for item in document.objects:
         link = validate_outline_metadata(item)
         if link is None or not link["linked"]:
@@ -67,6 +102,9 @@ def linked_transform_updates(
             after[item.id] = after[source_id].copy()
         elif item.id in after and after[item.id].to_dict() != item.transform.to_dict():
             raise ValueError("This outline is linked to its image; detach it before transforming separately")
+    for object_id in linked_transform_locked_ids(document).intersection(after):
+        if after[object_id].to_dict() != document.get_object(object_id).transform.to_dict():
+            raise ValueError("Unlock the image and its linked outlines before transforming them")
     return after
 
 

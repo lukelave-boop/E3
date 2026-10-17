@@ -1,5 +1,13 @@
 # Roadmap
 
+## Linked engraving image/vector manipulation (2026-10-17)
+
+Implemented on the arc feature branch: either linked member can drive movement,
+resize, rotation and mirroring; the pair shares handles when selected together.
+Explicit object locks anchor the family, and one Undo restores the whole edit.
+Saved links remain compatible. Source, frozen-build and operator verification
+are tracked separately in CURRENT_STATE.md.
+
 ## Arc recovery and reviewed Fit arc (2026-10-16)
 
 Implemented on `codex/arc-recovery`: bounded automatic recovery of circular arcs

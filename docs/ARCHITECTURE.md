@@ -260,8 +260,13 @@ the same image function and gates post-dither cells using a summed-area exclusio
 mask over each whole source footprint, conservatively bounding rotated cells.
 
 project/image_outline.py creates disabled zero-power PATH snapshots, propagates
-only transforms, and provides explicit detachment. History supports linked undo,
-source removal, and duplicate-link remapping. Native geometry is never rewritten
+only transforms, and provides explicit detachment. Pure transform commands and
+canvas previews accept either member as the driver and expand to every linked
+member, rejecting conflicting transforms or an explicit lock within that family.
+Shape replacement keeps its source-only transform rule so changing a path's local
+frame cannot reshape the source image. A selection confined to one linked family
+shares transform handles; no additional grouping or project schema is required.
+History supports linked undo, source removal, and duplicate-link remapping. Native geometry is never rewritten
 by later source edits. Nonzero offsets are reviewed mitered polylines; invalid or
 topology-changing results reject instead of auto-repairing. The browser SVG
 pipeline, MachineService and hardware authority remain unchanged.

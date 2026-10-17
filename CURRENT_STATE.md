@@ -1,5 +1,34 @@
 # Current repository state
 
+## Movable linked engraving image/vector pairs (2026-10-17)
+
+The operator reports that creating a linked vector in Edit image for engraving
+makes both objects seem immovable. The vector is above the image in canvas hit
+testing, but its former linked-state rules disable dragging and handles. The
+repair allows pure transform commands and previews to start at either member,
+propagating exactly one transform to the image and all linked outlines. Selecting
+a linked pair also shows shared resize/rotation handles. Explicit locking of any
+member anchors that family. Conflicting requests reject atomically; geometry
+replacement retains the stricter source-only rule. Detachment, layer/output
+settings, schema 6, frozen path geometry and ordinary Undo/Redo are preserved.
+
+This continues the isolated codex/arc-recovery worktree and retains the arc and
+Windows-profile fixes. The shared checkout is untouched; freshly fetched
+origin/main (`a7d2dae`) is an ancestor of this feature head. Source tests cover
+real offscreen mouse dragging
+of the topmost vector, simultaneous pair selection without double movement,
+non-mutating previews/cancellation, numeric transforms, locks, hidden/multiple
+members, conflicting requests, persistence, detachment and single-step Undo/Redo.
+Windows Python 3.14.4 focused verification covers 384 cases. The initial combined
+run passes 383 before adding paired-selection handles; the final combined run
+passes 383 with one native Qt worker crash in the unchanged engraving-editor
+rectangle gesture test. The complete editor module passes all 36 cases in an
+isolated process. The final shared-handle/rectangle cohort also passes 24 tests.
+Repository Ruff, application compileall and whitespace checks pass. Evidence:
+build/linked-pair-focused-final.xml and build/linked-pair-editor-isolated.xml.
+Hosted packaging and Windows compatibility results remain pending. No application
+launch, controller operation or physical verification is part of this repair.
+
 ## Arc DEV TEST native file browsing follow-up (2026-10-17)
 
 The operator's screenshot confirms canonical arc build `8627ac0` starts, but its

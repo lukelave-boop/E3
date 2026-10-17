@@ -1,5 +1,14 @@
 # Changelog
 
+## Linked image/vector manipulation (2026-10-17)
+
+- Allow dragging, resizing, rotating and mirroring from either an engraving image
+  or its linked vector, preserving alignment and one-step Undo/Redo.
+- Show shared transform handles when selecting a linked pair. Keep explicit
+  position locks effective across all linked members and preserve detachment.
+- Apply the behavior to existing saved links without changing their geometry,
+  project schema, operation layers or output settings.
+
 ## Unreleased - arc recovery and Fit arc (2026-10-16)
 
 - Recover circular arcs across bounded isolated edge defects while retaining

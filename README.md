@@ -142,7 +142,9 @@ Select an image and open **Objects → Image → Edit image for engraving…** f
 local shadow removal, reversible grayscale masks, automatic or manual Bézier
 outlines, node editing, and aligned vector snapshots with physical offsets.
 New vectors start with output disabled and power zero. Project schema 6 retains
-edits and explicit transform links. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
+edits and explicit transform links. Grab either a linked image or its vector to
+move, resize, rotate or mirror both together, with one Undo step. Explicitly
+locking either member anchors the pair. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
 
 The editor build also reads existing verified raster-travel records in saved
 machine profiles. It preserves their values and enforcement; see
