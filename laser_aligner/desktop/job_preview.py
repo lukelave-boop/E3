@@ -85,22 +85,16 @@ def prepare_job_preview(
         if not move.layer_id and not move.layer_name:
             continue
         key = move.layer_id or move.layer_name
-        row = rows.setdefault(
-            key,
-            {
-                "id": key,
-                "name": move.layer_name,
-                "color": move.layer_color,
-                "mode": move.layer_mode,
-                "distance": 0.0,
-                "seconds": 0.0,
-                "feeds": set(),
-                "vector_power_correction": move.vector_power_correction,
+        row = rows.get(key)
+        if row is None:
+            row = {
+                "id": key, "name": move.layer_name, "color": move.layer_color,
+                "mode": move.layer_mode, "distance": 0.0, "seconds": 0.0,
+                "feeds": set(), "vector_power_correction": move.vector_power_correction,
                 "raster_power_correction": move.raster_power_correction,
-                "power": 0.0,
-                "air_assist": False,
-            },
-        )
+                "power": 0.0, "air_assist": False,
+            }
+            rows[key] = row
         row["air_assist"] = bool(row["air_assist"]) or move.air_assist
         if move.laser_on:
             row["distance"] = float(row["distance"]) + move.distance_mm

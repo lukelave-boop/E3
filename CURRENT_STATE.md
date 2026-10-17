@@ -1,5 +1,44 @@
 # Current repository state
 
+## Toolpath generation performance (2026-10-17, source verification)
+
+Isolated `codex/toolpath-speed` starts from released main a7d2dae and preserves
+all unrelated work in the shared setup-wizard checkout. Desktop raster coordinate
+operations, rectangle/polygon bounds checks and vector containment candidate
+filtering are batched. Exact preview indexing has a fully matched canonical
+linear fast path with general-parser fallback, shared metadata/timing values and
+unchanged immutable PlannedMove output. Encoder temporaries are released before
+preview allocation. Material-surface binding happens before the one exact index;
+request/surface/capture invalidation and execution guards remain authoritative.
+
+Windows Python 3.14.4 offline measurement of the retained 162.901 x 154.308 mm
+barrel-emblem project at its original 0.1 mm pitch produces 726,664 moves.
+Three runs including snapshot/advisory preflight, surface binding, exact plan,
+preview summaries and asset verification take 8.836 / 9.071 / 9.109 seconds
+(median 9.071, maximum 9.109). The matched baseline takes
+42.035 / 42.735 / 44.264 seconds (median 42.735): 4.71x faster.
+All six runs have the same timestamp-normalized program SHA-256
+`c7d271b753fb6d1ff8b7d28316a3e627678c537969bb3b53f7c486ad16c4a881`.
+The 180 x 180 mm, 0.2 mm-pitch dense raster (811,800 moves) measures
+9.605 seconds median / 9.731 maximum across three runs.
+A 3,136-contour, 228,928-move vector grid over 192 mm measures
+3.143 median / 3.175 maximum over three runs, versus one matched
+36.930-second baseline. Its program hash also matches exactly.
+Placement/travel authority and surface metadata are synthetic; no controller is
+constructed, and the retained project is unchanged. GUI drawing, upload and Start
+are excluded. Compatibility CI and frozen operator handoff remain in progress. These results meet the ten-second target for these workloads,
+not every possible program below the command cap.
+
+Final focused Windows source verification passes 533 tests across desktop async
+and preview widgets, material surface, exact plan, browser/shared G-code, goldens,
+raster continuity/overscan/axes and new performance regressions. This includes
+offscreen single-index and stale-surface rejection, scalar-parser equivalence,
+chunk-boundary acceptance/rejection and temporary-geometry lifetime checks.
+Repository Ruff, compilation and whitespace checks pass. This is not a full
+compatibility pass or interactive GUI, camera, controller or laser verification.
+Ignored evidence is under build/toolpath-speed in the isolated checkout.
+See docs/TOOLPATH_PERFORMANCE.md for reproducible measurement and scope.
+
 ## 0.8.0 integration candidate (2026-10-16)
 
 The confirmed three-chat scope combines update download progress `986525a` and

@@ -26,7 +26,6 @@ from ..gcode.job_plan import (
     e3_metadata_line,
 )
 from ..geometry.polygon import (
-    convex_polygon_violation_normalized_mm,
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
@@ -708,20 +707,28 @@ def _containment_plan(paths: list[Polyline]) -> tuple[list[int], list[bool]]:
         minimum = path.points.min(axis=0)
         maximum = path.points.max(axis=0)
         bounds.append((minimum, maximum))
+    if not paths:
+        return depths, nested
+    minimums = np.array([bound[0] for bound in bounds])
+    maximums = np.array([bound[1] for bound in bounds])
+    closed = np.array([path.closed and len(path.points) >= 4 for path in paths])
     for index, inner in enumerate(paths):
         _raise_if_toolpath_cancelled()
-        if not inner.closed or len(inner.points) < 4:
+        if not closed[index]:
             continue
-        probe = inner.points[0]
-        for other_index, outer in enumerate(paths):
+        inner_min, inner_max = bounds[index]
+        # Reject disjoint boxes in one bounded array operation; only potential
+        # containers need the unchanged exact even/odd polygon test.
+        candidates = (
+            closed
+            & np.all(minimums <= inner_min + 1e-9, axis=1)
+            & np.all(maximums >= inner_max - 1e-9, axis=1)
+            & np.any(maximums - minimums > inner_max - inner_min + 1e-9, axis=1)
+        )
+        candidates[index] = False
+        for other_index in np.flatnonzero(candidates):
             _raise_if_toolpath_cancelled()
-            if other_index == index or not outer.closed or len(outer.points) < 4:
-                continue
-            inner_min, inner_max = bounds[index]
-            outer_min, outer_max = bounds[other_index]
-            if (np.all(outer_min <= inner_min + 1e-9) and np.all(outer_max >= inner_max - 1e-9)
-                    and np.any(outer_max - outer_min > inner_max - inner_min + 1e-9)
-                    and _point_in_closed_path(probe, outer.points)):
+            if _point_in_closed_path(inner.points[0], paths[other_index].points):
                 depths[index] += 1
                 nested[index] = True
                 nested[other_index] = True
@@ -840,11 +847,16 @@ def _validate_paths_in_guarded_polygon(
         for path in paths
     ):
         raise ValueError("Path coordinates must be finite and nonempty")
-    maximum = max(
-        convex_polygon_violation_normalized_mm(point, normalized)
-        for path in paths
-        for point in path.points
-    )
+    maximum = 0.0
+    for offset in range(0, len(paths), 4096):
+        _raise_if_toolpath_cancelled()
+        points = np.concatenate([path.points for path in paths[offset:offset + 4096]])
+        for start, end in zip(normalized, normalized[1:] + normalized[:1], strict=True):
+            edge_x, edge_y = end[0] - start[0], end[1] - start[1]
+            cross = edge_x * (points[:, 1] - start[1]) - edge_y * (points[:, 0] - start[0])
+            if not np.isfinite(cross).all():
+                raise ValueError("Path containment arithmetic must be finite")
+            maximum = max(maximum, float(np.max(-cross / math.hypot(edge_x, edge_y))))
     if maximum > 1e-6:
         raise SafetyError(
             f"Path exceeds the configured guarded output polygon: "
@@ -1068,38 +1080,49 @@ def _place_raster_rows(
     *,
     scan_angle_deg: float | None = None,
 ) -> list[RasterRow]:
-    placed = [
-        RasterRow(
-            points=_place_points(row.points, coordinate_frame),
-            lead_distance_mm=row.lead_distance_mm,
-            spans=_place_paths(row.spans, coordinate_frame),
-            source_tag=row.source_tag,
-        )
-        for row in rows
-    ]
-    if scan_angle_deg is not None:
-        angle = scan_angle_deg % 180.0
-        fixed_axis = 1 if angle == 0.0 else 0 if angle == 90.0 else None
-        if fixed_axis is not None:
-            # The inverse scan rotation followed by placement can leave tiny
-            # roundoff differences along a cardinal row. Near a .001 mm output
-            # rounding boundary these would become real perpendicular steps.
-            # Canonicalize before all placed/controller bounds checks, and never
-            # conceal a row that actually has a different direction.
-            for row in placed:
-                coordinate = row.points[0, fixed_axis]
-                arrays = [row.points, *(span.points for span in row.spans)]
-                coordinates = np.concatenate([points[:, fixed_axis] for points in arrays])
+    placed = []
+    angle = None if scan_angle_deg is None else scan_angle_deg % 180.0
+    fixed_axis = 1 if angle == 0.0 else 0 if angle == 90.0 else None
+    for row in rows:
+        _raise_if_toolpath_cancelled()
+        points = _place_points(row.points, coordinate_frame)
+        if row.spans and all(len(span.points) == 2 for span in row.spans):
+            span_points = np.array([span.points for span in row.spans], dtype=np.float64)
+            if coordinate_frame is not None:
+                origin, axes = _coordinate_frame_matrix(coordinate_frame)
+                span_points = span_points @ axes + origin
+            # Canonicalize cardinal rows before bounds checks. Never hide a
+            # genuinely different direction or leave rounding-induced jogs.
+            if fixed_axis is not None:
+                coordinate = points[0, fixed_axis]
+                if (not np.allclose(points[:, fixed_axis], coordinate, rtol=0, atol=1e-8)
+                        or not np.allclose(span_points[:, :, fixed_axis], coordinate, rtol=0, atol=1e-8)):
+                    raise SafetyError("Placed raster row does not match its machine scan angle")
+                points[:, fixed_axis] = coordinate
+                span_points[:, :, fixed_axis] = coordinate
+            spans = [Polyline(mapped, closed=span.closed, source_tag=span.source_tag)
+                     for mapped, span in zip(span_points, row.spans, strict=True)]
+        else:
+            spans = _place_paths(row.spans, coordinate_frame)
+            if fixed_axis is not None:
+                coordinate = points[0, fixed_axis]
+                arrays = [points, *(span.points for span in spans)]
+                coordinates = np.concatenate([array[:, fixed_axis] for array in arrays])
                 if not np.allclose(coordinates, coordinate, rtol=0, atol=1e-8):
                     raise SafetyError("Placed raster row does not match its machine scan angle")
-                for points in arrays:
-                    points[:, fixed_axis] = coordinate
+                for array in arrays:
+                    array[:, fixed_axis] = coordinate
+        placed.append(RasterRow(points=points, spans=spans,
+                                lead_distance_mm=row.lead_distance_mm, source_tag=row.source_tag))
     return placed
 
 
 def _length(points: np.ndarray) -> float:
     if len(points) < 2:
         return 0.0
+    if len(points) == 2:
+        dx, dy = points[1] - points[0]
+        return math.hypot(float(dx), float(dy))
     return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
 
 
@@ -1267,22 +1290,21 @@ def _controller_raster_rows(
     )
     if not np.isfinite(offset).all():
         raise ValueError("laser spot offsets must be finite")
-    return [
-        RasterRow(
+    result = []
+    for row in rows:
+        _raise_if_toolpath_cancelled()
+        if row.spans and all(len(span.points) == 2 for span in row.spans):
+            points = np.array([span.points for span in row.spans], dtype=np.float64) - offset
+            spans = [Polyline(mapped, closed=False, source_tag=span.source_tag)
+                     for mapped, span in zip(points, row.spans, strict=True)]
+        else:
+            spans = [Polyline(span.points.astype(np.float64, copy=True) - offset,
+                              closed=False, source_tag=span.source_tag) for span in row.spans]
+        result.append(RasterRow(
             points=row.points.astype(np.float64, copy=True) - offset,
-            lead_distance_mm=row.lead_distance_mm,
-            spans=[
-                Polyline(
-                    span.points.astype(np.float64, copy=True) - offset,
-                    closed=False,
-                    source_tag=span.source_tag,
-                )
-                for span in row.spans
-            ],
-            source_tag=row.source_tag,
-        )
-        for row in rows
-    ]
+            lead_distance_mm=row.lead_distance_mm, spans=spans, source_tag=row.source_tag,
+        ))
+    return result
 
 
 def _raster_motion_paths(
@@ -1315,7 +1337,7 @@ def _raster_row_command_count(
     count += 2  # One M3/M4 at row entry and one M5 after row lead-out.
     position = row.points[0]
     for span in row.spans:
-        if float(np.linalg.norm(span.points[0] - position)) > 1e-9:
+        if _points_differ(span.points[0], position):
             count += 1  # Laser-off gap.
         count += 1  # Powered G1 span; laser mode is shared by the whole row.
         if power_correction != 0.0:
@@ -1324,7 +1346,7 @@ def _raster_row_command_count(
             # without doing controller-specific motion planning here.
             count += 2 * DEFAULT_RAMP_STEPS
         position = span.points[-1]
-    if float(np.linalg.norm(row.points[-1] - position)) > 1e-9:
+    if _points_differ(row.points[-1], position):
         count += 1
     return count
 
@@ -2473,17 +2495,11 @@ def _image_raster_rows(
             continue
         row_start, row_end = row_interval
         scan_spans = [
-            np.array(
-                [
-                    [max(row_start, float(scan_boundaries[start_column])), row_position],
-                    [min(row_end, float(scan_boundaries[end_column])), row_position],
-                ],
-                dtype=np.float64,
-            )
+            ((max(row_start, float(scan_boundaries[start_column])), row_position),
+             (min(row_end, float(scan_boundaries[end_column])), row_position))
             for start_column, end_column in runs
             if min(row_end, float(scan_boundaries[end_column]))
-            - max(row_start, float(scan_boundaries[start_column]))
-            > 1e-9
+            - max(row_start, float(scan_boundaries[start_column])) > 1e-9
         ]
         if not scan_spans:
             continue
@@ -2491,19 +2507,16 @@ def _image_raster_rows(
             [[row_start, row_position], [row_end, row_position]],
             dtype=np.float64,
         )
+        span_points = np.asarray(scan_spans, dtype=np.float64)
         if row_index % 2:
             row_scan = row_scan[::-1].copy()
-            scan_spans = [span[::-1].copy() for span in reversed(scan_spans)]
+            span_points = span_points[::-1, ::-1]
+        # Retain independent 2x2 products, but dispatch all spans in the row
+        # together instead of allocating and multiplying each tiny array.
+        machine_spans = span_points @ scan_to_machine.T
         row = RasterRow(
             points=_scan_points_to_machine(row_scan, scan_to_machine),
-            spans=[
-                Polyline(
-                    _scan_points_to_machine(span, scan_to_machine),
-                    closed=False,
-                    source_tag=item.name,
-                )
-                for span in scan_spans
-            ],
+            spans=[Polyline(span, closed=False, source_tag=item.name) for span in machine_spans],
             source_tag=item.name,
         )
         rows.append(row)
@@ -2620,10 +2633,14 @@ def _operation_paths(
 
 
 def _points_differ(first: np.ndarray, second: np.ndarray) -> bool:
-    return float(np.linalg.norm(first - second)) > 1e-9
+    return math.hypot(float(first[0] - second[0]), float(first[1] - second[1])) > 1e-9
 
 
 def _points_have_motion(points: np.ndarray) -> bool:
+    if len(points) == 2:
+        return (_fmt(float(points[0, 0])), _fmt(float(points[0, 1]))) != (
+            _fmt(float(points[1, 0])), _fmt(float(points[1, 1]))
+        )
     return len(points) >= 2 and any(
         (_fmt(float(start[0])), _fmt(float(start[1])))
         != (_fmt(float(end[0])), _fmt(float(end[1])))
@@ -2728,6 +2745,7 @@ def _emit_raster_row(
 ) -> tuple[np.ndarray, float, float, int, int]:
     """Emit one scan row and return position, cut/travel, points, and paths."""
 
+    feed_word = _fmt(layer.speed_mm_min)
     motion = _raster_motion_points(row.points, layer.overscan_percent, row.lead_distance_mm)
     lead_start = motion[0]
     row_start = row.points[0]
@@ -2758,56 +2776,81 @@ def _emit_raster_row(
         off_travel += distance
         lines.append(
             f"G1 X{_fmt(row_start[0])} Y{_fmt(row_start[1])} "
-            f"F{_fmt(layer.speed_mm_min)}{off_word}"
+            f"F{feed_word}{off_word}"
         )
 
     position = row_start
     if power <= 0:
         lines.append(
             f"G1 X{_fmt(row_end[0])} Y{_fmt(row_end[1])} "
-            f"F{_fmt(layer.speed_mm_min)}"
+            f"F{feed_word}"
         )
         off_travel += float(np.linalg.norm(row_end - row_start))
         point_count = sum(len(span.points) for span in row.spans)
         path_count = len(row.spans)
         position = row_end
     else:
+        row_start_scalar = row_start.tolist()
+        row_end_scalar = row_end.tolist()
+        row_dx = row_end_scalar[0] - row_start_scalar[0]
+        row_dy = row_end_scalar[1] - row_start_scalar[1]
+        row_length = math.hypot(row_dx, row_dy)
+        unit_x, unit_y = ((row_dx / row_length, row_dy / row_length)
+                          if row_length > 1e-9 else (0.0, 0.0))
         for span in row.spans:
-            if not _points_have_motion(span.points):
+            span_start = span.points[0].tolist()
+            span_end = span.points[-1].tolist()
+            start_words = (_fmt(span_start[0]), _fmt(span_start[1]))
+            end_words = (_fmt(span_end[0]), _fmt(span_end[1]))
+            if len(span.points) == 2:
+                if start_words == end_words:
+                    continue
+            elif not _points_have_motion(span.points):
                 continue
-            span_start = span.points[0]
-            span_end = span.points[-1]
             if _points_differ(position, span_start):
-                gap = float(np.linalg.norm(span_start - position))
+                gap = math.hypot(float(span_start[0] - position[0]), float(span_start[1] - position[1]))
                 off_travel += gap
                 lines.append(
-                    f"G1 X{_fmt(span_start[0])} Y{_fmt(span_start[1])} "
-                    f"F{_fmt(layer.speed_mm_min)}{off_word}"
+                    f"G1 X{start_words[0]} Y{start_words[1]} "
+                    f"F{feed_word}{off_word}"
                 )
-            commanded_power = None
-            motions = corrected_raster_span_motions(
-                row_start,
-                row_end,
-                span_start,
-                span_end,
-                lead_in_mm=lead_in_mm,
-                lead_out_mm=lead_out_mm,
-                base_power=power,
-                correction=layer.raster_power_correction,
-                power_max=power_max,
-                feed_mm_min=layer.speed_mm_min,
-                acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+            if layer.raster_power_correction == 0.0:
+                # Same projection/degeneracy test as corrected_raster_span_motions;
+                # an unbiased span needs neither a profile object nor reformatting.
+                start_distance = ((span_start[0] - row_start_scalar[0]) * unit_x
+                                  + (span_start[1] - row_start_scalar[1]) * unit_y)
+                end_distance = ((span_end[0] - row_start_scalar[0]) * unit_x
+                                + (span_end[1] - row_start_scalar[1]) * unit_y)
+                if row_length > 1e-9 and end_distance - start_distance > 1e-9:
+                    lines.append(f"G1 X{end_words[0]} Y{end_words[1]} F{feed_word} S{power}")
+            else:
+                commanded_power = None
+                motions = corrected_raster_span_motions(
+                    row_start_scalar,
+                    row_end_scalar,
+                    span_start,
+                    span_end,
+                    lead_in_mm=lead_in_mm,
+                    lead_out_mm=lead_out_mm,
+                    base_power=power,
+                    correction=layer.raster_power_correction,
+                    power_max=power_max,
+                    feed_mm_min=layer.speed_mm_min,
+                    acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                )
+                for motion in motions:
+                    power_word = ""
+                    if motion.power != commanded_power:
+                        power_word = f" S{motion.power}"
+                        commanded_power = motion.power
+                    lines.append(
+                        f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
+                        f"F{feed_word}{power_word}"
+                    )
+            distance = (
+                math.hypot(span_end[0] - span_start[0], span_end[1] - span_start[1])
+                if len(span.points) == 2 else _length(span.points)
             )
-            for motion in motions:
-                power_word = ""
-                if motion.power != commanded_power:
-                    power_word = f" S{motion.power}"
-                    commanded_power = motion.power
-                lines.append(
-                    f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
-                    f"F{_fmt(layer.speed_mm_min)}{power_word}"
-                )
-            distance = _length(span.points)
             cut += distance
             point_count += len(span.points)
             path_count += 1
@@ -2817,7 +2860,7 @@ def _emit_raster_row(
             off_travel += gap
             lines.append(
                 f"G1 X{_fmt(row_end[0])} Y{_fmt(row_end[1])} "
-                f"F{_fmt(layer.speed_mm_min)}{off_word}"
+                f"F{feed_word}{off_word}"
             )
             position = row_end
 
@@ -2826,7 +2869,7 @@ def _emit_raster_row(
         off_travel += distance
         lines.append(
             f"G1 X{_fmt(lead_end[0])} Y{_fmt(lead_end[1])} "
-            f"F{_fmt(layer.speed_mm_min)}{off_word}"
+            f"F{feed_word}{off_word}"
         )
     if powered_row:
         # No rapid, row reversal, or following operation inherits enabled output.
@@ -2852,6 +2895,7 @@ def _generate_project_gcode(
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     planning_cache: PlanningCache | None = None,
     air_assist_commands: AirAssistCommands | None = None,
+    material_surface_metadata: dict[str, Any] | None = None,
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
     _raise_if_toolpath_cancelled()
@@ -3599,6 +3643,16 @@ def _generate_project_gcode(
             "or simplify project geometry"
         )
     text = "\n".join(lines)
+    if material_surface_metadata is not None:
+        from ..machine.material_surface import attach
+
+        # Native generation has no focus/surface directive yet. Validate and
+        # encode the single preamble using the same wire-format helper without
+        # rescanning every generated motion twice just to insert that line.
+        text = attach("", material_surface_metadata) + "\n" + text.rstrip("\n")
+        command_count += 1
+        if command_count > _MAX_STREAM_COMMANDS:
+            raise ValueError("Generated output exceeds the stream command limit after surface binding")
     encoded = _encoded_program_artifact(
         document,
         text,
@@ -3612,24 +3666,6 @@ def _generate_project_gcode(
             1 for layer_plan in layer_plans if layer_plan.layer.mode != LayerMode.LINE
         ),
     )
-    try:
-        plan = build_job_plan(
-            encoded.text,
-            power_max=controller_power_max,
-            default_feed_mm_min=laser.travel_feed_mm_min,
-            start_position=(float(start[0]), float(start[1])),
-            acceleration_mm_s2=laser.preview_acceleration_mm_s2,
-            command_delay_ms=laser.preview_command_delay_ms,
-            air_assist_commands=air_assist_commands,
-            cancel_check=_toolpath_cancel_requested,
-        )
-    except JobPlanCancelled as exc:
-        raise ToolpathGenerationCancelled("Toolpath generation was cancelled") from exc
-    _raise_if_toolpath_cancelled()
-    if expanded_raster_travel:
-        _validate_exact_raster_plan(
-            plan, raster_travel_envelope, engraving_surface, laser, guarded_polygon, execution_work_area,
-        )
     return ProjectJob(
         text=encoded.text,
         engraving_surface_mm=engraving_surface,
@@ -3637,11 +3673,10 @@ def _generate_project_gcode(
         bounds_mm=bounds,
         cut_length_mm=cut_length,
         travel_length_mm=travel_length,
-        estimated_seconds=plan.total_seconds,
+        estimated_seconds=0.0,
         path_count=path_count,
         point_count=point_count,
         layer_summaries=summaries,
-        plan=plan,
         spot_offset_mm=(
             float(laser.spot_offset_x_mm),
             float(laser.spot_offset_y_mm),
@@ -3672,6 +3707,7 @@ def generate_project_gcode(
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     planning_cache: PlanningCache | None = None,
     air_assist_commands: AirAssistCommands | None = None,
+    material_surface_metadata: dict[str, Any] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> ProjectJob:
     """Generate one guarded project program with optional cooperative cancellation."""
@@ -3680,7 +3716,7 @@ def generate_project_gcode(
         raise TypeError("cancel_check must be callable or None")
     token = _TOOLPATH_CANCEL_CHECK.set(cancel_check)
     try:
-        return _generate_project_gcode(
+        job = _generate_project_gcode(
             document,
             laser,
             power_max=power_max,
@@ -3693,7 +3729,34 @@ def generate_project_gcode(
             guarded_output_polygon_mm=guarded_output_polygon_mm,
             planning_cache=planning_cache,
             air_assist_commands=air_assist_commands,
+            material_surface_metadata=material_surface_metadata,
         )
+        # Geometry and encoding temporaries are released with the preceding
+        # function's frame before allocating the large immutable preview.
+        execution_area = machine_work_area or _project_work_area(document)
+        start = start_position or (execution_area.x_min, execution_area.y_min)
+        try:
+            plan = build_job_plan(
+                job.text,
+                power_max=int(power_max or laser.power_max),
+                default_feed_mm_min=laser.travel_feed_mm_min,
+                start_position=(float(start[0]), float(start[1])),
+                acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                command_delay_ms=laser.preview_command_delay_ms,
+                air_assist_commands=air_assist_commands,
+                cancel_check=_TOOLPATH_CANCEL_CHECK.get(),
+            )
+        except JobPlanCancelled as exc:
+            raise ToolpathGenerationCancelled("Toolpath generation was cancelled") from exc
+        _raise_if_toolpath_cancelled()
+        if job.raster_travel_envelope is not None:
+            _validate_exact_raster_plan(
+                plan, job.raster_travel_envelope, job.engraving_surface_mm,
+                laser, job.guarded_output_polygon_mm, execution_area,
+            )
+        job.plan = plan
+        job.estimated_seconds = plan.total_seconds
+        return job
     finally:
         _TOOLPATH_CANCEL_CHECK.reset(token)
 

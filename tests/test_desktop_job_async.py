@@ -4520,3 +4520,46 @@ def test_near_cap_backward_timeline_scrub_is_time_sliced(
         canvas.cancel_deferred_render()
         canvas.deleteLater()
         qt_application.processEvents()
+
+
+@pytest.mark.parametrize("change_surface", [False, True])
+def test_surface_is_bound_before_exact_index_and_stale_result_is_rejected(
+    qt_application, tmp_path, monkeypatch, change_surface,
+):
+    import laser_aligner.project.toolpath as toolpath_module
+    from tests.test_toolpath_performance import surface_metadata
+
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _add_line_output(window)
+    context = window.runtime.context
+    binding = surface_metadata()
+    signature = [None]
+    monkeypatch.setattr(context, "material_surface_metadata", lambda: binding)
+    monkeypatch.setattr(context, "material_surface_signature", lambda: signature[0])
+    monkeypatch.setattr(context, "bind_material_surface_program",
+                        lambda text: pytest.fail("surface binding repeated after exact indexing"))
+    original = toolpath_module.build_job_plan
+    indexed = []
+
+    def index(text, **kwargs):
+        indexed.append(text)
+        result = original(text, **kwargs)
+        if change_surface:
+            signature[0] = "changed"
+        return result
+
+    monkeypatch.setattr(toolpath_module, "build_job_plan", index)
+    try:
+        window.generate_toolpath()
+        _wait_until(qt_application, lambda: not window._job_preparation_busy)
+        assert len(indexed) == 1, errors
+        assert indexed[0].startswith("E3SURFACE 1 ")
+        if change_surface:
+            assert window.last_job is None
+            assert window._job_preview_dialog is None
+        else:
+            assert errors == []
+            assert window.last_job.text == indexed[0]
+            assert window._job_preview_dialog is not None
+    finally:
+        _dispose(qt_application, window)

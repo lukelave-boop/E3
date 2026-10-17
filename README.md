@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Toolpath generation now batches dense raster and vector work and builds one
+exact preview after material-surface binding. See [generation performance](docs/TOOLPATH_PERFORMANCE.md)
+for the under-ten-second target, repeatable measurements and verification scope.
+
 The 0.8 series combines desktop update progress, bounded and cancellable updates,
 and independent version state with the UI and installer improvements. See
 [versioning](docs/VERSIONING.md) and [current release verification](CURRENT_STATE.md).

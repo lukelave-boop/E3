@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased - faster toolpath generation (2026-10-17)
+
+- Batch dense raster transforms and bounds checks, and vector containment candidate filtering.
+- Index canonical linear preview commands without repeated generic parsing or per-move metadata conversion.
+- Bind measured material-surface provenance before exact preview indexing, retaining stale-request rejection.
+- Release temporary encoding geometry before allocating the exact preview; preserve resolution, commands and execution guards.
+- Add a repeatable offline generation benchmark; see [performance](docs/TOOLPATH_PERFORMANCE.md).
+
 ## 0.8.0 integration (2026-10-16)
 
 - Combine the download progress and independent version-state changes below

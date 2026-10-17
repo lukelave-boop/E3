@@ -1993,6 +1993,19 @@ operation reuse, raster/fill cache, or encoded-program cache yet.
 because the final stream still contains volatile generation-time text and
 whole-job dependencies.
 
+Dense generation now separates encoding from exact indexing so temporary raster
+geometry is released before allocating PlannedMove records. Raster spans retain
+the same per-span matrix arithmetic but are dispatched in row batches; rectangle
+and convex-polygon checks still inspect all points. Vector containment first
+filters bounding boxes in arrays, then applies the original even/odd test to
+candidates. Exact preview recognizes only a full-match, bounded-decimal G0/G1
+XYF[ S] grammar; unfamiliar syntax retains the general parser. Immutable move
+metadata and timing constants are reused within their original modal scope.
+The desktop snapshots material-surface metadata with its request and supplies it
+to the generator before encoding is finalized and indexed, avoiding a second
+full plan after provenance insertion. Surface/capture/context checks remain live.
+See [generation performance](TOOLPATH_PERFORMANCE.md) for measurement boundaries.
+
 Cache performance is measured explicitly rather than inferred from hit counts.
 `scripts/benchmark_planning_cache.py` compares uncached generation, cold-cache
 generation, warm identical regeneration, speed-only and power-only edits,

@@ -1,5 +1,15 @@
 # Roadmap
 
+## Toolpath generation under ten seconds (2026-10-17)
+
+Implemented on `codex/toolpath-speed`: dense raster batching, vector containment
+filtering and one exact preview index after surface binding. The retained
+726,664-move emblem measures 9.071 seconds median over three offline Windows
+runs, versus 42.735 seconds before; a 3,136-contour vector job measures 3.143 seconds.
+Compatibility and frozen/interactive acceptance
+remain in progress; this is not a universal timing guarantee.
+See [measurement scope](docs/TOOLPATH_PERFORMANCE.md) and CURRENT_STATE.md.
+
 ## 0.8.0 integration (2026-10-16)
 
 Prepared: confirmed download progress and version-state work combined with main's

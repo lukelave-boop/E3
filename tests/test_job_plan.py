@@ -187,7 +187,7 @@ def test_start_here_rejects_unknown_move() -> None:
     with pytest.raises(ValueError, match="outside"):
         restart_program_from_move(plan, 5)
 
-def test_build_job_plan_scans_each_executable_line_once(monkeypatch) -> None:
+def test_build_job_plan_scans_general_lines_once(monkeypatch) -> None:
     text = "\n".join(
         [
             "; comment-only line",
@@ -233,7 +233,6 @@ def test_build_job_plan_scans_each_executable_line_once(monkeypatch) -> None:
         ("G21", True),
         ("G90", True),
         ("M5", True),
-        ("G0 X10 Y0 F600", True),
         ("M4 S200", True),
         ("G1X20Y0F1200", True),
         ("M5", True),
@@ -567,3 +566,53 @@ def test_job_plan_and_start_here_poll_cooperative_cancellation() -> None:
         power_max=1000,
         cancel_check=lambda: False,
     ) == plan
+
+
+@pytest.mark.parametrize("acceleration", [None, 0, 500])
+@pytest.mark.parametrize("air_commands", [None, GRBL_AIR, MARLIN_AIR])
+def test_linear_fast_index_matches_general_parser(monkeypatch, acceleration, air_commands):
+    import re
+
+    text = "\n".join([
+        "G21", "G90", "M5",
+        '; @E3_LAYER {"id":"a","name":"First","mode":"raster"}',
+        '; @E3_PASS {"index":2,"count":3}', '; @E3_PATH {"name":"image"}',
+        "G0 X10 Y20 F1000", "M4 S100", "G1 X11.125 Y20 F500 S0",
+        "G1 X12 Y20 F500 S50", "G1 X12 Y20 F500 S70",  # no move, modal update
+        "G91", "G1 X-1 Y0 F0", "G90", "G0 X1 Y2 F800",  # rapid-on warning
+        '; @E3_LAYER {"id":"b","name":"Second","air_assist":true}',
+        '; @E3_PASS {"index":1,"count":1}', '; @E3_PATH {"name":"curve"}',
+        "G1 X3 Y4 F800 S20", "M5", "G1 X4 Y5 F800", "M5",
+    ])
+    arguments = dict(power_max=1000, acceleration_mm_s2=acceleration,
+                     command_delay_ms=3, air_assist_commands=air_commands)
+    fast = build_job_plan(text, **arguments)
+    monkeypatch.setattr(job_plan_module, "_LINEAR_LINE", re.compile(r"(?!)"))
+    assert fast == build_job_plan(text, **arguments)
+
+
+@pytest.mark.parametrize("line", [
+    "G1 X1 Y2 F3 ; M5", "G1 X1 Y2 F3 M5", "G1X1Y2F3", "g1 x1 y2 f3",
+    "G1 Y2 X1 F3", "G1 X1e2 Y2 F3", "G1 X+1 Y2 F3", "G1 X1 Y2 F-3",
+    "G1 X1 Y2 F3 S-1", "G1 X1 Y2 F3 S1.5", "G1 X1 Y2 F3 S1 S0",
+    "G1 X1 Y2 F3\n", "G1 X9999999999999 Y2 F3", "G1 X1 Y2 Z3 F4",
+])
+def test_linear_fast_index_falls_back_for_noncanonical_lines(monkeypatch, line):
+    assert job_plan_module._LINEAR_LINE.fullmatch(line) is None
+    calls = []
+    original = job_plan_module.scan_word_state
+
+    def scan(value, **kwargs):
+        calls.append(value)
+        return original(value, **kwargs)
+
+    monkeypatch.setattr(job_plan_module, "scan_word_state", scan)
+    build_job_plan("G21\nG90\nM5\n" + line + "\nM5", power_max=1000)
+    # splitlines removes a trailing newline before parsing.
+    if not line.endswith("\n"):
+        assert job_plan_module.strip_comment(line) in calls
+
+
+def test_fast_index_still_rejects_nonfinite_general_words():
+    with pytest.raises(ValueError, match="finite"):
+        build_job_plan("G21\nG90\nM5\nG1 X1e999 Y2 F3\nM5", power_max=1000)
