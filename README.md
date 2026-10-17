@@ -11,6 +11,10 @@ select one unlocked vector and use **Shape → Fit arc…**, choose the span, re
 the overlay, and Apply. The edit supports normal Undo/Redo. See
 [arc fitting](docs/OBJECT_TRACE.md#fit-an-arc-on-an-existing-vector).
 
+Toolpath generation now batches dense raster and vector work and builds one
+exact preview after material-surface binding. See [generation performance](docs/TOOLPATH_PERFORMANCE.md)
+for the under-ten-second target, repeatable measurements and verification scope.
+
 The 0.8 series combines desktop update progress, bounded and cancellable updates,
 and independent version state with the UI and installer improvements. See
 [versioning](docs/VERSIONING.md) and [current release verification](CURRENT_STATE.md).

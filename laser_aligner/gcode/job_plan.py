@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Any
+from itertools import chain
+from operator import attrgetter
+from typing import Any, NamedTuple
 
 from ..air_assist import (
     AIR_ASSIST_DIRECTIVE_PREFIX,
@@ -17,6 +20,14 @@ from ..operation_focus import PREFIX as OPERATION_FOCUS_PREFIX
 from ..operation_focus import mode as operation_focus_mode
 from ..raster_safety import RasterBoundary, parse_raster_boundary
 from .preview import parse_spot_offset_comment, scan_word_state, strip_comment
+
+# Full-match only: unfamiliar syntax always uses the existing general parser.
+# Keep numeric widths bounded so conversion cannot overflow to infinity.
+_LINEAR_LINE = re.compile(
+    r"G([01]) X(-?[0-9]{1,12}(?:\.[0-9]{1,9})?)"
+    r" Y(-?[0-9]{1,12}(?:\.[0-9]{1,9})?)"
+    r" F([0-9]{1,12}(?:\.[0-9]{1,9})?)(?: S([0-9]{1,12}))?"
+)
 
 
 class JobPlanCancelled(RuntimeError):
@@ -46,8 +57,8 @@ def _raise_if_cancelled() -> None:
         raise JobPlanCancelled("Job plan indexing was cancelled")
 
 
-@dataclass(slots=True, frozen=True)
-class PlannedMove:
+class PlannedMove(NamedTuple):
+    """Immutable exact move; tuple construction avoids per-field frozen setters."""
     index: int
     line_number: int
     start_x: float
@@ -140,6 +151,27 @@ def _metadata(raw_line: str) -> tuple[str, dict[str, Any]] | None:
     return prefix[4:].lower(), parsed
 
 
+def _move_bounds(moves: list[PlannedMove]) -> tuple[float, float, float, float]:
+    """Reduce named fields in C without another Python loop over every move."""
+    lower, upper = [], []
+    for axis in ("x", "y"):
+        _raise_if_cancelled()
+        start, end = attrgetter(f"start_{axis}"), attrgetter(f"end_{axis}")
+        minimum = min(chain((math.inf,), map(start, moves), map(end, moves)))
+        maximum = max(chain((-math.inf,), map(start, moves), map(end, moves)))
+        # Seeded extrema ignore NaN exactly like sequential comparisons. On a
+        # zero tie retain the first interleaved endpoint's sign as before.
+        if minimum == 0.0 or maximum == 0.0:
+            zero = next(value for move in moves for value in (start(move), end(move)) if value == 0.0)
+            if minimum == 0.0:
+                minimum = zero
+            if maximum == 0.0:
+                maximum = zero
+        lower.append(minimum)
+        upper.append(maximum)
+    return lower[0], lower[1], upper[0], upper[1]
+
+
 def _build_job_plan(
     text: str,
     *,
@@ -176,210 +208,228 @@ def _build_job_plan(
     air_assist_events: list[PlannedAirAssistEvent] = []
     warnings: list[str] = []
     raster_boundary = None
+    context_dirty = True
+    cancel_check = _JOB_PLAN_CANCEL_CHECK.get()
+    timing_feed = None
+    previous_x_word = previous_y_word = previous_feed_word = None
+    linear_x = linear_y = 0.0
+    linear_feed = feed
+    linear_powers = {"0": 0.0}
+    cut_moves = []
+    travel_moves = []
     for line_number, raw_line in enumerate(text.splitlines(), 1):
-        _raise_if_cancelled()
-        metadata = _metadata(raw_line)
-        if metadata is not None:
-            kind, payload = metadata
-            if kind == "layer":
-                layer = payload
-            elif kind == "job":
-                job_metadata = payload
-                if not moves and "start_x" in payload and "start_y" in payload:
-                    try:
-                        start_x = float(payload["start_x"])
-                        start_y = float(payload["start_y"])
-                    except (TypeError, ValueError):
-                        warnings.append("Job start metadata is invalid; using the supplied start pose")
-                    else:
-                        if math.isfinite(start_x) and math.isfinite(start_y):
-                            x, y = start_x, start_y
+        if cancel_check is not None and cancel_check():
+            raise JobPlanCancelled("Job plan indexing was cancelled")
+        linear = _LINEAR_LINE.fullmatch(raw_line)
+        if linear is not None:
+            motion_word, x_word, y_word, feed_word, power_word = linear.groups()
+            motion = 0 if motion_word == "0" else 1
+            if x_word != previous_x_word:
+                linear_x, previous_x_word = float(x_word), x_word
+            if y_word != previous_y_word:
+                linear_y, previous_y_word = float(y_word), y_word
+            new_x = linear_x if absolute else x + linear_x
+            new_y = linear_y if absolute else y + linear_y
+            if feed_word != previous_feed_word:
+                requested_feed = float(feed_word)
+                linear_feed = requested_feed if requested_feed > 1.0 else 1.0
+                previous_feed_word = feed_word
+            feed = linear_feed
+            if power_word is not None:
+                power = linear_powers.get(power_word)
+                if power is None:
+                    power = float(power_word)
+                    if len(linear_powers) < 256:
+                        linear_powers[power_word] = power
+            laser_on = laser_enabled and power > 0
+        else:
+            metadata = _metadata(raw_line)
+            if metadata is not None:
+                kind, payload = metadata
+                context_dirty = True
+                if kind == "layer":
+                    layer = payload
+                elif kind == "job":
+                    job_metadata = payload
+                    if not moves and "start_x" in payload and "start_y" in payload:
+                        try:
+                            start_x = float(payload["start_x"])
+                            start_y = float(payload["start_y"])
+                        except (TypeError, ValueError):
+                            warnings.append("Job start metadata is invalid; using the supplied start pose")
                         else:
-                            warnings.append(
-                                "Job start metadata is non-finite; using the supplied start pose"
-                            )
-            elif kind == "planner":
-                planner_metadata = payload
-            elif kind == "pass":
-                pass_metadata = payload
-            elif kind == "path":
-                source = payload
-            continue
-        raw_instruction = raw_line.strip()
-        boundary = parse_raster_boundary(raw_instruction)
-        if boundary is not None:
-            if raster_boundary is not None or moves:
+                            if math.isfinite(start_x) and math.isfinite(start_y):
+                                x, y = start_x, start_y
+                            else:
+                                warnings.append(
+                                    "Job start metadata is non-finite; using the supplied start pose"
+                                )
+                elif kind == "planner":
+                    planner_metadata = payload
+                elif kind == "pass":
+                    pass_metadata = payload
+                elif kind == "path":
+                    source = payload
+                continue
+            raw_instruction = raw_line.strip()
+            boundary = parse_raster_boundary(raw_instruction)
+            if boundary is not None:
+                if raster_boundary is not None or moves:
+                    raise SafetyError(
+                        f"Line {line_number}: raster boundary must occur once before motion"
+                    )
+                raster_boundary = boundary
+                continue
+            requested_focus_mode = operation_focus_mode(strip_comment(raw_instruction))
+            if requested_focus_mode is not None:
+                focus_mode = requested_focus_mode
+                continue
+            try:
+                air_assist_kind = (
+                    None
+                    if air_assist_commands is None
+                    else air_assist_commands.kind_for_program_line(raw_instruction)
+                )
+            except ValueError as exc:
                 raise SafetyError(
-                    f"Line {line_number}: raster boundary must occur once before motion"
+                    f"Line {line_number}: invalid E3 air-assist instruction: {exc}"
+                ) from exc
+            if (
+                air_assist_commands is None
+                and raw_instruction.startswith(AIR_ASSIST_DIRECTIVE_PREFIX)
+            ):
+                raise SafetyError(
+                    f"Line {line_number}: E3 air-assist instruction has no resolved mapping"
                 )
-            raster_boundary = boundary
-            continue
-        requested_focus_mode = operation_focus_mode(strip_comment(raw_instruction))
-        if requested_focus_mode is not None:
-            focus_mode = requested_focus_mode
-            continue
-        try:
-            air_assist_kind = (
-                None
-                if air_assist_commands is None
-                else air_assist_commands.kind_for_program_line(raw_instruction)
-            )
-        except ValueError as exc:
-            raise SafetyError(
-                f"Line {line_number}: invalid E3 air-assist instruction: {exc}"
-            ) from exc
-        if (
-            air_assist_commands is None
-            and raw_instruction.startswith(AIR_ASSIST_DIRECTIVE_PREFIX)
-        ):
-            raise SafetyError(
-                f"Line {line_number}: E3 air-assist instruction has no resolved mapping"
-            )
-        if air_assist_kind is not None:
-            enabled = air_assist_kind == "on"
-            physical_commands = (
-                air_assist_commands.on_commands
-                if enabled
-                else air_assist_commands.off_commands
-            )
-            displayed_command = (
-                strip_comment(raw_line)
-                if air_assist_commands.target is AirAssistTarget.PRIMARY
-                else "; ".join(physical_commands)
-            )
-            air_assist_events.append(
-                PlannedAirAssistEvent(
-                    line_number=line_number,
-                    move_index=len(moves),
-                    command=displayed_command,
-                    enabled=enabled,
-                    layer_id=str(layer.get("id", "")),
-                    layer_name=str(layer.get("name", "")),
+            if air_assist_kind is not None:
+                enabled = air_assist_kind == "on"
+                physical_commands = (
+                    air_assist_commands.on_commands
+                    if enabled
+                    else air_assist_commands.off_commands
                 )
+                displayed_command = (
+                    strip_comment(raw_line)
+                    if air_assist_commands.target is AirAssistTarget.PRIMARY
+                    else "; ".join(physical_commands)
+                )
+                air_assist_events.append(
+                    PlannedAirAssistEvent(
+                        line_number=line_number,
+                        move_index=len(moves),
+                        command=displayed_command,
+                        enabled=enabled,
+                        layer_id=str(layer.get("id", "")),
+                        layer_name=str(layer.get("name", "")),
+                    )
+                )
+                continue
+            spot_offset = parse_spot_offset_comment(raw_line)
+            if spot_offset is not None:
+                spot_offset_x, spot_offset_y = spot_offset
+                continue
+            line = strip_comment(raw_line)
+            if not line:
+                continue
+            g_codes, m_codes, values = scan_word_state(
+                line,
+                comments_stripped=True,
             )
-            continue
-        spot_offset = parse_spot_offset_comment(raw_line)
-        if spot_offset is not None:
-            spot_offset_x, spot_offset_y = spot_offset
-            continue
-        line = strip_comment(raw_line)
-        if not line:
-            continue
-        g_codes, m_codes, values = scan_word_state(
-            line,
-            comments_stripped=True,
-        )
-        if 90 in g_codes:
-            absolute = True
-        if 91 in g_codes:
-            absolute = False
-        if 5 in m_codes:
-            laser_enabled = False
-            power = 0.0
-        # Marlin's trusted air-assist command uses S255 as fan duty. It must
-        # never mutate the modal laser power used by preview/restart planning.
-        if "S" in values and 106 not in m_codes:
-            power = float(values["S"])
-        if m_codes.intersection({3, 4}):
-            laser_enabled = True
-        laser_on = laser_enabled and power > 0
-        if "F" in values:
-            feed = max(1.0, float(values["F"]))
+            if 90 in g_codes:
+                absolute = True
+            if 91 in g_codes:
+                absolute = False
+            if 5 in m_codes:
+                laser_enabled = False
+                power = 0.0
+            # Marlin's trusted air-assist command uses S255 as fan duty. It must
+            # never mutate the modal laser power used by preview/restart planning.
+            if "S" in values and 106 not in m_codes:
+                power = float(values["S"])
+            if m_codes.intersection({3, 4}):
+                laser_enabled = True
+            laser_on = laser_enabled and power > 0
+            if "F" in values:
+                feed = max(1.0, float(values["F"]))
 
-        motion = 0 if 0 in g_codes else 1 if 1 in g_codes else None
-        if motion is None:
-            continue
-        target_x = float(values.get("X", 0.0))
-        target_y = float(values.get("Y", 0.0))
-        new_x = target_x if absolute and "X" in values else x + target_x if "X" in values else x
-        new_y = target_y if absolute and "Y" in values else y + target_y if "Y" in values else y
+            motion = 0 if 0 in g_codes else 1 if 1 in g_codes else None
+            if motion is None:
+                continue
+            target_x = float(values.get("X", 0.0))
+            target_y = float(values.get("Y", 0.0))
+            new_x = target_x if absolute and "X" in values else x + target_x if "X" in values else x
+            new_y = target_y if absolute and "Y" in values else y + target_y if "Y" in values else y
         if new_x == x and new_y == y:
             continue
         rapid = motion == 0
         if rapid and laser_on:
             warnings.append(f"Line {line_number}: rapid motion requested while laser is on")
         distance = math.hypot(new_x - x, new_y - y)
-        velocity = feed / 60.0
-        acceleration = (
-            None
-            if acceleration_mm_s2 is None or acceleration_mm_s2 <= 0
-            else float(acceleration_mm_s2)
-        )
+        if feed != timing_feed:
+            velocity = feed / 60.0
+            acceleration = (
+                None if acceleration_mm_s2 is None or acceleration_mm_s2 <= 0
+                else float(acceleration_mm_s2)
+            )
+            if acceleration is not None:
+                ramp_distance = velocity * velocity / acceleration
+            delay_seconds = max(0.0, float(command_delay_ms)) / 1000.0
+            timing_feed = feed
         if acceleration is None:
             duration = distance / velocity
         else:
-            ramp_distance = velocity * velocity / acceleration
             duration = (
                 2.0 * math.sqrt(distance / acceleration)
                 if distance < ramp_distance
                 else 2.0 * velocity / acceleration
                 + (distance - ramp_distance) / velocity
             )
-        duration += max(0.0, float(command_delay_ms)) / 1000.0
+        duration += delay_seconds
+        if context_dirty:
+            layer_id = str(layer.get("id", ""))
+            layer_name = str(layer.get("name", "Unassigned"))
+            layer_color = str(layer.get("color", "#E35D6A"))
+            layer_mode = str(layer.get("mode", "line"))
+            pass_index = int(pass_metadata.get("index", 1))
+            pass_count = int(pass_metadata.get("count", 1))
+            source_name = str(source.get("name", ""))
+            vector_power_correction = float(layer.get("vector_power_correction", 0.0))
+            raster_power_correction = float(layer.get("raster_power_correction", 0.0))
+            air_assist = layer.get("air_assist") is True
+            context_dirty = False
+        # Positional construction avoids per-field keyword bindings per motion. Keep
+        # this order aligned with the immutable PlannedMove declaration above.
+        start_x, start_y = x + spot_offset_x, y + spot_offset_y
+        end_x, end_y = new_x + spot_offset_x, new_y + spot_offset_y
         move = PlannedMove(
-            index=len(moves),
-            line_number=line_number,
-            start_x=x + spot_offset_x,
-            start_y=y + spot_offset_y,
-            end_x=new_x + spot_offset_x,
-            end_y=new_y + spot_offset_y,
-            rapid=rapid,
-            laser_on=laser_on and not rapid,
-            power=power if laser_on and not rapid else 0.0,
-            feed_mm_min=feed,
-            layer_id=str(layer.get("id", "")),
-            layer_name=str(layer.get("name", "Unassigned")),
-            layer_color=str(layer.get("color", "#E35D6A")),
-            layer_mode=str(layer.get("mode", "line")),
-            pass_index=int(pass_metadata.get("index", 1)),
-            pass_count=int(pass_metadata.get("count", 1)),
-            source_name=str(source.get("name", "")),
-            distance_mm=distance,
-            duration_seconds=duration,
-            start_seconds=elapsed,
-            end_seconds=elapsed + duration,
-            vector_power_correction=float(layer.get("vector_power_correction", 0.0)),
-            raster_power_correction=float(layer.get("raster_power_correction", 0.0)),
-            air_assist=layer.get("air_assist") is True,
-            focus_mode=focus_mode,
+            len(moves), line_number,
+            start_x, start_y, end_x, end_y,
+            rapid, laser_on and not rapid, power if laser_on and not rapid else 0.0, feed,
+            layer_id, layer_name, layer_color, layer_mode,
+            pass_index, pass_count, source_name,
+            distance, duration, elapsed, elapsed + duration,
+            vector_power_correction, raster_power_correction, air_assist, focus_mode,
         )
         moves.append(move)
+        (cut_moves if move.laser_on else travel_moves).append(move)
         elapsed += duration
         x, y = new_x, new_y
-
-    x_min = y_min = powered_x_min = powered_y_min = math.inf
-    x_max = y_max = powered_x_max = powered_y_max = -math.inf
-    for move in moves:
-        _raise_if_cancelled()
-        x_min = min(x_min, move.start_x, move.end_x)
-        y_min = min(y_min, move.start_y, move.end_y)
-        x_max = max(x_max, move.start_x, move.end_x)
-        y_max = max(y_max, move.start_y, move.end_y)
-        if move.laser_on:
-            powered_x_min = min(powered_x_min, move.start_x, move.end_x)
-            powered_y_min = min(powered_y_min, move.start_y, move.end_y)
-            powered_x_max = max(powered_x_max, move.start_x, move.end_x)
-            powered_y_max = max(powered_y_max, move.start_y, move.end_y)
     if moves:
-        bounds = (x_min, y_min, x_max, y_max)
+        bounds = _move_bounds(moves)
     else:
         bounds = (0.0, 0.0, 0.0, 0.0)
         warnings.append("The program contains no motion")
-    cut_moves = []
-    travel_moves = []
-    for move in moves:
-        _raise_if_cancelled()
-        (cut_moves if move.laser_on else travel_moves).append(move)
     _raise_if_cancelled()
+    powered_bounds = _move_bounds(cut_moves)
     return JobPlan(
         moves=tuple(moves),
         bounds_mm=bounds,
-        cut_distance_mm=sum(move.distance_mm for move in cut_moves),
-        travel_distance_mm=sum(move.distance_mm for move in travel_moves),
-        cut_seconds=sum(move.duration_seconds for move in cut_moves),
-        travel_seconds=sum(move.duration_seconds for move in travel_moves),
+        cut_distance_mm=sum(map(attrgetter("distance_mm"), cut_moves)),
+        travel_distance_mm=sum(map(attrgetter("distance_mm"), travel_moves)),
+        cut_seconds=sum(map(attrgetter("duration_seconds"), cut_moves)),
+        travel_seconds=sum(map(attrgetter("duration_seconds"), travel_moves)),
         total_seconds=elapsed,
-        maximum_power=max((move.power for move in cut_moves), default=0.0),
+        maximum_power=max(map(attrgetter("power"), cut_moves), default=0.0),
         power_max=max(1, int(power_max)),
         warnings=tuple(dict.fromkeys(warnings)),
         planner_mode=str(job_metadata.get("planner", "source order")),
@@ -396,8 +446,8 @@ def _build_job_plan(
         air_assist_events=tuple(air_assist_events),
         air_assist_commands=air_assist_commands,
         powered_bounds_mm=(
-            (powered_x_min, powered_y_min, powered_x_max, powered_y_max)
-            if math.isfinite(powered_x_min)
+            powered_bounds
+            if math.isfinite(powered_bounds[0])
             else None
         ),
         raster_boundary=raster_boundary,

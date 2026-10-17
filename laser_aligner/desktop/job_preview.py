@@ -80,35 +80,31 @@ def prepare_job_preview(
     rows: dict[str, dict[str, object]] = {}
     move_ends: list[float] = []
     for move in plan.moves:
-        check_cancelled()
+        if cancel_check is not None and cancel_check():
+            raise JobPreviewPreparationCancelled("Exact Preview preparation was cancelled")
         move_ends.append(move.end_seconds)
         if not move.layer_id and not move.layer_name:
             continue
         key = move.layer_id or move.layer_name
-        row = rows.setdefault(
-            key,
-            {
-                "id": key,
-                "name": move.layer_name,
-                "color": move.layer_color,
-                "mode": move.layer_mode,
-                "distance": 0.0,
-                "seconds": 0.0,
-                "feeds": set(),
-                "vector_power_correction": move.vector_power_correction,
+        row = rows.get(key)
+        if row is None:
+            row = {
+                "id": key, "name": move.layer_name, "color": move.layer_color,
+                "mode": move.layer_mode, "distance": 0.0, "seconds": 0.0,
+                "feeds": set(), "vector_power_correction": move.vector_power_correction,
                 "raster_power_correction": move.raster_power_correction,
-                "power": 0.0,
-                "air_assist": False,
-            },
-        )
-        row["air_assist"] = bool(row["air_assist"]) or move.air_assist
+                "power": 0.0, "air_assist": False,
+            }
+            rows[key] = row
+        if move.air_assist:
+            row["air_assist"] = True
         if move.laser_on:
-            row["distance"] = float(row["distance"]) + move.distance_mm
-            row["seconds"] = float(row["seconds"]) + move.duration_seconds
+            row["distance"] += move.distance_mm
+            row["seconds"] += move.duration_seconds
             feeds = row["feeds"]
             assert isinstance(feeds, set)
-            feeds.add(float(move.feed_mm_min))
-            row["power"] = max(float(row["power"]), move.power)
+            feeds.add(move.feed_mm_min)
+            row["power"] = max(row["power"], move.power)
     check_cancelled()
     layer_rows: list[PreviewLayerRow] = []
     for row in rows.values():

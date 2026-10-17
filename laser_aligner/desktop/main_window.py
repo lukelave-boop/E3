@@ -3004,6 +3004,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             app_context = self.runtime.context
             surface_provider = getattr(app_context, "material_surface_signature", None)
             surface_signature = surface_provider() if callable(surface_provider) else None
+            surface_metadata_provider = getattr(self.runtime.context, "material_surface_metadata", None)
+            surface_metadata = (copy.deepcopy(surface_metadata_provider())
+                                if callable(surface_metadata_provider) else None)
             placement_capture_signature = (self.controller.placement_capture_signature()
                                            if surface_signature is not None else None)
             identity = app_context.machine_identity
@@ -3108,6 +3111,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 self._calibration_guidance_signature(calibration_guidance)
             ),
         }
+
+        if callable(surface_metadata_provider):
+            context["material_surface_metadata"] = surface_metadata
 
         def snapshot_operation() -> ProjectDocument | None:
             if cancellation.is_set():
@@ -3335,6 +3341,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     require_verified_raster_travel_limits=True,
                     guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
                     planning_cache=context["planning_cache"],
+                    material_surface_metadata=context.get("material_surface_metadata"),
                     air_assist_commands=context["air_assist_commands"],
                     cancel_check=cancellation.is_set,
                 )
@@ -3347,7 +3354,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     raise ValueError("Placement photograph changed; review and generate the toolpath again")
                 job.placement_capture_signature = capture_signature
                 bind_surface = getattr(app_context, "bind_material_surface_program", None)
-                if callable(bind_surface):
+                if "material_surface_metadata" not in context and callable(bind_surface):
                     bound_text = bind_surface(job.text)
                     if bound_text != job.text:
                         job.text = bound_text

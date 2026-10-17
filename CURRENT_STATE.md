@@ -328,6 +328,99 @@ setup lacked its temporary parent directory, and one new test used an incorrect
 helper name; both were corrected before the passing runs. No hardware behavior
 or machine values changed. Frozen build and interactive validation are pending.
 
+## Toolpath generation performance (2026-10-17, feature verification)
+
+**Operator handoff:** permanent `E3 DEV TEST` selects version **0.8.2**, exact
+implementation **5aaf7f02fb5881367bbb06a30abc919a61f088db**, from
+`.codex-worktrees/toolpath-speed/build/hosted-5aaf7f0/E3.exe` in the shared E3
+checkout. The canonical hosted Windows packaging run **39031824505** passed;
+the installer was extracted without installation. Its 196 archived application
+modules, entrypoint and ten resources match the commit. Bundled Qt 6.12 controls
+and the complete 726,664-move workspace/dialog canvases pass offscreen checks.
+The pointer was updated atomically with `packaging/set_dev_test_feature.py`;
+the normal installation and previous test bundle were preserved.
+
+Final archived-code benchmarks use isolated Windows CPython 3.12.10 with the
+bundle's dependencies, synthetic placement/travel authority, surface binding
+and desktop cancellation callbacks. Three runs each report:
+
+| Workload | Preparation median | Maximum |
+| --- | ---: | ---: |
+| Retained 726,664-move emblem | 6.174 s | 6.190 s |
+| Dense 811,800-move raster | 6.688 s | 6.834 s |
+| 3,136-contour / 228,928-move vector grid | 2.825 s | 2.848 s |
+
+All timestamp-normalized command hashes match the comparison programs.
+Preparation includes snapshot/preflight, exact generation/indexing, summary
+preparation and asset verification; drawing, upload and Start are separate.
+One further archived-code offscreen run takes 6.237 seconds to prepare the emblem
+and 2.930 seconds to build both complete preview canvases (9.168 seconds combined).
+This is not canonical EXE/full application startup, interactive or physical
+camera/controller/laser verification. Compatibility CI **39031820668** passes
+Windows 3.10, POSIX recovery and Ruff. Windows 3.12 reports **8,983 passed,
+69 skipped and one failure**: the unchanged secondary-channel isolation test
+exhausted its 20 ms simulated query deadline while establishing the unchanged
+10 ms quiet boundary. Both that test and all 146 controller-session tests pass
+locally. The test-only follow-up gives that isolation query 500 ms scheduling
+margin; it does not change production timing, quiet-boundary rejection or any
+application module in the selected 5aaf7f0 binary. Fresh full CI is required on
+the test/documentation follow-up. PR60 stays draft pending CI/operator acceptance.
+
+Isolated `codex/toolpath-speed` starts from released main a7d2dae and preserves
+all unrelated work in the shared setup-wizard checkout. Desktop raster coordinate
+operations, rectangle/polygon bounds checks and vector containment candidate
+filtering are batched. Exact preview indexing has a fully matched canonical
+linear fast path with general-parser fallback, shared metadata/timing values and
+unchanged named move values. PlannedMove now uses immutable tuple storage;
+golden serialization keeps the existing named-field schema. Bounds reductions
+and recurrent numeric words avoid repeated Python work and duplicate floats.
+Raster run clipping and serialized-coordinate collection use batch arrays.
+Unchanged spans are shared read-only, and coordinate formatting has a bounded
+cache. Encoder temporaries are released before
+preview allocation. Material-surface binding happens before the one exact index;
+request/surface/capture invalidation and execution guards remain authoritative.
+
+Initial revision 9d780bb Windows Python 3.14.4 offline measurement of the retained 162.901 x 154.308 mm
+barrel-emblem project at its original 0.1 mm pitch produces 726,664 moves.
+Three runs including snapshot/advisory preflight, surface binding, exact plan,
+preview summaries and asset verification take 8.836 / 9.071 / 9.109 seconds
+(median 9.071, maximum 9.109). The matched baseline takes
+42.035 / 42.735 / 44.264 seconds (median 42.735): 4.71x faster.
+All six runs have the same timestamp-normalized program SHA-256
+`c7d271b753fb6d1ff8b7d28316a3e627678c537969bb3b53f7c486ad16c4a881`.
+The 180 x 180 mm, 0.2 mm-pitch dense raster (811,800 moves) measures
+9.605 seconds median / 9.731 maximum across three runs.
+A 3,136-contour, 228,928-move vector grid over 192 mm measures
+3.143 median / 3.175 maximum over three runs, versus one matched
+36.930-second baseline. Its program hash also matches exactly.
+Placement/travel authority and surface metadata are synthetic; no controller is
+constructed, and the retained project is unchanged. GUI drawing, upload and Start
+are excluded. These initial source results meet the ten-second target for these workloads,
+not every possible program below the command cap.
+
+Initial focused Windows source verification passes 533 tests across desktop async
+and preview widgets, material surface, exact plan, browser/shared G-code, goldens,
+raster continuity/overscan/axes and new performance regressions. This includes
+offscreen single-index and stale-surface rejection, scalar-parser equivalence,
+chunk-boundary acceptance/rejection and temporary-geometry lifetime checks.
+Revision 9d780bb also passes full Compatibility CI run 39030144674 (Windows
+3.10 core, Windows 3.12 desktop, POSIX controller/session recovery and Ruff).
+Its canonical hosted Windows package passes run 39030322851. Local read-only
+verification matches 196 archived modules, the entrypoint and ten resources to
+that commit, and bundled Qt 6.12 controls pass an offscreen widget smoke test.
+Its packaged-runtime raster benchmark exceeded ten seconds, prompting the
+additional allocation and batch changes above. Follow-up source verification
+passes 548 focused tests, including immutable-record roundtripping, unchanged
+golden previews, numeric-cache/modal transitions, signed-zero/NaN extrema and
+geometry-reuse offset/rejection paths. Ruff, compilation and whitespace checks
+pass. Python 3.12.10 with packaged dependencies and desktop cancellation enabled
+takes 8.596 / 9.536 / 9.601 seconds for the 811,800-move dense raster, with the
+same timestamp-normalized program hash. Final rebuilt-package verification is
+recorded above; the first revision's CI remains separate evidence.
+No interactive GUI, camera, controller or laser verification is claimed.
+Ignored evidence is under build/toolpath-speed in the isolated checkout.
+See docs/TOOLPATH_PERFORMANCE.md for reproducible measurement and scope.
+
 ## 0.8.0 integration candidate (2026-10-16)
 
 The confirmed three-chat scope combines update download progress `986525a` and

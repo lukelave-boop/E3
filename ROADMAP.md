@@ -26,6 +26,19 @@ before Qt initializes file dialogs, retaining private E3 state. Older frozen
 executables keep their existing launcher behavior. Verification and the selected
 replacement build are recorded in CURRENT_STATE.md.
 
+## Toolpath generation under ten seconds (2026-10-17)
+
+Implemented on `codex/toolpath-speed`: dense raster batching, vector containment
+filtering, reduced allocation/parsing costs and one exact index after surface
+binding. The verified 0.8.2 archive is selected in permanent E3 DEV TEST.
+Three-run archived-code medians are 6.174 seconds for the retained 726,664-move
+emblem, 6.688 seconds for an 811,800-move dense raster, and 2.825 seconds for a
+3,136-contour vector grid. Commands are preserved. Offscreen emblem preparation
+plus both preview canvases takes 9.168 seconds in a separate check. Final full
+CI and interactive/operator acceptance remain in progress; this is not a
+universal timing guarantee or physical verification.
+See [measurement scope](docs/TOOLPATH_PERFORMANCE.md) and CURRENT_STATE.md.
+
 ## 0.8.0 integration (2026-10-16)
 
 Prepared: confirmed download progress and version-state work combined with main's
