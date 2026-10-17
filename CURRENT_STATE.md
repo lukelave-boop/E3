@@ -1,5 +1,44 @@
 # Current repository state
 
+## Permanent DEV TEST folder repair installed (2026-10-17)
+
+The recurring native Import raster image error was a missing Desktop under each
+new version/revision's private USERPROFILE. Earlier one-scope junction repairs
+were workarounds and did not repair the launcher. The permanent launcher now
+prepares native Desktop/Documents/Downloads/Pictures/Music/Videos junctions for
+every profile using Windows known-folder targets, preserving OneDrive redirects
+and original user-folder identity on launcher re-entry. AppData/config/data
+remain isolated. Conflicting existing paths are never replaced.
+
+Installed launcher source is codex/dev-test-known-folders / 934e893a860c7d3f421221aca677683c9041d94d,
+built successfully by Windows CI run 39034148895. Exact installed EXE SHA256:
+2d6102c3aa1c52b11890bd4c64fb15143daa20a39d42c0d0a85b847401a605b9.
+Backup: C:/Users/lukel/Documents/E3 Dev Test/launcher-backups/known-folders-20261017T125212Z.
+The permanent path, orange identity, shortcut, selected 0.8.2 feature pointer,
+selected application EXE and build-info were preserved; the open E3 process was
+not closed. Its missing Desktop junction and other user folders were repaired
+in place so the current dialog can retry immediately.
+
+Verification: 59 focused Windows launcher/state/folder tests passed; one existing
+symlink-privilege test skipped. Ruff/compileall passed. CI built the actual frozen
+launcher; a harmless C# child verified native shell folder availability through
+two successive isolated versions (0.7.153 and 0.8.999), all real folder targets,
+and unchanged seeded application state. This is frozen-launcher/native-shell
+verification, not an interactive click test of the user's open import dialog.
+Evidence: ignored build/known-folder-frozen-smoke-final/result.json and
+build/launcher-known-folders-install.json. The first smoke harness used a fake,
+nonexistent Windows profile and timed out at an error; the corrected harness
+retained real Windows profile identity while isolating all application state.
+
+Local packaging was refused by the 8 GiB managed build budget, so the normal
+hosted-CI packaging path was used without deleting unrelated artifacts or
+bypassing local storage checks. An initial push was rejected by automatic review;
+read-only verification of the user's authenticated GitHub ownership and existing
+AGENTS push instruction allowed the retry. No secrets or local state were pushed.
+The isolated repair branch extends the installed version-isolation branch;
+merge into main remains gated on integration and full compatibility CI.
+
+
 ## DEV TEST native folder repair (2026-10-17)
 
 The isolated launcher's USERPROFILE omitted Desktop, causing recurring native

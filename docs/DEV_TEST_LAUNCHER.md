@@ -10,6 +10,8 @@ Matching existing links are reused. Conflicting files, directories or links are
 preserved and cause a clear error rather than being replaced. AppData and all
 application-state redirection remain isolated. This fixes the recurring missing
 `home/Desktop` error without rebuilding the selected feature executable.
+The repair was installed on 2026-10-17 from revision 934e893 and verified with
+two successive frozen-launcher profiles.
 
 
 `E3 DEV TEST` is the stable entry point for operator testing of frozen Windows
