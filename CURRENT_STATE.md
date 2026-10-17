@@ -1,5 +1,462 @@
 # Current repository state
 
+## Combined completed desktop fixes (2026-10-17)
+
+The operator requested one DEV TEST containing probe-selection refresh, faster
+raster/vector toolpath generation, arc recovery/Fit arc and movable linked
+image/vector pairs, followed by integration of completed recent work into main.
+The combined source also includes the completed native Windows folder repair
+already installed in the permanent launcher. Its launcher executable is preserved.
+
+The integration merges codex/toolpath-speed (729d8d7) and
+codex/dev-test-known-folders (07267db) into codex/arc-recovery (c479f2b).
+Production code merged automatically; only additive documentation overlaps needed
+manual reconciliation. Performance modules match the speed branch byte-for-byte;
+probe, arc and linked-pair modules retain the previously verified implementation.
+Newer main's updater, immutable release baseline and packaging behavior remain.
+The remaining older completed local branches are already ancestors of origin/main.
+The browser-timeout diagnostic candidate remains an unfinished draft (PR54),
+excluded under the operator's instruction to preserve unfinished work separately.
+All pre-existing shared-checkout edits, including cooling/diagnostics work, remain
+untouched. The historical feature selections below are superseded by this combined
+handoff once verification and selection complete.
+
+Combined focused Windows verification covers 1,137 passing tests and one expected
+Windows symlink-privilege skip. Five initial temporary-file/junction permission
+failures were sandbox restrictions; all affected files pass outside that sandbox
+(67 passed, one skipped). Repository Ruff, compileall and whitespace checks pass.
+Offline combined-source checks with Windows Python 3.12.10 and hosted dependencies
+retain identical timestamp-normalized programs: dense raster 811,800 moves,
+11.304 s median; vector 228,928 moves, 4.577 s median (three samples each).
+These source timings differ from earlier frozen timings and are not a new
+sub-ten-second frozen-build claim. Exact archive checks remain pending.
+Full compatibility CI, exact frozen packaging, main integration and launcher
+selection are in progress. No interactive GUI or
+physical controller/laser verification is claimed; intermittent camera dropouts
+remain unexplained. No Pi code, configuration or firmware update is part of this
+integration.
+
+## Probe selection refresh recovery (2026-10-17)
+
+Position probe now requests fresh corrected camera images while selection is
+active, even with the normal Live overlay paused or slow. It leaves placement
+capture review when explicitly selected; trace/template/calibration review
+holds remain respected. A delayed or expired frame no longer silently cancels
+the crosshair mode. The panel explains that it is refreshing; a valid fresh
+click changes the same button to Move probe here. Expired targets are cleared
+and require another click. Selection never sends motion; the separate move
+retains freshness, mapping, machine-session and normal motion checks.
+
+The supplied 0.8.7 video shows stale/unavailable image feedback. The operator
+also reports camera online/offline flapping. Twelve read-only authenticated
+camera status samples all succeeded in 0.092-0.187 s with advancing frames;
+three 1920x1080 snapshots took 0.441-0.472 s. This does not explain or repair
+intermittent network/camera dropouts. No camera restart, settings change,
+controller command, motion or laser operation was performed.
+
+Implemented on the existing isolated codex/arc-recovery branch, retaining its
+arc and movable-pair changes. The shared checkout remains untouched. Focused
+Windows offscreen widget/mapping/lifecycle coverage passes 335 cases (330 in the
+combined cohort plus all 32 metadata/review tests after adding five cases).
+Both new refresh/expired-frame regression cases fail against the unchanged
+0.8.7 implementation. Repository Ruff, application compileall and whitespace
+checks pass. Interactive operator acceptance and physical behavior remain
+unverified; the existing feature branch remains pending operator review.
+
+[Compatibility CI 39031168799](https://github.com/lukelave-boop/E3/actions/runs/39031168799)
+passes on exact runtime revision `126a91ac71e101a76c70f95c349ede17cd9a46f7`:
+Windows Python 3.12 desktop 9,062 passed / 69 skipped; Windows Python 3.10 core
+7,448 passed / 186 skipped; POSIX 1,502 passed / 2 skipped; repository Ruff passes.
+[Canonical Windows packaging 39031170403](https://github.com/lukelave-boop/E3/actions/runs/39031170403)
+passes and produces version **0.8.9**. The frozen verifier checks 198 application
+modules, the entrypoint, 11 resources, normal/private Windows folder equality
+and private E3 storage. Downloaded EXE hash/resources and native-library guard
+pass locally. EXE SHA-256:
+`d794729b53749f96838b27549cc39e800de03c9b783645688b20f81ee1dbafd5`.
+
+The canonical atomic pointer setter now selects **Probe selection refresh -
+arc tools and movable pairs**, 0.8.9, codex/arc-recovery, at that exact revision:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-126a91a\E3.exe
+```
+
+Save work, close the old test instance, and reopen the permanent **E3 DEV TEST**
+launcher. Pointer readback matches and its previous contents are backed up in
+ignored build/probe-fix. The permanent launcher hash is unchanged. No application
+or installer was launched; normal E3, Pi software and hardware state were unchanged.
+Read-only Pi diagnostics also show zero node/camera-forwarder service restarts,
+no recent USB disconnect entries, and no throttling flags. The intermittent
+camera-dropout cause remains unresolved. Evidence is under build/probe-fix.
+
+
+## Movable linked engraving image/vector pairs (2026-10-17)
+
+The operator reports that creating a linked vector in Edit image for engraving
+makes both objects seem immovable. The vector is above the image in canvas hit
+testing, but its former linked-state rules disable dragging and handles. The
+repair allows pure transform commands and previews to start at either member,
+propagating exactly one transform to the image and all linked outlines. Selecting
+a linked pair also shows shared resize/rotation handles. Explicit locking of any
+member anchors that family. Conflicting requests reject atomically; geometry
+replacement retains the stricter source-only rule. Detachment, layer/output
+settings, schema 6, frozen path geometry and ordinary Undo/Redo are preserved.
+
+This continues the isolated codex/arc-recovery worktree and retains the arc and
+Windows-profile fixes. The shared checkout is untouched; freshly fetched
+origin/main (`a7d2dae`) is an ancestor of this feature head. Source tests cover
+real offscreen mouse dragging
+of the topmost vector, simultaneous pair selection without double movement,
+non-mutating previews/cancellation, numeric transforms, locks, hidden/multiple
+members, conflicting requests, persistence, detachment and single-step Undo/Redo.
+Windows Python 3.14.4 focused verification covers 384 cases. The initial combined
+run passes 383 before adding paired-selection handles; the final combined run
+passes 383 with one native Qt worker crash in the unchanged engraving-editor
+rectangle gesture test. The complete editor module passes all 36 cases in an
+isolated process. The final shared-handle/rectangle cohort also passes 24 tests.
+Repository Ruff, application compileall and whitespace checks pass. Evidence:
+build/linked-pair-focused-final.xml and build/linked-pair-editor-isolated.xml.
+[Hosted packaging run 39027084738](https://github.com/lukelave-boop/E3/actions/runs/39027084738)
+passes on exact runtime revision `b45be6e022f7e99395f83d540b0ecf24b3341b92`.
+The canonical Python 3.12 bundle is **0.8.7**. Its frozen verifier checks all
+**198 application modules**, the actual entrypoint and **11 resources**, plus
+normal/private Qt folder equality and private E3 state paths. The downloaded
+EXE hash and every reported resource match; the local native-library guard passes.
+Target:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-b45be6e\E3.exe
+```
+
+EXE SHA-256: `d1d21aeb266333d97de6d5f3719c515b73a874211a2d01a74da4e33c055c38c7`.
+This uses the documented hosted-bundle handoff, preserving managed accounting,
+older bundles and both permanent launchers. Evidence is retained under
+build/linked-pair-handoff/. An offscreen paired-selection resize/rotation capture
+was visually inspected; its aligned preview and shared handles are correct.
+The synthetic source and images remain ignored under build/linked-pair-qa/.
+
+[Compatibility run 39027085053](https://github.com/lukelave-boop/E3/actions/runs/39027085053)
+passes on the exact runtime revision: Windows Python 3.12 desktop **9,055
+passed, 69 skipped**; Windows Python 3.10 core **7,448 passed, 186 skipped**;
+POSIX transport/recovery **1,502 passed, 2 skipped**; repository Ruff passes.
+The supported Windows compatibility gate is green; the local Python 3.14 Qt
+worker crash above remains recorded rather than claimed fixed.
+
+The canonical atomic setter selects **Arc tools - movable image/vector pairs**,
+version **0.8.7**, branch `codex/arc-recovery`, at the exact revision and EXE above.
+The previous pointer is backed up in build/linked-pair-handoff/; validated
+readback matches and the permanent launcher hash is unchanged. The operator
+should save and close the current test instance, then reopen the permanent
+**E3 DEV TEST** shortcut. No E3 EXE, hardware service or installer was launched
+by this verification; interactive operator acceptance and physical verification
+remain separate. The feature branch remains pending operator review.
+
+## Arc DEV TEST native file browsing follow-up (2026-10-17)
+
+The operator's screenshot confirms canonical arc build `8627ac0` starts, but its
+native import dialog resolves Desktop inside the launcher's redirected profile.
+Its exact private home lacked Desktop. A local directory junction now maps only
+that build's home/Desktop to the real Windows Desktop; both directory listings
+match. The operator subsequently reopened v0.8.0 and reports the error is gone;
+the follow-up screenshot still shows the private home with only AppData and the
+Desktop link. That workaround does not restore normal Explorer navigation. The
+replacement below supplies the profile correction; interactive import success
+in the replacement remains unverified.
+
+The existing `codex/dev-test-file-dialog` history (`6070780`, `ca95eba`) is
+integrated into `codex/arc-recovery`. It restores the validated original Windows
+profile before Qt starts while retaining explicit E3 private state, config,
+credentials and build identity. Both features' documentation/history are kept.
+The permanent launcher, normal E3 and running application are unchanged.
+
+A new local build fails read-only admission: 6,723,197,847 measured bytes plus a
+2,147,483,648-byte request exceeds the fixed 8,589,934,592-byte managed cap.
+No reservation was created and no artifact or accounting was removed. The
+documented manually dispatched hosted Windows packaging workflow produced the
+exact portable bundle below. Canonical build, identity and frozen-profile
+verification passed before changing the feature pointer.
+
+Combined focused Windows Python 3.14 verification passes **170 tests**, with one
+expected Windows symlink-permission skip. Coverage includes state scope, launcher,
+packaged-entry ordering, preferences, deployment, startup/recovery, saved raster
+settings, arc core/dialog and downstream geometry. Repository Ruff, application
+compileall and whitespace checks pass. Independent startup/private-storage review
+found no blocking issues. Ignored evidence: build/arc-browsing-fix/ and
+build/arc-desktop-alias-repair.json.
+
+Packaging now compares frozen application code/resources to the exact checkout
+and runs normal/DEV TEST profile probes using archived startup code and bundled
+QtCore before uploading artifacts. Eighteen focused verifier tests and the source
+Qt profile regression pass. A real negative control against `8627ac0` reaches both
+isolated archived-code probes and fails specifically because Desktop/Documents/
+Downloads/Pictures still resolve inside the redirected profile. Private E3 paths
+and build identity remain intact in that control. This catches the reported bug
+without starting the EXE, constructing services or writing real settings.
+Evidence: build/frozen-profile-old-control.json.
+
+[Hosted Windows packaging run 39024233626](https://github.com/lukelave-boop/E3/actions/runs/39024233626)
+passes on exact runtime revision `0ee7fab141decb0bc5f173e95108421aadf916c0`.
+The canonical Python 3.12 frozen bundle is version **0.8.5**. Its archived
+**198 application modules**, actual entrypoint and **11 packaged resources**
+match source. Archived startup code plus bundled QtCore passes normal/DEV TEST
+Home, Desktop, Documents, Downloads and Pictures equality while all E3 storage
+and the disabled-updater build identity remain private. This starts no EXE,
+application services or hardware connection. The downloaded EXE SHA-256 matches
+the hosted report, packaged resources match source locally, and the local native
+library guard passes. The exact downloaded bundle is retained at:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\build\hosted-0ee7fab\E3.exe
+```
+
+EXE SHA-256: `a9828d0c8a44ade1bbcc566f953c7873ee23e37473aef0245639a329a4d1755f`.
+No installer was run; local managed accounting and all earlier artifacts remain
+unchanged. That handoff selected **Arc recovery and Fit arc -
+Windows browsing fixed**, version **0.8.5**, branch `codex/arc-recovery`, at that
+exact runtime revision and EXE. Selection is for native file browsing and arc UI
+operator testing. The previous pointer is backed up in
+build/arc-browsing-fix/previous-feature-pointer.json; pointer readback and the
+unchanged permanent launcher hash are verified in selection.json. No application
+was launched or closed. Save and close the old test application, then reopen the
+permanent **E3 DEV TEST** launcher; its first 0.8.5 start copies the prior private
+0.8.0 test state using the existing newer-version snapshot rule.
+
+[Compatibility CI run 39024231796](https://github.com/lukelave-boop/E3/actions/runs/39024231796)
+passes Windows Python 3.10 (**7,439 passed, 186 skipped**), POSIX transport/session
+recovery (**1,502 passed, 2 skipped**) and repository Ruff. The first Python 3.12
+attempt has **9,038 passed, 69 skipped and one failed** assertion in the unchanged
+millisecond duplicate-ack test. The simulated command is rejected with a missing
+quiet-boundary error and the log records session quarantine; the test expects the
+later duplicate-response rejection text. Its 20 ms transaction budget includes a
+10 ms quiet boundary, so scheduling can choose the earlier rejection. The final
+close assertion was not reached in that run. Relevant tests and controller paths
+are unchanged from both pre-feature main and the previous arc build. A focused
+local check passes both duplicate tests. The exact-revision second attempt passes
+that test but reports **9,038 passed, 69 skipped and one failed** assertion in
+`test_manual_home_failed_lift_never_homes[stop]`. Its expected error and no-`$H`
+assertions pass; `requires_clearance` is false. The test starts STOP on a daemon
+thread while the fake completes its lift immediately. Verified clearance can
+therefore finish before STOP latches; the later primary M5 is then rejected for
+its retired session, matching the CI log. All machine code, relevant fixtures and
+tests are unchanged from both `a7d2dae` and `8627ac0`. The two existing focused
+modules cover **275 cases**: 272 pass initially, and three loopback-only cases
+blocked by sandbox socket permissions pass on the narrowly elevated rerun. The
+Home acceptance/three rejection cases and existing synchronized pending-focus
+STOP check pass independently (**5 tests**). An ignored exact-lift diagnostic
+holds the Z30 acknowledgement, requests STOP after the write-entry barrier, and
+passes **5 cases** confirming an error, no Home command, M112, retained clearance
+and cleared surface. Both duplicate-response checks pass again (**2 tests**).
+These are simulator/automated checks on local Windows Python 3.14.4. No tracked
+test or controller guard was changed. Both CI attempts and all focused JUnit
+reports remain under build/arc-browsing-fix/; full Python 3.12 compatibility CI
+is not green. The selection receipt records that failure explicitly. This limited
+UI feature-test handoff does not claim release readiness or clear the compatibility
+failure; main integration remains deferred while operator review and the existing
+timing-sensitive test issues are outstanding.
+
+Interactive file-picker acceptance and real camera/controller/laser or physical
+accuracy verification remain pending; automated/frozen Qt checks do not establish
+them.
+
+## Arc recovery and Fit arc implementation (2026-10-16)
+
+Isolated branch `codex/arc-recovery` starts from authoritative `origin/main`
+`a7d2dae`. Existing unrelated changes in the shared checkout are preserved.
+Automatic native tracing fits circular arcs across narrowly bounded isolated
+edge defects, including across defect-created corner partitions, while retaining
+native tolerance, source-pixel limits, strong remaining support and final topology
+validation. Larger notches, corners, incompatible curvature and ambiguous fits
+fall back to the existing contour. Imported rasters and camera-native tracing
+share this stage; the browser single-SVG pipeline is unchanged.
+
+Shape → Fit arc opens a reviewed selected-span editor for one unlocked PATH or
+POLYGON. Endpoint selection, closed-outline alternate spans, physical dimensions,
+mirrors/rotation, original/proposed overlays and radius/deviation are supported.
+Apply uses one ordinary shape command with stale project/object/selection guards;
+Cancel is inert and Undo/Redo restores the exact original/reapplied object.
+The pure project operation retains endpoints, untouched segments and subpaths,
+holes, orientation and native topology. Existing native line/cubic schema and
+normal bounds/G-code/execution guards remain in force.
+
+Final combined focused verification passes **510 tests in 58.58 seconds** on
+Windows Python 3.14.4 with four workers. Coverage includes complete imported
+raster/camera pipelines, defect acceptance/rejection, closed-contour seam
+invariance, a local arc among 16 exact retained corners, the real Coleman fixture,
+manual spans, anisotropic fitting, mirrored/rotated save/load, holes and ordinary
+job-generation acceptance/rejection. Historical source-centering assertions stay
+intact with recovery explicitly disabled for that one fixture; a separate
+recovery-enabled Coleman check retains every hard corner and the fit-error bound.
+
+Offscreen Qt interaction verifies preview, Apply/Cancel, stale review guards and
+exact Undo/Redo. A hidden Windows-widget capture was visually reviewed at 960 x
+710 logical pixels / 125% DPI. The final independent reviews found no remaining
+actionable issues after adding tiny-hole clearance and closed-seam regressions.
+Repository Ruff, application compileall and whitespace checks pass. The separate
+seven raster-performance tests pass. Required Compatibility CI passes on exact
+runtime revision `8627ac0a6219724b47e20932f853f7753e1aa08a`:
+Windows Python 3.12 desktop **9,014 passed, 69 skipped**; Windows Python 3.10
+core/non-desktop **7,415 passed, 185 skipped**; POSIX transport/recovery
+**1,502 passed, 2 skipped**; repository Ruff passes. Evidence:
+[Compatibility CI run 38997560235](https://github.com/lukelave-boop/E3/actions/runs/38997560235).
+Ignored evidence is under this feature worktree's build/arc-final-stable.* and
+build/arc-fit-qa/fit-arc-preview.png. These are automated/offscreen checks only.
+No interactive operator, real camera/controller/laser or physical accuracy test
+has occurred. The supplied screenshot demonstrates the requested behavior but is
+not an original source fixture; synthetic end-to-end defect cases are used.
+
+The initial storage check refused packaging because an abandoned camera-roaming
+reservation consumed the remaining capacity. The user explicitly approved
+releasing only `windows-860f6bed16644f8cb4ab8718821b51fa`. After rechecking that its
+owner and related processes had exited, the exact accounting bytes were backed up
+adjacent to the state file, then that one reservation was removed atomically under
+the existing lock. All build files, other accounting and the fixed eight-GiB cap
+were retained. The canonical builder subsequently passed admission and completion;
+its seven generated outputs are recorded and its reservation is released.
+
+The initial **E3 DEV TEST** handoff selected **Arc recovery and Fit arc**,
+version **0.8.0**, branch `codex/arc-recovery`, exact frozen runtime revision
+`8627ac0a6219724b47e20932f853f7753e1aa08a`. Target:
+
+```text
+C:\Users\lukel\Documents\E3\.codex-worktrees\arc-recovery-dev\.e3-builds\windows-windows-2de4562732c34b1893522a0753e6a0c7\dist\E3\E3.exe
+```
+
+`packaging/build_windows.ps1` produced this EXE and the managed installer
+using Python 3.14.4, PyInstaller 6.22.3 and Inno Setup 7.1.0. The native-library
+guard passed. All **198 archived application modules**, the actual entrypoint,
+**ten resources** and packaged default configuration match the frozen commit;
+metadata validates as packaged Windows x86-64, schema 1, version 0.8.0. The EXE
+SHA-256 is `c71545070461f24596c582f80706d7ca91058357220e15e3a8dcf2251f6c0302`.
+
+An isolated offscreen process loaded the archived Fit arc/project code and exact
+bundled Qt 6.11.2 native libraries. Defect preview, unsuitable-span rejection,
+Apply, Cancel and exact Undo/Redo passed; its screenshot was visually reviewed.
+This does **not** constitute canonical EXE/main-window startup, interactive GUI,
+camera/controller/laser or physical accuracy verification. The check constructed
+no runtime/services or application QSettings. Operator review remains pending;
+keep the feature branch and selected bundle available for that review.
+
+The pointer was set through `packaging/set_dev_test_feature.py`, validated by
+readback against the adjacent build metadata, and the previous pointer backed up.
+The permanent launcher EXE hash is unchanged. Normal E3, shortcuts and installed
+application state were not changed. Ignored receipts in this worktree include
+build/approved-reservation-release.json, build/arc-windows-build-result.json,
+build/arc-frozen-qa/, and build/arc-dev-test-selection.json. Subsequent verification
+documentation does not change the exact frozen runtime revision above.
+
+## DEV TEST native file browsing correction (2026-10-16)
+
+The earlier Desktop junction only removed the missing-folder error. The
+launcher's redirected USERPROFILE and AppData still made the native file picker
+show an isolated home with incomplete Explorer navigation. Scope-aware startup
+now restores the launcher's validated original profile environment while keeping
+E3_USER_STATE_DIR, configuration, credentials and build identity private. Frozen
+startup performs this before importing the desktop and creating QApplication.
+Legacy executables retain their existing launcher isolation until rebuilt.
+
+Focused Windows Python 3.14 verification passes 89 tests with one expected
+Windows symlink-permission skip. This includes two independent Qt subprocesses
+confirming normal and DEV TEST Home/Desktop/Documents/Downloads/Pictures/AppData
+locations match, state/private-storage checks, malformed-profile rejection,
+launcher compatibility, packaged-entry ordering and startup/recovery checks.
+Scoped Ruff, application compileall and whitespace checks pass. Initial test
+setup lacked its temporary parent directory, and one new test used an incorrect
+helper name; both were corrected before the passing runs. No hardware behavior
+or machine values changed. Frozen build and interactive validation are pending.
+
+## Toolpath generation performance (2026-10-17, feature verification)
+
+**Operator handoff:** permanent `E3 DEV TEST` selects version **0.8.2**, exact
+implementation **5aaf7f02fb5881367bbb06a30abc919a61f088db**, from
+`.codex-worktrees/toolpath-speed/build/hosted-5aaf7f0/E3.exe` in the shared E3
+checkout. The canonical hosted Windows packaging run **39031824505** passed;
+the installer was extracted without installation. Its 196 archived application
+modules, entrypoint and ten resources match the commit. Bundled Qt 6.12 controls
+and the complete 726,664-move workspace/dialog canvases pass offscreen checks.
+The pointer was updated atomically with `packaging/set_dev_test_feature.py`;
+the normal installation and previous test bundle were preserved.
+
+Final archived-code benchmarks use isolated Windows CPython 3.12.10 with the
+bundle's dependencies, synthetic placement/travel authority, surface binding
+and desktop cancellation callbacks. Three runs each report:
+
+| Workload | Preparation median | Maximum |
+| --- | ---: | ---: |
+| Retained 726,664-move emblem | 6.174 s | 6.190 s |
+| Dense 811,800-move raster | 6.688 s | 6.834 s |
+| 3,136-contour / 228,928-move vector grid | 2.825 s | 2.848 s |
+
+All timestamp-normalized command hashes match the comparison programs.
+Preparation includes snapshot/preflight, exact generation/indexing, summary
+preparation and asset verification; drawing, upload and Start are separate.
+One further archived-code offscreen run takes 6.237 seconds to prepare the emblem
+and 2.930 seconds to build both complete preview canvases (9.168 seconds combined).
+This is not canonical EXE/full application startup, interactive or physical
+camera/controller/laser verification. Compatibility CI **39031820668** passes
+Windows 3.10, POSIX recovery and Ruff. Windows 3.12 reports **8,983 passed,
+69 skipped and one failure**: the unchanged secondary-channel isolation test
+exhausted its 20 ms simulated query deadline while establishing the unchanged
+10 ms quiet boundary. Both that test and all 146 controller-session tests pass
+locally. The test-only follow-up gives that isolation query 500 ms scheduling
+margin; it does not change production timing, quiet-boundary rejection or any
+application module in the selected 5aaf7f0 binary. Fresh full CI is required on
+the test/documentation follow-up. PR60 stays draft pending CI/operator acceptance.
+
+Isolated `codex/toolpath-speed` starts from released main a7d2dae and preserves
+all unrelated work in the shared setup-wizard checkout. Desktop raster coordinate
+operations, rectangle/polygon bounds checks and vector containment candidate
+filtering are batched. Exact preview indexing has a fully matched canonical
+linear fast path with general-parser fallback, shared metadata/timing values and
+unchanged named move values. PlannedMove now uses immutable tuple storage;
+golden serialization keeps the existing named-field schema. Bounds reductions
+and recurrent numeric words avoid repeated Python work and duplicate floats.
+Raster run clipping and serialized-coordinate collection use batch arrays.
+Unchanged spans are shared read-only, and coordinate formatting has a bounded
+cache. Encoder temporaries are released before
+preview allocation. Material-surface binding happens before the one exact index;
+request/surface/capture invalidation and execution guards remain authoritative.
+
+Initial revision 9d780bb Windows Python 3.14.4 offline measurement of the retained 162.901 x 154.308 mm
+barrel-emblem project at its original 0.1 mm pitch produces 726,664 moves.
+Three runs including snapshot/advisory preflight, surface binding, exact plan,
+preview summaries and asset verification take 8.836 / 9.071 / 9.109 seconds
+(median 9.071, maximum 9.109). The matched baseline takes
+42.035 / 42.735 / 44.264 seconds (median 42.735): 4.71x faster.
+All six runs have the same timestamp-normalized program SHA-256
+`c7d271b753fb6d1ff8b7d28316a3e627678c537969bb3b53f7c486ad16c4a881`.
+The 180 x 180 mm, 0.2 mm-pitch dense raster (811,800 moves) measures
+9.605 seconds median / 9.731 maximum across three runs.
+A 3,136-contour, 228,928-move vector grid over 192 mm measures
+3.143 median / 3.175 maximum over three runs, versus one matched
+36.930-second baseline. Its program hash also matches exactly.
+Placement/travel authority and surface metadata are synthetic; no controller is
+constructed, and the retained project is unchanged. GUI drawing, upload and Start
+are excluded. These initial source results meet the ten-second target for these workloads,
+not every possible program below the command cap.
+
+Initial focused Windows source verification passes 533 tests across desktop async
+and preview widgets, material surface, exact plan, browser/shared G-code, goldens,
+raster continuity/overscan/axes and new performance regressions. This includes
+offscreen single-index and stale-surface rejection, scalar-parser equivalence,
+chunk-boundary acceptance/rejection and temporary-geometry lifetime checks.
+Revision 9d780bb also passes full Compatibility CI run 39030144674 (Windows
+3.10 core, Windows 3.12 desktop, POSIX controller/session recovery and Ruff).
+Its canonical hosted Windows package passes run 39030322851. Local read-only
+verification matches 196 archived modules, the entrypoint and ten resources to
+that commit, and bundled Qt 6.12 controls pass an offscreen widget smoke test.
+Its packaged-runtime raster benchmark exceeded ten seconds, prompting the
+additional allocation and batch changes above. Follow-up source verification
+passes 548 focused tests, including immutable-record roundtripping, unchanged
+golden previews, numeric-cache/modal transitions, signed-zero/NaN extrema and
+geometry-reuse offset/rejection paths. Ruff, compilation and whitespace checks
+pass. Python 3.12.10 with packaged dependencies and desktop cancellation enabled
+takes 8.596 / 9.536 / 9.601 seconds for the 811,800-move dense raster, with the
+same timestamp-normalized program hash. Final rebuilt-package verification is
+recorded above; the first revision's CI remains separate evidence.
+No interactive GUI, camera, controller or laser verification is claimed.
+Ignored evidence is under build/toolpath-speed in the isolated checkout.
+See docs/TOOLPATH_PERFORMANCE.md for reproducible measurement and scope.
+
 ## 0.8.0 integration candidate (2026-10-16)
 
 The confirmed three-chat scope combines update download progress `986525a` and
@@ -299,6 +756,63 @@ Automatic approval review blocked the GitHub push because uploading repository
 source/documentation to origin requires explicit user authorization. No push,
 remote CI, main merge, publication or installed application replacement occurred.
 Existing shared checkout changes and other branches remain untouched.
+
+## Permanent DEV TEST folder repair installed (2026-10-17)
+
+The recurring native Import raster image error was a missing Desktop under each
+new version/revision's private USERPROFILE. Earlier one-scope junction repairs
+were workarounds and did not repair the launcher. The permanent launcher now
+prepares native Desktop/Documents/Downloads/Pictures/Music/Videos junctions for
+every profile using Windows known-folder targets, preserving OneDrive redirects
+and original user-folder identity on launcher re-entry. AppData/config/data
+remain isolated. Conflicting existing paths are never replaced.
+
+Installed launcher source is codex/dev-test-known-folders / 934e893a860c7d3f421221aca677683c9041d94d,
+built successfully by Windows CI run 39034148895. Exact installed EXE SHA256:
+2d6102c3aa1c52b11890bd4c64fb15143daa20a39d42c0d0a85b847401a605b9.
+Backup: C:/Users/lukel/Documents/E3 Dev Test/launcher-backups/known-folders-20261017T125212Z.
+The permanent path, orange identity, shortcut, selected 0.8.2 feature pointer,
+selected application EXE and build-info were preserved; the open E3 process was
+not closed. Its missing Desktop junction and other user folders were repaired
+in place so the current dialog can retry immediately.
+
+Verification: 59 focused Windows launcher/state/folder tests passed; one existing
+symlink-privilege test skipped. Ruff/compileall passed. CI built the actual frozen
+launcher; a harmless C# child verified native shell folder availability through
+two successive isolated versions (0.7.153 and 0.8.999), all real folder targets,
+and unchanged seeded application state. This is frozen-launcher/native-shell
+verification, not an interactive click test of the user's open import dialog.
+Evidence: ignored build/known-folder-frozen-smoke-final/result.json and
+build/launcher-known-folders-install.json. The first smoke harness used a fake,
+nonexistent Windows profile and timed out at an error; the corrected harness
+retained real Windows profile identity while isolating all application state.
+
+Local packaging was refused by the 8 GiB managed build budget, so the normal
+hosted-CI packaging path was used without deleting unrelated artifacts or
+bypassing local storage checks. An initial push was rejected by automatic review;
+read-only verification of the user's authenticated GitHub ownership and existing
+AGENTS push instruction allowed the retry. No secrets or local state were pushed.
+The isolated repair branch extends the installed version-isolation branch;
+merge into main remains gated on integration and full compatibility CI.
+
+
+## DEV TEST native folder repair (2026-10-17)
+
+The isolated launcher's USERPROFILE omitted Desktop, causing recurring native
+file-dialog failures for each new build identity. Launch preparation now creates
+native junctions to the user's actual Windows Desktop, Documents, Downloads,
+Pictures, Music and Videos when available, using known-folder APIs so OneDrive
+and other redirections are respected. AppData, config, calibration and legacy
+application state remain isolated. Existing conflicting paths fail without
+replacement. No per-version hard-coded folder workaround is needed.
+
+58 Windows launcher/state/folder tests pass; one pre-existing symlink test skips
+because symlink privilege is unavailable. Ruff and focused compileall pass.
+The installed 0.8.2 scope's missing Desktop junction was repaired without closing
+E3. Local build admission hit the managed pool budget; Windows CI packaging and
+frozen two-version verification are pending. This branch extends the installed
+version-state-isolation launcher and carries the ctypes HRESULT portability fix.
+
 
 ## Regular E3 0.7.153 restored; launcher isolation installed (2026-10-16)
 

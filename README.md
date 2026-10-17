@@ -1,5 +1,24 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The combined desktop update includes probe selection refresh, faster toolpath
+generation, arc recovery/Fit arc, movable linked image/vector pairs and native
+Windows folder access in DEV TEST. See [verification](CURRENT_STATE.md).
+
+Position probe keeps the crosshair active while refreshing the camera, including
+when Live overlay is paused. Click a fresh point to change it to **Move probe here**;
+that separate action retains the existing movement checks.
+
+Desktop tracing now recognizes circular arcs across small, isolated edge defects
+when the remaining contour consistently supports the circle. Larger notches,
+corners and incompatible curves remain unchanged. For a reviewed correction,
+select one unlocked vector and use **Shape → Fit arc…**, choose the span, review
+the overlay, and Apply. The edit supports normal Undo/Redo. See
+[arc fitting](docs/OBJECT_TRACE.md#fit-an-arc-on-an-existing-vector).
+
+Toolpath generation now batches dense raster and vector work and builds one
+exact preview after material-surface binding. See [generation performance](docs/TOOLPATH_PERFORMANCE.md)
+for the under-ten-second target, repeatable measurements and verification scope.
+
 The 0.8 series combines desktop update progress, bounded and cancellable updates,
 and independent version state with the UI and installer improvements. See
 [versioning](docs/VERSIONING.md) and [current release verification](CURRENT_STATE.md).
@@ -13,6 +32,11 @@ size and SHA-256 verification.
 Desktop updates show the package size before download, then downloaded/total bytes,
 percentage and current transfer speed. See [updates](docs/UPDATES.md).
 
+DEV TEST preserves access to the real Windows Desktop and document folders
+inside each isolated build profile. Application settings remain per-build.
+See [the launcher guide](docs/DEV_TEST_LAUNCHER.md).
+
+
 Desktop builds now keep independent copies of machine settings, calibration,
 materials and recovery data. The permanent **E3 DEV TEST** launcher prepares a
 private copy for each exact test version/revision, including older frozen test
@@ -22,6 +46,10 @@ installed version only on their first launch. Install application updates from
 regular E3; test launches keep the updater disabled and use the permanent
 launcher for build selection. See [version state and recovery](docs/UPDATES.md#independent-version-state)
 and [current verification](CURRENT_STATE.md).
+
+Updated DEV TEST builds restore your normal Windows profile before file dialogs
+open. Desktop, Documents, Downloads and the Explorer navigation pane use your
+usual folders; E3 settings and recovery files remain in the private test scope.
 
 Image-editor automatic outlines use the current cleaned image, including background
 cleanup and local edits. Both outline previews preserve thin pixel features without
@@ -131,7 +159,9 @@ Select an image and open **Objects → Image → Edit image for engraving…** f
 local shadow removal, reversible grayscale masks, automatic or manual Bézier
 outlines, node editing, and aligned vector snapshots with physical offsets.
 New vectors start with output disabled and power zero. Project schema 6 retains
-edits and explicit transform links. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
+edits and explicit transform links. Grab either a linked image or its vector to
+move, resize, rotate or mirror both together, with one Undo step. Explicitly
+locking either member anchors the pair. See the [usage guide](docs/ENGRAVING_IMAGE_EDITOR.md).
 
 The editor build also reads existing verified raster-travel records in saved
 machine profiles. It preserves their values and enforcement; see
@@ -948,14 +978,15 @@ After the baseline fit, the source-neutral primitive-recovery stage may replace
 compatible neighboring spans with arbitrary-angle total-least-squares lines or
 conceptual circular arcs. This is geometric fitting, not OCR, font, logo, or
 template recognition. Maximum, RMS, and endpoint/join gates are bounded
-jointly by source-pixel spacing and the existing fit tolerance, and hard-corner
-partitions remain protected. A recovered join may move an observed corner only
+jointly by source-pixel spacing and the existing fit tolerance. Only bounded
+isolated defects allow adjacent corner partitions to be joined into an arc;
+substantial straight runs and retained corners remain protected. A recovered join may move an observed corner only
 to a nearby model intersection inside both endpoint allowances; a rejected
 hypothesis, unsafe join, or failed frame or topology check keeps the original
 fitted pieces unchanged; a rejected compound result is rerun once through the
 complete baseline fit with recovery disabled. Model selection tries a line,
-then a circle, then the unchanged freeform fallback without increasing any
-candidate partition's segment count. Circular arcs are stored as bounded canonical cubic
+then a circle, then the unchanged freeform fallback, with bounded arc unions
+across proven local defects and no increase in the replaced segment count. Circular arcs are stored as bounded canonical cubic
 Bézier spans, so the native schema, existing G0/G1
 planning, and Straighten behavior do not change. The stage does not rotate or
 deskew the raster and does not change thresholding, source-edge localization,

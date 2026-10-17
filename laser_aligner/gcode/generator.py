@@ -236,12 +236,18 @@ def validate_paths(
         or float(margin_mm) < 0
     ):
         raise ValueError("Path boundary margin must be a finite nonnegative number")
-    if not paths or any(
-        len(path.points) == 0 or not np.isfinite(path.points).all()
-        for path in paths
-    ):
+    if not paths or any(len(path.points) == 0 for path in paths):
         raise ValueError("Path coordinates must be finite and nonempty")
-    minimum_x, minimum_y, maximum_x, maximum_y = _program_bounds(paths)
+    minimum = np.array([math.inf, math.inf])
+    maximum = np.array([-math.inf, -math.inf])
+    for offset in range(0, len(paths), 4096):
+        points = np.concatenate([path.points for path in paths[offset:offset + 4096]])
+        if not np.isfinite(points).all():
+            raise ValueError("Path coordinates must be finite and nonempty")
+        minimum = np.minimum(minimum, points.min(axis=0))
+        maximum = np.maximum(maximum, points.max(axis=0))
+    minimum_x, minimum_y = map(float, minimum)
+    maximum_x, maximum_y = map(float, maximum)
     safe_minimum_x = work_area.x_min + margin_mm
     safe_maximum_x = work_area.x_max - margin_mm
     safe_minimum_y = work_area.y_min + margin_mm

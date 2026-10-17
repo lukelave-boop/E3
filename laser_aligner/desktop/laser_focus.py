@@ -65,6 +65,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self._offset_edited = False
         self._offset_entered = [False, False]
         self._camera_target: dict[str, Any] | None = None
+        self._camera_refresh_available = False
         self._camera_point_rejected = False
         self._camera_live = False
         self._failure_message: str | None = None
@@ -940,7 +941,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.align_probe.setEnabled(bool(transfer_ready and not probe_phase))
         self.align_laser.setEnabled(bool(transfer_ready and probe_phase and surface))
         selection_ready = (moving and known and reference and not requires_clearance
-                           and offset_valid and not self._offset_edited and self._camera_live
+                           and offset_valid and not self._offset_edited
+                           and (self._camera_live or (self._camera_refresh_available and not self._camera_target))
                            and self._result.get("position_probe_available") is True
                            and z is not None and clearance is not None and abs(z-clearance) <= .05)
         self.position_probe.setEnabled(bool(selection_ready))
@@ -1177,7 +1179,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         ))
 
     def can_move_probe(self) -> bool:
-        return bool(self.position_probe.isEnabled() and self._camera_target)
+        return bool(self.position_probe.isEnabled() and self._camera_live and self._camera_target)
 
     def _position_probe(self) -> None:
         self._sync()
@@ -1542,6 +1544,7 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.panel = LaserFocusPanel(calibration_mode=calibration_mode)
+        self.panel._camera_refresh_available = main_view is not None
         self.maximum_panel = None
         self.maximum_coordinator = None
         if calibration_mode:
@@ -1642,6 +1645,12 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
                 self._map_camera_selection(selection, target["mapping_signature"])
             except (CalibrationError, ValueError, RuntimeError, KeyError, TypeError) as exc:
                 self._camera_selection_invalidated(str(exc))
+        if (target is None and self.panel.position_probe.isChecked()
+                and not self.panel._camera_point_rejected):
+            self.panel.camera_target.setText(
+                f"Click a solid probe spot in the {self.panel._camera_location}."
+                if camera_live else "Refreshing the camera image for probe selection; wait for a fresh view."
+            )
         self.panel._sync()
 
     def _move_camera_probe(self) -> None:

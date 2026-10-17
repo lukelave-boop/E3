@@ -271,6 +271,10 @@ def prepare_runtime_state(explicit_config: Path | None = None) -> None:
 
     global _runtime_publication
     if os.environ.get("E3_USER_STATE_DIR", "").strip():
+        if os.environ.get("E3_DEV_TEST") == "1":
+            from .dev_test_launcher import restore_native_profile_environment
+
+            restore_native_profile_environment()
         return
     _runtime_publication = None
     explicit = explicit_config or os.environ.get("E3_CONFIG_PATH", "").strip()

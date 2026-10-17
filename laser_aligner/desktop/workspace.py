@@ -738,7 +738,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             self.setPos(transform.x_mm, -transform.y_mm)
             linked_outline = scene_object.metadata.get("image_outline", {}).get("linked", False)
             self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-                         not scene_object.locked and not linked_outline)
+                         not scene_object.locked)
             self.setRotation(-transform.rotation_deg)
             item_transform = QtGui.QTransform()
             item_transform.scale(
@@ -759,7 +759,7 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                     if scene_object.kind == ObjectKind.IMAGE
                     else ""
                 )
-                + ("\nLinked to image; detach in Objects for independent transforms" if linked_outline else "")
+                + ("\nLinked to image: move, resize or rotate either to transform both; detach in Objects to separate" if linked_outline else "")
             )
         finally:
             self._syncing = False
@@ -3006,6 +3006,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             if area_changed:
                 self.set_work_area(document.work_area, fit=True)
             layers = {layer.id: layer for layer in document.layers}
+            from ..project.image_outline import linked_transform_locked_ids
+
+            linked_locks = linked_transform_locked_ids(document)
             for z_index, scene_object in enumerate(document.objects):
                 layer = layers[scene_object.layer_id]
                 item = existing_items.pop(scene_object.id, None)
@@ -3019,6 +3022,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                     self.workspace_scene.addItem(item)
                 else:
                     item.apply_model(scene_object, layer)
+                if scene_object.id in linked_locks:
+                    item.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
                 item.setZValue(float(z_index))
                 item.set_display_transparency(
                     self._object_transparency.get(scene_object.id, 0)
@@ -3149,6 +3154,10 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         scene_object = self._document.get_object(object_id)
         layer = self._document.get_layer(scene_object.layer_id)
         item.apply_model(scene_object, layer)
+        from ..project.image_outline import linked_transform_locked_ids
+
+        if object_id in linked_transform_locked_ids(self._document):
+            item.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         if (
             self._object_transform_overlay is not None
             and self._object_transform_overlay.object_id == object_id
@@ -3226,17 +3235,25 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     def _item_move_preview(self, object_id: str, position: tuple[float, float]) -> None:
         if self._document is None or self._syncing_document:
             return
-        source = self._document.get_object(object_id)
-        if source.kind is not ObjectKind.IMAGE:
+        from ..project.image_outline import linked_transform_updates
+
+        driver = self._document.get_object(object_id)
+        if (driver.kind is not ObjectKind.IMAGE
+                and not driver.metadata.get("image_outline", {}).get("linked", False)):
             return
-        transform = source.transform.copy(x_mm=position[0], y_mm=position[1])
-        # Preview only linked paths: the source is already being dragged by Qt.
-        for item in self._document.objects:
-            link = item.metadata.get("image_outline", {})
-            if link.get("linked") and link.get("source_id") == object_id:
-                target = self._items_by_id.get(item.id)
-                if target is not None:
-                    target.preview_transform(item, self._document.get_layer(item.layer_id), transform)
+        transform = driver.transform.copy(x_mm=position[0], y_mm=position[1])
+        try:
+            updates = linked_transform_updates(
+                self._document, {object_id: transform}, allow_linked_driver=True,
+            )
+        except ValueError:
+            return
+        # Qt moves the dragged member; preview its companions without touching
+        # model state or recursively emitting their own move previews.
+        for target_id, updated in updates.items():
+            if target_id != object_id and (target := self._items_by_id.get(target_id)) is not None:
+                item = self._document.get_object(target_id)
+                target.preview_transform(item, self._document.get_layer(item.layer_id), updated)
 
     def _preview_object_transform(self, object_id: str, transform: Transform) -> None:
         """Update canvas geometry while leaving the document untouched."""
@@ -3249,7 +3266,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         from ..project.image_outline import linked_transform_updates
 
         try:
-            updates = linked_transform_updates(self._document, {object_id: transform})
+            updates = linked_transform_updates(
+                self._document, {object_id: transform}, allow_linked_driver=True,
+            )
         except ValueError:
             return
         for target_id, updated in updates.items():
@@ -3270,17 +3289,26 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         if self._syncing_document or self._document is None:
             return
         selected = self.selected_object_ids()
-        if len(selected) != 1:
+        if not selected:
             return
         object_id = selected[0]
+        from ..project.image_outline import linked_transform_locked_ids, linked_transform_updates
+
         try:
             scene_object = self._document.get_object(object_id)
-        except KeyError:
+            if len(selected) > 1:
+                family = linked_transform_updates(
+                    self._document, {object_id: scene_object.transform}, allow_linked_driver=True,
+                )
+                if not set(selected).issubset(family):
+                    return
+        except (KeyError, ValueError):
             return
         item = self._items_by_id.get(object_id)
+
         if (
             scene_object.locked
-            or scene_object.metadata.get("image_outline", {}).get("linked", False)
+            or object_id in linked_transform_locked_ids(self._document)
             or not scene_object.visible
             or item is None
             or item.scene() is not self.workspace_scene

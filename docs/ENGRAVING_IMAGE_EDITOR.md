@@ -84,9 +84,16 @@ The new PATH is on a new visible LINE layer with **Output off and power 0**.
 Assign it to a reviewed operation and set power/output explicitly before it can
 be cut. Creating an outline never starts a job or changes machine authority.
 
-**Move image and vector together** defaults on. Moving, rotating, mirroring or
-resizing the source image moves both together. The vector shape is a frozen
-snapshot: later image edits do not change an already reviewed cut path. Select
+**Move image and vector together** defaults on. Select or drag either the image
+or its vector to move both together. Resize handles, rotation, mirroring and
+numeric transforms keep their alignment; selecting the linked pair also shows
+shared resize/rotation handles. Each committed transform is one Undo/Redo step.
+Existing saved linked vectors gain the same behavior without being recreated.
+The link locks their alignment, while the Objects **Lock** checkbox anchors their
+position: explicitly locking either member prevents transforming the whole pair.
+Unlock it to move the pair again. Multiple linked outlines follow their source,
+including hidden members. The vector shape is a frozen snapshot: later image
+edits do not change an already reviewed cut path. Select
 the path and use **Detach outline from image** in Objects before independent
 transforms. Deleting the source automatically detaches retained paths; Undo
 restores the link. Duplicating both remaps the link; duplicating only a path

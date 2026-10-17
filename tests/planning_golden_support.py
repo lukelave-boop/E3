@@ -514,6 +514,8 @@ def snapshot_case(case_name: str) -> dict[str, str]:
     if job.plan is None:
         raise AssertionError(f"Planning golden case {case_name} produced no JobPlan")
     preview_payload = asdict(job.plan)
+    # Immutable move records retain the established named-field golden schema.
+    preview_payload["moves"] = [move._asdict() for move in job.plan.moves]
     if job.plan.raster_boundary is None:
         # Legacy snapshots retain their established schema. These derived
         # display fields have focused coverage; new envelope cases retain them.

@@ -12,7 +12,10 @@ Choose **Position probe**, then click a solid spot in the main calibrated view
 on the left. Review the crosshair and target coordinates, check the clear path
 and remove the gauge, then press **Move probe here** to move at clearance.
 Selection requires a fresh calibrated image; the click itself never moves or
-probes. The duplicate live bed view in the right-hand controls is removed.
+probes.
+Position probe refreshes the camera even when Live overlay is paused. Wait for
+the fresh-view prompt, then click the target. Refresh delays keep the crosshair
+mode active; expired targets require a new click before Move probe here returns. The duplicate live bed view in the right-hand controls is removed.
 
 The complete **Preview and position** section is in **Machine Setup →
 7 · Z / laser focus** beside probe-offset and gauge teaching controls. That

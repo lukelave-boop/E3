@@ -1869,7 +1869,9 @@ def test_secondary_fault_status_cannot_frame_primary_transaction(
     )
     transport.set_next_reply("$I", GRBL_REALTIME, GRBL_IDENTITY, "ok")
 
-    assert machine.send_command("$I") == [GRBL_IDENTITY, "ok"]
+    # This tests channel isolation, not a 20 ms deadline. Leave scheduling
+    # margin for the unchanged mandatory post-terminal quiet boundary on CI.
+    assert machine.send_command("$I", timeout=0.5) == [GRBL_IDENTITY, "ok"]
     status = machine.status()
     assert status["controller_state"] == "READY_HOME_REQUIRED"
     assert status["secondary_air_assist"]["fault"] == "secondary USB failed"

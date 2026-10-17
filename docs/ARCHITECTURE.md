@@ -1,5 +1,25 @@
 # Architecture
 
+Daily probe selection temporarily requests corrected-frame refreshes through
+DesktopController without changing the Live overlay preference. Placement
+review is released by explicit selection; other review holds and single-flight
+correction remain enforced. Camera delays retain selection intent, never an
+expired motion target. Movement still requires fresh mapped evidence.
+
+## Circular arc reconstruction
+
+The shared physical contour fitter owns automatic arc recovery for imported
+rasters and camera-native tracing. Its bounded defect exception applies only to
+circular hypotheses and retains the ordinary geometric tolerance and final
+native/topology checks. It does not change threshold masks or machine authority.
+
+`project/arc_fit.py` is the UI-neutral selected-span operation. It fits in physical
+object dimensions and returns a proposed native geometry without mutating a
+project. The desktop dialog owns selection and overlay review; Apply uses the
+ordinary object-shape command only while the original project/object/selection
+snapshot is current. Cancel has no project effect. Canonical cubic storage keeps
+existing persistence, transforms, preview and toolpath handling.
+
 Release packaging verifies a shared version and exact revision against the
 Windows installer product version, both platform bundles' metadata and the
 update manifest before the publisher can switch the offered update. The Linux
@@ -26,6 +46,15 @@ The UI-neutral downloader reports byte counts after writing each available chunk
 A locked counter transfers worker progress to a 250 ms GUI timer, which renders
 percentage and a rolling three-second byte rate without queuing one Qt event per
 chunk. Completion still requires exact size, SHA-256 and atomic cache promotion.
+
+## DEV TEST user files and private state
+
+The launcher redirects application state into a version/revision scope but maps
+its private home's user document folders to Windows known-folder targets using
+native junctions. It never links AppData or config to production state. Folder
+preparation occurs before launching even older frozen E3 builds and is independent
+of the currently selected feature identity.
+
 
 ## Desktop version state
 
@@ -67,6 +96,11 @@ even an older frozen E3. Test scopes live under `state/<version>-<revision>/`
 beside the permanent launcher; the actual application state is in its
 `local/E3 Positioning System/` child. Its child environment also redirects Windows
 profile directories so pre-existing file-backed storage defaults remain isolated.
+Scope-aware desktop startup restores the saved native profile environment before
+Qt initializes, while retaining the explicit E3 state/config/credential paths.
+The storage override and isolated-state legacy-fallback guards keep material,
+autosave and Qt settings private; shell browsing uses the real Windows profile.
+Older frozen executables that lack this startup step retain their prior behavior.
 The launcher supplies private `E3_BUILD_INFO` metadata with unchanged version and
 revision, a `dev-test` channel and an empty `manifest_url`. This disables historical
 test-build updaters whose child installers would inherit redirected profiles;
@@ -241,8 +275,13 @@ the same image function and gates post-dither cells using a summed-area exclusio
 mask over each whole source footprint, conservatively bounding rotated cells.
 
 project/image_outline.py creates disabled zero-power PATH snapshots, propagates
-only transforms, and provides explicit detachment. History supports linked undo,
-source removal, and duplicate-link remapping. Native geometry is never rewritten
+only transforms, and provides explicit detachment. Pure transform commands and
+canvas previews accept either member as the driver and expand to every linked
+member, rejecting conflicting transforms or an explicit lock within that family.
+Shape replacement keeps its source-only transform rule so changing a path's local
+frame cannot reshape the source image. A selection confined to one linked family
+shares transform handles; no additional grouping or project schema is required.
+History supports linked undo, source removal, and duplicate-link remapping. Native geometry is never rewritten
 by later source edits. Nonzero offsets are reviewed mitered polylines; invalid or
 topology-changing results reject instead of auto-repairing. The browser SVG
 pipeline, MachineService and hardware authority remain unchanged.
@@ -1993,6 +2032,25 @@ operation reuse, raster/fill cache, or encoded-program cache yet.
 because the final stream still contains volatile generation-time text and
 whole-job dependencies.
 
+Dense generation now separates encoding from exact indexing so temporary raster
+geometry is released before allocating PlannedMove records. Raster spans retain
+the same per-span matrix arithmetic but are dispatched in row batches; rectangle
+and convex-polygon checks still inspect all points. Vector containment first
+filters bounding boxes in arrays, then applies the original even/odd test to
+candidates. Exact preview recognizes only a full-match, bounded-decimal G0/G1
+XYF[ S] grammar; unfamiliar syntax retains the general parser. Immutable move
+metadata and timing constants are reused within their original modal scope.
+PlannedMove uses immutable named-tuple storage; named-field serialization uses
+`_asdict()` and retains the golden preview schema. Recurring canonical numeric
+words reuse parsed values within a bounded cache, independently of modal state.
+Unchanged raster spans can be shared read-only through placement and zero spot
+offsets; transformed coordinates remain independent. Raster run clipping and
+serialized-coordinate collection use arrays without per-point tuple lists.
+The desktop snapshots material-surface metadata with its request and supplies it
+to the generator before encoding is finalized and indexed, avoiding a second
+full plan after provenance insertion. Surface/capture/context checks remain live.
+See [generation performance](TOOLPATH_PERFORMANCE.md) for measurement boundaries.
+
 Cache performance is measured explicitly rather than inferred from hit counts.
 `scripts/benchmark_planning_cache.py` compares uncached generation, cold-cache
 generation, warm identical regeneration, speed-only and power-only edits,
@@ -2168,14 +2226,22 @@ existing fitting tolerance jointly bound maximum and RMS residual, endpoint
 movement, and join adjustment, so a wide tolerance cannot silently promote
 resolved curvature or freeform detail.
 
-Hard-corner classifications remain immutable partition boundaries across
-recovery. The observed vertex at one of those boundaries may be replaced by a
-nearby line-line, line-circle, or circle-circle intersection only when the
-adjustment fits both endpoint allowances. Smooth joins additionally require
-tangent agreement. Each source-index-exact partition tries a line, then a
-circle, then keeps that partition's original fitted objects; one partition's
-savings cannot justify expanding another partition, and recovery never increases
-the contour's segment count. No parallel-edge, constant-width, rectangle, or
+Hard-corner classifications anchor the initial partitions. A bounded circular
+hypothesis may bridge adjacent partitions only when an isolated defect is
+identified and every removed corner lies within four source pixels of its
+rejected samples. Substantial proven straight runs remain boundaries. Defects
+are capped at the existing native tolerance and 1.5 source-normal pixels; each
+run is at most four source-tangent pixels and 5% of angular support, with at
+most eight runs and 8% total unsupported support. Independent supported halves
+must agree on the circle. Closed-circle fitting has no artificial anchored
+endpoint at the contour storage seam. Up to 64 bridge hypotheses share the
+existing 256-hypothesis ceiling; broad and local candidates share that budget.
+
+Retained joins may use a nearby model intersection only within both endpoint
+allowances, and smooth joins still require tangent agreement. Each initial
+source-index-exact partition tries a line, then a circle, then its original
+fitted objects. A proposed union must not increase the replaced segment count,
+and recovery never increases the complete contour's segment count. No parallel-edge, constant-width, rectangle, or
 symmetry constraint is applied. The resulting native sequence must still pass the
 existing frame, continuous error, self/adjacent-arc, compound-clearance,
 even-odd, and rasterized-hierarchy validators. A rejected hypothesis, unsafe

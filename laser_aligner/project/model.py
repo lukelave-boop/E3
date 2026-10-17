@@ -1294,7 +1294,7 @@ class ProjectDocument:
 
         item = self.get_object(object_id)
         previous = item.transform
-        updates = linked_transform_updates(self, {object_id: transform})
+        updates = linked_transform_updates(self, {object_id: transform}, allow_linked_driver=True)
         for target_id, updated in updates.items():
             self.get_object(target_id).transform = updated
         self.touch()

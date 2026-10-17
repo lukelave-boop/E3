@@ -1,5 +1,19 @@
 # Permanent Windows feature-test launcher
 
+## Native file-dialog folders
+
+Each isolated `home` receives native junctions for Desktop, Documents, Downloads,
+Pictures, Music and Videos when the real Windows folder is available. Targets
+come from `SHGetKnownFolderPath`, including OneDrive redirection; no real user
+folder is moved or copied. This runs on every launch and for every version/revision.
+Matching existing links are reused. Conflicting files, directories or links are
+preserved and cause a clear error rather than being replaced. AppData and all
+application-state redirection remain isolated. This fixes the recurring missing
+`home/Desktop` error without rebuilding the selected feature executable.
+The repair was installed on 2026-10-17 from revision 934e893 and verified with
+two successive frozen-launcher profiles.
+
+
 `E3 DEV TEST` is the stable entry point for operator testing of frozen Windows
 feature builds. It is distinct from the installed production E3 application.
 Before starting the selected executable, it prepares an independent copy of
@@ -124,6 +138,26 @@ update-manifest URL. The existing updater therefore stays disabled, including
 in older frozen builds. Install application updates from regular E3; select test
 builds through the permanent launcher. The original executable and adjacent
 `build-info.json` are unchanged.
+
+Updated scope-aware E3 builds restore the saved normal Windows profile before
+Qt starts. Import/save dialogs therefore open in the real user home and retain
+the normal Desktop, Documents, Downloads and Explorer navigation. E3's explicit
+private state/config/credential paths remain selected; materials, preferences
+and recovery files cannot fall back to production storage. The launcher remains
+compatible with older frozen builds, which retain their redirected profile until
+rebuilt with this startup correction. Creating links inside the redirected home
+does not repair the native browsing experience.
+
+When local managed build capacity is unavailable, manually dispatched Windows
+packaging validation also retains the exact portable bundle for seven days.
+It can be downloaded for DEV TEST selection without running the installer or
+replacing normal E3. Its adjacent build metadata still must match the pointer.
+The packaging workflow also verifies archived application code and resources
+against the checked-out revision, then compares normal and DEV TEST Windows
+folders using archived startup code and the bundled Qt libraries. This check
+keeps E3 storage private and starts no application runtime or hardware service.
+Retain its verification report and match the downloaded EXE's SHA-256 before
+selecting the hosted bundle. Native dialog interaction remains an operator check.
 
 An older build still requires settings it understands; the launcher does not discard unknown safety
 settings or downgrade a newer schema. Recovery of an already affected build

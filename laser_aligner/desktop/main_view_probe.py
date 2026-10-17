@@ -98,6 +98,10 @@ class MainViewProbe(QtCore.QObject):
             self.workspace.cancel_shape_draft()
             self.workspace.cancel_point_pick()
             self.workspace.viewport().setCursor(QtCore.Qt.CursorShape.CrossCursor)
+            release = getattr(self.controller, "release_placement_capture", None)
+            if callable(release):
+                release()
+            self._refresh_selection_frame()
         else:
             self.workspace.viewport().unsetCursor()
 
@@ -215,7 +219,17 @@ class MainViewProbe(QtCore.QObject):
                         key: float(getattr(area, key)) for key in ("x_min", "x_max", "y_min", "y_max")
                     })
 
+    def _refresh_selection_frame(self) -> None:
+        # Explicit positioning needs a live view even when the ordinary overlay
+        # is paused or slow. The controller drops overlapping refresh requests
+        # and retains calibration/trace/template review guards.
+        refresh = getattr(self.controller, "request_camera_refresh", None)
+        if (self._active and self._selection_enabled and callable(refresh)
+                and not getattr(self.controller, "_camera_refresh_in_flight", False)):
+            refresh()
+
     def _check_selection(self) -> None:
+        self._refresh_selection_frame()
         fresh = self.current_frame_fresh()
         was_fresh, self._last_frame_fresh = self._last_frame_fresh, fresh
         if not fresh and (self._selection is not None or was_fresh):

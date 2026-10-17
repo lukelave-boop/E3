@@ -1,5 +1,3 @@
-from dataclasses import FrozenInstanceError
-
 import pytest
 
 import laser_aligner.gcode.job_plan as job_plan_module
@@ -80,7 +78,7 @@ def test_job_plan_preserves_exact_move_context_and_timing() -> None:
     assert plan.planner_mode == "nearest path"
     assert plan.source_order_travel_mm == pytest.approx(12.5)
     assert plan.planner_savings_mm == pytest.approx(2.5)
-    with pytest.raises(FrozenInstanceError):
+    with pytest.raises(AttributeError):
         cut.power = 500.0  # type: ignore[misc]
 
 
@@ -187,7 +185,7 @@ def test_start_here_rejects_unknown_move() -> None:
     with pytest.raises(ValueError, match="outside"):
         restart_program_from_move(plan, 5)
 
-def test_build_job_plan_scans_each_executable_line_once(monkeypatch) -> None:
+def test_build_job_plan_scans_general_lines_once(monkeypatch) -> None:
     text = "\n".join(
         [
             "; comment-only line",
@@ -233,7 +231,6 @@ def test_build_job_plan_scans_each_executable_line_once(monkeypatch) -> None:
         ("G21", True),
         ("G90", True),
         ("M5", True),
-        ("G0 X10 Y0 F600", True),
         ("M4 S200", True),
         ("G1X20Y0F1200", True),
         ("M5", True),
@@ -567,3 +564,103 @@ def test_job_plan_and_start_here_poll_cooperative_cancellation() -> None:
         power_max=1000,
         cancel_check=lambda: False,
     ) == plan
+
+
+@pytest.mark.parametrize("acceleration", [None, 0, 500])
+@pytest.mark.parametrize("air_commands", [None, GRBL_AIR, MARLIN_AIR])
+def test_linear_fast_index_matches_general_parser(monkeypatch, acceleration, air_commands):
+    import re
+
+    text = "\n".join([
+        "G21", "G90", "M5",
+        '; @E3_LAYER {"id":"a","name":"First","mode":"raster"}',
+        '; @E3_PASS {"index":2,"count":3}', '; @E3_PATH {"name":"image"}',
+        "G0 X10 Y20 F1000", "M4 S100", "G1 X11.125 Y20 F500 S0",
+        "G1 X12 Y20 F500 S50", "G1 X12 Y20 F500 S70",  # no move, modal update
+        "G91", "G1 X-1 Y0 F0", "G90", "G0 X1 Y2 F800",  # rapid-on warning
+        '; @E3_LAYER {"id":"b","name":"Second","air_assist":true}',
+        '; @E3_PASS {"index":1,"count":1}', '; @E3_PATH {"name":"curve"}',
+        "G1 X3 Y4 F800 S20", "M5", "G1 X4 Y5 F800", "M5",
+        "G91", "G1 X4 Y5 F800 S20", "G1 X2 Y3 F123 ; general parser",
+        "G1 X4 Y5 F800 S20", "G90", "G1 X4 Y5 F800 S20", "M5",
+    ])
+    arguments = dict(power_max=1000, acceleration_mm_s2=acceleration,
+                     command_delay_ms=3, air_assist_commands=air_commands)
+    fast = build_job_plan(text, **arguments)
+    monkeypatch.setattr(job_plan_module, "_LINEAR_LINE", re.compile(r"(?!)"))
+    assert fast == build_job_plan(text, **arguments)
+
+
+@pytest.mark.parametrize("line", [
+    "G1 X1 Y2 F3 ; M5", "G1 X1 Y2 F3 M5", "G1X1Y2F3", "g1 x1 y2 f3",
+    "G1 Y2 X1 F3", "G1 X1e2 Y2 F3", "G1 X+1 Y2 F3", "G1 X1 Y2 F-3",
+    "G1 X1 Y2 F3 S-1", "G1 X1 Y2 F3 S1.5", "G1 X1 Y2 F3 S1 S0",
+    "G1 X1 Y2 F3\n", "G1 X9999999999999 Y2 F3", "G1 X1 Y2 Z3 F4",
+])
+def test_linear_fast_index_falls_back_for_noncanonical_lines(monkeypatch, line):
+    assert job_plan_module._LINEAR_LINE.fullmatch(line) is None
+    calls = []
+    original = job_plan_module.scan_word_state
+
+    def scan(value, **kwargs):
+        calls.append(value)
+        return original(value, **kwargs)
+
+    monkeypatch.setattr(job_plan_module, "scan_word_state", scan)
+    build_job_plan("G21\nG90\nM5\n" + line + "\nM5", power_max=1000)
+    # splitlines removes a trailing newline before parsing.
+    if not line.endswith("\n"):
+        assert job_plan_module.strip_comment(line) in calls
+
+
+def test_fast_index_still_rejects_nonfinite_general_words():
+    with pytest.raises(ValueError, match="finite"):
+        build_job_plan("G21\nG90\nM5\nG1 X1e999 Y2 F3\nM5", power_max=1000)
+
+
+def test_linear_power_cache_preserves_more_than_256_distinct_powers(monkeypatch):
+    import re
+
+    text = "G21\nG90\nM5\nM4 S0\n" + "\n".join(
+        f"G1 X{index} Y2 F600 S{index}" for index in range(1, 300)
+    ) + "\nG1 X300 Y2 F600 S1\nM5"
+    fast = build_job_plan(text, power_max=1000)
+    monkeypatch.setattr(job_plan_module, "_LINEAR_LINE", re.compile(r"(?!)"))
+    assert fast == build_job_plan(text, power_max=1000)
+
+
+def test_exact_move_record_remains_immutable_and_preserves_named_fields():
+    import pickle
+
+    move = build_job_plan("G21\nG90\nM5\nM4 S10\nG1 X1 Y2 F60\nM5", power_max=1000).moves[0]
+    assert job_plan_module.PlannedMove(**move._asdict()) == move
+    assert pickle.loads(pickle.dumps(move)) == move
+    assert move.vector_power_correction == move.raster_power_correction == 0.0
+    assert move.air_assist is False and move.focus_mode is None
+    with pytest.raises(AttributeError):
+        move.power = 0
+    with pytest.raises(TypeError):
+        move[0] = 2
+    replacement = move._replace(power=0)
+    assert replacement.power == 0 and move.power == 10
+
+
+@pytest.mark.parametrize("coordinates", [
+    [(4., 7., 2., 9.), (-1., 3., 8., -2.)],
+    [(float("nan"), -0., 0., 0.), (3., 2., -0., 5.)],
+    [(float("nan"), float("nan"), float("nan"), float("nan"))],
+    [],
+])
+def test_batched_move_bounds_preserve_ordered_extrema(coordinates):
+    import math
+
+    template = build_job_plan("G21\nG90\nM5\nG1 X1 Y2 F60\nM5", power_max=1000).moves[0]
+    moves = [template._replace(start_x=a, start_y=b, end_x=c, end_y=d) for a, b, c, d in coordinates]
+    expected = [math.inf, math.inf, -math.inf, -math.inf]
+    for a, b, c, d in coordinates:
+        for x, y in ((a, b), (c, d)):
+            expected = [min(expected[0], x), min(expected[1], y),
+                        max(expected[2], x), max(expected[3], y)]
+    result = job_plan_module._move_bounds(moves)
+    assert result == tuple(expected)
+    assert [math.copysign(1, v) for v in result] == [math.copysign(1, v) for v in expected]

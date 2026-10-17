@@ -535,7 +535,7 @@ def test_camera_contrast_shallow_bar_recovers_lines_and_preserves_hard_corners(
     _assert_recovered_camera_bar(result)
     recovery = result.detections[0].diagnostics["primitive_recovery"]
     assert recovery["baseline_segment_count"] == 48
-    assert recovery["hypothesis_count"] == 6
+    assert recovery["hypothesis_count"] == 7
 
 
 @pytest.mark.parametrize("detection_mode", ["contrast", "auto"])

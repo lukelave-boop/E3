@@ -1,5 +1,48 @@
 # Changelog
 
+## Combined desktop update (2026-10-17)
+
+- Combine probe refresh, raster/vector preparation speedups, arc tools, movable
+  linked image/vector pairs and the completed DEV TEST Windows folder repair.
+
+- Fixed daily Position probe losing selection mode during camera refresh delays.
+  Probe selection requests live images even with Live overlay paused, shows
+  refresh progress, and changes to Move probe here after a valid fresh click.
+
+## Linked image/vector manipulation (2026-10-17)
+
+- Allow dragging, resizing, rotating and mirroring from either an engraving image
+  or its linked vector, preserving alignment and one-step Undo/Redo.
+- Show shared transform handles when selecting a linked pair. Keep explicit
+  position locks effective across all linked members and preserve detachment.
+- Apply the behavior to existing saved links without changing their geometry,
+  project schema, operation layers or output settings.
+
+## Unreleased - arc recovery and Fit arc (2026-10-16)
+
+- Recover circular arcs across bounded isolated edge defects while retaining
+  substantial notches, corners, topology and unsupported freeform contours.
+- Add **Shape → Fit arc…** for a selected vector span, with a proposed overlay,
+  fit measurements, explicit Apply/Cancel and ordinary Undo/Redo.
+- Store accepted arcs as existing native cubic segments; project schema and
+  guarded job generation remain unchanged.
+
+## DEV TEST file browsing (2026-10-16)
+
+- Restore the normal Windows profile before Qt starts in updated DEV TEST builds,
+  so import/save dialogs show the user's folders and Explorer navigation.
+- Keep configuration, credentials, materials, preferences and recovery data in
+  the existing private E3 scope. Older frozen builds retain launcher isolation.
+
+## Unreleased - faster toolpath generation (2026-10-17)
+
+- Batch dense raster transforms and bounds checks, and vector containment candidate filtering.
+- Index canonical linear preview commands without repeated generic parsing or per-move metadata conversion.
+- Bind measured material-surface provenance before exact preview indexing, retaining stale-request rejection.
+- Release temporary encoding geometry before allocating the exact preview; preserve resolution, commands and execution guards.
+- Reduce allocation cost with immutable tuple move records, shared unchanged raster spans and bounded coordinate-format caching.
+- Add a repeatable offline generation benchmark; see [performance](docs/TOOLPATH_PERFORMANCE.md).
+
 ## 0.8.0 integration (2026-10-16)
 
 - Combine the download progress and independent version-state changes below
@@ -32,6 +75,13 @@
   speed; show package size before download and a separate verification status.
 - Read available network data promptly so slow links report progress without
   waiting for a full megabyte. Size and SHA-256 rejection remain mandatory.
+
+## DEV TEST file-dialog folders (2026-10-17)
+
+- Map each isolated test home's user folders to their native Windows locations.
+- Keep per-build application settings isolated and preserve existing paths.
+- Cover successive build identities and redirected Desktop paths with tests.
+
 
 ## Unreleased - independent desktop version state (2026-10-16)
 

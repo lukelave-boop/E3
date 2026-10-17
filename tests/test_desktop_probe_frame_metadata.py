@@ -189,3 +189,34 @@ def test_changed_honeycomb_frame_discards_queued_capture(capture):
     frame.provenance_signature = ("frame", 1, "pose-2")
     callbacks["on_success"](image)
     assert capture.delivered == []
+
+
+@pytest.mark.parametrize("review", [None, "placement", "trace", "template", "calibration"])
+def test_explicit_probe_selection_refreshes_paused_overlay_without_bypassing_review(capture, review):
+    from laser_aligner.desktop.main_view_probe import MainViewProbe
+    from laser_aligner.desktop.workspace import WorkspaceView
+    from laser_aligner.project import Bounds
+
+    controller = capture.controller
+    controller.set_live_camera(False)
+    if review:
+        setattr(controller, f"_{review}_review_active", True)
+    view = WorkspaceView(Bounds(0., 0., 200., 200.))
+    probe = MainViewProbe(controller, view, view)
+    try:
+        probe.begin()
+        probe.set_selection_enabled(True)
+        assert not controller._placement_review_active
+        assert not controller._live_camera_enabled
+        assert not controller._camera_live_timer.isActive()
+        assert len(capture.launches) == (1 if review in (None, "placement") else 0)
+        probe._check_selection()
+        assert len(capture.launches) <= 1  # No overlapping correction requests.
+        probe.set_selection_enabled(False)
+        probe._check_selection()
+        assert len(capture.launches) <= 1
+    finally:
+        probe.end()
+        view.close()
+        view.deleteLater()
+        capture.app.processEvents()

@@ -567,7 +567,7 @@ class UpdateTransformsCommand(Command):
         self.document = document
         from .image_outline import linked_transform_updates
 
-        self.after = linked_transform_updates(document, transforms)
+        self.after = linked_transform_updates(document, transforms, allow_linked_driver=True)
         self.before = {
             object_id: document.get_object(object_id).transform.copy()
             for object_id in self.after

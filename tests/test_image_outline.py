@@ -97,8 +97,8 @@ def test_direct_model_transform_obeys_linkage(linked):
     previous = document.update_transform(source.id, transform)
     assert previous.rotation_deg == 0
     assert source.transform.to_dict() == vector.transform.to_dict() == transform.to_dict()
-    with pytest.raises(ValueError, match="detach"):
-        document.update_transform(vector.id, transform.copy(x_mm=99))
+    document.update_transform(vector.id, transform.copy(x_mm=99))
+    assert source.transform.x_mm == vector.transform.x_mm == 99
     document.validate()
 
 
@@ -130,16 +130,18 @@ def test_failed_removal_preserves_links_and_revision(linked):
     assert document.to_dict() == before
 
 
+@pytest.mark.parametrize("driver", ["image", "outline"])
 @pytest.mark.parametrize("command_type", [UpdateTransformCommand, UpdateTransformsCommand])
-def test_source_transforms_move_linked_snapshot_with_undo(linked, command_type):
+def test_either_member_transforms_linked_snapshot_with_undo(linked, command_type, driver):
     document, source, vector, history = linked
     before = source.transform.to_dict()
     geometry = copy.deepcopy(vector.geometry)
     transformed = Transform(102, 118, 96, 90, rotation_deg=37, mirror_x=True, mirror_y=True)
+    driver_id = source.id if driver == "image" else vector.id
     command = (
-        command_type(document, source.id, transformed)
+        command_type(document, driver_id, transformed)
         if command_type is UpdateTransformCommand
-        else command_type(document, {source.id: transformed})
+        else command_type(document, {driver_id: transformed})
     )
     history.execute(command)
     assert vector.transform.to_dict() == source.transform.to_dict() == transformed.to_dict()
@@ -178,8 +180,6 @@ def test_independent_linked_transform_rejected_until_explicit_detach(linked):
     document, source, vector, history = linked
     after = vector.transform.copy(x_mm=123)
     for construct in (
-        lambda: UpdateTransformCommand(document, vector.id, after),
-        lambda: UpdateTransformsCommand(document, {vector.id: after}),
         lambda: UpdateObjectShapeCommand(document, vector.id, after, vector.geometry),
         lambda: UpdateTransformsCommand(document, {source.id: source.transform, vector.id: after}),
     ):
@@ -239,7 +239,7 @@ def test_linkage_persistence_and_transforms_after_reopen(linked, tmp_path):
     assert restored.get_object(vector.id).geometry == vector.geometry
     assert restored.get_object(vector.id).metadata == vector.metadata
     transformed = source.transform.copy(rotation_deg=129, width_mm=24, mirror_y=True)
-    UpdateTransformCommand(restored, source.id, transformed).redo()
+    UpdateTransformCommand(restored, vector.id, transformed).redo()
     assert restored.get_object(vector.id).transform.to_dict() == transformed.to_dict()
     restored.validate()
 
@@ -275,3 +275,57 @@ def test_open_or_self_crossing_outline_rejected_without_mutation(linked):
         with pytest.raises(ValueError):
             AddOutlineCommand(document, source.id, geometry)
         assert document.to_dict() == before
+
+
+@pytest.mark.parametrize("locked_member", ["image", "outline"])
+@pytest.mark.parametrize("driver", ["image", "outline"])
+def test_explicit_lock_anchors_linked_pair(linked, locked_member, driver):
+    document, source, vector, history = linked
+    (source if locked_member == "image" else vector).locked = True
+    before = document.to_dict()
+    with pytest.raises(ValueError, match="Unlock"):
+        history.execute(UpdateTransformCommand(
+            document, source.id if driver == "image" else vector.id,
+            source.transform.copy(x_mm=100),
+        ))
+    assert document.to_dict() == before
+
+
+def test_outline_driver_updates_all_siblings_and_hidden_source_once(linked):
+    document, source, vector, history = linked
+    extra = AddOutlineCommand(document, source.id, outline())
+    history.execute(extra)
+    sibling = document.get_object(extra.item.id)
+    source.visible = False
+    after = source.transform.copy(x_mm=101, rotation_deg=18)
+    depth = history.depth
+    history.execute(UpdateTransformsCommand(document, {vector.id: after, sibling.id: after}))
+    assert history.depth == depth + 1
+    assert all(item.transform.to_dict() == after.to_dict() for item in (source, vector, sibling))
+    assert source.visible is False
+    history.undo()
+    assert all(item.transform.x_mm == 70 for item in (source, vector, sibling))
+    history.redo()
+    document.validate()
+
+
+def test_conflicting_sibling_transforms_reject_atomically(linked):
+    document, source, vector, history = linked
+    extra = AddOutlineCommand(document, source.id, outline())
+    history.execute(extra)
+    before = document.to_dict()
+    with pytest.raises(ValueError, match="detach"):
+        UpdateTransformsCommand(document, {
+            vector.id: source.transform.copy(x_mm=100),
+            extra.item.id: source.transform.copy(x_mm=110),
+        })
+    assert document.to_dict() == before
+
+
+def test_document_outline_transform_keeps_family_aligned(linked):
+    document, source, vector, _history = linked
+    before = source.transform.to_dict()
+    after = source.transform.copy(width_mm=99, mirror_y=True)
+    assert document.update_transform(vector.id, after).to_dict() == before
+    assert source.transform.to_dict() == vector.transform.to_dict() == after.to_dict()
+    document.validate()

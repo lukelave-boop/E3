@@ -1,5 +1,50 @@
 # Roadmap
 
+## Completed-feature integration (2026-10-17)
+
+Probe selection, generation speedups, arc tools, linked-pair manipulation and
+Windows folder repair are combined for main integration and one DEV TEST build.
+Unfinished diagnostic experiments and shared-checkout work remain separate.
+
+- Implemented probe selection refresh recovery and explicit fresh-click button
+  transition; operator verification and intermittent-camera diagnosis remain pending.
+
+## Linked engraving image/vector manipulation (2026-10-17)
+
+Implemented on the arc feature branch: either linked member can drive movement,
+resize, rotation and mirroring; the pair shares handles when selected together.
+Explicit object locks anchor the family, and one Undo restores the whole edit.
+Saved links remain compatible. Source, frozen-build and operator verification
+are tracked separately in CURRENT_STATE.md.
+
+## Arc recovery and reviewed Fit arc (2026-10-16)
+
+Implemented on `codex/arc-recovery`: bounded automatic recovery of circular arcs
+across small isolated contour defects and a selected-vector Fit arc dialog with
+preview and Undo/Redo. Significant notches, corners and unsupported curves must
+retain their observed geometry. Automated, offscreen, frozen-build and operator
+verification levels are recorded separately in [current state](CURRENT_STATE.md).
+
+## DEV TEST file browsing (2026-10-16)
+
+Implemented: scope-aware desktop startup restores native Windows profile paths
+before Qt initializes file dialogs, retaining private E3 state. Older frozen
+executables keep their existing launcher behavior. Verification and the selected
+replacement build are recorded in CURRENT_STATE.md.
+
+## Toolpath generation under ten seconds (2026-10-17)
+
+Implemented on `codex/toolpath-speed`: dense raster batching, vector containment
+filtering, reduced allocation/parsing costs and one exact index after surface
+binding. The verified 0.8.2 archive is selected in permanent E3 DEV TEST.
+Three-run archived-code medians are 6.174 seconds for the retained 726,664-move
+emblem, 6.688 seconds for an 811,800-move dense raster, and 2.825 seconds for a
+3,136-contour vector grid. Commands are preserved. Offscreen emblem preparation
+plus both preview canvases takes 9.168 seconds in a separate check. Final full
+CI and interactive/operator acceptance remain in progress; this is not a
+universal timing guarantee or physical verification.
+See [measurement scope](docs/TOOLPATH_PERFORMANCE.md) and CURRENT_STATE.md.
+
 ## 0.8.0 integration (2026-10-16)
 
 Prepared: confirmed download progress and version-state work combined with main's
@@ -20,6 +65,14 @@ cause; a slow-trickle timeout defect is reproduced offline. See CURRENT_STATE.md
 
 Implemented: manifest-sized progress, downloaded/total bytes and a recent transfer
 rate, followed by an explicit verification status. See [verification](CURRENT_STATE.md).
+
+## DEV TEST file-dialog reliability
+
+Implemented: native user-folder mappings for every isolated build profile.
+Windows native-folder and isolation tests pass. The frozen launcher passed
+two-version native-shell verification and is installed at the permanent path.
+The selected application was not rebuilt.
+
 
 ## Independent desktop version state (2026-10-16)
 

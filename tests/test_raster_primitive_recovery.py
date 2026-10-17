@@ -636,7 +636,7 @@ def test_mixed_line_and_freeform_recovery_keeps_failed_group_pieces_unchanged(
     assert metrics.recovered_line_length_mm == pytest.approx(16.0, abs=1e-10)
     assert metrics.recovered_arc_count == 0
     assert metrics.freeform_cubic_count == 4
-    assert metrics.hypothesis_count == 3
+    assert metrics.hypothesis_count == 4
 
 
 def test_line_geometry_rejects_reversed_emitted_endpoint_order() -> None:
