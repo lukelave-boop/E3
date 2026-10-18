@@ -1,5 +1,12 @@
 # Changelog
 
+- Add Take control for unowned running Pi jobs, fixing disabled Pause after
+  desktop detachment or lease expiry without resetting the active controller.
+- Add normal Stop job with bounded command admission, buffered-tail draining,
+  output-off and verified focus clearance, followed by a fresh edited Start.
+  Paused cancellation requires explicit buffered-motion confirmation; emergency
+  STOP remains independent. Requires the matching pi-job-controls-v1 companion.
+
 - Fix desktop Pause/Resume incorrectly attempting Connect during a running
   Pi-owned job; retain queued-session and job-revision guards.
 

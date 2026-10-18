@@ -24,6 +24,7 @@ from .material_surface import CAPABILITY as MATERIAL_SURFACE_CAPABILITY
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
+    ACTION_JOB_CANCEL,
     ACTION_JOB_CHUNK,
     ACTION_JOB_CHUNK_COMPRESSED,
     ACTION_JOB_DELETE,
@@ -117,6 +118,7 @@ MACHINE_ACTIONS = frozenset(
 SERVER_CAPABILITIES = (
     CAPABILITY_PI_COMPRESSED_UPLOAD,
     "pi-job-pause-v1",
+    "pi-job-controls-v1",
     RASTER_TRAVEL_CAPABILITY,
     RASTER_SURFACE_TRAVEL_CAPABILITY,
     MATERIAL_SURFACE_CAPABILITY,
@@ -309,6 +311,11 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
         "response": ("job",),
         "priority": "bypasses ordinary operation serialization",
     },
+    ACTION_JOB_CANCEL: {
+        "required": ("job_id", "expected_run_id", "expected_pause_revision", "finish_buffered"),
+        "optional": (),
+        "response": ("status",),
+    },
     ACTION_JOB_PAUSE: {
         "required": ("job_id", "expected_run_id", "expected_pause_revision"),
         "optional": (),
@@ -350,6 +357,7 @@ _CONTROL_LEASE_SECONDS = 30.0
 
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_JOB_CANCEL,
         ACTION_JOB_PAUSE,
         ACTION_JOB_RESUME,
         ACTION_MACHINE_MAINBOARD,
@@ -1051,6 +1059,14 @@ class PiMachineServer:
             }
         if action == ACTION_JOB_LATEST:
             return {"job": self.service.latest_result()}
+        if action == ACTION_JOB_CANCEL:
+            return {"status": self.service.cancel(
+                validate_job_id(request.get("job_id")),
+                expected_run_id=validate_session_generation(request.get("expected_run_id"), label="expected_run_id"),
+                expected_pause_revision=validate_session_generation(request.get("expected_pause_revision"), label="expected_pause_revision"),
+                finish_buffered=request.get("finish_buffered"),
+                expected_session_generation=request.get("expected_session_generation"),
+            )}
         if action in {ACTION_JOB_PAUSE, ACTION_JOB_RESUME}:
             return {"status": self.service.pause(
                 validate_job_id(request.get("job_id")),

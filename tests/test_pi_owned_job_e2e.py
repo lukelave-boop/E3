@@ -540,3 +540,65 @@ def test_authenticated_pi_pause_resume_retains_job_and_monitor_detach(paused_mac
         server.stop()
         jobs.shutdown()
         server_thread.join(3)
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_detached_job_reclaims_and_cancels_without_controller_reset(paused_machine, monkeypatch, tmp_path, paused):
+    from test_job_cancel import cancel
+    machine, transport = paused_machine()
+    token = "cancel-e2e-only-token-0123456789abcdef"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    jobs = PiJobService(machine, PiJobStore(tmp_path / "jobs"), watch_interval_seconds=0.01)
+    server = PiMachineServer(jobs, host="127.0.0.1", port=0, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    wait_for(lambda: server._bound_port is not None)
+    def client():
+        return RemoteMachineService(
+            replace(machine.settings, port=f"e3bridge://127.0.0.1:{server.bound_port}"),
+            machine.laser_settings, hardware_enabled=True, monitor_interval_seconds=0.02,
+        )
+    remote = client()
+    observer = client()
+    try:
+        remote.connect()
+        remote.start_monitoring()
+        program = remote.preflight_program(_program(count=100, powered=True))
+        started = remote.start_preflighted_program(program, "cancel-e2e", authorization_phrase=remote.ARM_PHRASE)
+        transport.wait_for_motion(1)
+        wait_for(lambda: (remote.status().get("job_pause") or {}).get("available") is True)
+        if paused:
+            request(remote)
+            wait_for(lambda: remote.status()["job_pause"]["state"] == "paused")
+        observer.start_monitoring()
+        wait_for(lambda: (observer.status().get("job_pause") or {}).get("available") is True)
+        with pytest.raises(MachineError):
+            observer.connect()
+        with pytest.raises(MachineError):
+            cancel(observer, finish_buffered=paused)
+        remote.detach()
+        before = list(transport.writes)
+        observer.refresh_status()
+        observer.connect()
+        assert all(kind == "raw" and data == b"?" for kind, data in transport.writes[len(before):])
+        assert observer.status()["job_controls_supported"] is True
+        with pytest.raises(MachineError, match="stale"):
+            cancel(observer, expected_run_id=999)
+        cancel(observer, finish_buffered=paused)
+        admitted = list(transport.motion_lines)
+        transport.release_all()
+        wait_for(lambda: jobs.get(started["job_id"])["state"] == "stopped")
+        wait_for(lambda: not observer.status()["job"]["running"])
+        assert transport.motion_lines == admitted
+        assert jobs.get(started["job_id"])["error"] is None
+        assert machine._last_successful_job is None
+        assert ("raw", b"!\x18") not in transport.writes
+        changed = observer.preflight_program("G21\nG90\nM5\nG1 X2 Y2 F300\nM5")
+        new = observer.start_preflighted_program(changed, "edited-settings")
+        wait_for(lambda: jobs.get(new["job_id"])["state"] == "complete")
+        assert new["job_id"] != started["job_id"]
+    finally:
+        remote.detach()
+        observer.detach()
+        server.stop()
+        jobs.shutdown()
+        thread.join(3)

@@ -1,5 +1,53 @@
 # Current repository state
 
+## Normal job controls and running-job reattachment (2026-10-17)
+
+The operator reported Pause was not clickable. Read-only authenticated Pi status
+showed JOB_RUNNING, job_pause.available=true and no control owner. Desktop
+reattachment admitted only paused jobs, so an unowned running job had no route
+back to Pause. The new Take control action reattaches the existing running or
+paused job without reconnecting its serial transport; another owner's lease and
+boot/session checks remain authoritative.
+
+A separate Stop job action ends command admission, drains the accepted controller
+tail, acknowledges M5/auxiliary OFF and the motion barrier, then verifies the
+existing focus-clearance lift. Successful cancellation reports stopped without
+a success receipt, reset, emergency protocol or automatic Home. It retains only
+verified position/focus authority; a fresh Start still validates and arms the
+edited program. Paused cancellation requires explicit confirmation to resume the
+buffered tail, which may emit output. Faults and the existing red STOP still
+revoke authority. Both features require the pi-job-controls-v1 companion.
+
+Implemented in isolated codex/job-controls from current main. Initial Windows
+fake-controller/offscreen coverage passes 68 existing pause/stream/widget cases,
+14 new cancellation cases, 77 authenticated ownership/UI cases and two measured
+focus cancellation/cleanup-failure cases. Broader focused checks, compatibility
+CI, frozen packaging and Pi deployment remain pending. The live job was only
+observed, never paused, stopped or changed. Exact installed Pi sources were read
+and a four-file patch staged; cooling and local restrictions are preserved.
+Expanded local Windows verification: 746 focused machine/runner/focus/remote/desktop
+cases pass with four workers. A separate 77-case ownership/loopback cohort and
+28 final cancellation/widget checks pass, including nonmodal paused confirmation
+and emergency STOP overtaking a pending cancel/resume write. All 26 runtime-strip
+layout/action tests pass with the new control included. Ruff/compileall/diff checks
+pass. Initial loopback attempts were blocked by sandbox sockets; authorized
+unsandboxed fake-controller runs passed. Compatibility and frozen checks continue.
+
+The initial full compatibility run passed Windows 3.10, Ruff and the POSIX
+controller tier; Windows 3.12 reported three native Qt worker crashes during
+later widget teardown. The focused mixed widget cohort reproduced the crash.
+Explicit deferred deletion in the new pause/confirmation tests fixes the cohort
+(44 passed, then 59 with runtime-strip coverage); full CI is being repeated.
+The 0.8.26 candidate's archived controls render correctly with its bundled Qt
+6.12, and downloaded executable/resources match packaging evidence. This is an
+offscreen widget check, not full interactive startup or a hardware test.
+The approved Pi installation has not occurred: the node became unreachable
+before an idle/disconnected state could be verified. The four-file installer
+remains staged and rejects unknown predecessor files.
+
+No physical pause, cancellation, restart or laser behavior is qualified by these
+automated checks. Existing shared-checkout edits remain untouched.
+
 ## Pause retains the active Pi controller session (2026-10-17)
 
 A 0.8.19 operator screenshot reports Pause failing with "Cannot connect to the

@@ -333,6 +333,10 @@ class JobStatus:
         }
 
 
+class _JobCancelled(Exception):
+    """New command admission ended; drain acknowledged ownership before cleanup."""
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class _JobRunContext:
     identity: int
@@ -344,6 +348,8 @@ class _JobRunContext:
     focus_plan: dict[str, Any] | None = None
     retained_workpiece_plan: dict[str, Any] | None = None
     pause: JobPause = field(default_factory=JobPause)
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    cancel_cleanup: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass(frozen=True, slots=True)
@@ -6419,6 +6425,7 @@ class MachineService:
             with self._transport_write_lock:
                 if getattr(context, "pause", None) is not None and context.pause.state != "running":
                     continue
+                self._check_job_cancel_admission(context)
                 with self._lock:
                     if self._active_job_context is context:
                         context.status.phase = phase
@@ -6455,6 +6462,45 @@ class MachineService:
         self._raise_if_secondary_faulted()
         check_job_focus_context(self, context)
 
+    def request_cancel(self, *, expected_run_id: int, expected_pause_revision: int,
+                       finish_buffered: bool = False) -> dict[str, Any]:
+        """End this job after accepted moves; never reset a healthy controller.
+
+        A paused queue moves again only with explicit finish_buffered consent.
+        The original immutable job authorization covers only that accepted tail.
+        """
+        if type(finish_buffered) is not bool:
+            raise SafetyError("finish_buffered must be an exact boolean")
+        if any(type(v) is not int or v < 0 for v in (expected_run_id, expected_pause_revision)):
+            raise SafetyError("Cancel requires an exact job identity and pause revision")
+        context = self._active_job_context
+        if context is None:
+            raise MachineError("Stop job requires an active job")
+        with self._job_pause_write_lock, self._transport_write_lock:
+            self._require_pause_authority(context)
+            if expected_run_id != context.identity or expected_pause_revision != context.pause.revision:
+                raise MachineError("Stop job request is stale; refresh job status")
+            if context.cancel_cleanup.is_set() or context.status.phase not in {"streaming", "draining"}:
+                raise MachineError("Stop job is unavailable during focus or Home / park")
+            if context.pause.state not in {"running", "paused"}:
+                raise MachineError("Wait for the current pause/resume transition")
+            if context.pause.state == "paused":
+                if not finish_buffered:
+                    raise MachineError("Stopping a paused job requires confirmation to finish buffered moves")
+                self.request_pause(resume=True, expected_run_id=expected_run_id,
+                                   expected_pause_revision=expected_pause_revision)
+            with context.pause._lock:
+                context.cancel_event.set()
+                context.pause.revision += 1
+            self._append_log("INFO", "Stop job requested; finishing buffered moves before laser-off")
+        return self.status()
+
+    @staticmethod
+    def _check_job_cancel_admission(context: _JobRunContext) -> None:
+        if (getattr(context, "cancel_event", None) is not None
+                and context.cancel_event.is_set() and not context.cancel_cleanup.is_set()):
+            raise _JobCancelled()
+
     def request_pause(self, *, resume: bool = False, expected_run_id: int | None = None,
                       expected_pause_revision: int | None = None) -> dict[str, Any]:
         if type(resume) is not bool:
@@ -6469,6 +6515,8 @@ class MachineService:
         # the admission gate nor the secondary controller's ACK wait.
         with self._job_pause_write_lock, self._transport_write_lock:
             self._require_pause_authority(context)
+            if context.cancel_event.is_set():
+                raise MachineError("Job cancellation is already in progress")
             if (expected_run_id is not None and expected_run_id != context.identity
                     or expected_pause_revision is not None and expected_pause_revision != context.pause.revision):
                 raise MachineError("Pause/resume request is stale; refresh job status")
@@ -6526,6 +6574,7 @@ class MachineService:
                 pause = getattr(context, "pause", None)
                 if pause is not None and pause.state != "running":
                     continue
+                self._check_job_cancel_admission(context)
                 return self._write_unpaused_job_line(command, **kwargs)
 
     def _write_unpaused_job_line(
@@ -6728,35 +6777,41 @@ class MachineService:
         index = start
         # A failed exchange stays owned until the existing exact-session abort
         # retires it. Never release an ambiguous stream for another command.
-        while index < len(lines) and canonical_linear_move(lines[index]):
-            command = lines[index]
-            wire = compactor.encode(command)
-            byte_count = len(wire.encode("ascii")) + 1
-            if byte_count > capacity:
-                raise MachineError("Motion command exceeds the controller stream byte window")
-            while True:
-                if pending and (len(pending) >= window.max_pending
-                                or context.pause.clock() >= pending[0][4] + timeout):
+        cancelled = False
+        try:
+            while index < len(lines) and canonical_linear_move(lines[index]):
+                command = lines[index]
+                wire = compactor.encode(command)
+                byte_count = len(wire.encode("ascii")) + 1
+                if byte_count > capacity:
+                    raise MachineError("Motion command exceeds the controller stream byte window")
+                while True:
+                    if pending and (len(pending) >= window.max_pending
+                                    or context.pause.clock() >= pending[0][4] + timeout):
+                        acknowledge()
+                        continue
+                    accepted = self._write_running_job_line(
+                        command, wire_command=wire,
+                        stream_write=lambda write, source_index=index, size=byte_count: receiver.stream_write(
+                            token, source_index, size, write, capacity=capacity,
+                        ),
+                    )
+                    if accepted:
+                        sequence, started = self._job_context.last_stream_transaction
+                        pending.append((index, sequence, started, wire, context.pause.clock()))
+                        break
+                    if not pending:
+                        raise MachineError("Controller stream window cannot admit a motion line")
                     acknowledge()
-                    continue
-                accepted = self._write_running_job_line(
-                    command, wire_command=wire,
-                    stream_write=lambda write, source_index=index, size=byte_count: receiver.stream_write(
-                        token, source_index, size, write, capacity=capacity,
-                    ),
-                )
-                if accepted:
-                    sequence, started = self._job_context.last_stream_transaction
-                    pending.append((index, sequence, started, wire, context.pause.clock()))
-                    break
-                if not pending:
-                    raise MachineError("Controller stream window cannot admit a motion line")
-                acknowledge()
-            index += 1
+                index += 1
+        except _JobCancelled:
+            cancelled = True
         while pending:
             acknowledge()
         receiver.finish_stream(token, quiet_interval=_POST_TERMINAL_QUIET_SECONDS, timeout=timeout)
         self._job_context.last_stream_transaction = None
+        if cancelled:
+            raise _JobCancelled()
         return index
 
     def _selected_job_focus(self, program):
@@ -6876,6 +6931,77 @@ class MachineService:
             else "Powered job completed; machine homed, parked, and motors released",
         )
 
+    def _stream_job_body(self, context, lines, job_ack_timeout):
+        self._write_running_job_line("M5")
+        self._wait_for_ack(job_ack_timeout)
+        # The service-level prelude covers powered setup/calibration jobs
+        # that intentionally contain no layer Air Assist commands. Bind it
+        # only to the immutable mapping that passed program integrity checks.
+        for command in context.air_assist_off_commands:
+            self._write_running_job_line(command)
+            self._wait_for_ack(job_ack_timeout)
+        focused = False
+        active_focus_mode = "CUT"
+        if context.focus_plan is not None:
+            self._move_job_focus(context, clearance=True)
+        streamed_through = 0
+        for index, line in enumerate(lines, start=1):
+            if index <= streamed_through:
+                continue
+            if parse_raster_boundary(line) is not None:
+                continue
+            if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
+                continue
+            requested_focus_mode = operation_focus_mode(line)
+            if requested_focus_mode is not None:
+                if context.focus_plan is not None and focused and requested_focus_mode != active_focus_mode:
+                    self._execute_running_job_command("M5", timeout=job_ack_timeout)
+                    self._execute_running_job_command(context.session.dialect.motion_barrier_command,
+                                                      timeout=job_ack_timeout)
+                    self._move_job_focus(context, clearance=True)
+                    focused = False
+                active_focus_mode = requested_focus_mode
+                continue
+            focus_words = ({word.letter: word.value for word in parse_words(line)}
+                           if context.focus_plan is not None and not focused
+                           and not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) else {})
+            raster_lead_mode = (
+                active_focus_mode == "RASTER"
+                and focus_words.get("M") in (3, 4)
+                and focus_words.get("S") == 0
+            )
+            if (context.focus_plan is not None and not focused
+                    and (raster_lead_mode or (
+                        focus_words.get("S", 0) > 0
+                        and (focus_words.get("M") in (3, 4) or focus_words.get("G") == 1)
+                    ))):
+                # Lower at the completed row approach, before zero-power
+                # acceleration. A barrier at the first powered sample would
+                # discard the already-planned run-up and start it at rest.
+                self._execute_running_job_command(context.session.dialect.motion_barrier_command,
+                                                  timeout=job_ack_timeout)
+                self._move_job_focus(context, clearance=False, focus_mode=active_focus_mode)
+                focused = True
+            if (context.session.dialect is GRBL_DIALECT
+                    and context.session.receiver is not None
+                    and (context.focus_plan is None or focused)
+                    and canonical_linear_move(line)
+                    and index < len(lines) and canonical_linear_move(lines[index])):
+                streamed_through = self._stream_running_job_moves(
+                    context, lines, index - 1, timeout=job_ack_timeout,
+                )
+                continue
+            primary_written = self._write_running_job_line(line)
+            # GRBL may delay an acknowledgement while its planner is full or
+            # while a standalone laser-state command synchronizes queued
+            # motion. A short interactive-command timeout can therefore turn
+            # a healthy finishing move into a false job failure.
+            if primary_written:
+                self._wait_for_ack(job_ack_timeout)
+            with self._lock:
+                if self._active_job_context is context:
+                    context.status.completed_lines = index
+
     def _run_job(
         self,
         context: _JobRunContext,
@@ -6892,77 +7018,17 @@ class MachineService:
                 _JOB_COMMAND_ACK_TIMEOUT_SECONDS,
                 self.settings.read_timeout,
             )
-            self._write_running_job_line("M5")
-            self._wait_for_ack(job_ack_timeout)
-            # The service-level prelude covers powered setup/calibration jobs
-            # that intentionally contain no layer Air Assist commands. Bind it
-            # only to the immutable mapping that passed program integrity checks.
-            for command in context.air_assist_off_commands:
-                self._write_running_job_line(command)
-                self._wait_for_ack(job_ack_timeout)
-            focused = False
-            active_focus_mode = "CUT"
-            if context.focus_plan is not None:
-                self._move_job_focus(context, clearance=True)
-            streamed_through = 0
-            for index, line in enumerate(lines, start=1):
-                if index <= streamed_through:
-                    continue
-                if parse_raster_boundary(line) is not None:
-                    continue
-                if focus_binding_id(line) is not None or line.startswith(MATERIAL_SURFACE_PREFIX):
-                    continue
-                requested_focus_mode = operation_focus_mode(line)
-                if requested_focus_mode is not None:
-                    if context.focus_plan is not None and focused and requested_focus_mode != active_focus_mode:
-                        self._execute_running_job_command("M5", timeout=job_ack_timeout)
-                        self._execute_running_job_command(context.session.dialect.motion_barrier_command,
-                                                          timeout=job_ack_timeout)
-                        self._move_job_focus(context, clearance=True)
-                        focused = False
-                    active_focus_mode = requested_focus_mode
-                    continue
-                focus_words = ({word.letter: word.value for word in parse_words(line)}
-                               if context.focus_plan is not None and not focused
-                               and not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) else {})
-                raster_lead_mode = (
-                    active_focus_mode == "RASTER"
-                    and focus_words.get("M") in (3, 4)
-                    and focus_words.get("S") == 0
-                )
-                if (context.focus_plan is not None and not focused
-                        and (raster_lead_mode or (
-                            focus_words.get("S", 0) > 0
-                            and (focus_words.get("M") in (3, 4) or focus_words.get("G") == 1)
-                        ))):
-                    # Lower at the completed row approach, before zero-power
-                    # acceleration. A barrier at the first powered sample would
-                    # discard the already-planned run-up and start it at rest.
-                    self._execute_running_job_command(context.session.dialect.motion_barrier_command,
-                                                      timeout=job_ack_timeout)
-                    self._move_job_focus(context, clearance=False, focus_mode=active_focus_mode)
-                    focused = True
-                if (context.session.dialect is GRBL_DIALECT
-                        and context.session.receiver is not None
-                        and (context.focus_plan is None or focused)
-                        and canonical_linear_move(line)
-                        and index < len(lines) and canonical_linear_move(lines[index])):
-                    streamed_through = self._stream_running_job_moves(
-                        context, lines, index - 1, timeout=job_ack_timeout,
-                    )
-                    continue
-                primary_written = self._write_running_job_line(line)
-                # GRBL may delay an acknowledgement while its planner is full or
-                # while a standalone laser-state command synchronizes queued
-                # motion. A short interactive-command timeout can therefore turn
-                # a healthy finishing move into a false job failure.
-                if primary_written:
-                    self._wait_for_ack(job_ack_timeout)
-                with self._lock:
-                    if self._active_job_context is context:
-                        context.status.completed_lines = index
+            try:
+                self._stream_job_body(context, lines, job_ack_timeout)
+            except _JobCancelled:
+                pass
+            # No new source commands can enter after cancellation. Cleanup still
+            # uses the same session, original job authority and guarded writes.
+            with self._transport_write_lock:
+                context.cancel_cleanup.set()
             run_completion = (
                 requires_laser_authorization
+                and not context.cancel_event.is_set()
                 and self.settings.backend == "serial"
                 and self.settings.home_and_release_after_powered_job
             )
@@ -7012,7 +7078,7 @@ class MachineService:
                 final_xy = self._jog_position_mm
                 if final_xy is None:
                     final_xy = tuple((context.focus_plan or context.retained_workpiece_plan)["xy"])
-                    for line in lines:
+                    for line in lines[:context.status.completed_lines]:
                         if (focus_binding_id(line) is not None
                                 or line.startswith((AIR_ASSIST_DIRECTIVE_PREFIX, MATERIAL_SURFACE_PREFIX,
                                                     OPERATION_FOCUS_PREFIX, RASTER_BOUNDARY_PREFIX))):
@@ -7064,9 +7130,9 @@ class MachineService:
                     context.status.finished_at = time.time()
                     context.status.error = error
                     context.status.phase = (
-                        "failed" if error is not None else "complete"
+                        "failed" if error is not None else "stopped" if context.cancel_event.is_set() else "complete"
                     )
-                    if error is None and is_current:
+                    if error is None and is_current and not context.cancel_event.is_set():
                         self._last_successful_job = {
                             "name": context.status.name,
                             "program_digest": program_digest,
@@ -7437,10 +7503,19 @@ class MachineService:
                 "run_id": context.identity if context is not None else None,
                 "available": bool(context is not None and self._pause_supported(context)
                                   and context.status.phase in {"streaming", "draining"}
-                                  and not context.stop_event.is_set()),
+                                  and not context.stop_event.is_set()
+                                  and not context.cancel_event.is_set()),
+                "cancelling": context is not None and context.cancel_event.is_set(),
+                "cancel_available": bool(context is not None and self._pause_supported(context)
+                                         and context.status.phase in {"streaming", "draining"}
+                                         and not context.cancel_cleanup.is_set()
+                                         and not context.cancel_event.is_set()
+                                         and not context.stop_event.is_set()),
             }
             if job["running"] and pause is not None and pause.state != "running":
                 job["phase"] = pause.state
+            if job["running"] and context is not None and context.cancel_event.is_set():
+                job["phase"] = "cancelling"
             last_successful_job = (
                 None
                 if self._last_successful_job is None
@@ -7449,6 +7524,7 @@ class MachineService:
         armed = self.armed
         return {
             "connected": connected,
+            "job_controls_supported": True,
             "connecting": connecting,
             "controller_state": state.value,
             "controller_session_generation": self._controller_session_generation,

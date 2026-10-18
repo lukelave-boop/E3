@@ -147,6 +147,7 @@ jobs:
           tests/test_grbl_stream.py
           tests/test_machine_streaming.py
           tests/test_job_pause.py
+          tests/test_job_cancel.py
           tests/test_compressed_upload.py
           tests/test_pi_job_store.py
           tests/test_large_job_preparation.py

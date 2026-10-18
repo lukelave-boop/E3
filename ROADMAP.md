@@ -1,5 +1,10 @@
 # Roadmap
 
+- Normal job cancellation and running-job reattachment are implemented with
+  fake-controller, authenticated loopback and offscreen acceptance/rejection tests.
+  Windows compatibility/frozen delivery and supervised physical acceptance remain
+  pending; buffered work may continue emitting until normal Stop completes.
+
 - Implemented retained-session Pause/Resume dispatch after the 0.8.19 operator
   report; merged as PR62 and selected as DEV TEST 0.8.22. Windows CI and frozen
   checks pass; physical Pause/Resume acceptance remains pending.

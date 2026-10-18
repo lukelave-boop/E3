@@ -1,5 +1,14 @@
 # Safety requirements
 
+Normal **Stop job** is not an immediate stop: accepted buffered moves may
+continue emitting while the queue drains. The stopped result requires acknowledged
+M5, auxiliary OFF, motion completion and any required verified clearance lift.
+Paused cancellation must explicitly authorize completing that buffered tail;
+it never silently resumes. Successful cancellation may retain verified session
+and workpiece authority, but grants no new laser authorization. Failed cleanup
+uses the existing quarantine/fail-off path. The red software STOP remains
+independent and neither control is safety-rated.
+
 Compressed uploads are inert transport data. Input frames, compressed pieces,
 expanded chunks and total job size are bounded independently. Only exact decoded
 bytes enter the durable store; digest, whole-program validation and explicit Start

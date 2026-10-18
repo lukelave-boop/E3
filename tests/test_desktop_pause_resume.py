@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.runtime_strip import RuntimeSafetyStrip
@@ -42,6 +42,8 @@ def test_actual_runtime_pause_button(phase, label, enabled):
     strip.set_status({**status, "job_pause": {}})
     assert not strip.pause_button.isEnabled()
     strip.close()
+    strip.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     app.processEvents()
 
 
@@ -58,3 +60,77 @@ def test_desktop_handler_sends_bound_request(phase, resume):
     )
     DesktopController.pause_resume(controller)
     assert requests == [{"resume": resume, "expected_run_id": 7, "expected_pause_revision": 3}]
+
+@pytest.mark.parametrize("phase", ["running", "paused", "pausing", "resuming"])
+def test_unowned_active_job_exposes_take_control(phase):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    strip = RuntimeSafetyStrip()
+    status = {
+        "backend": "serial", "port": "e3bridge://127.0.0.1:8765", "remote": True,
+        "hardware_enabled": True, "allow_motion": True, "connected": True,
+        "controller_state": "JOB_RUNNING", "job": {"running": True},
+        "control_ownership_supported": True, "control_owned": False,
+        "control_in_use": False, "job_controls_supported": True,
+        "job_pause": {"available": True, "state": phase, "cancel_available": True},
+    }
+    strip.set_status(status)
+    assert strip.connect_button.isEnabled()
+    assert strip.connect_button.text() == "Take control"
+    assert not strip.pause_button.isEnabled()
+    assert "Connect" in strip.pause_button.toolTip()
+    strip.set_status({**status, "control_owned": True})
+    assert strip.pause_button.isEnabled() == (phase in {"running", "paused"})
+    assert strip.cancel_button.isEnabled() == (phase in {"running", "paused"})
+    strip.set_status({**status, "control_in_use": True})
+    assert not strip.connect_button.isEnabled()
+    strip.close()
+    strip.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
+def test_normal_stop_handler_retains_identity_and_never_connects_or_emergency_stops():
+    requests = []
+    options = []
+    machine = SimpleNamespace(request_cancel=lambda **kwargs: requests.append(kwargs))
+    def run(callback, **kwargs):
+        options.append(kwargs)
+        callback()
+    controller = SimpleNamespace(runtime=SimpleNamespace(context=SimpleNamespace(machine=machine)), _run=run)
+    DesktopController.cancel_job(controller, expected_pause={"run_id": 7, "revision": 3}, finish_buffered=True)
+    assert requests == [{"expected_run_id": 7, "expected_pause_revision": 3, "finish_buffered": True}]
+    assert options[0]["requires_controller"] is True
+    assert options[0]["ensure_connection"] is False
+
+@pytest.mark.parametrize("answer", [QtWidgets.QMessageBox.StandardButton.Yes, QtWidgets.QMessageBox.StandardButton.No])
+def test_paused_stop_confirmation_is_nonmodal_and_keeps_original_job(answer):
+    from laser_aligner.desktop.main_window import E3MainWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = QtWidgets.QMainWindow()
+    requested = []
+    status = {"job_pause": {"state": "paused", "run_id": 5, "revision": 2}}
+    window.controller = SimpleNamespace(
+        runtime=SimpleNamespace(context=SimpleNamespace(machine=SimpleNamespace(status=lambda: status))),
+        cancel_job=lambda **kwargs: requested.append(kwargs),
+    )
+    emergency = QtWidgets.QPushButton("Software stop", window)
+    clicks = []
+    emergency.clicked.connect(lambda: clicks.append(True))
+    window.show()
+    E3MainWindow._cancel_running_job(window)
+    box = window._cancel_job_confirmation
+    assert box.windowModality() == QtCore.Qt.WindowModality.NonModal
+    app.processEvents()
+    assert QtWidgets.QApplication.activeModalWidget() is None
+    emergency.click()
+    assert clicks == [True]
+    status["job_pause"] = {"state": "running", "run_id": 6, "revision": 0}
+    box.done(answer)
+    assert requested == ([{"expected_pause": {"state": "paused", "run_id": 5, "revision": 2},
+                           "finish_buffered": True}]
+                         if answer == QtWidgets.QMessageBox.StandardButton.Yes else [])
+    assert window._cancel_job_confirmation is None
+    window.close()
+    window.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    app.processEvents()
