@@ -1,5 +1,10 @@
 # Roadmap
 
+## Manual workpiece height
+
+Implemented explicit operator-entered material thickness and spacers, with matching Pi capability and guarded focus selection. Windows/Pi compatibility and frozen build verification are in progress; physical dimensional/focus validation remains pending.
+
+
 - Normal job cancellation and running-job reattachment are implemented with
   fake-controller, authenticated loopback and offscreen acceptance/rejection tests.
   Windows compatibility/frozen delivery and supervised physical acceptance remain

@@ -496,7 +496,8 @@ class BedSurveyDialog(QtWidgets.QDialog):
         try:
             current = self._binding()
             surface = self.panel._result.get("surface")
-            if not surface or self.panel._busy or self.panel._pending:
+            if (not surface or surface.get("height_source") == "manual"
+                    or self.panel._busy or self.panel._pending):
                 raise ValueError("Complete an explicit surface measurement before recording")
             if self.store is not None:
                 self.store.load()  # Refuse an unreadable evidence file before changing the in-memory survey.

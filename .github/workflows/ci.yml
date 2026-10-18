@@ -156,6 +156,8 @@ jobs:
           tests/test_validation_endpoint_reuse.py
           tests/test_prepared_polygon.py
           tests/test_job_focus.py
+          tests/test_manual_workpiece_height.py
+          tests/test_thickness_focus.py
           tests/test_raster_safety.py
           tests/test_raster_safety_focus.py
           tests/test_raster_overscan_envelope.py

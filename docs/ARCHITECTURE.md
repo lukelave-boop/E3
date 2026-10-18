@@ -1,5 +1,10 @@
 # Architecture
 
+## Manual workpiece height
+
+The desktop daily focus panel sends the typed `set_workpiece_height` action through MachineService or its remote facade. The Pi calculates the asserted surface datum from thickness, spacers and saved honeycomb height, then uses existing session-bound job focus and operation targets. Manual provenance is retained separately from probe evidence; gauge teaching requires a probed surface. This changes the desktop project workflow and shared machine admission, not the browser single-SVG generation UI.
+
+
 Normal desktop Stop job is a separate, session/run/revision-bound job.cancel RPC,
 negotiated by pi-job-controls-v1. It ends new source-command admission under the
 existing pause/write locks. The runner drains every accepted FIFO ACK, preserves

@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+## Manual workpiece height
+
+Workpiece focus can accept material thickness and optional spacers without probing the workpiece. It retains the machine Z reference, saved gauge calibration and guarded job start. See [manual height](docs/LASER_FOCUS.md#manual-workpiece-height); matching desktop and Pi support is required.
+
+
 The runtime strip offers **Take control** for an unowned running Pi job, then
 **Pause / Resume** and a separate **Stop job**. Normal Stop finishes buffered
 moves before output-off and verified clearance; wait for **JOB STOPPED**, edit,

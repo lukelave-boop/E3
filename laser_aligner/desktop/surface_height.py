@@ -185,7 +185,7 @@ class SurfaceHeightDialog(QtWidgets.QDialog):
         try:
             provider = getattr(getattr(self.context, "machine", None), "material_surface_snapshot", None)
             snapshot = provider() if callable(provider) else None
-            if snapshot is None:
+            if snapshot is None or snapshot.get("height_source") == "manual":
                 if not quiet:
                     self.result_status.setText("Measure the surface and establish its current job focus first.")
                 return

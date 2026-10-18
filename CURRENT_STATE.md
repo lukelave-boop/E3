@@ -1,5 +1,42 @@
 # Current repository state
 
+## Manual workpiece height (2026-10-18, in progress)
+
+First compatibility run 39128557248 passed Windows core, POSIX and Ruff, but
+Windows desktop exposed three compact-panel regressions (426 px minimum versus
+420 px allowed; 9,207 other tests passed). Shortened the mode selector and Apply
+labels; all 48 focused layout/manual-height/daily-focus tests now pass, including
+an added real-window manual-mode fit case. No controller code changed in this
+correction. Frozen 0.8.31 / 410cd3a was archive/hash/profile verified but was never
+selected or installed. A corrected canonical build and full CI are required.
+
+The exact two-file Pi kit passed read-only checks against installed predecessors;
+the Pi was idle, disconnected, disarmed and unowned. Automatic approval review
+blocked the deployment helper before staging or restart. The operator then
+explicitly approved installation after tests pass. That approval remains pending
+execution; no machine connection, motion, arming or laser test was performed.
+
+Isolated `codex/manual-workpiece-height` begins at authoritative main a85353a;
+unrelated shared-checkout edits are preserved. Daily Workpiece focus adds direct
+material thickness plus optional spacer height, using the saved honeycomb datum
+and current border/gauge calibration. Apply is idle/disarmed and sends no probing
+or positioning. It requires known current Z at clearance and ordinary XY authority;
+both cut and raster focus targets must fit existing clearance and Z bounds.
+Manual provenance is explicit and cannot become gauge-teaching probe evidence.
+Existing job binding, motion, arming, STOP, and disconnect guards remain active.
+The Pi advertises `pi-manual-workpiece-height-v1`; older nodes reject the new action.
+
+Windows Python 3.14 verification: 556 focused focus/remote/lifecycle/operation
+regressions and 39 material/calibration/desktop checks pass (595 total). Repository
+Ruff, compileall and diff checks pass. Tests include accepted no-probe application,
+guarded execution, old-job rejection, capability negotiation, invalid dimensions,
+reference/calibration/clearance rejection, STOP/disconnect invalidation and rejection
+of manual values as gauge/bed-survey/camera-calibration evidence. Offscreen Qt
+controls are exercised; this is not interactive GUI, camera, controller or laser
+verification. Compatibility CI and canonical frozen packaging remain pending.
+No Pi update, hardware action, installed EXE replacement or DEV TEST selection
+has been performed. A matching desktop/Pi handoff is still being prepared.
+
 ## Normal job controls and running-job reattachment (2026-10-17)
 
 The operator reported Pause was not clickable. Read-only authenticated Pi status

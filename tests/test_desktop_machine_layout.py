@@ -268,10 +268,17 @@ def test_window_shutdown_closes_pending_focus_and_rejects_late_reply(window, mon
     assert not coordinator._pending
 
 
-@pytest.mark.parametrize("mode", ["disconnected", "restored", "recovery"])
+@pytest.mark.parametrize("mode", ["disconnected", "restored", "recovery", "manual"])
 def test_machine_tab_switch_releases_camera_and_compact_controls_fit(window, app, mode):
     workspace = window.focus_workspace
-    if mode == "restored":
+    if mode == "manual":
+        workspace.set_machine_status(status())
+        workspace.panel.set_result(result(surface=None, job_focus=None, manual_height_available=True,
+                                          thickness_focus_available=True, workpiece_focus_available=True))
+        workspace.panel.path_clear.setChecked(True)
+        workspace.panel.height_mode.setCurrentIndex(1)
+        assert workspace.panel.manual_apply.isEnabled()
+    elif mode == "restored":
         workspace.set_machine_status(status())
         workspace.panel.set_result(result(z_retention={
             "available": True, "restored": True, "reason": "Border datum restored.",

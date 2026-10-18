@@ -384,7 +384,7 @@ class MaterialWorkspaceMixin:
                 or not 0 <= uncertainty_mm <= 1):
             raise CalibrationError("Supply a finite measured height and uncertainty between 0 and 1 mm")
         snapshot = self.machine.material_surface_snapshot()
-        if snapshot is None:
+        if snapshot is None or snapshot.get("height_source") == "manual":
             raise CalibrationError("Probe the calibration target and select measured focus before preparing powered height marks")
         from .machine.material_surface import snapshot_from_plan
         try:
