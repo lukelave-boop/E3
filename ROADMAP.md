@@ -2,7 +2,7 @@
 
 ## Manual workpiece height
 
-Implemented explicit operator-entered material thickness and spacers, with matching Pi capability and guarded focus selection. Windows/Pi compatibility and frozen build verification are in progress; physical dimensional/focus validation remains pending.
+Implemented explicit operator-entered material thickness and spacers, with matching Pi capability and guarded focus selection. Merged as PR64; Windows/Pi compatibility and frozen build verification pass. E3 DEV TEST selects 0.8.32 and the matching two-file Pi companion is installed and hash-verified. Interactive GUI and physical dimensional/focus validation remain pending.
 
 
 - Normal job cancellation and running-job reattachment are implemented with

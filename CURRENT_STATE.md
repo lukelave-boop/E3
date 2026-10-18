@@ -1,23 +1,12 @@
 # Current repository state
 
-## Manual workpiece height (2026-10-18, in progress)
+## Manual workpiece height (2026-10-18)
 
-First compatibility run 39128557248 passed Windows core, POSIX and Ruff, but
-Windows desktop exposed three compact-panel regressions (426 px minimum versus
-420 px allowed; 9,207 other tests passed). Shortened the mode selector and Apply
-labels; all 48 focused layout/manual-height/daily-focus tests now pass, including
-an added real-window manual-mode fit case. No controller code changed in this
-correction. Frozen 0.8.31 / 410cd3a was archive/hash/profile verified but was never
-selected or installed. A corrected canonical build and full CI are required.
-
-The exact two-file Pi kit passed read-only checks against installed predecessors;
-the Pi was idle, disconnected, disarmed and unowned. Automatic approval review
-blocked the deployment helper before staging or restart. The operator then
-explicitly approved installation after tests pass. That approval remains pending
-execution; no machine connection, motion, arming or laser test was performed.
-
-Isolated `codex/manual-workpiece-height` begins at authoritative main a85353a;
-unrelated shared-checkout edits are preserved. Daily Workpiece focus adds direct
+Merged through [PR64](https://github.com/lukelave-boop/E3/pull/64) at
+`530e00942249c6da85b9136443f47ed8fbfbeb85`; its tree exactly matches tested candidate
+`9b1cabe9f4b7173677e8f2eb26fdbec55b160987`. The completed feature branch was
+deleted locally and remotely; its worktree and selected build remain available.
+Unrelated shared-checkout edits are preserved. Daily Workpiece focus adds direct
 material thickness plus optional spacer height, using the saved honeycomb datum
 and current border/gauge calibration. Apply is idle/disarmed and sends no probing
 or positioning. It requires known current Z at clearance and ordinary XY authority;
@@ -33,9 +22,44 @@ guarded execution, old-job rejection, capability negotiation, invalid dimensions
 reference/calibration/clearance rejection, STOP/disconnect invalidation and rejection
 of manual values as gauge/bed-survey/camera-calibration evidence. Offscreen Qt
 controls are exercised; this is not interactive GUI, camera, controller or laser
-verification. Compatibility CI and canonical frozen packaging remain pending.
-No Pi update, hardware action, installed EXE replacement or DEV TEST selection
-has been performed. A matching desktop/Pi handoff is still being prepared.
+verification. First compatibility run 39128557248 exposed three compact-panel
+regressions; shortened labels fix them, and all 48 focused layout/manual-height/
+daily-focus checks pass, including a new real-window manual-mode fit case.
+
+[Compatibility CI 39129502512](https://github.com/lukelave-boop/E3/actions/runs/39129502512)
+passes: Windows Python 3.10 core 7,568 passed / 187 skipped; Windows Python 3.12
+desktop 9,211 passed / 69 skipped; POSIX controller recovery 1,596 passed /
+2 skipped; repository Ruff passed. [Canonical packaging 39129500636](https://github.com/lukelave-boop/E3/actions/runs/39129500636)
+produces **0.8.32** at the exact candidate revision above. The downloaded bundle
+matches all 199 archived application modules, the entrypoint and 11 resources.
+Bundled native Windows profile checks and native-library guards pass. EXE SHA256:
+`db70d063a8dd705d605e08e66432489d24a11a1423c4fbfbb61e1d2ecf1aa0e5`.
+Earlier 0.8.31 / 410cd3a was never selected; the correction changes only UI labels
+and layout coverage, with identical Pi companion bytes.
+
+The operator approved the two-file Pi installation after tests passed. Installed
+and read-only verified on 2026-10-18 at 07:14 MDT: exact predecessor checks,
+repeated DISCONNECTED/disarmed/idle/unowned checks, adjacent backups, atomic file
+replacement and service restart succeeded. The service is active with a new boot
+ID and `pi-manual-workpiece-height-v1`; both installed hashes match. Configuration,
+calibration sidecars, cooling overrides and unrelated controller sources are
+unchanged. Status remains disconnected, disarmed and unowned with no active job.
+No controller connection, motion, arming or laser test was performed.
+
+The exact kit remains at `/home/greenhouse-climate/e3-pi-manual-height-410cd3a` and
+under the feature worktree's `build/manual-height/e3-pi-manual-height-410cd3a`.
+Manifest SHA256: `49d5e49c238cd535a2ef7d22b603ba9cd4b12026b0605c41f2b4ed0a4a108d18`.
+Local installation/verification, CI, archive and selection receipts are retained
+under `build/manual-height`. The installer receipt's `service_started=false`
+describes the file installer only; the deployment wrapper restarted the service
+and the separate verification receipt confirms it active.
+
+E3 DEV TEST now selects **0.8.32**, branch main, exact revision 9b1cabe above, at
+`C:\Users\lukel\Documents\E3\.codex-worktrees\manual-workpiece-height\build\hosted-9b1cabe\E3.exe`.
+The canonical pointer tool validated matching adjacent metadata and preserved the
+permanent launcher hash. Normal E3 remains unchanged. No canonical EXE or hardware
+runtime was launched during verification. Operator interactive GUI and physical
+focus/laser acceptance remain pending; use the permanent **E3 DEV TEST** launcher.
 
 ## Normal job controls and running-job reattachment (2026-10-17)
 
