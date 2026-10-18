@@ -97,15 +97,15 @@ def test_stop_job_uses_priority_stop_without_queue_connect_or_resume(failure):
         if failure:
             raise RuntimeError("controller unreachable")
     controller = SimpleNamespace(
-        runtime=SimpleNamespace(context=SimpleNamespace(machine=SimpleNamespace(request_stop=stop))),
+        runtime=SimpleNamespace(context=SimpleNamespace(machine=SimpleNamespace(request_job_stop=stop))),
         stopInitiated=SimpleNamespace(emit=lambda: events.append("invalidated")),
         errorOccurred=SimpleNamespace(emit=lambda message: events.append(("error", message))),
         _machine_changed=lambda message: events.append(("notice", message)),
     )
     DesktopController.cancel_job(controller)
-    assert events[:2] == ["invalidated", ("stop", {"emergency": True})]
+    assert events[:2] == ["invalidated", ("stop", {})]
     assert events[2][0] == ("error" if failure else "notice")
-    assert "controller unreachable" in events[2][1] if failure else "reference" in events[2][1]
+    assert "controller unreachable" in events[2][1] if failure else "retained" in events[2][1]
 
 
 def test_paused_stop_has_no_resume_confirmation_or_queued_work():

@@ -1410,7 +1410,7 @@ def test_saved_z_status_is_informational_and_never_dispatches_motion(panel, app)
                                     current_readback={"z_mm": 30., "z_known": False, "fresh": True}))
     app.processEvents()
     assert panel.z_retention_group.isVisible()
-    assert "restored from a normal shutdown" in panel.z_retention_status.text()
+    assert "Z reference retained" in panel.z_retention_status.text()
     assert "probe mount" in panel.z_retention_note.text()
     assert "border/support" in panel.z_retention_note.text()
     assert "physically moved while off" in panel.z_retention_note.text()
@@ -1610,7 +1610,8 @@ def test_preview_and_position_are_setup_only_with_no_removed_xy_dispatch(app, ca
 
 
 @pytest.mark.parametrize("calibration_mode", [False, True])
-def test_daily_and_setup_retained_home_never_references_or_forgets_automatically(app, calibration_mode):
+@pytest.mark.parametrize("lowered", [False, True])
+def test_daily_and_setup_retained_home_never_references_or_forgets_automatically(app, calibration_mode, lowered):
     panel = LaserFocusPanel(calibration_mode=calibration_mode)
     controller = FakeController()
     coordinator = LaserFocusCoordinator(panel, controller)
@@ -1619,6 +1620,7 @@ def test_daily_and_setup_retained_home_never_references_or_forgets_automatically
                                          coordinate_reference_ready=False)
     controller.machine.payload = retained_result(
         surface=None, ender={"ready": True, "generation": 4, "recovery_required": False},
+        requires_clearance=lowered, current_readback={"z_mm": 25. if lowered else 30., "z_known": True, "fresh": True},
     )
     homes = []
 
@@ -1634,6 +1636,7 @@ def test_daily_and_setup_retained_home_never_references_or_forgets_automatically
         app.processEvents()
         assert panel.z_retention_group.isVisible() is calibration_mode
         assert panel.reference.text() == "Home / park XY"
+        assert not panel.xy_recovery_group.isVisible()
         assert "no border probe" in panel.next_step.text()
         assert not panel.reference.isEnabled()
         assert controller.machine.calls == [] and homes == []

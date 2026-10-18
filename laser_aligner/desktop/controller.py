@@ -3200,11 +3200,11 @@ class DesktopController(QtCore.QObject):
         # unlike the old normal-cancel RPC, it never resumes a paused planner.
         self.stopInitiated.emit()
         try:
-            self.runtime.context.machine.request_stop(emergency=True)
+            self.runtime.context.machine.request_job_stop()
         except Exception as exc:
             self.errorOccurred.emit(f"Job stop failed: {exc}")
             return
-        self._machine_changed("Job interruption and laser-off requested; recover and reference before restarting")
+        self._machine_changed("Job interruption and laser-off requested; Z is retained only after verification. Home / park XY before restarting.")
 
     def emergency_stop(self) -> None:
         self.stopInitiated.emit()

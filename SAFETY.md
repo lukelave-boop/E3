@@ -5,13 +5,18 @@
 An explicit manual workpiece height may replace workpiece probing, using operator-entered thickness and spacers. It cannot establish the machine Z reference or teach gauge calibration. A compatible gauge, current reference/session, known position at clearance and existing surface/Z limits remain mandatory. Applying is idle/disarmed and sends no movement or probe command. Manual dimensions are unverified assertions, identified in the UI; the existing guarded job path remains authoritative. Changing height requires regenerating the job. This feature is not safety-rated.
 
 
-Desktop **Stop job** uses the existing priority `request_stop(emergency=True)`
-path. On GRBL it requests feed hold/reset and M5 rather than waiting for accepted
-planner motion to finish. It never resumes a paused job, moves to clearance or
-homes automatically. Controller, coordinate and workpiece authority are revoked;
-recovery and referencing precede another job. A returned request is not physical
-stop verification. Both it and the independently available red software STOP
-request emergency secondary interruption. Neither control is safety-rated.
+Desktop **Stop job** requests priority feed hold/reset and M5 on GRBL without
+waiting for accepted planner motion. It never resumes a paused job, moves to
+clearance or homes automatically. XY and workpiece authority are revoked. The
+matching Pi companion may retain an independently stationary Ender Z datum only
+after unchanged-controller/firmware/configuration, known-position and stowed-probe
+readback matches the job's last verified Z. Active/uncertain Z falls back to full
+interruption; red software STOP always interrupts the secondary and discards Z.
+An explicit Home / park may raise retained Z to its prior clearance before XY
+homing, without probing. New workpiece selection, generation and arming remain
+required. A returned request is not physical stop verification. Neither control
+is safety-rated. The retained candidate is memory-only and grants no authority
+across a process restart or power loss.
 The legacy `job.cancel` RPC remains a buffered-tail drain for older clients; the
 current desktop Stop job button does not use it.
 

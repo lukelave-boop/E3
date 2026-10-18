@@ -1481,6 +1481,18 @@ def test_disconnect_detaches_active_job_but_explicit_stop_uses_priority_rpc(
     assert fake.requests[0]["emergency"] is True
 
 
+@pytest.mark.parametrize("capability", [True, False])
+def test_job_stop_uses_cached_capability_without_negotiation(monkeypatch, capability):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._node_capabilities = ("pi-job-stop-retain-z-v1",) if capability else ()
+    service.request_job_stop()
+    assert [request["action"] for request in fake.requests] == [ACTION_JOB_STOP]
+    assert fake.requests[0]["emergency"] is (not capability)
+    assert fake.requests[0].get("retain_z", False) is capability
+
+
 def test_idle_disconnect_may_release_the_pi_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
