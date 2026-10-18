@@ -34,11 +34,8 @@ configured serial aliases and resolved device paths. Retention binds the stable
 configured endpoint used by recovery, while keeping a distinct primary/Ender gate.
 
 Read-only Pi inspection found a pre-existing local CPU cooling patch in service.py;
-the matching update must preserve it. The other three changed existing Pi modules
-match the current main baseline. The companion needs four updated modules plus
-new stopped_z.py. No Pi installation/restart, controller command, arming or motion
-has been performed for this change. The work is isolated from the dirty primary
-checkout and existing selected build.
+the installed update preserves it. The companion updates four existing modules
+and adds stopped_z.py. The work is isolated from the dirty primary checkout.
 
 Merged through [PR66](https://github.com/lukelave-boop/E3/pull/66) at
 `26f1feb80e03b13a7bf78bcb7a2c25eebcd4821d`; its tree exactly matches tested candidate
@@ -58,19 +55,24 @@ The canonical pointer tool selects **E3 DEV TEST 0.8.39**, branch main, at
 Adjacent metadata matches; the permanent launcher hash is unchanged. Normal E3
 and any running desktop remain untouched. No frozen application was launched.
 
-The matching five-file Pi kit is staged at
+The matching five-file Pi kit was installed from
 `/home/greenhouse-climate/e3-pi-stop-z-0fbc064`. Its service.py preserves the exact
 pre-existing CPU cooling patch, verified against the observed installed baseline;
 all other changed modules match the candidate. The source variant passes 177
 fake-controller tests on Windows and 177 on the Pi; the final alias correction
 passes 15 additional Pi tests. Staged imports against installed dependencies,
 known-baseline dry-run installation, unknown-change rejection, and read-only
-idle/disconnected/disarmed/unowned prechecks pass. The live installation and
-service restart are **awaiting explicit operator approval**; the earlier approval
-was for the separate two-file manual-height update. Until the matching Pi update
-is installed, this desktop uses full STOP and cannot retain Z. No controller was
-instantiated by import verification, and no live motion/arming/stop command or
-physical acceptance test was performed. Receipts remain under `build/stop-z`.
+idle/disconnected/disarmed/unowned prechecks pass. After explicit operator approval
+and repeated fresh state checks, the five-file update was installed with backups
+of all four replaced files and e3-hardware-node.service was restarted. Read-only
+verification at 2026-10-18 14:56 UTC confirms the service active, all five installed
+hashes matching, protected configuration/service/cooling files unchanged, and
+`pi-job-stop-retain-z-v1` advertised. New boot ID:
+`2f7b63c8-d12a-494f-ad23-acf22830941a`. The controller remains disconnected,
+disarmed, idle and unowned. No controller was instantiated by import verification,
+and no live motion/arming/stop command or physical acceptance test was performed.
+Installation and verification receipts remain under `build/stop-z` and in the Pi
+kit directory. Physical Stop and Z-retention acceptance remain pending.
 
 ## Stop job interruption and Z status layout (2026-10-18)
 

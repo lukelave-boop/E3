@@ -6,9 +6,11 @@ Implemented a distinct normal-stop request that still aborts queued GRBL motion,
 with verified in-process Ender Z continuity and an explicit clearance-before-XY
 Home path. PR66 is merged, full Windows/POSIX compatibility and frozen verification
 pass, and E3 DEV TEST selects 0.8.39. The exact Pi source variant passes Windows
-and Pi tests and is staged, preserving local cooling changes; installation and
-service restart await operator approval. Until installed, the desktop falls back
-to full STOP. Physical acceptance remains pending. Red STOP remains a full
+and Pi tests and is installed with operator approval, backups and local cooling
+changes preserved. The restarted service advertises the retention capability;
+all five installed hashes and unchanged protected files are verified, with the
+controller disconnected, disarmed, idle and unowned. Physical acceptance remains
+pending. Red STOP remains a full
 secondary interruption with reference revocation. See CURRENT_STATE.md.
 
 ## Stop job interruption and Z text layout
