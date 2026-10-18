@@ -5,17 +5,21 @@
 The desktop daily focus panel sends the typed `set_workpiece_height` action through MachineService or its remote facade. The Pi calculates the asserted surface datum from thickness, spacers and saved honeycomb height, then uses existing session-bound job focus and operation targets. Manual provenance is retained separately from probe evidence; gauge teaching requires a probed surface. This changes the desktop project workflow and shared machine admission, not the browser single-SVG generation UI.
 
 
-Normal desktop Stop job is a separate, session/run/revision-bound job.cancel RPC,
-negotiated by pi-job-controls-v1. It ends new source-command admission under the
-existing pause/write locks. The runner drains every accepted FIFO ACK, preserves
-receive ownership, then uses the normal M5/auxiliary-off/barrier/clearance checks.
-A successful cancellation persists stopped, never complete or a success receipt;
-configuration changes require a newly generated and authorized Start. An explicit
-paused-cancel confirmation is required before cycle-start drains the retained
-tail. STOP/fault authority takes precedence and no ordinary cancellation clears a
-fault. The browser's existing STOP path is unchanged; shared runner regressions
-cover both pipelines. Active-job Connect is control-lease reattachment only when
+Desktop Stop job dispatches `request_stop(emergency=True)` directly through the
+existing priority `job.stop` path, bypassing the ordinary desktop worker queue.
+Its stop signal invalidates queued UI operations. GRBL abort/reset and bounded
+M5 cleanup retire the controller session and all reference/focus authority; no
+buffered-tail resume, clearance move or Home is issued. It requests secondary
+interruption too, just like the independently available red software STOP.
+The old `job.cancel` RPC remains
+compatible for older clients but is not used by the desktop button. This changes
+desktop dispatch only; browser STOP and shared controller/protocol behavior are
+unchanged. Active-job Connect is control-lease reattachment only when
 the exact supported job/session remains active; it sends no serial command.
+
+WrappedStatusLabel reserves height at its current width when status text, font,
+style or geometry changes. Daily Z/focus and setup labels use it so nested Qt
+layouts scroll their full text instead of compressing wrapped paragraphs.
 
 ## Active-job Pause/Resume dispatch
 

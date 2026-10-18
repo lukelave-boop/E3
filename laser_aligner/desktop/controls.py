@@ -11,6 +11,33 @@ from .scroll_position import StableScrollArea
 QtCore, QtGui, QtWidgets = require_qt()
 
 
+class WrappedStatusLabel(QtWidgets.QLabel):
+    """Keep changing status text readable inside nested scrolling layouts."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setWordWrap(True)
+
+    def _fit_height(self) -> None:
+        required = max(0, self.heightForWidth(self.width()))
+        if self.minimumHeight() != required:
+            self.setMinimumHeight(required)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self._fit_height()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_height()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() in {QtCore.QEvent.Type.FontChange, QtCore.QEvent.Type.StyleChange,
+                            QtCore.QEvent.Type.ContentsRectChange}:
+            self._fit_height()
+
+
 class AxisPositionReadout(QtWidgets.QLabel):
     """A stable coordinate box; changing text never changes layout geometry."""
 

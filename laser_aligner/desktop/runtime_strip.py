@@ -81,7 +81,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         )
         self.cancel_button = QtWidgets.QPushButton("Stop job")
         self.cancel_button.setObjectName("runtimeCancelJobButton")
-        self.cancel_button.setAccessibleName("Stop job after buffered moves")
+        self.cancel_button.setAccessibleName("Interrupt job and discard buffered motion")
         for button in (
             self.connect_button,
             self.disconnect_button,
@@ -247,16 +247,15 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         cancelling = pause.get("cancelling") is True
         self.cancel_button.setText("Stopping job…" if cancelling else "Stop job")
         self.cancel_button.setEnabled(
-            not self._busy and state.status_trusted and state.can_control
-            and self._machine_status.get("job_controls_supported") is True
-            and pause.get("cancel_available") is True and phase in {"running", "paused"}
+            state.status_trusted and state.can_control
+            and state.controller_state == "JOB_RUNNING"
+            and (self._machine_status.get("job") or {}).get("running") is True
         )
         self.cancel_button.setToolTip(
             state.control_reason if not state.can_control else
-            "Update the Pi companion to enable normal Stop job."
-            if self._machine_status.get("job_controls_supported") is not True else
-            "Stop sending new work, finish buffered moves, then turn the laser off and lift to clearance. "
-            "Buffered moves can still emit laser output. Wait for Job stopped before editing and starting again."
+            "Interrupt motion, discard the controller's queued work and request laser off. "
+            "A paused job is not resumed. Recover and reference the machine before restarting. "
+            "Software stop is not a replacement for the physical emergency stop."
         )
 
     def _render_status(self) -> None:

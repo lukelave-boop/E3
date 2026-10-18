@@ -1,5 +1,13 @@
 # Changelog
 
+## Stop job interruption and readable Z status
+
+- Route desktop Stop job through priority controller stop/reset and laser-off,
+  including paused jobs, without waiting for buffered motion or resuming output.
+  Recovery and referencing are required before another job. Uses existing Pi STOP.
+- Preserve the full wrapped height of Z/focus status text in narrow panels and
+  with larger fonts; the inspector scrolls instead of clipping the text.
+
 ## Manual workpiece height
 
 Added an explicit manual material-thickness and spacer-height option to daily Workpiece focus. Applying creates a labelled, session-bound focus selection without probing or moving; replacing it invalidates old generated-job bindings. Existing machine reference, clearance and laser guards remain required.

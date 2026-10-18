@@ -301,3 +301,25 @@ def test_machine_tab_switch_releases_camera_and_compact_controls_fit(window, app
     window.inspector_tabs.select_panel("machine")
     app.processEvents()
     assert workspace.bed_view._active
+
+
+@pytest.mark.parametrize("width", [420, 850])
+@pytest.mark.parametrize("font_size", [10, 14])
+def test_z_status_text_keeps_its_wrapped_height(window, app, width, font_size):
+    window.setFont(QtGui.QFont("Segoe UI", font_size))
+    panel = window.focus_workspace.panel
+    window.focus_workspace.set_machine_status(status())
+    panel.set_result(result(surface=None, job_focus=None, manual_height_available=True,
+                            thickness_focus_available=True, workpiece_focus_available=True))
+    panel.height_mode.setCurrentIndex(1)
+    z = window.machine_panel.z_control
+    z.readback_note.setText("Unreferenced controller position\nLive Z telemetry during reference movement; not an encoder measurement.")
+    window.resize(1395, 1003)
+    window.resizeDocks([window.layer_dock], [width], QtCore.Qt.Orientation.Horizontal)
+    app.processEvents()
+    labels = [z.readback_note, panel.next_step, panel.range_note, panel.position_note,
+              panel.manual_note, panel.thickness_note, panel.target, panel.job_note]
+    for label in labels:
+        assert label.isVisible()
+        required = label.heightForWidth(label.width())
+        assert label.height() >= required, (label.text(), label.size(), required)

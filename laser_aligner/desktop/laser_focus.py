@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..errors import CalibrationError
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, WrappedStatusLabel
 from .focus_bed_view import FocusBedView
 from .machine_state import machine_payload, project_machine_state
 from .main_view_probe import MainViewProbe
@@ -76,7 +76,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.addWidget(self.setup_status)
         self.setup_status.setVisible(calibration_mode)
-        intro = QtWidgets.QLabel(
+        intro = WrappedStatusLabel(
             "Measure surface elevation above the border, then position the laser at a known gap. "
             "This is laser-off setup; it does not change camera calibration or start a job."
             if calibration_mode else
@@ -86,29 +86,29 @@ class LaserFocusPanel(QtWidgets.QWidget):
         intro.setWordWrap(True)
         layout.addWidget(intro)
         readouts = QtWidgets.QGridLayout()
-        self.height = QtWidgets.QLabel("Z — mm")
+        self.height = WrappedStatusLabel("Z — mm")
         self.height.setWordWrap(True)
         self.height.setObjectName("focusZReadout")
         self.height.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.height.setToolTip("Controller-reported Z; not an encoder measurement.")
-        self.surface = QtWidgets.QLabel("Surface elevation: not measured")
+        self.surface = WrappedStatusLabel("Surface elevation: not measured")
         self.surface.setWordWrap(True)
-        self.maximum = QtWidgets.QLabel("Active maximum: unknown")
+        self.maximum = WrappedStatusLabel("Active maximum: unknown")
         self.maximum.setWordWrap(True)
-        self.calibration = QtWidgets.QLabel("Laser offset: not taught")
+        self.calibration = WrappedStatusLabel("Laser offset: not taught")
         self.calibration.setWordWrap(True)
         readouts.addWidget(self.height, 0, 0)
         readouts.addWidget(self.surface, 0, 1)
         readouts.addWidget(self.maximum, 1, 0)
         readouts.addWidget(self.calibration, 1, 1)
         layout.addLayout(readouts)
-        self.live_z_note = QtWidgets.QLabel()
+        self.live_z_note = WrappedStatusLabel()
         self.live_z_note.setWordWrap(True)
         self.live_z_note.setObjectName("focusLiveZNote")
         self.live_z_note.hide()
         layout.addWidget(self.live_z_note)
         ender_row = QtWidgets.QHBoxLayout()
-        self.ender_status = QtWidgets.QLabel("Ender: waiting for connection status")
+        self.ender_status = WrappedStatusLabel("Ender: waiting for connection status")
         self.ender_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.ender_status.setWordWrap(True)
         self.reconnect_ender = QtWidgets.QPushButton("Reconnect Ender")
@@ -117,7 +117,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Supported recovery firmware may restart and initialize the probe pin. "
             "No XY/Z movement or homing is replayed."
         )
-        recovery_notice = QtWidgets.QLabel(
+        recovery_notice = WrappedStatusLabel(
             "Reconnect may restart the Ender and move its probe pin. Keep the pin path clear."
         )
         recovery_notice.setWordWrap(True)
@@ -138,7 +138,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         honeycomb_row.addWidget(self.honeycomb_height)
         honeycomb_row.addWidget(self.save_honeycomb)
         honeycomb_layout.addLayout(honeycomb_row)
-        self.honeycomb_note = QtWidgets.QLabel("Enter the measured bed height relative to the border. Saving clears the workpiece measurement; measure again before running a job.")
+        self.honeycomb_note = WrappedStatusLabel("Enter the measured bed height relative to the border. Saving clears the workpiece measurement; measure again before running a job.")
         self.honeycomb_note.setWordWrap(True)
         honeycomb_layout.addWidget(self.honeycomb_note)
         self.bed_survey_button = QtWidgets.QPushButton("Bed leveling measurements (5 positions)")
@@ -151,7 +151,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.z_retention_group = QtWidgets.QGroupBox("Saved Z between sessions")
         retention_layout = QtWidgets.QVBoxLayout(self.z_retention_group)
         retention_row = QtWidgets.QHBoxLayout()
-        self.z_retention_status = QtWidgets.QLabel()
+        self.z_retention_status = WrappedStatusLabel()
         self.z_retention_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.z_retention_status.setWordWrap(True)
         self.forget_z = QtWidgets.QPushButton("Forget saved Z")
@@ -162,7 +162,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         retention_row.addWidget(self.z_retention_status, 1)
         retention_row.addWidget(self.forget_z)
         retention_layout.addLayout(retention_row)
-        self.z_retention_note = QtWidgets.QLabel(
+        self.z_retention_note = WrappedStatusLabel(
             "If the Z axis, probe mount, or border/support was physically moved while off, "
             "choose Forget saved Z, then Reference border again. The taught gauge offset is kept."
         )
@@ -170,12 +170,12 @@ class LaserFocusPanel(QtWidgets.QWidget):
         retention_layout.addWidget(self.z_retention_note)
         layout.addWidget(self.z_retention_group)
         layout = outer_layout
-        self.failure_detail = QtWidgets.QLabel()
+        self.failure_detail = WrappedStatusLabel()
         self.failure_detail.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.failure_detail.setWordWrap(True)
         self.failure_detail.hide()
         layout.addWidget(self.failure_detail)
-        self.next_step = QtWidgets.QLabel("Next: Home / park XY, then reference the border.")
+        self.next_step = WrappedStatusLabel("Next: Home / park XY, then reference the border.")
         self.next_step.setObjectName("focusNextStep")
         self.next_step.setWordWrap(True)
         self.next_step.setStyleSheet("font-weight: bold; padding: 6px;")
@@ -194,7 +194,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "The retained clearance restriction remains until a separate border reference."
         )
         recovery_layout.addWidget(self.recover_xy)
-        self.xy_recovery_note = QtWidgets.QLabel(
+        self.xy_recovery_note = WrappedStatusLabel(
             "Z stays at its current height. Then separately confirm headroom and reference the border."
         )
         self.xy_recovery_note.setWordWrap(True)
@@ -212,7 +212,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.clearance_label = QtWidgets.QLabel("Clearance Z")
         grid.addWidget(self.clearance_label, 0, 0)
         grid.addWidget(self.clearance, 0, 1)
-        self.range_note = QtWidgets.QLabel("Measurement range awaits firmware readback")
+        self.range_note = WrappedStatusLabel("Measurement range awaits firmware readback")
         self.range_note.setWordWrap(True)
         grid.addWidget(self.range_note, 0, 2, 1, 2)
         self.path_clear = QtWidgets.QCheckBox("Headroom and Z path clear to the selected clearance")
@@ -226,13 +226,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.position_probe.setCheckable(True)
         self.position_probe.setStyleSheet("QPushButton:checked { border: 1px solid #ffcf40; color: #ffcf40; }")
         self.position_probe.setToolTip(f"Select a probe target in the {self._camera_location}.")
-        self.camera_target = QtWidgets.QLabel(self._camera_prompt)
+        self.camera_target = WrappedStatusLabel(self._camera_prompt)
         self.camera_target.setWordWrap(True)
         grid.addWidget(self.position_probe, 4, 0, 1, 4)
         grid.addWidget(self.camera_target, 6, 0, 1, 4)
         self.position_probe.toggled.connect(self.cameraModeRequested)
         self.position_probe.clicked.connect(self._position_probe)
-        self.offset_readout = QtWidgets.QLabel("Probe XY offset: not set · use a wide, flat patch")
+        self.offset_readout = WrappedStatusLabel("Probe XY offset: not set · use a wide, flat patch")
         self.offset_readout.setWordWrap(True)
         grid.addWidget(self.offset_readout, 9, 0, 1, 4)
         self.align_probe = QtWidgets.QPushButton("Put probe over laser spot")
@@ -251,7 +251,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             grid.removeWidget(self.clear_surface)
             grid.addWidget(self.align_laser, 12, 2, 1, 2)
             grid.addWidget(self.clear_surface, 13, 0, 1, 4)
-        self.position_note = QtWidgets.QLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
+        self.position_note = WrappedStatusLabel("Remove the gauge and keep the full XY path clear. Measure only a solid, flat target with room for probe deployment.")
         if not calibration_mode:
             self.position_note.setText(
                 "Measure surface sets cut focus and the 7 mm raster surface gap on this flat workpiece. "
@@ -290,7 +290,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         if calibration_mode:
             self.offset_editor = QtWidgets.QGroupBox("Probe / laser XY offset")
             offset_layout = QtWidgets.QGridLayout(self.offset_editor)
-            offset_note = QtWidgets.QLabel(
+            offset_note = WrappedStatusLabel(
                 "Measured probe position relative to laser center, in machine axes: "
                 "probe = laser + offset. Leave unset until measured."
             )
@@ -312,7 +312,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
 
             teach = QtWidgets.QGroupBox("Teach once with the 7 mm gauge")
             teach_layout = QtWidgets.QGridLayout(teach)
-            hint = QtWidgets.QLabel(
+            hint = WrappedStatusLabel(
                 "Approach with 1, 2 or 5 mm steps only while there is room for the whole step. "
                 "Switch to 0.1 mm near the 7 mm gauge fit. Remove the gauge before each move; "
                 "fit it between the laser reference face and this same surface."
@@ -334,7 +334,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             teach_layout.addWidget(self.gauge, 2, 0, 1, 4)
             self.forget = QtWidgets.QPushButton("Forget taught offset")
             teach_layout.addWidget(self.forget, 3, 3)
-            self.teaching_limits = QtWidgets.QLabel()
+            self.teaching_limits = WrappedStatusLabel()
             self.teaching_limits.setWordWrap(True)
             teach_layout.addWidget(self.teaching_limits, 4, 0, 1, 4)
             layout.addWidget(teach)
@@ -357,23 +357,23 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.manual_thickness.setSuffix(" mm")
         self.manual_thickness.setPrefix("Material thickness: ")
         self.manual_apply = QtWidgets.QPushButton("Apply workpiece height")
-        self.manual_note = QtWidgets.QLabel(
+        self.manual_note = WrappedStatusLabel(
             "Enter material thickness and any spacers (0 for none). Applying confirms one flat "
             "workpiece, correct dimensions, gauge removed and clear travel paths. Uses the saved "
             "honeycomb height and current machine Z reference; no probing or movement. "
             "Clear the workpiece height before changing these values, then generate the job again."
         )
         self.manual_note.setWordWrap(True)
-        self.thickness_note = QtWidgets.QLabel("Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: waiting for saved height.")
+        self.thickness_note = WrappedStatusLabel("Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: waiting for saved height.")
         self.thickness_note.setWordWrap(True)
         self.gap = QtWidgets.QComboBox()
         for gap in (7.0, 5.0, 3.0):
             self.gap.addItem(f"{gap:g} mm gap", gap)
         self.preview = QtWidgets.QPushButton("Preview target")
         self.move = QtWidgets.QPushButton("Move to focus")
-        self.target = QtWidgets.QLabel("Target Z: preview required")
+        self.target = WrappedStatusLabel("Target Z: preview required")
         self.target.setWordWrap(True)
-        self.move_note = QtWidgets.QLabel()
+        self.move_note = WrappedStatusLabel()
         self.move_note.setWordWrap(True)
         self.move_note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         focus_layout.addWidget(self.gap, 0, 0)
@@ -382,14 +382,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
         focus_layout.addWidget(self.move, 4, 0, 1, 3)
         focus_layout.addWidget(self.target, 1, 0, 1, 3)
         self.use_job = QtWidgets.QPushButton("Use measured focus for next job")
-        self.job_note = QtWidgets.QLabel("Job focus: not selected. Preview the measured surface, then select.")
+        self.job_note = WrappedStatusLabel("Job focus: not selected. Preview the measured surface, then select.")
         self.job_note.setWordWrap(True)
-        self.move_confirmation = QtWidgets.QLabel(
+        self.move_confirmation = WrappedStatusLabel(
             "Choosing Move to focus confirms the gauge is removed and the path to the target is clear."
         )
         self.move_confirmation.setWordWrap(True)
         focus_layout.addWidget(self.move_confirmation, 2, 0, 1, 3)
-        self.job_confirmation = QtWidgets.QLabel(
+        self.job_confirmation = WrappedStatusLabel(
             "Choosing Use measured focus for next job confirms one flat surface across the job, "
             "the gauge removed, and clear Z and travel paths."
         )
@@ -418,7 +418,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.manual_apply.clicked.connect(lambda: self.request("set_workpiece_height"))
         layout.addWidget(self.preview_group)
         footer = QtWidgets.QHBoxLayout()
-        self.message = QtWidgets.QLabel("Connect the machine, then refresh focus support.")
+        self.message = WrappedStatusLabel("Connect the machine, then refresh focus support.")
         self.message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.message.setWordWrap(True)
         self.refresh = QtWidgets.QPushButton("Refresh")
@@ -1638,7 +1638,7 @@ class LaserFocusWorkspace(QtWidgets.QWidget):
             # The Machine inspector already scrolls; daily positioning uses
             # the calibrated image in the main workspace.
             self.panel.layout().setContentsMargins(0, 0, 0, 0)
-            note = QtWidgets.QLabel(
+            note = WrappedStatusLabel(
                 "Select in the main view on the left. Camera targets use the bed plane; "
                 "raised surfaces are not height-corrected. Check the actual probe, surface and clearance."
             )

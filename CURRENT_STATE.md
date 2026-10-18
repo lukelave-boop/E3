@@ -1,5 +1,40 @@
 # Current repository state
 
+## Stop job interruption and Z status layout (2026-10-18, in progress)
+
+The operator reports manual height working in 0.8.32 (4 mm material, no spacers),
+but Stop job displayed Stopping and let the short path finish. Red STOP was not
+pressed. Read-only authenticated Pi status records that run as stopped, 12/15
+lines, about 38.64 seconds, no error, controller READY_MOTION/disarmed. This is
+consistent with the old normal-cancel contract draining already accepted motion;
+it is not evidence that the red STOP path failed. The controller remained owned
+by the desktop and was not connected, stopped or reconfigured by diagnostics.
+
+Desktop Stop job now directly invokes the existing priority
+request_stop(emergency=True), emits the existing queued-operation invalidation,
+and bypasses ordinary worker admission. It interrupts rather than drains the
+planner, never resumes a paused job, and preserves the existing controller/Z/
+focus authority revocation and recovery requirements. The red STOP remains
+independently available. The existing Pi job.stop protocol and all backend code
+are unchanged; no Pi update or restart is required. Legacy job.cancel remains
+available for older clients. This affects desktop controls, not browser dispatch.
+
+The operator also reports clipped Z text. An offscreen real-window regression
+reproduced a wrapped paragraph allocated 81 pixels when 133 were required at a
+narrow width. Z/focus labels now reserve their current wrapped height as text,
+font and width change, allowing scrolling. Narrow/wide and 10/14-point layout
+checks pass, including manual height and the previous compact panel regressions.
+
+Windows Python 3.14 focused regression coverage: 565 passed across desktop
+layout/focus, runtime controls, real MachineService fake-transport interruption,
+streaming, cancellation and remote facade tests. The final priority-stop handler
+checks pass again (22). Tests with all four short-path moves queued and ACKs
+withheld show abort/reset and M5 without queue completion, no paused cycle-start,
+revoked authority and rejected restart. Repository Ruff, compileall and diff
+checks pass. Source widgets were rendered offscreen; interactive GUI and physical
+stop acceptance remain pending. Full Windows compatibility and canonical frozen
+delivery are still pending. All work is isolated from the dirty shared checkout.
+
 ## Manual workpiece height (2026-10-18)
 
 Merged through [PR64](https://github.com/lukelave-boop/E3/pull/64) at

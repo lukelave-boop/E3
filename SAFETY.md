@@ -5,14 +5,15 @@
 An explicit manual workpiece height may replace workpiece probing, using operator-entered thickness and spacers. It cannot establish the machine Z reference or teach gauge calibration. A compatible gauge, current reference/session, known position at clearance and existing surface/Z limits remain mandatory. Applying is idle/disarmed and sends no movement or probe command. Manual dimensions are unverified assertions, identified in the UI; the existing guarded job path remains authoritative. Changing height requires regenerating the job. This feature is not safety-rated.
 
 
-Normal **Stop job** is not an immediate stop: accepted buffered moves may
-continue emitting while the queue drains. The stopped result requires acknowledged
-M5, auxiliary OFF, motion completion and any required verified clearance lift.
-Paused cancellation must explicitly authorize completing that buffered tail;
-it never silently resumes. Successful cancellation may retain verified session
-and workpiece authority, but grants no new laser authorization. Failed cleanup
-uses the existing quarantine/fail-off path. The red software STOP remains
-independent and neither control is safety-rated.
+Desktop **Stop job** uses the existing priority `request_stop(emergency=True)`
+path. On GRBL it requests feed hold/reset and M5 rather than waiting for accepted
+planner motion to finish. It never resumes a paused job, moves to clearance or
+homes automatically. Controller, coordinate and workpiece authority are revoked;
+recovery and referencing precede another job. A returned request is not physical
+stop verification. Both it and the independently available red software STOP
+request emergency secondary interruption. Neither control is safety-rated.
+The legacy `job.cancel` RPC remains a buffered-tail drain for older clients; the
+current desktop Stop job button does not use it.
 
 Compressed uploads are inert transport data. Input frames, compressed pieces,
 expanded chunks and total job size are bounded independently. Only exact decoded
