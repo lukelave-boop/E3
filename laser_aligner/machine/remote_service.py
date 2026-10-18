@@ -33,9 +33,14 @@ from .job_focus import CAPABILITY as JOB_FOCUS_CAPABILITY
 from .job_focus import WORKPIECE_FOCUS_CAPABILITY
 from .job_focus import attach as attach_job_focus
 from .laser_focus import CLICK_CAPABILITY as FOCUS_CLICK_CAPABILITY
+from .laser_focus import (
+    MANUAL_HEIGHT_CAPABILITY,
+    THICKNESS_CAPABILITY,
+    validate_setup_evidence,
+    validate_thickness_plan,
+)
 from .laser_focus import PI_CAPABILITY as FOCUS_CAPABILITY
 from .laser_focus import RECOVERY_CAPABILITY as FOCUS_RECOVERY_CAPABILITY
-from .laser_focus import THICKNESS_CAPABILITY, validate_setup_evidence, validate_thickness_plan
 from .laser_focus import XY_CAPABILITY as FOCUS_XY_CAPABILITY
 from .laser_focus import XY_RECOVERY_CAPABILITY as FOCUS_XY_RECOVERY_CAPABILITY
 from .laser_focus import validate_request as validate_focus_request
@@ -2140,7 +2145,9 @@ class RemoteMachineService:
         self._require_controller_session_capability()
         if FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the E3 Pi service to use taught laser focus")
-        if action in {"measure_workpiece", "set_honeycomb_height"} and THICKNESS_CAPABILITY not in (self._node_capabilities or ()):
+        if action == "set_workpiece_height" and MANUAL_HEIGHT_CAPABILITY not in (self._node_capabilities or ()):
+            raise MachineError("Update the Pi companion before entering manual workpiece height")
+        if action in {"measure_workpiece", "set_honeycomb_height", "set_workpiece_height"} and THICKNESS_CAPABILITY not in (self._node_capabilities or ()):
             self._job_focus_required = True
             self._selected_job_focus = None
             raise MachineError("Update the Pi companion before measuring thickness-based focus")
@@ -2151,7 +2158,7 @@ class RemoteMachineService:
         if action == "use_job" and JOB_FOCUS_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the Pi companion before selecting measured job focus")
         workpiece_supported = WORKPIECE_FOCUS_CAPABILITY in (self._node_capabilities or ())
-        if action in {"measure", "measure_workpiece", "set_job_gap"} and not workpiece_supported:
+        if action in {"measure", "measure_workpiece", "set_workpiece_height", "set_job_gap"} and not workpiece_supported:
             self._job_focus_required = True
             self._selected_job_focus = None
             raise MachineError("Update the Pi companion before measuring automatic workpiece focus")
@@ -2172,7 +2179,14 @@ class RemoteMachineService:
                 "measurement_id": measurement_id, "preview_id": preview_id,
             }, timeout=_FOCUS_XY_RECOVERY_RPC_TIMEOUT_SECONDS if action == "recover_xy" else 125.0)
         result = self._response_mapping(response, "result")
-        if action == "measure_workpiece" and (
+        if action == "set_workpiece_height":
+            plan = result.get("job_focus")
+            if (result.get("manual_height_available") is not True or type(plan) is not dict
+                    or plan.get("height_source") != "manual" or plan.get("entered_height") != value):
+                self._job_focus_required = True
+                self._selected_job_focus = None
+                raise PiJobProtocolError("Pi did not confirm the entered workpiece height")
+        if action in {"measure_workpiece", "set_workpiece_height"} and (
             result.get("thickness_focus_available") is not True
             or (result.get("job_focus") is not None
                 and (type(result["job_focus"]) is not dict
@@ -2260,6 +2274,7 @@ class RemoteMachineService:
                 self._cache_workpiece_focus(result)
         result["workpiece_focus_available"] = workpiece_supported
         result["thickness_focus_available"] = THICKNESS_CAPABILITY in (self._node_capabilities or ())
+        result["manual_height_available"] = MANUAL_HEIGHT_CAPABILITY in (self._node_capabilities or ())
         if not workpiece_supported and action == "use_job":
             plan = result.get("job_focus")
             if type(plan) is not dict:

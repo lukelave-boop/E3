@@ -1,5 +1,10 @@
 # Safety requirements
 
+## Manual workpiece height
+
+An explicit manual workpiece height may replace workpiece probing, using operator-entered thickness and spacers. It cannot establish the machine Z reference or teach gauge calibration. A compatible gauge, current reference/session, known position at clearance and existing surface/Z limits remain mandatory. Applying is idle/disarmed and sends no movement or probe command. Manual dimensions are unverified assertions, identified in the UI; the existing guarded job path remains authoritative. Changing height requires regenerating the job. This feature is not safety-rated.
+
+
 Normal **Stop job** is not an immediate stop: accepted buffered moves may
 continue emitting while the queue drains. The stopped result requires acknowledged
 M5, auxiliary OFF, motion completion and any required verified clearance lift.

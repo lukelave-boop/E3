@@ -1,5 +1,31 @@
 # Surface height and gauge-taught laser focus
 
+## Manual workpiece height
+
+In **Machine → Workpiece focus**, choose **Enter workpiece height manually**.
+Enter the material thickness and **Spacers** (zero when resting directly on the
+honeycomb), then choose **Apply manual workpiece height**. This skips workpiece
+probing. The machine still needs current XY/Z references, compatible saved gauge
+calibration, and verified position at the selected clearance. The desktop and Pi
+must both support `pi-manual-workpiece-height-v1`.
+
+Top elevation = saved honeycomb height + material thickness + spacers. The saved
+border datum and taught gauge offset determine Z. Cut/Fill use the existing
+thickness-derived gap; Raster uses 7 mm above the top. Both targets and the
+surface envelope must fit the existing clearance and configured limits.
+Applying sends no probe, positioning, arming or emission command. The selected
+height is labelled **Manual entry** and is an operator assertion, not a measured
+surface. It cannot be used for gauge teaching or calibration positioning.
+
+Generate and review the job after applying. To change dimensions, clear the
+workpiece height, enter and apply the new values, and regenerate. Old generated
+jobs retain their old focus binding and cannot start using a replacement height.
+Height is retained through normal successful jobs and verified parking, but
+cleared by STOP, disconnect, changed datum or lost controller/reference authority.
+No manual setting establishes unknown machine Z. Physical focus accuracy and
+operator dimensions remain unverified until tested on the actual setup.
+
+
 ## Recognizing existing gauge calibration
 
 Use the setup wizard's **Check progress** to refresh current controller evidence.

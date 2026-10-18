@@ -1,5 +1,10 @@
 # Changelog
 
+## Manual workpiece height
+
+Added an explicit manual material-thickness and spacer-height option to daily Workpiece focus. Applying creates a labelled, session-bound focus selection without probing or moving; replacing it invalidates old generated-job bindings. Existing machine reference, clearance and laser guards remain required.
+
+
 - Add Take control for unowned running Pi jobs, fixing disabled Pause after
   desktop detachment or lease expiry without resetting the active controller.
 - Add normal Stop job with bounded command admission, buffered-tail draining,

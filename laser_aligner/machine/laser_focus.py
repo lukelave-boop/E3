@@ -28,12 +28,13 @@ CLICK_CAPABILITY = "pi-laser-focus-click-v1"
 RECOVERY_CAPABILITY = "pi-laser-focus-recovery-v1"
 XY_RECOVERY_CAPABILITY = "pi-laser-focus-xy-recovery-v1"
 THICKNESS_CAPABILITY = "pi-thickness-focus-v2"
+MANUAL_HEIGHT_CAPABILITY = "pi-manual-workpiece-height-v1"
 # Operator-reported rig datum (2026-09-06), explicitly selected for this workflow.
 HONEYCOMB_HEIGHT_MM = -1.5
 THICKNESS_POLICY = "linear-0-6mm-v2"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece", "set_honeycomb_height"}
+           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece", "set_honeycomb_height", "set_workpiece_height"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -58,12 +59,29 @@ def thickness_focus(elevation_mm, spacer_mm, honeycomb_height_mm=HONEYCOMB_HEIGH
 
 def validate_thickness_plan(plan):
     """Recheck the derived values at remote observation and job admission."""
+    if plan.get("height_source") == "manual":
+        values = validate_manual_height(plan.get("entered_height"))
+        border = finite_number(plan["reference"]["border_z_mm"], "Border reference", -.5, .5)
+        honeycomb = finite_number(plan["honeycomb_height_mm"], "Honeycomb height", -10, 10)
+        expected_contact = honeycomb + values["material_thickness_mm"] + values["spacer_thickness_mm"] + border
+        if (plan.get("surface_elevation_mm") != expected_contact - border
+                or plan.get("contact_z_mm") != expected_contact
+                or "focus_policy" not in plan):
+            raise SafetyError("Manual workpiece height changed; enter the height again")
     if "focus_policy" not in plan:
         return
     derived = thickness_focus(plan.get("surface_elevation_mm"), plan.get("spacer_thickness_mm"),
                               plan.get("honeycomb_height_mm"))
     if any(plan.get(key) != value for key, value in derived.items()):
         raise SafetyError("Thickness-derived focus changed; measure the workpiece again")
+
+
+def validate_manual_height(value):
+    if type(value) is not dict or set(value) != {"material_thickness_mm", "spacer_thickness_mm"}:
+        raise SafetyError("Enter material thickness and spacer height in millimetres")
+    finite_number(value["material_thickness_mm"], "Material thickness", 0, 100)
+    finite_number(value["spacer_thickness_mm"], "Spacer thickness", 0, 80)
+    return dict(value)
 
 
 def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
@@ -76,7 +94,9 @@ def validate_request(action, confirmed=False, value=None, clearance_z_mm=30.0,
     finite_number(gap_mm, "Focus gauge gap", 3, 7)
     if gap_mm not in (3, 5, 7):
         raise SafetyError("Select a 3, 5 or 7 mm focus gap")
-    if action == "measure_workpiece":
+    if action == "set_workpiece_height":
+        validate_manual_height(value)
+    elif action == "measure_workpiece":
         finite_number(value, "Spacer thickness", 0, 80)
     elif action == "set_honeycomb_height":
         finite_number(value, "Honeycomb height", -10, 10)
@@ -556,6 +576,8 @@ class LaserFocus:
             return contact
 
         def measured():
+            if self.surface is not None and self.surface.get("height_source") == "manual":
+                raise SafetyError("Probe the surface before gauge teaching or calibration positioning")
             if self.surface is None or measurement_id != self.surface["id"]:
                 raise SafetyError("Surface measurement changed; measure and preview again")
             if clearance < self.surface["contact_z_mm"] + 15:
@@ -640,6 +662,42 @@ class LaserFocus:
                 self.surface["carriage_xy_mm"] = list(xy)
             if action == "align_laser" and self.job_plan is not None:
                 self.job_plan["xy"] = list(xy)
+        elif action == "set_workpiece_height":
+            # A manual assertion uses the existing machine datum and gauge;
+            # it is never evidence of probe contact or a new Z reference.
+            self.job_focus_required = True
+            self.clear_surface()
+            self.job_focus_block_reason = "Enter a valid workpiece height or measure the surface before jobs"
+            known()
+            if self.reference is None or self.xy_recovery_pending_reference:
+                raise SafetyError("Reference the border before entering workpiece height")
+            if not compatible:
+                raise SafetyError("Teach the 7 mm focus gauge before entering workpiece height")
+            if self.requires_clearance or abs(current - clearance) > .05:
+                raise SafetyError("Return to the selected clearance before entering workpiece height")
+            entered = validate_manual_height(value)
+            elevation = (self.honeycomb_height_mm + entered["material_thickness_mm"]
+                         + entered["spacer_thickness_mm"])
+            contact = finite_number(elevation + self.reference["border_z_mm"],
+                                    "Manual surface datum", geometry["min_mm"], min(geometry["max_mm"], clearance - 15))
+            elevation = contact - self.reference["border_z_mm"]
+            derived = thickness_focus(elevation, entered["spacer_thickness_mm"], self.honeycomb_height_mm)
+            target = contact + self.calibration["focus_offset_mm"] + derived["gap_mm"] - 7
+            raster_target = contact + self.calibration["focus_offset_mm"]
+            if not (0 <= target <= maximum and target < clearance
+                    and 0 <= raster_target <= maximum and raster_target < clearance):
+                raise SafetyError("Manual workpiece focus exceeds the available Z clearance")
+            self.surface = dict(id=str(uuid.uuid4()), contact_z_mm=contact, elevation_mm=elevation,
+                                carriage_xy_mm=list(xy), height_source="manual", entered_at=time.time(),
+                                entered_height=entered, **derived)
+            self._select_measured_job(firmware=firmware, geometry=geometry, maximum=maximum,
+                                     session=session, xy=xy, current=current, clearance=clearance,
+                                     gap=derived["gap_mm"], compatible=compatible)
+            if self.job_plan is None:
+                self.clear_surface()
+                raise SafetyError(self.job_focus_block_reason)
+            self.job_plan.update(derived, height_source="manual", entered_height=entered)
+            self.job_focus_block_reason = "Manual workpiece height is no longer current; enter it again"
         elif action == "measure":
             self.job_focus_required = True
             self.job_plan = None
@@ -791,6 +849,7 @@ class LaserFocus:
                               "reference": self.reference,
                               "reference_id": self._reference_id if self.reference is not None else None,
                               "thickness_focus_available": True,
+                              "manual_height_available": True,
                               "workpiece_focus_available": True,
                               "honeycomb_height_mm": self.honeycomb_height_mm,
                               "honeycomb_height_persistent": self.honeycomb_path is not None,

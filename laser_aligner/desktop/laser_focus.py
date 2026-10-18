@@ -348,6 +348,22 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.spacers.setSuffix(" mm")
         self.spacers.setPrefix("Spacers: ")
         self.spacers.setToolTip("Total spacer thickness under the material. Clear measurement before changing this value.")
+        self.height_mode = QtWidgets.QComboBox()
+        self.height_mode.addItem("Probe workpiece", "probe")
+        self.height_mode.addItem("Enter workpiece height manually", "manual")
+        self.manual_thickness = MeasurementSpinBox()
+        self.manual_thickness.setRange(0, 100)
+        self.manual_thickness.setDecimals(3)
+        self.manual_thickness.setSuffix(" mm")
+        self.manual_thickness.setPrefix("Material thickness: ")
+        self.manual_apply = QtWidgets.QPushButton("Apply manual workpiece height")
+        self.manual_note = QtWidgets.QLabel(
+            "Enter material thickness and any spacers (0 for none). Applying confirms one flat "
+            "workpiece, correct dimensions, gauge removed and clear travel paths. Uses the saved "
+            "honeycomb height and current machine Z reference; no probing or movement. "
+            "Clear the workpiece height before changing these values, then generate the job again."
+        )
+        self.manual_note.setWordWrap(True)
         self.thickness_note = QtWidgets.QLabel("Cut gap: 7 → 3 mm over 0 → 6 mm material thickness. Raster gap: 7 mm above surface. Honeycomb: waiting for saved height.")
         self.thickness_note.setWordWrap(True)
         self.gap = QtWidgets.QComboBox()
@@ -388,12 +404,18 @@ class LaserFocusPanel(QtWidgets.QWidget):
             while focus_layout.count():
                 focus_layout.takeAt(0)
             for row, control in enumerate((
-                self.spacers, self.thickness_note, self.target, self.job_note,
+                self.height_mode, self.manual_thickness, self.spacers, self.manual_note, self.manual_apply,
+                self.thickness_note, self.target, self.job_note,
             )):
                 focus_layout.addWidget(control, row, 0)
         else:
             self.spacers.hide()
             self.thickness_note.hide()
+        self.height_mode.setVisible(not calibration_mode)
+        for control in (self.manual_thickness, self.manual_note, self.manual_apply):
+            control.hide()
+        self.height_mode.currentIndexChanged.connect(lambda _index: self._sync())
+        self.manual_apply.clicked.connect(lambda: self.request("set_workpiece_height"))
         layout.addWidget(self.preview_group)
         footer = QtWidgets.QHBoxLayout()
         self.message = QtWidgets.QLabel("Connect the machine, then refresh focus support.")
@@ -639,6 +661,15 @@ class LaserFocusPanel(QtWidgets.QWidget):
             self._honeycomb_edited = False
         job_focus = result.get("job_focus")
         if not self.calibration_mode and isinstance(job_focus, Mapping) and job_focus.get("reusable") is True:
+            manual = job_focus.get("height_source") == "manual"
+            blocker = QtCore.QSignalBlocker(self.height_mode)
+            self.height_mode.setCurrentIndex(1 if manual else 0)
+            del blocker
+            if manual:
+                entered = job_focus.get("entered_height") or {}
+                thickness = _number(entered.get("material_thickness_mm"))
+                if thickness is not None and 0 <= thickness <= 100:
+                    self.manual_thickness.setValue(thickness)
             spacer = _number(job_focus.get("spacer_thickness_mm"))
             if spacer is not None and 0 <= spacer <= 80:
                 blocker = QtCore.QSignalBlocker(self.spacers)
@@ -720,7 +751,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
                         "Preview is no longer current; choose Preview target again."),
             "move": "Focus position reached. Return to clearance before moving XY or changing the workpiece.",
             "clearance": "At clearance. XY positioning and workpiece changes can resume.",
-            "clear_surface": "Surface measurement cleared.",
+            "clear_surface": "Workpiece height cleared.",
+            "set_workpiece_height": "Manual workpiece height applied. Generate and preview the job again.",
             "forget": "Taught offset forgotten.",
             "forget_z": "Saved Z forgotten. Reference the border again. The taught gauge offset is kept.",
             "set_xy_offset": "Measured XY offset saved. Align the laser visually over your target, then put the probe there.",
@@ -955,6 +987,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             for editor in (self.offset_x, self.offset_y):
                 editor.setEnabled(bool(idle and xy_available))
         if self.calibration_mode:
+            surface = surface and (self._result.get("surface") or {}).get("height_source") != "manual"
             teach_ready = moving and reference and surface and known and not probe_phase
             step = float(self.z_step.currentData())
             measured = self._result.get("surface") or {}
@@ -988,7 +1021,26 @@ class LaserFocusPanel(QtWidgets.QWidget):
         )
         workpiece_ready = self._sync_workpiece_focus() if not self.calibration_mode else False
         if not self.calibration_mode:
-            self.spacers.setEnabled(bool(ready and not surface and not job_focus))
+            editable = bool(ready and not surface and not job_focus)
+            self.spacers.setEnabled(editable)
+            self.height_mode.setEnabled(editable)
+            manual = self.height_mode.currentData() == "manual"
+            for control in (self.manual_thickness, self.manual_note, self.manual_apply):
+                control.setVisible(manual)
+            self.manual_thickness.setEnabled(editable)
+            self.manual_apply.setEnabled(bool(
+                manual and editable and moving and known and reference and not requires_clearance
+                and not recovery_reference_only and z is not None and clearance is not None
+                and abs(z - clearance) <= .05 and self._result.get("calibration_compatible") is True
+                and self._result.get("manual_height_available") is True
+            ))
+            self.manual_apply.setToolTip(
+                "Apply the entered dimensions without moving or probing."
+                if self._result.get("manual_height_available") is True else
+                "Update the Pi companion to use manual workpiece height."
+            )
+            if manual:
+                self.measure.setEnabled(False)
             if self._result.get("thickness_focus_available") is not True:
                 self.measure.setEnabled(False)
         self.move_note.setText(
@@ -1016,7 +1068,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Next: Confirm the Z path, then reference the border." if reference_only else
             "Next: Confirm the clear path, then Home / park XY; the saved Z needs no border probe."
             if home_action == "home_retained" and not projection.can_jog else
-            "Workpiece focus is ready for every job. Measure again after changing the material or supports."
+            "Workpiece focus is ready for every job. Reapply the height or measure again after changing the material or supports."
             if workpiece_ready and not self._camera_target and not self.position_probe.isChecked() else
             "Next: Confirm the clear path, then choose Home / park + reference." if not reference else
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
@@ -1068,10 +1120,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             target = _number(plan.get("target_z_mm"))
             clearance = _number(plan.get("clearance_z_mm"))
             if gap is not None and target is not None and clearance is not None:
-                self.target.setText(f"Material: {thickness:.3f} mm · cut gap: {gap:.3f} mm\nCut Z: {target:.3f} mm · Raster gap: 7 mm above surface")
+                source = "Manual entry · " if plan.get("height_source") == "manual" else ""
+                self.target.setText(f"{source}Material: {thickness:.3f} mm · cut gap: {gap:.3f} mm\nCut Z: {target:.3f} mm · Raster gap: 7 mm above surface")
                 self.job_note.setText(
                     f"Jobs use cut focus or the 7 mm raster gap and travel at Z{clearance:g} mm. "
-                    "Measure again after changing the material or its supports."
+                    "Reapply the height or measure again after changing the material or its supports."
                 )
                 return True
         self.job_note.setText(
@@ -1105,7 +1158,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "measure": self.measure, "teach": self.teach,
             "preview": self.preview, "use_job": self.use_job, "move": self.move, "clearance": self.return_clearance,
             "clear_surface": self.clear_surface, "forget": self.forget, "forget_z": self.forget_z,
-            "set_honeycomb_height": self.save_honeycomb,
+            "set_honeycomb_height": self.save_honeycomb, "set_workpiece_height": self.manual_apply,
             "set_xy_offset": self.apply_offset, "align_probe": self.align_probe, "align_laser": self.align_laser,
             "recover": self.reconnect_ender, "recover_xy": self.recover_xy,
         }.get(action)
@@ -1138,6 +1191,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
         if action in {"jog", "home_reference", "home_retained", "reference", "measure", "move", "clearance",
                       "set_xy_offset", "align_probe", "align_laser"}:
             self._reset_checks(self.gauge)
+        if action == "set_workpiece_height":
+            if not self.manual_thickness.hasAcceptableInput() or not self.spacers.hasAcceptableInput():
+                return
+            self.manual_thickness.interpretText()
+            self.spacers.interpretText()
+            arguments["value"] = {"material_thickness_mm": float(self.manual_thickness.value()),
+                                  "spacer_thickness_mm": float(self.spacers.value())}
         if action == "measure" and not self.calibration_mode:
             if not self.spacers.hasAcceptableInput():
                 return
@@ -1362,6 +1422,9 @@ class LaserFocusCoordinator(QtCore.QObject):
     def request(self, action: str, arguments: dict[str, Any]) -> None:
         if (self._closed or self._suspended or self._modal_blocked()
                 or self._busy or not _read_allowed(self._status)):
+            return
+        if action == "set_workpiece_height" and (arguments.get("confirmed") is not True
+                                                   or not self.panel.manual_apply.isEnabled()):
             return
         if action in {"preview", "move", "use_job"} and not self.panel.calibration_mode:
             return
