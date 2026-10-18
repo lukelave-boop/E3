@@ -2,9 +2,9 @@
 
 ## Manual workpiece height
 
-In **Machine → Workpiece focus**, choose **Enter workpiece height manually**.
+In **Machine → Workpiece focus**, choose **Manual height**.
 Enter the material thickness and **Spacers** (zero when resting directly on the
-honeycomb), then choose **Apply manual workpiece height**. This skips workpiece
+honeycomb), then choose **Apply workpiece height**. This skips workpiece
 probing. The machine still needs current XY/Z references, compatible saved gauge
 calibration, and verified position at the selected clearance. The desktop and Pi
 must both support `pi-manual-workpiece-height-v1`.

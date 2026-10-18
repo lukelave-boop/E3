@@ -350,13 +350,13 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.spacers.setToolTip("Total spacer thickness under the material. Clear measurement before changing this value.")
         self.height_mode = QtWidgets.QComboBox()
         self.height_mode.addItem("Probe workpiece", "probe")
-        self.height_mode.addItem("Enter workpiece height manually", "manual")
+        self.height_mode.addItem("Manual height", "manual")
         self.manual_thickness = MeasurementSpinBox()
         self.manual_thickness.setRange(0, 100)
         self.manual_thickness.setDecimals(3)
         self.manual_thickness.setSuffix(" mm")
         self.manual_thickness.setPrefix("Material thickness: ")
-        self.manual_apply = QtWidgets.QPushButton("Apply manual workpiece height")
+        self.manual_apply = QtWidgets.QPushButton("Apply workpiece height")
         self.manual_note = QtWidgets.QLabel(
             "Enter material thickness and any spacers (0 for none). Applying confirms one flat "
             "workpiece, correct dimensions, gauge removed and clear travel paths. Uses the saved "

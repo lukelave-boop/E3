@@ -2,6 +2,20 @@
 
 ## Manual workpiece height (2026-10-18, in progress)
 
+First compatibility run 39128557248 passed Windows core, POSIX and Ruff, but
+Windows desktop exposed three compact-panel regressions (426 px minimum versus
+420 px allowed; 9,207 other tests passed). Shortened the mode selector and Apply
+labels; all 48 focused layout/manual-height/daily-focus tests now pass, including
+an added real-window manual-mode fit case. No controller code changed in this
+correction. Frozen 0.8.31 / 410cd3a was archive/hash/profile verified but was never
+selected or installed. A corrected canonical build and full CI are required.
+
+The exact two-file Pi kit passed read-only checks against installed predecessors;
+the Pi was idle, disconnected, disarmed and unowned. Automatic approval review
+blocked the deployment helper before staging or restart. The operator then
+explicitly approved installation after tests pass. That approval remains pending
+execution; no machine connection, motion, arming or laser test was performed.
+
 Isolated `codex/manual-workpiece-height` begins at authoritative main a85353a;
 unrelated shared-checkout edits are preserved. Daily Workpiece focus adds direct
 material thickness plus optional spacer height, using the saved honeycomb datum
