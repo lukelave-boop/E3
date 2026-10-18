@@ -18,32 +18,43 @@ edited program. Paused cancellation requires explicit confirmation to resume the
 buffered tail, which may emit output. Faults and the existing red STOP still
 revoke authority. Both features require the pi-job-controls-v1 companion.
 
-Implemented in isolated codex/job-controls from current main. Initial Windows
-fake-controller/offscreen coverage passes 68 existing pause/stream/widget cases,
-14 new cancellation cases, 77 authenticated ownership/UI cases and two measured
-focus cancellation/cleanup-failure cases. Broader focused checks, compatibility
-CI, frozen packaging and Pi deployment remain pending. The live job was only
-observed, never paused, stopped or changed. Exact installed Pi sources were read
-and a four-file patch staged; cooling and local restrictions are preserved.
-Expanded local Windows verification: 746 focused machine/runner/focus/remote/desktop
-cases pass with four workers. A separate 77-case ownership/loopback cohort and
-28 final cancellation/widget checks pass, including nonmodal paused confirmation
-and emergency STOP overtaking a pending cancel/resume write. All 26 runtime-strip
-layout/action tests pass with the new control included. Ruff/compileall/diff checks
-pass. Initial loopback attempts were blocked by sandbox sockets; authorized
-unsandboxed fake-controller runs passed. Compatibility and frozen checks continue.
+Merged through [PR63](https://github.com/lukelave-boop/E3/pull/63) at
+`9c1ec60773e6a9c17e9e55005e363af3046f52a9`; the merge tree exactly matches
+verified candidate `c2fff5986cf36df057998bc6405a4e1a6be91312`. The completed
+branch was deleted locally and remotely. Compatibility run 39089318344 passes:
+Windows Python 3.10: 7528 passed/186 skipped; Windows Python 3.12 desktop:
+9158 passed/69 skipped; POSIX controller recovery: 1521 passed/2 skipped; Ruff
+passed. Canonical Windows packaging run 39089325759 also passes. Local focused
+coverage included 746 machine/runner/focus/remote/desktop cases and 77 ownership,
+RPC and widget cases. Compileall and diff checks pass.
 
-The initial full compatibility run passed Windows 3.10, Ruff and the POSIX
-controller tier; Windows 3.12 reported three native Qt worker crashes during
-later widget teardown. The focused mixed widget cohort reproduced the crash.
-Explicit deferred deletion in the new pause/confirmation tests fixes the cohort
-(44 passed, then 59 with runtime-strip coverage); full CI is being repeated.
-The 0.8.26 candidate's archived controls render correctly with its bundled Qt
-6.12, and downloaded executable/resources match packaging evidence. This is an
-offscreen widget check, not full interactive startup or a hardware test.
-The approved Pi installation has not occurred: the node became unreachable
-before an idle/disconnected state could be verified. The four-file installer
-remains staged and rejects unknown predecessor files.
+Initial Windows desktop CI exposed three native Qt worker crashes. The mixed
+widget cohort reproduced them; explicit deferred deletion in pause/confirmation
+tests fixes the cohort (44 passed, then 59 with runtime-strip coverage) and the
+full compatibility run. Frozen archived controls were also checked offscreen
+with bundled Qt 6.12. This is not interactive full-application startup or hardware
+verification.
+
+E3 DEV TEST now selects 0.8.27 at the exact candidate revision above, from
+`.codex-worktrees/job-controls-dev/build/hosted-c2fff59/E3.exe`. The canonical
+pointer tool validated adjacent metadata; the permanent launcher hash remained
+unchanged. Download verification matched the executable SHA256, 199 archived
+modules and 11 resources; final bundled-Qt offscreen checks show Take control,
+Pause/Resume, normal Stop and independent emergency STOP in their expected
+states. Neither the canonical EXE nor a hardware runtime was launched by these
+checks. Evidence is retained in that worktree's `build/job-controls` directory.
+
+The approved Pi installation remains blocked as of 2026-10-18: VPN reports the
+node offline and both its known VPN/LAN SSH addresses time out. An idle and
+disconnected state cannot be verified, so no upload, installation, service
+restart or controller action has occurred. Its live job was only observed.
+The exact four-file kit is staged under
+`.codex-worktrees/job-controls-dev/build/job-controls/e3-pi-job-controls`;
+manifest SHA256 is `c8ae21973ccb2629406ee3b15dab62215af911b52aa70eaa639e6ee622e92677`.
+It preserves the installed cooling/local restrictions and rejects unknown
+predecessor files. Installation is already authorized after job completion;
+recheck authenticated idle/disarmed/unowned status before proceeding. Normal
+Stop remains unavailable against the old Pi companion.
 
 No physical pause, cancellation, restart or laser behavior is qualified by these
 automated checks. Existing shared-checkout edits remain untouched.
