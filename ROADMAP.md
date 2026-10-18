@@ -3,9 +3,10 @@
 ## Stop job interruption and Z text layout
 
 Desktop Stop job now requests the existing priority abort rather than draining
-the planner. Z/focus labels reserve their wrapped height. Focused fake-controller
-and offscreen layout checks pass; full Windows CI, frozen delivery and physical
-stop acceptance remain pending.
+the planner. Z/focus labels reserve their wrapped height. Merged as PR65; focused
+fake-controller/offscreen checks and full Windows/Pi compatibility pass. Verified
+frozen 0.8.35 is selected through E3 DEV TEST and needs no Pi update. Interactive
+GUI and physical stop acceptance remain pending.
 
 ## Manual workpiece height
 

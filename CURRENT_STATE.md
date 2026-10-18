@@ -1,6 +1,6 @@
 # Current repository state
 
-## Stop job interruption and Z status layout (2026-10-18, in progress)
+## Stop job interruption and Z status layout (2026-10-18)
 
 The operator reports manual height working in 0.8.32 (4 mm material, no spacers),
 but Stop job displayed Stopping and let the short path finish. Red STOP was not
@@ -31,9 +31,31 @@ streaming, cancellation and remote facade tests. The final priority-stop handler
 checks pass again (22). Tests with all four short-path moves queued and ACKs
 withheld show abort/reset and M5 without queue completion, no paused cycle-start,
 revoked authority and rejected restart. Repository Ruff, compileall and diff
-checks pass. Source widgets were rendered offscreen; interactive GUI and physical
-stop acceptance remain pending. Full Windows compatibility and canonical frozen
-delivery are still pending. All work is isolated from the dirty shared checkout.
+checks pass. Source widgets were rendered and visually checked offscreen;
+interactive GUI and physical stop acceptance remain pending. All work is isolated
+from the dirty shared checkout.
+
+Merged through [PR65](https://github.com/lukelave-boop/E3/pull/65) at
+`7ae29f2e8c457fe5159ec98c00195903b25d6c75`; the merge tree exactly matches tested
+candidate `ff402009f9167be9a234be7fff5ab887c3fd399b`. The completed branch is deleted
+locally and remotely; the worktree remains to retain its selected executable.
+[Compatibility CI 39134185907](https://github.com/lukelave-boop/E3/actions/runs/39134185907)
+passes: Windows Python 3.12 desktop 9,224 passed / 69 skipped; Windows Python 3.10
+core 7,568 passed / 188 skipped; POSIX controller recovery 1,596 passed / 2 skipped;
+repository Ruff passed. [Canonical packaging 39134185124](https://github.com/lukelave-boop/E3/actions/runs/39134185124)
+passes and produces **0.8.35** at the exact candidate revision above.
+
+Downloaded verification matches all 199 archived modules, the entrypoint and 11
+resources, native profile equality and native-library checks. EXE SHA256:
+`84095f457a478d4c157a2ab48993a497376158982c1f36cb57b2625b478c0b23`.
+The canonical pointer tool selects **E3 DEV TEST 0.8.35**, branch main, exact
+candidate revision above, at
+`C:\Users\lukel\Documents\E3\.codex-worktrees\stop-job-recovery\build\hosted-ff40200\E3.exe`.
+Adjacent metadata matches and the permanent launcher hash is unchanged. Normal
+E3 and the running application are untouched. No Pi installation, service restart,
+connection request, motion, arming or physical stop test was performed. No frozen
+application runtime was launched. Local CI/build/selection receipts and the
+read-only Pi observation remain under the worktree's `build/stop-diagnostics`.
 
 ## Manual workpiece height (2026-10-18)
 
