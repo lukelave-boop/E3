@@ -8,28 +8,28 @@ running or paused job without reconnecting/resetting its serial controller. It
 cannot take another desktop's live lease. Pause's tooltip explains ownership,
 busy and stale-status blocks.
 
-Use **Stop job** for routine edits. It stops sending new program lines, finishes
-only the moves already buffered by the controller, acknowledges laser/auxiliary
-OFF and motion completion, and performs the guarded lift to the existing measured
-clearance. These buffered moves can still emit laser output; stopping can take
-as long as those accepted moves. **STOPPING JOB** is not a stopped confirmation.
-No Home or emergency reset is requested. Wait for **JOB STOPPED**, change the
-settings, regenerate/review, then Start from the beginning with fresh authorization.
-The cancelled run has no successful-completion receipt. Focus/position are retained
-only after the existing checks succeed. A failure instead revokes authority.
+**Stop job** requests priority controller interruption and laser-off. On GRBL it
+uses the existing feed-hold/reset path to discard queued work, bypassing ordinary
+desktop tasks and pending acknowledgements. A paused job is stopped without
+cycle-start or a confirmation to finish its buffered motion. The button remains
+available during active-job transitions and desktop work while current status
+and control ownership allow it. The red software STOP remains independently
+available. Both request emergency secondary interruption as well.
 
-For an already paused job, normal Stop first asks **Finish buffered moves and
-stop?**. Choosing Yes authorizes that remaining buffered motion and its original
-laser output; No leaves the job paused. No new toolpath is sent. Resume and normal
-Stop are unavailable during transition, focus, Home or final cleanup. The red
-software STOP remains available independently and retains its reset/recovery
-behavior. For an actual emergency use the physical emergency controls.
+The interrupted job gets no successful-completion receipt. Controller, coordinate
+and workpiece authority are invalidated; follow recovery/reference prompts, enter
+or measure the workpiece again, then generate/review and Start anew. No automatic
+Home, clearance lift or resumed motion follows Stop. A status message confirms
+only a software request, not physical cessation. Use physical emergency controls
+for an emergency; neither software control is safety-rated.
 
-Both desktop and Pi need this update; older Pi companions leave normal Stop
-unavailable. Test running-job reattachment, normal stopping during a dense raster,
-paused-stop confirmation/refusal, changed-setting restart, and emergency STOP
-during normal cancellation. Record the exact builds/controller/firmware/settings;
-automated fake-controller tests do not establish physical behavior.
+This desktop correction uses existing Pi STOP support and needs no new Pi
+companion. Earlier desktop builds used `job.cancel`, which drained accepted moves;
+a whole short path could already be queued and thus finish despite that request.
+That legacy RPC remains available to older clients but is not the current button
+behavior. Test interruption during short vector paths, dense raster, paused jobs
+and pending ACKs, followed by guarded recovery. Record exact builds/controller/
+firmware/settings; fake-controller tests do not establish physical stopping.
 
 Desktop Pause/Resume uses the existing job session without a preceding Connect
 request. A changed controller session, boot or queued state invalidates the request;

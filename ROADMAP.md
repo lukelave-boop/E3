@@ -1,14 +1,20 @@
 # Roadmap
 
+## Stop job interruption and Z text layout
+
+Desktop Stop job now requests the existing priority abort rather than draining
+the planner. Z/focus labels reserve their wrapped height. Focused fake-controller
+and offscreen layout checks pass; full Windows CI, frozen delivery and physical
+stop acceptance remain pending.
+
 ## Manual workpiece height
 
 Implemented explicit operator-entered material thickness and spacers, with matching Pi capability and guarded focus selection. Merged as PR64; Windows/Pi compatibility and frozen build verification pass. E3 DEV TEST selects 0.8.32 and the matching two-file Pi companion is installed and hash-verified. Interactive GUI and physical dimensional/focus validation remain pending.
 
 
-- Normal job cancellation and running-job reattachment are implemented with
-  fake-controller, authenticated loopback and offscreen acceptance/rejection tests.
-  Windows compatibility/frozen delivery and supervised physical acceptance remain
-  pending; buffered work may continue emitting until normal Stop completes.
+- Running-job reattachment and the legacy buffered-cancel RPC are implemented
+  and delivered in 0.8.27. The desktop Stop button now uses the priority
+  interruption correction above; physical acceptance remains pending.
 
 - Implemented retained-session Pause/Resume dispatch after the 0.8.19 operator
   report; merged as PR62 and selected as DEV TEST 0.8.22. Windows CI and frozen

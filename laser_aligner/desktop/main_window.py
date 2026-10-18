@@ -1417,37 +1417,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.tasksDrained.connect(self._background_tasks_drained)
 
     def _cancel_running_job(self) -> None:
-        pause = dict(self.controller.runtime.context.machine.status().get("job_pause") or {})
-        if pause.get("state") != "paused":
-            self.controller.cancel_job(expected_pause=pause)
-            return
-        existing = getattr(self, "_cancel_job_confirmation", None)
-        if existing is not None:
-            existing.raise_()
-            return
-        box = QtWidgets.QMessageBox(self)
-        box.setWindowTitle("Finish buffered moves and stop?")
-        box.setText(
-            "This job is paused. Normal Stop resumes only the moves already buffered "
-            "in the controller, including their laser output, then turns output off "
-            "and lifts to clearance. No more job lines will be sent.\n\n"
-            "Keep the workpiece and axes stationary. Finish those buffered moves and stop?"
-        )
-        box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
-        box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
-        # Keep the independent software STOP reachable while deciding. The exact
-        # run/revision captured above rejects consent after STOP or a new job.
-        box.setWindowModality(QtCore.Qt.WindowModality.NonModal)
-        self._cancel_job_confirmation = box
-
-        def finished(result):
-            self._cancel_job_confirmation = None
-            box.deleteLater()
-            if result == QtWidgets.QMessageBox.StandardButton.Yes:
-                self.controller.cancel_job(expected_pause=pause, finish_buffered=True)
-
-        box.finished.connect(finished)
-        box.show()
+        self.controller.cancel_job()
 
 
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:

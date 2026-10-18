@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from .controls import AxisPositionReadout, MeasurementSpinBox
+from .controls import AxisPositionReadout, MeasurementSpinBox, WrappedStatusLabel
 from .machine_state import (
     controller_node_boot_id,
     controller_session_generation,
@@ -81,12 +81,12 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         layout.addWidget(self.up, 1, 1)
         layout.addWidget(QtWidgets.QLabel("Step"), 1, 2)
         layout.addWidget(self.step, 1, 3)
-        self.readback_note = QtWidgets.QLabel("Reported position · waiting for connection")
+        self.readback_note = WrappedStatusLabel("Reported position · waiting for connection")
         self.readback_note.setWordWrap(True)
         layout.addWidget(self.readback_note, 2, 0, 1, 4)
         self.confirm = QtWidgets.QCheckBox("Probe stowed and Z path clear")
         layout.addWidget(self.confirm, 3, 0, 1, 4)
-        self.active_maximum = QtWidgets.QLabel("Active maximum: unknown")
+        self.active_maximum = WrappedStatusLabel("Active maximum: unknown")
         self.active_maximum.setObjectName("zActiveMaximum")
         self.active_maximum.setWordWrap(True)
         layout.addWidget(self.active_maximum, 4, 0, 1, 4)
@@ -104,11 +104,11 @@ class MainboardZPanel(QtWidgets.QGroupBox):
         layout.addWidget(QtWidgets.QLabel("Set max"), 5, 0)
         layout.addWidget(self.maximum, 5, 1, 1, 2)
         layout.addWidget(self.apply, 5, 3)
-        self.firmware_note = QtWidgets.QLabel("Firmware ceiling not confirmed")
+        self.firmware_note = WrappedStatusLabel("Firmware ceiling not confirmed")
         self.firmware_note.setObjectName("mutedLabel")
         self.firmware_note.setWordWrap(True)
         layout.addWidget(self.firmware_note, 6, 0, 1, 4)
-        self.message = QtWidgets.QLabel("Connect to read the Ender Z position and limit.")
+        self.message = WrappedStatusLabel("Connect to read the Ender Z position and limit.")
         self.message.setWordWrap(True)
         self.message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         layout.addWidget(self.message, 7, 0, 1, 3)

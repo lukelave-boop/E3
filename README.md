@@ -6,10 +6,11 @@ Workpiece focus can accept material thickness and optional spacers without probi
 
 
 The runtime strip offers **Take control** for an unowned running Pi job, then
-**Pause / Resume** and a separate **Stop job**. Normal Stop finishes buffered
-moves before output-off and verified clearance; wait for **JOB STOPPED**, edit,
-regenerate and Start again. A paused stop asks before resuming its buffered tail.
-The red software STOP remains separate. See [job controls](docs/JOB_PAUSE.md).
+**Pause / Resume** and a separate **Stop job**. Stop job requests a priority
+controller interruption, discards queued motion and requests laser off; a paused
+job is never resumed to finish its queue. Recover and reference before starting
+again. The red software STOP remains separate. Z/focus status text keeps its full
+wrapped height in the scrolling panel. See [job controls](docs/JOB_PAUSE.md).
 
 Pause and Resume retain the active job's controller session and do not issue a
 Connect request first. Session changes and stale pause revisions still reject.
