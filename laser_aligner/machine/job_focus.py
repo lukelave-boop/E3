@@ -288,6 +288,8 @@ def move(machine, context, *, clearance, verify_only=False, focus_mode="CUT"):
         if verify_only:
             if abs(current - target) > .05:
                 raise MachineError("Workpiece focus clearance was not confirmed")
+            with guard():
+                context.verified_z["z_mm"] = current
             return
         machine._set_running_job_phase("lifting" if clearance else "focusing")
         with guard():
@@ -307,6 +309,7 @@ def move(machine, context, *, clearance, verify_only=False, focus_mode="CUT"):
             stowed()
             with guard():
                 machine._laser_focus.requires_clearance = not clearance
+                context.verified_z["z_mm"] = target
         finally:
             machine._z_probe_active = False
         machine._set_running_job_phase("streaming")

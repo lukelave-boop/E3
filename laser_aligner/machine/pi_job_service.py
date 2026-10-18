@@ -1217,11 +1217,14 @@ class PiJobService:
         self,
         *,
         emergency: bool = False,
+        retain_z: bool = False,
         requested_job_id: str | None = None,
         _recover: bool = True,
     ) -> dict[str, Any] | None:
         if type(emergency) is not bool:
             raise PiJobServiceError("emergency must be a JSON boolean")
+        if type(retain_z) is not bool or (retain_z and emergency):
+            raise PiJobServiceError("retain_z requires a non-emergency stop and a JSON boolean")
         # Deliberately bypass _ordinary_lock: request_stop is the local immediate
         # stop primitive and must interrupt an ACK wait or a queued operation.
         # Do not put even a durable-store read in front of the controller stop.
@@ -1229,7 +1232,10 @@ class PiJobService:
             active_job_id = self._active_job_id
             if active_job_id is not None:
                 self._stop_requested_for = active_job_id
-        self.machine.request_stop(emergency=emergency, _recover=_recover)
+        if retain_z:
+            self.machine.request_job_stop()
+        else:
+            self.machine.request_stop(emergency=emergency, _recover=_recover)
         LOGGER.warning(
             "Pi-local STOP issued active_job=%s emergency=%s",
             "none" if active_job_id is None else active_job_id[:8],

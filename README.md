@@ -8,8 +8,10 @@ Workpiece focus can accept material thickness and optional spacers without probi
 The runtime strip offers **Take control** for an unowned running Pi job, then
 **Pause / Resume** and a separate **Stop job**. Stop job requests a priority
 controller interruption, discards queued motion and requests laser off; a paused
-job is never resumed to finish its queue. Recover and reference before starting
-again. The red software STOP remains separate. Z/focus status text keeps its full
+job is never resumed to finish its queue. With the matching Pi update, stationary
+Ender Z can retain its border reference after fresh verification. Use Home / park
+XY, reapply the workpiece height and regenerate; a border probe is unnecessary
+when retention succeeds. Red STOP still discards Z. Z/focus status text keeps its full
 wrapped height in the scrolling panel. See [job controls](docs/JOB_PAUSE.md).
 
 Pause and Resume retain the active job's controller session and do not issue a

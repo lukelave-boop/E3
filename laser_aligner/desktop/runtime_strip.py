@@ -254,7 +254,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.cancel_button.setToolTip(
             state.control_reason if not state.can_control else
             "Interrupt motion, discard the controller's queued work and request laser off. "
-            "A paused job is not resumed. Recover and reference the machine before restarting. "
+            "A paused job is not resumed. Verified stationary Ender Z can be retained; "
+            "Home / park XY before restarting. Red STOP always discards the reference. "
             "Software stop is not a replacement for the physical emergency stop."
         )
 

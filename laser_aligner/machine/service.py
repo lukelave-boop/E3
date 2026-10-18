@@ -86,6 +86,9 @@ from .material_surface import snapshot_from_plan, validate_program_binding
 from .probe_pin import ProbePinDiagnosticError, run_pin_diagnostic
 from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
+from .stopped_z import capture as capture_stopped_z
+from .stopped_z import connection_matches as stopped_z_connection_matches
+from .stopped_z import restore as restore_stopped_z
 from .transport import MachineTransport
 from .transport_factory import create_machine_transport
 from .z_limits import MainboardZLimits, validate_max_z
@@ -350,6 +353,7 @@ class _JobRunContext:
     pause: JobPause = field(default_factory=JobPause)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     cancel_cleanup: threading.Event = field(default_factory=threading.Event)
+    verified_z: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -926,6 +930,7 @@ class MachineService:
         # Consume a clean checkpoint before the Pi startup path can open either
         # controller. Failure to publish dirty state must prevent connection.
         self._pending_retained_z = self._z_retention.take()
+        self._stopped_z = None
         self._z_retention_restored = False
         self._clean_z_disconnected = False
         self._z_retention_reason = "No clean Z checkpoint is available"
@@ -963,6 +968,7 @@ class MachineService:
         self._z_retention.invalidate()
         self._clean_z_disconnected = False
         self._pending_retained_z = None
+        self._stopped_z = None
         self._z_retention_restored = False
         self._z_retention_reason = reason
         self._laser_focus.drop_z_reference(require_reference=require_reference)
@@ -1611,12 +1617,16 @@ class MachineService:
             self._clean_z_disconnected = False
             if saved is not None:
                 self._pending_retained_z = saved
-            if (recovery or self._retained_z_binding() != self._z_retention_binding
+            stopped_z = self._stopped_z
+            retain_stopped_z = stopped_z_connection_matches(
+                self, stopped_z, active_port, selected, active_baudrate, connect_stop_epoch,
+            )
+            if not retain_stopped_z and (recovery or self._retained_z_binding() != self._z_retention_binding
                 or active_port != self.settings.port or selected != self.settings.protocol
                 or active_baudrate != self.settings.baudrate):
                 self.discard_retained_z("Changed connection or recovery requires a fresh Z reference")
-            # A new primary session may inherit Z only from the consumed clean
-            # checkpoint. Drop any unrelated in-memory datum before opening;
+            # A new primary session may inherit Z from a consumed clean checkpoint
+            # or an explicit stationary-Z job stop. Drop the live datum before opening;
             # successful restoration below establishes its verified successor.
             self._laser_focus.drop_z_reference(require_reference=False)
             self._z_retention_restored = False
@@ -1811,6 +1821,19 @@ class MachineService:
                     )
                 self._resolved_air_assist_commands()
                 self._restore_retained_z_after_connect(candidate, expected_stop_epoch)
+                stopped_z = self._stopped_z
+                if stopped_z is not None:
+                    try:
+                        restore_stopped_z(self, stopped_z, candidate, expected_stop_epoch)
+                    except Exception as exc:
+                        with self._stop_epoch_lock:
+                            if self._stop_epoch == expected_stop_epoch:
+                                self._invalidate_retained_z(f"Stop job could not retain Z: {exc}")
+                        self._append_log("INFO", f"Stop job could not retain Z: {exc}")
+                    finally:
+                        with self._stop_epoch_lock:
+                            if self._stopped_z is stopped_z:
+                                self._stopped_z = None
                 self._append_log(
                     "INFO",
                     f"connected session {candidate.generation} using {dialect.id}",
@@ -4550,7 +4573,12 @@ class MachineService:
                 if action == "status":
                     return unavailable()
                 raise MachineError("Connect the shared Ender controller before laser focus")
-            if action not in {"status", "recover", "recover_xy", "forget", "clear_surface", "set_xy_offset", "set_honeycomb_height"}:
+            retained_clearance = (
+                action == "clearance" and xy_recovery_available() and self._z_retention_restored
+                and self._laser_focus.retain_z_reference(probe.owner.generation) is not None
+                and not self._laser_focus.xy_recovery_pending_reference
+            )
+            if not retained_clearance and action not in {"status", "recover", "recover_xy", "forget", "clear_surface", "set_xy_offset", "set_honeycomb_height"}:
                 if (self._controller_state is not ControllerState.READY_MOTION
                     or not self._coordinate_reference_ready
                     or self._coordinate_reference_session_generation != session.generation
@@ -4580,6 +4608,15 @@ class MachineService:
                         raise MachineError("Focus operation cancelled or session changed")
                     if require_secondary and action != "recover" and (not probe.owner.ready or probe.owner.generation != secondary_generation):
                         raise MachineError("Focus Ender connection changed")
+                    if retained_clearance and (
+                        not self._z_retention_restored
+                        or self._laser_focus.retain_z_reference(secondary_generation) is None
+                        or recovery_configuration != (
+                            self.settings.photo_x, self.settings.photo_y, self.settings.mainboard_max_z_mm,
+                            self.laser_settings.travel_feed_mm_min,
+                        )
+                    ):
+                        raise MachineError("Retained Z clearance authority changed")
                     if action == "recover_xy" and (
                         not recovery_configuration_valid()
                         or recovery_configuration != (
@@ -7192,7 +7229,11 @@ class MachineService:
             self._job_context.pending_transaction = None
             self._job_context.last_stream_transaction = None
 
-    def request_stop(self, emergency: bool = False, *, _recover: bool = True) -> None:
+    def request_job_stop(self) -> None:
+        """Abort the planner, retaining only independently verified stationary Z."""
+        self.request_stop(_retain_z=True)
+
+    def request_stop(self, emergency: bool = False, *, _recover: bool = True, _retain_z: bool = False) -> None:
         """Quarantine the exact session and issue bounded priority laser-off.
 
         Communication recovery is asynchronous and can publish only
@@ -7202,7 +7243,19 @@ class MachineService:
         stop_at = time.time()
         stop_call_deadline = time.monotonic() + _REALTIME_STOP_WRITE_DEADLINE_SECONDS
         with self._stop_epoch_lock:
+            stopped_z = None
+            if _retain_z and not emergency:
+                try:
+                    stopped_z = capture_stopped_z(self)
+                except Exception:
+                    # Optional retention can never prevent the priority abort.
+                    stopped_z = None
+            if _retain_z and stopped_z is None:
+                emergency = True
             self._invalidate_retained_z("Software STOP discarded Z; reference the border again")
+            self._stopped_z = stopped_z
+            if stopped_z is not None:
+                self._z_retention_reason = "Stop job: checking unchanged Ender Z after XY recovery"
             interrupt_secondary_motion = emergency or self._z_probe_active
             self._stop_epoch += 1
             if self.cpu_cooling_enabled and self._secondary_air_assist is not None:

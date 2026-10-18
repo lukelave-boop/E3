@@ -116,6 +116,7 @@ MACHINE_ACTIONS = frozenset(
 )
 
 SERVER_CAPABILITIES = (
+    "pi-job-stop-retain-z-v1",
     CAPABILITY_PI_COMPRESSED_UPLOAD,
     "pi-job-pause-v1",
     "pi-job-controls-v1",
@@ -308,7 +309,7 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
     },
     ACTION_JOB_STOP: {
         "required": (),
-        "optional": ("job_id", "emergency"),
+        "optional": ("job_id", "emergency", "retain_z"),
         "response": ("job",),
         "priority": "bypasses ordinary operation serialization",
     },
@@ -1082,10 +1083,12 @@ class PiMachineServer:
                 None if raw_job_id is None else validate_job_id(raw_job_id)
             )
             emergency = _exact_bool(request.get("emergency", False), "emergency")
+            retain_z = _exact_bool(request.get("retain_z", False), "retain_z")
             return {
                 "job": self.service.stop(
                     emergency=emergency,
                     requested_job_id=requested_job_id,
+                    **({"retain_z": True} if retain_z else {}),
                 )
             }
         if action == ACTION_JOB_DELETE:

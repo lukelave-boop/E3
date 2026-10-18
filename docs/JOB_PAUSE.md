@@ -14,17 +14,23 @@ desktop tasks and pending acknowledgements. A paused job is stopped without
 cycle-start or a confirmation to finish its buffered motion. The button remains
 available during active-job transitions and desktop work while current status
 and control ownership allow it. The red software STOP remains independently
-available. Both request emergency secondary interruption as well.
+available and always requests emergency secondary interruption.
 
-The interrupted job gets no successful-completion receipt. Controller, coordinate
-and workpiece authority are invalidated; follow recovery/reference prompts, enter
-or measure the workpiece again, then generate/review and Start anew. No automatic
+The interrupted job gets no successful-completion receipt. XY and workpiece
+authority are invalidated. With `pi-job-stop-retain-z-v1`, Stop job can keep the
+independent Ender border reference when Z was stationary and fresh recovery checks
+match its last verified job position. Use **Home / park XY**: it raises Z to the
+previous clearance first if needed, then homes XY without another border probe.
+Reapply material thickness/spacers (or measure), then generate/review and Start
+anew. Changed/unknown Z, firmware, connection or setup requires referencing again.
+Stopping during Z movement uses full interruption and discards Z. No automatic
 Home, clearance lift or resumed motion follows Stop. A status message confirms
 only a software request, not physical cessation. Use physical emergency controls
 for an emergency; neither software control is safety-rated.
 
-This desktop correction uses existing Pi STOP support and needs no new Pi
-companion. Earlier desktop builds used `job.cancel`, which drained accepted moves;
+Retaining Z requires a matching Pi companion. Older nodes receive the full
+emergency STOP and lose reference authority. Earlier desktop builds used
+`job.cancel`, which drained accepted moves;
 a whole short path could already be queued and thus finish despite that request.
 That legacy RPC remains available to older clients but is not the current button
 behavior. Test interruption during short vector paths, dense raster, paused jobs

@@ -873,7 +873,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         elif not self.fresh():
             self.z_retention_status.setText("Saved Z: refresh to check the saved position.")
         else:
-            prefix = ("Saved Z: restored from a normal shutdown. " if retention["restored"]
+            prefix = ("Z reference retained. " if retention["restored"]
                       and retention["available"] else "Saved Z: ")
             self.z_retention_status.setText(prefix + (retention["reason"] or "No saved position restored."))
 
@@ -916,7 +916,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         self.reference.setText({"reference": "Reference border", "home_retained": "Home / park XY",
                                 "home_reference": "Home / park + reference"}[home_action])
         self.reference.setToolTip(
-            "Home and park XY, keeping the restored Z reference. No border probing is requested."
+            "Raise Z to clearance if needed, then home and park XY, keeping the verified Z reference. No border probing is requested."
             if home_action == "home_retained" else
             "Establish Z at the border and return to clearance. Keep the Z path clear."
             if reference_only else
@@ -928,7 +928,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             and (reference_only or not requires_clearance or known)
         ))
         self.reconnect_ender.setEnabled(bool(idle and self._result.get("recovery_available") is True))
-        recovery_needed = requires_clearance and projection.controller_state == "READY_HOME_REQUIRED"
+        recovery_needed = (requires_clearance and projection.controller_state == "READY_HOME_REQUIRED"
+                           and home_action != "home_retained")
         self.xy_recovery_group.setVisible(recovery_needed)
         ender = self._result.get("ender") or {}
         recovery_ready = bool(

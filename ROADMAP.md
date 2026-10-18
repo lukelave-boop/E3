@@ -1,5 +1,13 @@
 # Roadmap
 
+## Retain stationary Z after Stop job
+
+Implemented a distinct normal-stop request that still aborts queued GRBL motion,
+with verified in-process Ender Z continuity and an explicit clearance-before-XY
+Home path. Matching desktop/Pi rollout and physical acceptance are pending;
+automated verification is recorded in CURRENT_STATE.md. Red STOP remains a full
+secondary interruption with reference revocation.
+
 ## Stop job interruption and Z text layout
 
 Desktop Stop job now requests the existing priority abort rather than draining

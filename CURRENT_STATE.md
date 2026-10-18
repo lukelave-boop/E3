@@ -1,5 +1,40 @@
 # Current repository state
 
+## Stop job retaining independent Z (2026-10-18)
+
+Normal desktop Stop job now uses a capability-gated priority request that still
+aborts/resets GRBL queued XY motion and requests M5. The Pi may retain a memory-only
+candidate for a stationary, separately controlled Ender datum with a last verified
+job Z. Primary recovery reads unchanged Ender generation/firmware, known Z,
+consistent stowed-probe flags and final position, with unchanged rig/calibration
+bindings. Only then is the border datum restored. Old workpiece selections,
+previews, program bindings, XY authority and arming are discarded. Red STOP,
+active Z operations, stale/missing evidence or failed continuity checks discard Z.
+
+Explicit Home / park XY may raise this verified retained Z to its previous
+clearance before homing, without a border probe. The daily/setup panel offers
+that path at a lowered height instead of the unreferenced XY-recovery path.
+Reapply manual material/spacer height (or measure) and regenerate before Start.
+Old companions receive the existing full emergency STOP; no negotiation delays
+the stop request. Browser STOP behavior and project schemas are unchanged.
+
+Windows Python 3.14 focused checks: 828 passed with one unrelated transient
+Windows access-denied replacement in a pre-existing disk-checkpoint test. Final
+affected cohort passes 310, including that test. The additional automatic recovery
+acceptance check passes; new tests cover pending ACK interruption, retained Z and
+clearance/Home without probing, stale-job rejection, changed position/known state/
+firmware/probe/generation/configuration, red STOP races, uncertain Z fallback,
+strict RPC validation and cached-capability fallback. Qt coverage is offscreen
+widget testing; no interactive or physical stop test is claimed. Ruff, compileall
+and diff checks pass. Full compatibility CI and frozen build verification pending.
+
+Read-only Pi inspection found a pre-existing local CPU cooling patch in service.py;
+the matching update must preserve it. The other three changed existing Pi modules
+match the current main baseline. The companion needs four updated modules plus
+new stopped_z.py. No Pi installation/restart, controller command, arming or motion
+has been performed for this change. The work is isolated from the dirty primary
+checkout and existing selected build.
+
 ## Stop job interruption and Z status layout (2026-10-18)
 
 The operator reports manual height working in 0.8.32 (4 mm material, no spacers),

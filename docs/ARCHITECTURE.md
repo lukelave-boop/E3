@@ -5,16 +5,22 @@
 The desktop daily focus panel sends the typed `set_workpiece_height` action through MachineService or its remote facade. The Pi calculates the asserted surface datum from thickness, spacers and saved honeycomb height, then uses existing session-bound job focus and operation targets. Manual provenance is retained separately from probe evidence; gauge teaching requires a probed surface. This changes the desktop project workflow and shared machine admission, not the browser single-SVG generation UI.
 
 
-Desktop Stop job dispatches `request_stop(emergency=True)` directly through the
-existing priority `job.stop` path, bypassing the ordinary desktop worker queue.
-Its stop signal invalidates queued UI operations. GRBL abort/reset and bounded
-M5 cleanup retire the controller session and all reference/focus authority; no
-buffered-tail resume, clearance move or Home is issued. It requests secondary
-interruption too, just like the independently available red software STOP.
+Desktop Stop job dispatches `request_job_stop()` directly through the priority
+`job.stop` path, bypassing the ordinary desktop worker queue. Cached capability
+`pi-job-stop-retain-z-v1` enables the strict optional `retain_z` boolean; old nodes
+receive the existing emergency STOP. No capability query delays interruption.
+GRBL abort/reset and bounded M5 cleanup retire XY and job authority. A memory-only
+candidate may retain the separate Ender's datum when no Z operation is active and
+the exact running job has verified Z. Primary recovery verifies unchanged Ender
+generation, firmware, known position, stowed probe and rig/calibration binding
+before publishing that datum. STOP, failure or invalidation revokes the candidate.
+No workpiece selection or old job binding survives. Explicit Home / park may lift
+verified retained Z to clearance before homing XY; ordinary Z moves still require
+XY readiness. Red STOP always requests secondary interruption and discards Z.
 The old `job.cancel` RPC remains
 compatible for older clients but is not used by the desktop button. This changes
-desktop dispatch only; browser STOP and shared controller/protocol behavior are
-unchanged. Active-job Connect is control-lease reattachment only when
+desktop dispatch and shared machine recovery; browser STOP remains unchanged.
+Active-job Connect is control-lease reattachment only when
 the exact supported job/session remains active; it sends no serial command.
 
 WrappedStatusLabel reserves height at its current width when status text, font,

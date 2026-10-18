@@ -1,5 +1,14 @@
 # Changelog
 
+## Stop job with retained Z
+
+- Keep a stationary separate Ender border reference after normal Stop job only
+  when recovery verifies unchanged connection, firmware, known height and probe.
+  XY still resets; explicit Home / park lifts to clearance and homes XY without
+  probing. Reapply workpiece height and regenerate. Requires matching Pi support.
+- Preserve full interruption and reference revocation for red STOP, active Z
+  motion, failed checks and older Pi companions.
+
 ## Stop job interruption and readable Z status
 
 - Route desktop Stop job through priority controller stop/reset and laser-off,

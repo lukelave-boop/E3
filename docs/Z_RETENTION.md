@@ -1,5 +1,20 @@
 # Saved Z after a normal shutdown
 
+## Z after Stop job
+
+Normal **Stop job** can retain the separate Ender's border datum in the same Pi
+process while resetting the GRBL XY/laser controller. It requires the matching
+`pi-job-stop-retain-z-v1` companion, a stationary Z axis and a verified running-job
+height. Recovery reads the unchanged Ender identity, known Z and stowed probe;
+different position, configuration, firmware or connection rejects retention.
+No shutdown checkpoint or coordinate-restoration command is used.
+
+After successful verification, use **Home / park XY**. It lifts to the prior
+clearance before XY travel and skips border probing. Reapply workpiece height
+and regenerate the job. The red STOP, stopping during Z movement, or a failed
+continuity check still requires a fresh border reference. Physical operation
+of this workflow remains unverified until recorded with the exact rig/build.
+
 This feature can reuse the known Z coordinate and border reference after a
 clean shutdown, avoiding another border probe when the machine's physical
 position and reference setup have stayed unchanged. It does not retain a
@@ -55,8 +70,9 @@ again.
 E3 will not restore from a missing, malformed, already-consumed or dirty record.
 An interrupted or failed shutdown, active job/probe/focus operation, arming,
 unknown Z, a position below saved clearance, unresolved recovery state or failed
-shutdown verification cannot create a clean checkpoint. STOP and failed
-operations revoke retained reference authority.
+shutdown verification cannot create a clean checkpoint. Red STOP and failed
+operations revoke retained reference authority. Normal Stop job uses only the
+separate in-process continuity check described above; it never saves a checkpoint.
 
 Changed rig configuration, configured maximum, firmware or geometry, an
 unstowed/inconsistent probe report, mismatching live known Z or a failed final

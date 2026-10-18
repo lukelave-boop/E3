@@ -938,6 +938,14 @@ def test_owner_requests_share_one_lifecycle_failure(
     }
 
 
+@pytest.mark.parametrize("fields", [{"retain_z": 1}, {"retain_z": "true"}, {"retain_z": True, "emergency": True}])
+def test_stop_rejects_invalid_retention_options(server_harness, fields):
+    before = server_harness.machine.operation_generation()
+    response = _rpc(server_harness, ACTION_JOB_STOP, **fields)
+    assert response["ok"] is False
+    assert server_harness.machine.operation_generation() == before
+
+
 def test_stop_tombstones_prepared_job_before_delayed_start(
     server_harness: ServerHarness,
 ) -> None:
@@ -1211,8 +1219,10 @@ def test_authenticated_client_disconnect_does_not_stop_accepted_powered_job(
     assert b"!\x18" not in server_harness.transport.raw_writes
 
 
+@pytest.mark.parametrize("retain_z", [False, True])
 def test_stop_after_reattach_bypasses_job_ack_wait(
     server_harness: ServerHarness,
+    retain_z: bool,
 ) -> None:
     job_id, program, _ = _upload(server_harness)
     started = _rpc(
@@ -1228,7 +1238,8 @@ def test_stop_after_reattach_bypasses_job_ack_wait(
         server_harness,
         ACTION_JOB_STOP,
         job_id=job_id,
-        emergency=True,
+        emergency=not retain_z,
+        **({"retain_z": True} if retain_z else {}),
     )
     assert stopped["ok"] is True
     assert stopped["job"]["state"] in {"running", "stopping", "stopped"}

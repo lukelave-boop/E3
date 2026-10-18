@@ -3118,7 +3118,13 @@ class RemoteMachineService:
         self._cache_remote_status(status, job_record=record, response=response)
         return self.status()
 
-    def request_stop(self, emergency: bool = False) -> None:
+    def request_job_stop(self) -> None:
+        # Use only already cached capabilities: STOP never waits for negotiation.
+        with self._state_lock:
+            supported = "pi-job-stop-retain-z-v1" in (self._node_capabilities or ())
+        self.request_stop(emergency=not supported, _retain_z=supported)
+
+    def request_stop(self, emergency: bool = False, *, _retain_z: bool = False) -> None:
         if type(emergency) is not bool:
             raise TypeError("emergency must be an exact boolean")
         with self._stop_epoch_lock:
@@ -3130,6 +3136,8 @@ class RemoteMachineService:
             job_id = self._accepted_job_id or self._tracked_job_id
             self._job_submission = None
         payload: dict[str, Any] = {"emergency": emergency}
+        if _retain_z:
+            payload["retain_z"] = True
         if job_id is not None:
             payload["job_id"] = job_id
         stop_deadline = time.monotonic() + _STOP_RPC_TIMEOUT_SECONDS
