@@ -17,7 +17,8 @@ CAPABILITY = "pi-job-stop-retain-z-v1"
 def capture(machine):
     """Called under the STOP gate. No serial I/O, waits, or coordinate grants."""
     context, probe, state = machine._active_job_context, machine._z_probe, machine._laser_focus
-    if (context is None or probe is None or machine._z_probe_active or machine._focus_operation_active
+    if (context is None or probe is None or not machine._z_retention_configured
+            or machine._z_probe_active or machine._focus_operation_active
             or context.stop_event.is_set() or not context.status.running
             or context.status.phase not in {"streaming", "draining"}
             or not machine._same_controller_session(machine._session, context.session)
@@ -41,7 +42,7 @@ def capture(machine):
         "binding": copy.deepcopy(machine._retained_z_binding()),
         "z_mm": context.verified_z["z_mm"], "clearance": plan["clearance_z_mm"],
         "calibration": copy.deepcopy(state.calibration),
-        "endpoint": context.session.resolved_endpoint,
+        "endpoint": context.session.configured_endpoint,
         "baudrate": context.session.baudrate,
     }
 

@@ -27,6 +27,9 @@ firmware/probe/generation/configuration, red STOP races, uncertain Z fallback,
 strict RPC validation and cached-capability fallback. Qt coverage is offscreen
 widget testing; no interactive or physical stop test is claimed. Ruff, compileall
 and diff checks pass. Full compatibility CI and frozen build verification pending.
+Final retained-stop tests pass (15), including automatic recovery with different
+configured serial aliases and resolved device paths. Retention binds the stable
+configured endpoint used by recovery, while keeping a distinct primary/Ender gate.
 
 Read-only Pi inspection found a pre-existing local CPU cooling patch in service.py;
 the matching update must preserve it. The other three changed existing Pi modules

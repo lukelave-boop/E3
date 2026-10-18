@@ -1,5 +1,6 @@
 """Job Stop keeps independent stationary Z only across verified recovery."""
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -10,6 +11,8 @@ from tests.test_machine_z_retention import rig  # noqa: F401
 
 def running(rig, monkeypatch):  # noqa: F811
     machine = rig.machine
+    # Linux opens a stable by-id alias but resolves it to a different tty path.
+    machine._session = replace(machine._session, resolved_endpoint="actual-primary-tty")
     rig.serial.contacts = [0., 5.]
     plan = select(machine)
     primary = rig.primaries[-1]
