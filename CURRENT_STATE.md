@@ -26,7 +26,9 @@ clearance/Home without probing, stale-job rejection, changed position/known stat
 firmware/probe/generation/configuration, red STOP races, uncertain Z fallback,
 strict RPC validation and cached-capability fallback. Qt coverage is offscreen
 widget testing; no interactive or physical stop test is claimed. Ruff, compileall
-and diff checks pass. Full compatibility CI and frozen build verification pending.
+and diff checks pass. The source panel was also rendered and visually inspected
+at a narrow width with retained Z below clearance; its text is readable and the
+Home / park XY path appears without the unreferenced recovery prompt.
 Final retained-stop tests pass (15), including automatic recovery with different
 configured serial aliases and resolved device paths. Retention binds the stable
 configured endpoint used by recovery, while keeping a distinct primary/Ender gate.
@@ -37,6 +39,38 @@ match the current main baseline. The companion needs four updated modules plus
 new stopped_z.py. No Pi installation/restart, controller command, arming or motion
 has been performed for this change. The work is isolated from the dirty primary
 checkout and existing selected build.
+
+Merged through [PR66](https://github.com/lukelave-boop/E3/pull/66) at
+`26f1feb80e03b13a7bf78bcb7a2c25eebcd4821d`; its tree exactly matches tested candidate
+`0fbc0647c582835b004913ea741241ed94128cb3`. The feature branch is deleted locally
+and remotely; its detached worktree remains for the selected executable.
+[Compatibility CI 39136701024](https://github.com/lukelave-boop/E3/actions/runs/39136701024)
+passes: Windows Python 3.12 desktop 9,247 passed / 69 skipped; Windows Python 3.10
+core 7,589 passed / 188 skipped; POSIX 1,641 passed / 2 skipped; Ruff passed.
+[Canonical packaging 39136696757](https://github.com/lukelave-boop/E3/actions/runs/39136696757)
+produces **0.8.39** at the exact candidate revision. Downloaded verification
+matches all 200 archived modules, 11 resources and the entrypoint, with native
+profile equality and native-library checks. EXE SHA256:
+`bf4187fa0244ff9923eb416c76bd7fb31913389496e3d86565119f276310fe06`.
+
+The canonical pointer tool selects **E3 DEV TEST 0.8.39**, branch main, at
+`C:\Users\lukel\Documents\E3\.codex-worktrees\stop-retain-z\build\hosted-0fbc064\E3.exe`.
+Adjacent metadata matches; the permanent launcher hash is unchanged. Normal E3
+and any running desktop remain untouched. No frozen application was launched.
+
+The matching five-file Pi kit is staged at
+`/home/greenhouse-climate/e3-pi-stop-z-0fbc064`. Its service.py preserves the exact
+pre-existing CPU cooling patch, verified against the observed installed baseline;
+all other changed modules match the candidate. The source variant passes 177
+fake-controller tests on Windows and 177 on the Pi; the final alias correction
+passes 15 additional Pi tests. Staged imports against installed dependencies,
+known-baseline dry-run installation, unknown-change rejection, and read-only
+idle/disconnected/disarmed/unowned prechecks pass. The live installation and
+service restart are **awaiting explicit operator approval**; the earlier approval
+was for the separate two-file manual-height update. Until the matching Pi update
+is installed, this desktop uses full STOP and cannot retain Z. No controller was
+instantiated by import verification, and no live motion/arming/stop command or
+physical acceptance test was performed. Receipts remain under `build/stop-z`.
 
 ## Stop job interruption and Z status layout (2026-10-18)
 
