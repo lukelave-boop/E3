@@ -44,17 +44,26 @@ Pause/Resume, normal Stop and independent emergency STOP in their expected
 states. Neither the canonical EXE nor a hardware runtime was launched by these
 checks. Evidence is retained in that worktree's `build/job-controls` directory.
 
-The approved Pi installation remains blocked as of 2026-10-18: VPN reports the
-node offline and both its known VPN/LAN SSH addresses time out. An idle and
-disconnected state cannot be verified, so no upload, installation, service
-restart or controller action has occurred. Its live job was only observed.
-The exact four-file kit is staged under
+The approved Pi update was installed on 2026-10-18 at 06:31 MDT after the operator
+brought the Pi online. SSH used its known LAN address; the Windows Tailscale
+backend was stopped. Authenticated preflight confirmed no active job, no owner,
+disarmed and DISCONNECTED. All four exact predecessor files matched before
+replacement. The hardware-node service was stopped, the files atomically
+replaced with adjacent backups, and the service restarted successfully.
+Read-only authenticated verification confirms `pi-job-controls-v1`,
+`job_controls_supported=true`, a new service boot ID, no active job and a
+disarmed/disconnected controller. All four installed checksums match; configuration,
+service cooling overrides and unrelated cooling/focus/serial sources are unchanged.
+No controller connection, motion, arming or laser test was performed.
+
+The exact four-file kit and local receipts are retained under
 `.codex-worktrees/job-controls-dev/build/job-controls/e3-pi-job-controls`;
 manifest SHA256 is `c8ae21973ccb2629406ee3b15dab62215af911b52aa70eaa639e6ee622e92677`.
-It preserves the installed cooling/local restrictions and rejects unknown
-predecessor files. Installation is already authorized after job completion;
-recheck authenticated idle/disarmed/unowned status before proceeding. Normal
-Stop remains unavailable against the old Pi companion.
+The Pi retains `/home/greenhouse-climate/e3-job-controls-c2fff59`, including
+`installation-result.json` and `verification-result.json`. Local verification
+evidence is `build/job-controls/pi-verification-result.json` in the feature
+worktree. Use E3 DEV TEST 0.8.27 for operator acceptance; both sides now contain
+the job-control update.
 
 No physical pause, cancellation, restart or laser behavior is qualified by these
 automated checks. Existing shared-checkout edits remain untouched.
