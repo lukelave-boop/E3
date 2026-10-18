@@ -33,6 +33,18 @@ layout/action tests pass with the new control included. Ruff/compileall/diff che
 pass. Initial loopback attempts were blocked by sandbox sockets; authorized
 unsandboxed fake-controller runs passed. Compatibility and frozen checks continue.
 
+The initial full compatibility run passed Windows 3.10, Ruff and the POSIX
+controller tier; Windows 3.12 reported three native Qt worker crashes during
+later widget teardown. The focused mixed widget cohort reproduced the crash.
+Explicit deferred deletion in the new pause/confirmation tests fixes the cohort
+(44 passed, then 59 with runtime-strip coverage); full CI is being repeated.
+The 0.8.26 candidate's archived controls render correctly with its bundled Qt
+6.12, and downloaded executable/resources match packaging evidence. This is an
+offscreen widget check, not full interactive startup or a hardware test.
+The approved Pi installation has not occurred: the node became unreachable
+before an idle/disconnected state could be verified. The four-file installer
+remains staged and rejects unknown predecessor files.
+
 No physical pause, cancellation, restart or laser behavior is qualified by these
 automated checks. Existing shared-checkout edits remain untouched.
 

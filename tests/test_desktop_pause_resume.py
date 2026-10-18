@@ -42,6 +42,8 @@ def test_actual_runtime_pause_button(phase, label, enabled):
     strip.set_status({**status, "job_pause": {}})
     assert not strip.pause_button.isEnabled()
     strip.close()
+    strip.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     app.processEvents()
 
 
@@ -82,6 +84,8 @@ def test_unowned_active_job_exposes_take_control(phase):
     strip.set_status({**status, "control_in_use": True})
     assert not strip.connect_button.isEnabled()
     strip.close()
+    strip.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     app.processEvents()
 
 
@@ -127,4 +131,6 @@ def test_paused_stop_confirmation_is_nonmodal_and_keeps_original_job(answer):
                          if answer == QtWidgets.QMessageBox.StandardButton.Yes else [])
     assert window._cancel_job_confirmation is None
     window.close()
+    window.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     app.processEvents()
