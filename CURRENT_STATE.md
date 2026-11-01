@@ -2,30 +2,46 @@
 
 ## Single-line and filled text (2026-11-01)
 
-Desktop text source now offers Single-line engrave, Filled engrave, and Outline
-+ filled engrave in addition to existing outline/stencil modes. The original
-E3 Single Stroke font supports English uppercase/lowercase, digits and ASCII
-punctuation, whitespace and multiline layout; unsupported glyphs reject rather
-than substitute. Explicit stroke sequences remain open even when returning to
-their starting point. Font contours retain empty counters through the existing
-even-odd raster planner. Combined text is grouped and uses Raster before Line,
-with independently editable settings. New operation layers start at zero power
-and Output off; an existing matching operation retains its settings. All
-objects/layers form one undoable edit and persist as existing PATH geometry.
+E3 DEV TEST now selects **0.8.43**, branch **main**, frozen revision
+`4313d6b36638f4ec4311fa86dad9724ea4a373de`. Target:
+`C:/Users/lukel/Documents/E3/build/text-engraving-4313d6b/E3.exe`.
+The canonical pointer updater validated the adjacent build metadata and wrote
+an atomic selection. The permanent launcher hash is unchanged; no running app
+was closed and the normal E3 launcher was not replaced.
 
-Verification in the shared Windows/Python 3.14 checkout: 296 focused tests pass
-across text geometry/dialog/action transactions, stencil regression, project
-toolpath guards and history. Scoped Ruff and application compileall pass.
-Coverage includes all 94 printable non-space ASCII glyphs, counters, grouping,
-save/load, undo/redo, unsupported text, incompatible layer modes, disabled
-motion and out-of-bounds rejection. Qt offscreen widget tests and rendered
-dialog/font visual inspection were performed; no interactive operator test,
-camera/controller connection, laser output or physical qualification occurred.
-Browser SVG, project schema, planner and machine code are unchanged.
+Desktop Text now offers Single-line engrave, Filled engrave, and Outline +
+filled engrave alongside outline/stencil modes. E3 Single Stroke supports
+English uppercase/lowercase, digits and ASCII punctuation, spaces and multiple
+lines; unsupported glyphs reject rather than substitute. Explicit stroke paths
+remain open sequences even when returning to their starting point. Filled text
+uses ordinary font contours and preserves empty counters. Combined text groups
+two aligned copies on Raster then Line operations with independent settings.
+Existing matching layers retain their settings; new layers start at zero power
+with Output off. Creation and new layers are one undoable edit, saved as normal
+PATH geometry. Browser SVG, project schema, planner and machine code are unchanged.
 
-The feature is being isolated against origin/main for integration/build checks;
-the original shared working-tree changes are preserved. No frozen feature build,
-CI success, main merge, launcher update or physical verification is claimed yet.
+Verification: 296 focused Windows/Python 3.14 tests passed both in the shared
+checkout and against the isolated integration source; repository Ruff and
+compileall passed on the isolated source. Tests cover all 94 non-space ASCII
+glyphs, counter preservation, grouping, atomic undo/redo, save/load, dialog/action
+acceptance and cancellation, unsupported glyphs, mismatched layers, disabled
+motion and out-of-bounds rejection. Offscreen Qt widgets and rendered dialog/font
+visuals were checked; this is not interactive operator or physical verification.
+
+[Compatibility CI](https://github.com/lukelave-boop/E3/actions/runs/41328760197)
+passed Windows Python 3.10 (7,589 passed / 189 skipped), Windows Python 3.12 desktop
+(9,366 passed / 69 skipped), Ruff and the POSIX controller-session tier.
+[Windows packaging](https://github.com/lukelave-boop/E3/actions/runs/41328762848)
+passed the canonical builder and frozen source/resource/native-profile checks.
+The downloaded bundle matches its report: 202 application modules, including
+all new text modules, plus resources and entrypoint. EXE SHA256:
+`36b7db64947a8329915c073e78c01b1ecf2871e6cfeba3d17fa16ded46dfd5e9`.
+
+The tested code is integrated into main. Unrelated shared-tree edits were
+preserved. Evidence and the prior launcher selection are in ignored
+`build/text-feature-integration`; the frozen report is beside the selected EXE.
+No frozen desktop launch, camera/controller connection, laser output or physical
+material verification was performed. Operator testing remains pending.
 
 ## Stop job retaining independent Z (2026-10-18)
 

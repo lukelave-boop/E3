@@ -9,7 +9,8 @@
 - Preserve letter counters, existing layer settings, ordinary project PATH
   persistence, and guarded generation. New operations start at zero power with
   Output off. Add atomic undo/redo and unsupported-character rejection tests.
-- Source implementation only; no frozen feature build or physical test yet.
+- Verified Windows feature build 0.8.43 is selected in E3 DEV TEST. Full
+  compatibility CI passed; physical engraving remains unverified.
 
 ## Stop job with retained Z
 

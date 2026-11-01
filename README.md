@@ -4,8 +4,7 @@ Desktop text now includes **Single-line engrave** (built-in E3 Single Stroke),
 **Filled engrave**, and **Outline + filled engrave**, alongside outline and
 stencil cuts. Combined text has grouped Raster and Line operations with separate
 settings. New operations start with Output off; configure speed/power in
-Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). Implemented in source;
-the installed DEV TEST executable has not been updated for this feature.
+Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). E3 DEV TEST 0.8.43 contains this feature; operator testing remains pending.
 
 ## Manual workpiece height
 

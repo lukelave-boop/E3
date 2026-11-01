@@ -4,10 +4,11 @@
 
 Implemented in source: built-in single-line lettering, filled normal-font text,
 and grouped raster-plus-outline operations with atomic undo/redo and ordinary
-PATH persistence. Existing outline and stencil modes remain. Pending: Windows
-compatibility CI, frozen feature handoff, operator/material verification,
-additional stroke fonts/Unicode coverage, and editable regeneration of saved
-text. No physical engraving or controller behavior is claimed verified.
+PATH persistence. Existing outline and stencil modes remain. Windows
+compatibility CI passed and E3 DEV TEST selects frozen build 0.8.43. Remaining:
+operator/material verification, additional stroke fonts/Unicode coverage, and
+editable regeneration of saved text. No physical engraving or controller
+behavior is claimed verified.
 
 ## Retain stationary Z after Stop job
 
