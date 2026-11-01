@@ -7,8 +7,9 @@ plus selectable **Relief SingleLine**,
 stencil cuts. Combined text has grouped Raster and Line operations with separate
 settings. New operations start with Output off; configure speed/power in
 Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). E3 DEV TEST selects the
-verified corrected-font build **0.8.45**. Recreate previously saved text to use
-the new fonts; physical engraving and operator acceptance remain pending.
+verified Twin Sans build **0.8.47**. Recreate previously saved text to use
+the new font; the specimen is approved, while application/operator testing
+and physical engraving remain pending.
 
 ## Manual workpiece height
 

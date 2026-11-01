@@ -7,6 +7,8 @@
 - Keep curves smooth across font coordinate scales and preserve multiline
   spacing for fonts that store descent as a positive distance.
 - Retain other font choices and existing saved text geometry.
+- Integrate into main after full Windows compatibility and frozen checks pass;
+  select verified 0.8.47 through the permanent E3 DEV TEST launcher.
 
 ## Correct single-line lettering (2026-11-01)
 

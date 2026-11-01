@@ -4,8 +4,10 @@
 
 The operator approved the original Twin Sans specimen. It is now the source
 default for single-line engraving, with bundled OFL data and normalized curve
-precision. Existing fonts remain selectable. Application and physical engraving
-acceptance remain separate from approval of the font specimen.
+precision. Existing fonts remain selectable. Full Windows compatibility and
+frozen verification passed; integrated into main and selected as build 0.8.47
+in E3 DEV TEST. Application and physical engraving acceptance remain separate
+from approval of the font specimen.
 
 ## Stroke-font quality correction (2026-11-01)
 

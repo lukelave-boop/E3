@@ -14,13 +14,30 @@ passed 602 tests, plus three final open-path/multiline checks after extending
 coverage to Twin Sans. Repository Ruff and application compileall passed. The
 initial sandbox temporary-folder errors were resolved by using a workspace test
 directory. Offscreen default and multiline dialogs were rendered and inspected.
-Full compatibility CI and frozen handoff are pending; DEV TEST still selects
-0.8.45 until verification completes. No physical engraving or interactive
-operator acceptance is claimed.
+[Compatibility CI](https://github.com/lukelave-boop/E3/actions/runs/41342043101)
+passed Windows Python 3.10 (7,604 passed / 189 skipped), Windows Python 3.12 desktop
+(9,673 passed / 69 skipped), Ruff and POSIX recovery (1,641 passed / 2 skipped).
+[Windows packaging](https://github.com/lukelave-boop/E3/actions/runs/41342045841)
+passed the canonical builder and frozen source/resource/native-profile checks:
+202 application modules and 18 resources. Downloaded font/license bytes and EXE
+SHA-256 match the report: `eb1f4b92786bb8467de1cd69c63742e9b132036c5ac0d6bc845d88a0e59c5168`.
+
+E3 DEV TEST now selects **0.8.47**, branch **main**, frozen revision
+`eacd129e12cac87acd5a22c66fb7338656fb2904`. Target:
+`C:/Users/lukel/.codex/worktrees/text-engraving-modes/E3/build/twin-sans-eacd129/E3.exe`.
+The canonical updater atomically selected the exact verified build. The permanent
+launcher hash is unchanged; normal E3 and running processes were not changed.
+The tested code is integrated into main. The selected bundle must remain here.
+Evidence, offscreen previews and the previous pointer are in ignored
+`build/free-font-samples`; the frozen report is beside the EXE.
+No frozen application launch, interactive GUI acceptance, camera/controller
+connection, laser output or physical engraving was performed. The font specimen
+is operator-approved; application/operator and material testing remain pending.
 
 ## Correcting single-line lettering (2026-11-01)
 
-E3 DEV TEST selects **0.8.45**, branch **main**, frozen revision
+Historical handoff, superseded by 0.8.47 above: E3 DEV TEST selected
+**0.8.45**, branch **main**, frozen revision
 `c149e476372134f7a987ef6c3ea269ef841cfb4d`. Target:
 `C:/Users/lukel/.codex/worktrees/text-engraving-modes/E3/build/proper-stroke-c149e47/E3.exe`.
 The canonical pointer updater validated the adjacent metadata and selected this
