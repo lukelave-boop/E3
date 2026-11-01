@@ -38,7 +38,8 @@ def bundle(verifier, tmp_path, monkeypatch):
     sources = {name.replace(".", "/") + ".py": b"value = 1\n" for name in verifier.REQUIRED_MODULES}
     sources["packaging/e3_entry.py"] = b"entry = True\n"
     resources = ("config/default.json", "laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md",
-                 "laser_aligner/web/app.js", "laser_aligner/web/index.html", "laser_aligner/web/style.css")
+                 "laser_aligner/web/app.js", "laser_aligner/web/index.html", "laser_aligner/web/style.css",
+                 "laser_aligner/project/fonts/font.svg", "laser_aligner/project/fonts/license.txt")
     for path in resources:
         sources[path] = b"fixture resource\n"
         destination = directory / path if path.startswith("config/") else directory / "_internal" / path
@@ -58,7 +59,7 @@ def bundle(verifier, tmp_path, monkeypatch):
         if arguments[0] == "rev-parse":
             return revision.encode()
         if arguments[0] == "ls-tree":
-            return b""
+            return b"laser_aligner/project/fonts/font.svg\nlaser_aligner/project/fonts/license.txt\n"
         return sources[arguments[1].split(":", 1)[1]]
 
     monkeypatch.setattr(verifier, "git", git)
@@ -72,9 +73,11 @@ def test_exact_archive_reports_identity_modules_resources_and_hash(verifier, bun
     assert len(result["exe_sha256"]) == 64
     assert result["build_info"]["revision"] == bundle.revision
     assert "config/default.json" in result["verified_resources"]
+    assert "laser_aligner/project/fonts/font.svg" in result["verified_resources"]
+    assert "laser_aligner/project/fonts/license.txt" in result["verified_resources"]
 
 
-@pytest.mark.parametrize("change", ["module", "entry", "source", "resource", "missing", "metadata", "revision"])
+@pytest.mark.parametrize("change", ["module", "entry", "source", "resource", "font", "license", "missing", "metadata", "revision"])
 def test_mixed_or_incomplete_bundle_is_rejected(verifier, bundle, change):
     name = "laser_aligner.state_scope"
     if change == "module":
@@ -85,6 +88,9 @@ def test_mixed_or_incomplete_bundle_is_rejected(verifier, bundle, change):
         (bundle.root / "laser_aligner/state_scope.py").write_text("value = 2")
     elif change == "resource":
         (bundle.exe.parent / "config/default.json").write_text("different")
+    elif change in {"font", "license"}:
+        filename = "font.svg" if change == "font" else "license.txt"
+        (bundle.exe.parent / "_internal/laser_aligner/project/fonts" / filename).write_text("different")
     elif change == "missing":
         del bundle.pyz.toc[name]
     elif change == "metadata":

@@ -1,0 +1,18 @@
+Bundled single-line fonts (downloaded 2026-11-01)
+
+Relief SingleLine: https://github.com/isdat-type/Relief-SingleLine
+Original file: fonts/open_svg/ReliefSingleLineSVG-Regular.svg
+License: SIL Open Font License 1.1; see Relief-OFL.txt and embedded credits.
+
+Hershey Sans and Script: https://gitlab.com/oskay/svg-fonts
+Original files: fonts/Hershey/HersheySans1.svg and HersheyScript1.svg
+License and attribution are embedded in each unmodified SVG file.
+
+The font files are redistributed unmodified. E3 uses their explicit pen paths
+and advance widths. It does not trace outlines or synthesize missing glyphs.
+
+SHA-256:
+HersheySans1.svg: 998705d56cf5148e5b6ef8149801edda3e594ff778f65c84e97977e809db5ed3
+HersheyScript1.svg: 26854b00c2147c2a0a27dba488d7a696db581603ff43f4b85f07b435246d473f
+Relief-OFL.txt: 005834fd32a01fb021a44167cafd4fa3df8058a7b0fb7319bd19b445d2fe24a3
+ReliefSingleLineSVG-Regular.svg: 75f05a5b64ed6039c9816628ee051d98e16c19148a8268c63f5eccf8382479e2

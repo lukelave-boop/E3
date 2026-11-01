@@ -293,9 +293,13 @@ or custom uncut margins. The original irregular polygon controls containment;
 its simplified edges are used only for rotation choices.
 
 The Text action opens a vector-text dialog rather than creating a display-
-only TEXT object. **Single-line engrave** uses the built-in **E3 Single Stroke**
-font: uppercase/lowercase English letters, digits, and ASCII punctuation, with
-spaces and multiple lines. Unsupported characters are rejected, not replaced.
+only TEXT object. **Single-line engrave** has a Font dropdown with bundled
+**Relief SingleLine** (default, smooth sans lettering), **Hershey Sans**, and
+**Hershey Script**. These are the fonts' original open paths, with their advance
+widths, kerning where provided, and multiline layout. Supported accented letters
+are available; unsupported characters are rejected, not replaced. Previously
+saved text remains unchanged, including geometry created with the retired crude
+E3 Single Stroke font. Create new text to use the corrected fonts.
 Installed fonts remain available for **Filled engrave**, which raster engraves
 letter interiors while leaving counters (such as the center of O) empty.
 **Outline + filled engrave** creates two aligned, grouped copies on separate

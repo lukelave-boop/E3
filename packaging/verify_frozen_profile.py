@@ -70,8 +70,9 @@ def verify_archive(root: Path, exe: Path, revision: str) -> dict:
     entry = marshal.loads(archive.extract("e3_entry"))
     require(entry == compile(source("packaging/e3_entry.py"), entry.co_filename, "exec", dont_inherit=True, optimize=0),
             "Archived entrypoint differs from committed source")
-    assets = git(root, "ls-tree", "-r", "--name-only", revision, "laser_aligner/desktop/assets").decode().splitlines()
-    resources = [path for path in assets if path.endswith(".svg")]
+    assets = git(root, "ls-tree", "-r", "--name-only", revision,
+                 "laser_aligner/desktop/assets", "laser_aligner/project/fonts").decode().splitlines()
+    resources = [path for path in assets if path.endswith((".svg", ".txt"))]
     resources += ["laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md", "laser_aligner/web/app.js",
                   "laser_aligner/web/index.html", "laser_aligner/web/style.css", "config/default.json"]
     for path in resources:

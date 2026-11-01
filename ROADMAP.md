@@ -1,5 +1,13 @@
 # Roadmap
 
+## Stroke-font quality correction (2026-11-01)
+
+The operator rejected the crude single-line font in 0.8.43. Source now uses
+selectable Relief SingleLine and Hershey Sans/Script fonts, with the conventional
+smooth Relief face as default. Font data and licenses are bundled; existing
+saved paths are unchanged. Corrected build handoff and operator review are
+pending. Additional fonts and editable regeneration remain future work.
+
 ## Text engraving modes (2026-11-01)
 
 Implemented in source: built-in single-line lettering, filled normal-font text,

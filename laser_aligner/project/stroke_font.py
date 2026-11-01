@@ -1,79 +1,112 @@
-"""Original geometric single-stroke alphabet, independent of installed fonts/Qt.
+"""Layout licensed, bundled open-path fonts without Qt or installed-font lookup."""
 
-Coordinates use a 4 x 6 cap-height grid with Y down. Spaces separate pen-down
-strokes, pairs encode vertices. Lowercase has a four-unit x-height and optional
-descenders. No contour tracing or implicit closing segment is involved.
-"""
+from __future__ import annotations
 
-STROKE_FONT_NAME = "E3 Single Stroke"
+import math
+import unicodedata
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
-_GLYPHS = {
-    "A": "062046 1333", "B": "0006 003041423303 033344453606",
-    "C": "4130100105163645", "D": "00063645413000",
-    "E": "40000646 0333", "F": "060040 0333",
-    "G": "41301001051636454323", "H": "0006 4046 0343",
-    "I": "0040 2026 0646", "J": "0040 4045351605",
-    "K": "0006 400346", "L": "000646",
-    "M": "0600234046",
-    "N": "06004640", "O": "103041453616050110",
-    "P": "06003041423303", "Q": "103041453616050110 2447",
-    "R": "06003041423303 2346", "S": "4130100112233445361605",
-    "T": "0040 2026", "U": "000516364540", "V": "002640",
-    "W": "0006234640", "X": "0046 4006", "Y": "002340 2326",
-    "Z": "00400646",
-    "a": "4332120305163645 4246", "b": "0006 03324345361605",
-    "c": "4332120305163645", "d": "4046 4332120305163645",
-    "e": "04444332120305163645", "f": "16112030 0333",
-    "g": "4536160503123243 4247371707", "h": "0006 03324346",
-    "i": "2021 2226", "j": "3031 32371707",
-    "k": "0006 420446", "l": "10152636", "m": "0602132326 23334346",
-    "n": "0602 03324346", "o": "123243453616050312",
-    "p": "0208 03324345361605", "q": "4248 4332120305163645",
-    "r": "0206 033243", "s": "4332120314243546361605",
-    "t": "20253646 0242", "u": "0205163645 4246",
-    "v": "022642", "w": "020614264642", "x": "0246 4206",
-    "y": "022642 2608", "z": "02420646",
-    "0": "103041453616050110 0541", "1": "112026 0646",
-    "2": "0110304142230646", "3": "0040233445361605",
-    "4": "300444 3036", "5": "400003334445361605",
-    "6": "4030100105163645443303", "7": "004016",
-    "8": "1302011030414233 1304051636454433 1333",
-    "9": "103041423313020110 4245361606",
-    ".": "2526", ",": "252617", ":": "2223 2526", ";": "2223 252617",
-    "!": "2024 2526", "?": "01103041422324 2526",
-    "'": "2022", '"': "1012 3032", "`": "1021",
-    "-": "0343", "_": "0646", "+": "0343 2125", "=": "0242 0444",
-    "/": "0640", "\\": "0046", "|": "2026",
-    "(": "3011121536", ")": "1031323516", "[": "30202636",
-    "]": "10202616", "{": "30212213242536", "}": "10212233242516",
-    "<": "410345", ">": "014305", "^": "022042", "~": "0312233243",
-    "*": "2125 1234 3214", "#": "1016 3036 0242 0444",
-    "%": "0640 0010110100 3545463635", "$": "4130100112233445361605 2026",
-    "&": "462112011022450616052334", "@": "443424232232444130100105163646",
+import numpy as np
+
+from ..geometry.svg import _GeometryBudget, _path_to_polylines
+from .path_geometry import MAX_NATIVE_PATH_FLATTENED_POINTS
+
+STROKE_FONT_NAME = "Relief SingleLine"
+STROKE_FONTS = {
+    STROKE_FONT_NAME: "ReliefSingleLineSVG-Regular.svg",
+    "Hershey Sans": "HersheySans1.svg",
+    "Hershey Script": "HersheyScript1.svg",
 }
+_NS = "{http://www.w3.org/2000/svg}"
 
 
-def stroke_text_lines(text: str) -> list[list[tuple[float, float]]]:
-    """Return centered-line layout in font units, rejecting unsupported glyphs."""
-    unsupported = sorted(set(text) - set(_GLYPHS) - {" ", "\n", "\r", "\t"})
+@dataclass(frozen=True)
+class _Font:
+    glyphs: dict[str, ET.Element]
+    advance: float
+    cap_height: float
+    line_height: float
+    kerning: dict[tuple[str, str], float]
+
+
+@lru_cache(maxsize=3)
+def _font(name: str) -> _Font:
+    if name not in STROKE_FONTS:
+        raise ValueError(f"Unknown single-line font: {name}")
+    root = ET.parse(Path(__file__).with_name("fonts") / STROKE_FONTS[name]).getroot()
+    font = root.find(f"{_NS}defs/{_NS}font")
+    if font is None:
+        raise ValueError(f"Missing bundled single-line font: {name}")
+    face = font.find(f"{_NS}font-face")
+    if face is None:
+        raise ValueError(f"Missing font metrics: {name}")
+    glyphs = {g.get("unicode"): g for g in font.findall(f"{_NS}glyph") if len(g.get("unicode", "")) == 1}
+    kerning = {}
+    for pair in font.findall(f"{_NS}hkern"):
+        for left in pair.get("g1", "").split(","):
+            for right in pair.get("g2", "").split(","):
+                kerning[left, right] = float(pair.get("k", "0"))
+    return _Font(
+        glyphs, float(font.get("horiz-adv-x", "0")), float(face.get("cap-height", "1")),
+        (float(face.get("ascent", "800")) - float(face.get("descent", "-200"))) * 1.2,
+        kerning,
+    )
+
+
+@lru_cache(maxsize=1024)
+def _glyph_strokes(name: str, character: str) -> tuple[tuple[tuple[float, float], ...], ...]:
+    data = _font(name).glyphs[character].get("d", "")
+    if not data:
+        return ()
+    # Reuse the bounded SVG curve parser. Tolerance is in source font units
+    # (typically 1000/em), before the ordinary text-height and output guards.
+    paths = _path_to_polylines(data, 0.1, np.eye(3), _GeometryBudget(strict_tolerance=True))
+    return tuple(tuple((float(x), float(y)) for x, y in path.points) for path in paths)
+
+
+def stroke_text_lines(text: str, font_name: str = STROKE_FONT_NAME) -> list[list[tuple[float, float]]]:
+    """Lay out original font strokes, with advance widths, kerning and line breaks."""
+    if len(text) > 4096:
+        raise ValueError("Single-line text is limited to 4096 characters per object")
+    font = _font(font_name)
+    text = unicodedata.normalize("NFC", text).expandtabs(4)
+    unsupported = sorted(set(text) - set(font.glyphs) - {"\n", "\r"})
     if unsupported:
-        raise ValueError(
-            "Single-line text supports English letters, digits and ASCII punctuation. "
-            f"Unsupported characters: {''.join(unsupported)!r}"
-        )
-    lines = text.expandtabs(4).splitlines()
-    widest = max((len(line) for line in lines), default=0)
+        raise ValueError(f"Unsupported characters in {font_name}: {''.join(unsupported)!r}")
+    layouts = []
+    for line in text.splitlines():
+        pen_x = 0.0
+        previous = ""
+        placed = []
+        for character in line:
+            glyph = font.glyphs[character]
+            glyph_name = glyph.get("glyph-name", "")
+            pen_x -= font.kerning.get((previous, glyph_name), 0.0)
+            placed.append((pen_x, character))
+            advance = float(glyph.get("horiz-adv-x", str(font.advance)))
+            if not math.isfinite(advance) or advance <= 0:
+                raise ValueError(f"Invalid glyph advance in {font_name}: {character!r}")
+            pen_x += advance
+            previous = glyph_name
+        layouts.append((pen_x, placed))
+    widest = max((width for width, _ in layouts), default=0.0)
+    scale = 6.0 / font.cap_height
     result = []
-    for row, line in enumerate(lines):
-        offset = (widest - len(line)) * 3.0
-        for column, character in enumerate(line):
-            if character == " ":
-                continue
-            for stroke in _GLYPHS[character].split():
+    point_count = 0
+    for row, (width, placed) in enumerate(layouts):
+        offset = (widest - width) / 2.0
+        for pen_x, character in placed:
+            for stroke in _glyph_strokes(font_name, character):
+                point_count += len(stroke)
+                if point_count > MAX_NATIVE_PATH_FLATTENED_POINTS:
+                    raise ValueError("Single-line text exceeds the path point limit; use shorter text")
                 result.append([
-                    (offset + column * 6 + int(stroke[i]), row * 10 + int(stroke[i + 1]))
-                    for i in range(0, len(stroke), 2)
+                    ((offset + pen_x + x) * scale, (row * font.line_height - y) * scale)
+                    for x, y in stroke
                 ])
     if not result:
-        raise ValueError("Text cannot be empty")
+        raise ValueError("Text contains no engravable strokes")
     return result

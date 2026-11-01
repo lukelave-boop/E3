@@ -3,9 +3,17 @@
 ## Desktop text engraving
 
 The text dialog also offers single-line, raster-filled, and outline-plus-filled
-creation. `project/stroke_font.py` is a Qt/HTTP-free, original geometric stroke
-alphabet; `desktop/text_geometry.py` scales its explicit pen paths and preserves
-open endpoints without implicit closure. Unsupported glyphs reject creation.
+creation. `project/stroke_font.py` is a Qt/HTTP-free adapter for unmodified,
+licensed Relief SingleLine and Hershey Sans/Script SVG font resources. It uses
+the existing bounded SVG path parser (0.1 source-font-unit curve tolerance),
+font advance widths, provided glyph-name kerning and NFC normalization. Text
+is bounded to 4096 input characters and the project flattened-point limit.
+`desktop/text_geometry.py` scales explicit pen paths and preserves open endpoints
+without implicit closure. Unknown fonts and unsupported glyphs reject creation.
+The Font dropdown preserves separate stroke/installed-font selections. Font data,
+attributions and licenses are packaged and checked against committed bytes by
+the frozen verifier. Existing saved PATH objects never reload or regenerate from
+font metadata, so replacing the retired crude font cannot change saved geometry.
 `desktop/text_creation.py` stages ordinary PATH objects and matching operation
 layers in one undoable command. Combined text groups two copies and appends a
 Raster layer before a Line layer using priorities above existing layers. New

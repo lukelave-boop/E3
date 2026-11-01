@@ -1,10 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
-Desktop text now includes **Single-line engrave** (built-in E3 Single Stroke),
+Desktop text includes **Single-line engrave** with selectable **Relief SingleLine**,
+**Hershey Sans**, and **Hershey Script** fonts,
 **Filled engrave**, and **Outline + filled engrave**, alongside outline and
 stencil cuts. Combined text has grouped Raster and Line operations with separate
 settings. New operations start with Output off; configure speed/power in
-Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). E3 DEV TEST 0.8.43 contains this feature; operator testing remains pending.
+Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). The crude font in 0.8.43
+has been replaced in source; a corrected Windows feature build is being prepared.
 
 ## Manual workpiece height
 

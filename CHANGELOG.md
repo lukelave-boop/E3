@@ -1,5 +1,14 @@
 # Changelog
 
+## Correct single-line lettering (2026-11-01)
+
+- Replace the crude hand-drawn alphabet shipped in 0.8.43 with original,
+  licensed Relief SingleLine, Hershey Sans and Hershey Script font data.
+- Default to Relief's smooth lettering; allow stroke-font selection with live
+  preview, original spacing/kerning and supported accented characters.
+- Preserve existing saved text geometry and filled/outline/stencil behavior.
+- Verify bundled fonts and license files as part of frozen build verification.
+
 ## Single-line and filled text (2026-11-01)
 
 - Add single-line engraving with an original built-in stroke font supporting

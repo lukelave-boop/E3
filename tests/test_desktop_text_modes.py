@@ -29,7 +29,7 @@ from laser_aligner.project import (
     load_project,
     save_project,
 )
-from laser_aligner.project.stroke_font import STROKE_FONT_NAME, stroke_text_lines
+from laser_aligner.project.stroke_font import STROKE_FONT_NAME, STROKE_FONTS, stroke_text_lines
 from laser_aligner.project.toolpath import _scanline_rows, object_polylines
 
 
@@ -43,16 +43,17 @@ def application():
     yield app
 
 
-def options(mode="single_line", text="E3", height=20):
-    return TextVectorOptions(text, "Arial", height, mode=mode)
+def options(mode="single_line", text="E3", height=20, font=STROKE_FONT_NAME):
+    return TextVectorOptions(text, font if mode == "single_line" else "Arial", height, mode=mode)
 
 
 @pytest.mark.parametrize("character", string.ascii_letters + string.digits + string.punctuation)
-def test_every_stroke_glyph_produces_finite_nonzero_segments(character):
-    strokes = stroke_text_lines(character)
+@pytest.mark.parametrize("font", STROKE_FONTS)
+def test_every_stroke_glyph_produces_finite_nonzero_segments(character, font):
+    strokes = stroke_text_lines(character, font)
     assert strokes
-    item = create_vector_text_object("line", options(text=character), center=(50, 50))
-    assert item.metadata["text_font_family"] == STROKE_FONT_NAME
+    item = create_vector_text_object("line", options(text=character, font=font), center=(50, 50))
+    assert item.metadata["text_font_family"] == font
     for path in object_polylines(item):
         assert all(math.dist(a, b) > 0 for a, b in zip(path.points, path.points[1:], strict=False))
     for stroke in strokes:
@@ -65,17 +66,20 @@ def test_single_line_e_has_no_implicit_closing_or_double_outline():
     paths = object_polylines(item)
     assert len(paths) == 2
     assert all(not path.closed for path in paths)
-    assert sum(math.dist(a, b) for path in paths for a, b in zip(path.points, path.points[1:], strict=False)) == pytest.approx(17)
+    length = sum(math.dist(a, b) for path in paths for a, b in zip(path.points, path.points[1:], strict=False))
+    assert length == pytest.approx((361 * 2 + 660 + 344) * 6 / 680)
 
 
 def test_multiline_stroke_text_centers_each_line_and_preserves_case():
-    paths = stroke_text_lines("AB\na")
-    assert min(x for x, y in paths[-2] if y >= 10) == 3
+    solo = stroke_text_lines("A")
+    paths = stroke_text_lines("AA\nA")
+    assert paths[-2][0][0] - solo[0][0][0] == pytest.approx(338 * 6 / 680)
+    assert paths[-2][0][1] - solo[0][0][1] == pytest.approx(1200 * 6 / 680)
     assert stroke_text_lines("a") != stroke_text_lines("A")
     assert stroke_text_lines("A\tB") == stroke_text_lines("A   B")
 
 
-@pytest.mark.parametrize("text", ["", " \t\n", "Café", "E3🔥", "A\x00"])
+@pytest.mark.parametrize("text", ["", " \t\n", "漢", "E3🔥", "A\x00"])
 def test_invalid_stroke_text_leaves_document_and_history_untouched(text):
     document = ProjectDocument.new()
     before = document.to_dict()
@@ -158,9 +162,10 @@ def test_stroke_on_raster_layer_gets_separate_line_operation():
 
 
 @pytest.mark.parametrize("mode", ["single_line", "filled", "outline_filled"])
-def test_text_program_uses_existing_guards_and_rejects_out_of_bounds(mode):
+@pytest.mark.parametrize("font", STROKE_FONTS)
+def test_text_program_uses_existing_guards_and_rejects_out_of_bounds(mode, font):
     document = ProjectDocument.new()
-    command = CreateTextCommand(document, document.active_layer_id, options(mode), center=(50, 50))
+    command = CreateTextCommand(document, document.active_layer_id, options(mode, font=font), center=(50, 50))
     command.redo()
     for layer in document.layers:
         layer.output_enabled = True
@@ -203,15 +208,25 @@ def test_text_dialog_switches_fonts_bridges_and_rejects_unsupported_strokes():
     assert ok.isEnabled()
     assert not dialog.font_combo.isEnabled()
     assert not dialog.auto_bridge.isEnabled()
-    assert "E3 Single Stroke" in dialog.preview_status.text()
+    assert STROKE_FONT_NAME in dialog.preview_status.text()
     assert dialog.options().font_family == STROKE_FONT_NAME
-    dialog.text_edit.setPlainText("Café")
+    dialog.text_edit.setPlainText("漢")
     assert not ok.isEnabled()
     assert "Unsupported" in dialog.preview_status.text()
     dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("outline_filled"))
     assert ok.isEnabled() and dialog.font_combo.isEnabled()
     assert "Raster first" in dialog.preview_status.text()
     dialog.text_edit.setPlainText("E3")
+    original_font = dialog.font_combo.currentFont().family()
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("single_line"))
+    preview = dialog.preview.pixmap().toImage()
+    dialog.stroke_font_combo.setCurrentText("Hershey Script")
+    assert dialog.options().font_family == "Hershey Script"
+    assert dialog.preview.pixmap().toImage() != preview
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("outline"))
+    assert dialog.font_combo.currentFont().family() == original_font
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("single_line"))
+    assert dialog.options().font_family == "Hershey Script"
     for mode in ("outline", "stencil", "single_line", "filled", "outline_filled"):
         dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData(mode))
         assert ok.isEnabled()

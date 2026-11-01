@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ..project import SceneObject
-from ..project.stroke_font import STROKE_FONT_NAME, stroke_text_lines
+from ..project.stroke_font import stroke_text_lines
 from .qt import require_qt
 
 QtCore, QtGui, _QtWidgets = require_qt()
@@ -220,7 +220,7 @@ def build_vector_text_path(
 ) -> tuple[QtGui.QPainterPath, float, int]:
     if options.mode == "single_line":
         path = QtGui.QPainterPath()
-        for stroke in stroke_text_lines(options.text):
+        for stroke in stroke_text_lines(options.text, options.font_family):
             path.moveTo(*stroke[0])
             for point in stroke[1:]:
                 path.lineTo(*point)
@@ -302,9 +302,7 @@ def create_vector_text_object(
     item.metadata.update(
         {
             "text_source": options.text,
-            "text_font_family": (
-                STROKE_FONT_NAME if options.mode == "single_line" else options.font_family
-            ),
+            "text_font_family": options.font_family,
             "text_vector_mode": options.mode,
             "text_height_mm": options.height_mm,
             "text_bridge_width_mm": bridge_width_mm,

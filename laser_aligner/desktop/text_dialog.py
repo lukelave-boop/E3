@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..project.stroke_font import STROKE_FONT_NAME
+from ..project.stroke_font import STROKE_FONTS
 from .controls import NumericDoubleSpinBox
 from .qt import require_qt
 from .text_geometry import (
@@ -38,12 +38,13 @@ class VectorTextDialog(QtWidgets.QDialog):
         self.text_edit.setMaximumHeight(86)
         self.font_combo = QtWidgets.QFontComboBox()
         self.font_combo.setCurrentFont(QtGui.QFont("Arial"))
-        self.stroke_font_label = QtWidgets.QLabel(STROKE_FONT_NAME)
+        self.stroke_font_combo = QtWidgets.QComboBox()
+        self.stroke_font_combo.addItems(list(STROKE_FONTS))
         font_row = QtWidgets.QWidget()
         font_layout = QtWidgets.QHBoxLayout(font_row)
         font_layout.setContentsMargins(0, 0, 0, 0)
         font_layout.addWidget(self.font_combo)
-        font_layout.addWidget(self.stroke_font_label)
+        font_layout.addWidget(self.stroke_font_combo)
         self.mode_combo = QtWidgets.QComboBox()
         self.mode_combo.addItem("Outline cut", "outline")
         self.mode_combo.addItem("Stencil-safe cut", "stencil")
@@ -108,6 +109,7 @@ class VectorTextDialog(QtWidgets.QDialog):
 
         self.text_edit.textChanged.connect(self._refresh_preview)
         self.font_combo.currentFontChanged.connect(self._refresh_preview)
+        self.stroke_font_combo.currentTextChanged.connect(self._refresh_preview)
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         self.height_spin.valueChanged.connect(self._height_changed)
         self.auto_bridge.toggled.connect(self._bridge_mode_changed)
@@ -118,7 +120,7 @@ class VectorTextDialog(QtWidgets.QDialog):
         return TextVectorOptions(
             text=self.text_edit.toPlainText(),
             font_family=(
-                STROKE_FONT_NAME if self.mode_combo.currentData() == "single_line"
+                self.stroke_font_combo.currentText() if self.mode_combo.currentData() == "single_line"
                 else self.font_combo.currentFont().family()
             ),
             height_mm=self.height_spin.value(),
@@ -134,15 +136,13 @@ class VectorTextDialog(QtWidgets.QDialog):
         single_line = self.mode_combo.currentData() == "single_line"
         self.font_combo.setEnabled(not single_line)
         self.font_combo.setVisible(not single_line)
-        self.stroke_font_label.setVisible(single_line)
+        self.stroke_font_combo.setVisible(single_line)
         self.height_spin.setToolTip(
             "Overall text height; short single-line glyphs use at least one capital-letter height."
             if single_line else "Overall height of the complete text block."
         )
-        self.font_combo.setToolTip(
-            "Single-line mode uses E3 Single Stroke (English letters, digits and punctuation)."
-            if single_line else "Choose an installed outline font."
-        )
+        self.font_combo.setToolTip("Choose an installed outline font.")
+        self.stroke_font_combo.setToolTip("Bundled engraving fonts with genuine single-line paths.")
         self.bridge_label.setEnabled(stencil)
         self.auto_bridge.setEnabled(stencil)
         self.bridge_spin.setEnabled(stencil and not self.auto_bridge.isChecked())
@@ -210,8 +210,8 @@ class VectorTextDialog(QtWidgets.QDialog):
             )
         elif self.mode_combo.currentData() == "single_line":
             self.preview_status.setText(
-                "E3 Single Stroke: each stroke is a laser path, without font outlines. "
-                "Supports English letters, digits and punctuation. Uses a Line operation."
+                f"{self.stroke_font_combo.currentText()}: engraves the font's original "
+                "letter strokes. Uses a Line operation."
             )
         elif self.mode_combo.currentData() == "filled":
             self.preview_status.setText(

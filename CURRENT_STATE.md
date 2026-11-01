@@ -1,5 +1,27 @@
 # Current repository state
 
+## Correcting single-line lettering (2026-11-01)
+
+The operator rejected the crude hand-drawn glyphs shipped in 0.8.43. They have
+been removed from new text creation. Relief SingleLine is now the default;
+Hershey Sans and Hershey Script are selectable in an actual Font dropdown.
+Unmodified upstream SVG font resources and licenses are bundled. Original
+curves use the existing bounded SVG parser, with original advance widths,
+kerning where provided and NFC normalization. Missing glyphs and unknown fonts
+reject; text and aggregate geometry are bounded. Saved PATH geometry is not
+regenerated, so existing projects are unchanged. Machine/planner and browser
+SVG behavior are unchanged; no hardware commands are involved.
+
+Windows/Python 3.14 checks: 502 focused tests passed across font data,
+all printable ASCII glyphs in each font, desktop text geometry/dialogs,
+stencil regression, guarded toolpaths and frozen resource verification.
+Repository Ruff and application compileall passed.
+Offscreen screenshots of all three choices were rendered; the corrected Relief
+E3 preview was visually inspected and shown to the operator. The corrected
+frozen build and compatibility CI remain pending.
+This is source/offscreen verification, not physical engraving or operator
+acceptance. The previous 0.8.43 pointer has not yet been changed.
+
 ## Single-line and filled text (2026-11-01)
 
 E3 DEV TEST now selects **0.8.43**, branch **main**, frozen revision

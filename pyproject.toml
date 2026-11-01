@@ -46,6 +46,8 @@ laser_aligner = [
   "web/*.js",
   "web/*.css",
   "desktop/assets/*.svg",
+  "project/fonts/*.svg",
+  "project/fonts/*.txt",
   "operator_docs/*.md"
 ]
 
