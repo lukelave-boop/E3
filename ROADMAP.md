@@ -5,15 +5,17 @@
 The operator rejected the crude single-line font in 0.8.43. Source now uses
 selectable Relief SingleLine and Hershey Sans/Script fonts, with the conventional
 smooth Relief face as default. Font data and licenses are bundled; existing
-saved paths are unchanged. Corrected build handoff and operator review are
-pending. Additional fonts and editable regeneration remain future work.
+saved paths are unchanged. Full Windows compatibility and frozen verification
+passed; E3 DEV TEST selects corrected build 0.8.45, integrated into main.
+Operator review remains pending. Additional fonts and editable regeneration
+remain future work.
 
 ## Text engraving modes (2026-11-01)
 
 Implemented in source: built-in single-line lettering, filled normal-font text,
 and grouped raster-plus-outline operations with atomic undo/redo and ordinary
 PATH persistence. Existing outline and stencil modes remain. Windows
-compatibility CI passed and E3 DEV TEST selects frozen build 0.8.43. Remaining:
+compatibility CI passed; the original 0.8.43 handoff is superseded by 0.8.45 above. Remaining:
 operator/material verification, additional stroke fonts/Unicode coverage, and
 editable regeneration of saved text. No physical engraving or controller
 behavior is claimed verified.

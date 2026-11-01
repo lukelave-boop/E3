@@ -2,6 +2,13 @@
 
 ## Correcting single-line lettering (2026-11-01)
 
+E3 DEV TEST selects **0.8.45**, branch **main**, frozen revision
+`c149e476372134f7a987ef6c3ea269ef841cfb4d`. Target:
+`C:/Users/lukel/.codex/worktrees/text-engraving-modes/E3/build/proper-stroke-c149e47/E3.exe`.
+The canonical pointer updater validated the adjacent metadata and selected this
+build atomically. The permanent launcher hash is unchanged. The selected bundle
+must remain in this worktree; normal E3 and running applications were not changed.
+
 The operator rejected the crude hand-drawn glyphs shipped in 0.8.43. They have
 been removed from new text creation. Relief SingleLine is now the default;
 Hershey Sans and Hershey Script are selectable in an actual Font dropdown.
@@ -18,13 +25,29 @@ stencil regression, guarded toolpaths and frozen resource verification.
 Repository Ruff and application compileall passed.
 Offscreen screenshots of all three choices were rendered; the corrected Relief
 E3 preview was visually inspected and shown to the operator. The corrected
-frozen build and compatibility CI remain pending.
-This is source/offscreen verification, not physical engraving or operator
-acceptance. The previous 0.8.43 pointer has not yet been changed.
+frozen build passed the canonical Windows builder and archived source/resource
+and isolated native-profile verification.
+
+[Compatibility CI](https://github.com/lukelave-boop/E3/actions/runs/41336518074)
+passed Windows Python 3.10 (7,601 passed / 189 skipped), Windows Python 3.12 desktop
+(9,572 passed / 69 skipped), Ruff and POSIX recovery (1,641 passed / 2 skipped).
+[Windows packaging](https://github.com/lukelave-boop/E3/actions/runs/41336520535)
+verified 202 application modules and 16 resources, including all five font and
+license files. The downloaded EXE hash and bundled font/license bytes match the
+report and source. EXE SHA256:
+`06f794867c1c3e870964bf49d80e33c8693c7b0373289ae93e86849e3d2036f0`.
+Evidence, offscreen previews and the previous pointer are retained in ignored
+`build/font-reference`; the frozen report is beside the selected EXE.
+
+The tested code is integrated into main. No frozen desktop launch, interactive
+GUI acceptance, camera/controller connection, laser output or physical engraving
+was performed. Operator acceptance remains pending. Existing saved text must be
+recreated to use the replacement fonts.
 
 ## Single-line and filled text (2026-11-01)
 
-E3 DEV TEST now selects **0.8.43**, branch **main**, frozen revision
+Historical handoff, superseded by 0.8.45 above: E3 DEV TEST selected **0.8.43**,
+branch **main**, frozen revision
 `4313d6b36638f4ec4311fa86dad9724ea4a373de`. Target:
 `C:/Users/lukel/Documents/E3/build/text-engraving-4313d6b/E3.exe`.
 The canonical pointer updater validated the adjacent build metadata and wrote

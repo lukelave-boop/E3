@@ -8,6 +8,9 @@
   preview, original spacing/kerning and supported accented characters.
 - Preserve existing saved text geometry and filled/outline/stencil behavior.
 - Verify bundled fonts and license files as part of frozen build verification.
+- Select verified build 0.8.45 in E3 DEV TEST after full Windows compatibility
+  and packaging checks pass; integrate into main. Operator acceptance and
+  physical engraving remain pending.
 
 ## Single-line and filled text (2026-11-01)
 

@@ -5,8 +5,9 @@ Desktop text includes **Single-line engrave** with selectable **Relief SingleLin
 **Filled engrave**, and **Outline + filled engrave**, alongside outline and
 stencil cuts. Combined text has grouped Raster and Line operations with separate
 settings. New operations start with Output off; configure speed/power in
-Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). The crude font in 0.8.43
-has been replaced in source; a corrected Windows feature build is being prepared.
+Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). E3 DEV TEST selects the
+verified corrected-font build **0.8.45**. Recreate previously saved text to use
+the new fonts; physical engraving and operator acceptance remain pending.
 
 ## Manual workpiece height
 
