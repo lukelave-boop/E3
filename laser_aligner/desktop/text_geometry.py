@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ..project import SceneObject
+from ..project.stroke_font import STROKE_FONT_NAME, stroke_text_lines
 from .qt import require_qt
 
 QtCore, QtGui, _QtWidgets = require_qt()
 
-TextVectorMode = Literal["outline", "stencil"]
+TextVectorMode = Literal["outline", "stencil", "single_line", "filled", "outline_filled"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +28,7 @@ class TextVectorOptions:
             raise ValueError("Choose a font")
         if not math.isfinite(self.height_mm) or self.height_mm <= 0:
             raise ValueError("Text height must be positive")
-        if self.mode not in {"outline", "stencil"}:
+        if self.mode not in {"outline", "stencil", "single_line", "filled", "outline_filled"}:
             raise ValueError(f"Unsupported text mode: {self.mode}")
         if self.bridge_width_mm is not None and (
             not math.isfinite(self.bridge_width_mm)
@@ -217,11 +218,19 @@ def _stencil_path(
 def build_vector_text_path(
     options: TextVectorOptions,
 ) -> tuple[QtGui.QPainterPath, float, int]:
-    path = _plain_text_path(options.text, options.font_family)
+    if options.mode == "single_line":
+        path = QtGui.QPainterPath()
+        for stroke in stroke_text_lines(options.text):
+            path.moveTo(*stroke[0])
+            for point in stroke[1:]:
+                path.lineTo(*point)
+    else:
+        path = _plain_text_path(options.text, options.font_family)
     initial_bounds = path.boundingRect()
-    if initial_bounds.height() <= 1e-9:
+    initial_height = max(initial_bounds.height(), 6.0) if options.mode == "single_line" else initial_bounds.height()
+    if initial_height <= 1e-9:
         raise ValueError("The selected font produced zero-height text")
-    scale = options.height_mm / initial_bounds.height()
+    scale = options.height_mm / initial_height
     bridge_width_mm = (
         automatic_bridge_width(options.height_mm)
         if options.bridge_width_mm is None
@@ -253,6 +262,8 @@ def build_vector_text_path(
 
 def painter_path_polylines(
     path: QtGui.QPainterPath,
+    *,
+    single_line: bool = False,
 ) -> list[dict[str, object]]:
     output: list[dict[str, object]] = []
     for polygon in path.toSubpathPolygons():
@@ -260,13 +271,15 @@ def painter_path_polylines(
             [float(point.x()), float(-point.y())]
             for point in polygon
         ]
-        if len(points) < 3:
+        if len(points) < 2:
             continue
-        if math.dist(points[0], points[-1]) <= 1e-7:
+        # Stroke loops retain their explicit final segment as open sequences.
+        # They are pen paths, not compound filled regions (e.g. the two loops of 8).
+        if not single_line and math.dist(points[0], points[-1]) <= 1e-7:
             points.pop()
-        if len(points) < 3:
+        if len(points) < (2 if single_line else 3):
             continue
-        output.append({"points": points, "closed": True})
+        output.append({"points": points, "closed": not single_line})
     if not output:
         raise ValueError("The selected text produced no usable vector contours")
     return output
@@ -281,7 +294,7 @@ def create_vector_text_object(
     path, bridge_width_mm, bridge_count = build_vector_text_path(options)
     item = SceneObject.path(
         layer_id,
-        painter_path_polylines(path),
+        painter_path_polylines(path, single_line=options.mode == "single_line"),
         name=(options.text.strip().splitlines()[0][:40] or "Text"),
         center=center,
         source_name="E3 vector text",
@@ -289,7 +302,9 @@ def create_vector_text_object(
     item.metadata.update(
         {
             "text_source": options.text,
-            "text_font_family": options.font_family,
+            "text_font_family": (
+                STROKE_FONT_NAME if options.mode == "single_line" else options.font_family
+            ),
             "text_vector_mode": options.mode,
             "text_height_mm": options.height_mm,
             "text_bridge_width_mm": bridge_width_mm,

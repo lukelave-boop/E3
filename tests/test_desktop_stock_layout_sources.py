@@ -48,7 +48,7 @@ def test_vector_text_dialog_supports_stencil_bridges() -> None:
     assert "automatic_bridge_width" in geometry
     assert "letter_path.subtracted(bridges)" in geometry
     assert '"text_bridge_count": bridge_count' in geometry
-    assert "create_vector_text_object" in window
+    assert "CreateTextCommand" in window
 
 
 def test_stock_boundaries_are_filtered_from_every_output_entrypoint() -> None:

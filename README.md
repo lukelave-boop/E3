@@ -1,5 +1,12 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Desktop text now includes **Single-line engrave** (built-in E3 Single Stroke),
+**Filled engrave**, and **Outline + filled engrave**, alongside outline and
+stencil cuts. Combined text has grouped Raster and Line operations with separate
+settings. New operations start with Output off; configure speed/power in
+Cuts / Layers. See [text creation](docs/DESKTOP_V1.md). Implemented in source;
+the installed DEV TEST executable has not been updated for this feature.
+
 ## Manual workpiece height
 
 Workpiece focus can accept material thickness and optional spacers without probing the workpiece. It retains the machine Z reference, saved gauge calibration and guarded job start. See [manual height](docs/LASER_FOCUS.md#manual-workpiece-height); matching desktop and Pi support is required.

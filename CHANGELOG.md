@@ -1,5 +1,16 @@
 # Changelog
 
+## Single-line and filled text (2026-11-01)
+
+- Add single-line engraving with an original built-in stroke font supporting
+  English uppercase/lowercase, digits, punctuation, and multiline layout.
+- Add raster-filled text and grouped outline-plus-filled text, engraving the
+  interior before its independently configured contour operation.
+- Preserve letter counters, existing layer settings, ordinary project PATH
+  persistence, and guarded generation. New operations start at zero power with
+  Output off. Add atomic undo/redo and unsupported-character rejection tests.
+- Source implementation only; no frozen feature build or physical test yet.
+
 ## Stop job with retained Z
 
 - Keep a stationary separate Ender border reference after normal Stop job only

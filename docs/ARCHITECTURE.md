@@ -1,5 +1,19 @@
 # Architecture
 
+## Desktop text engraving
+
+The text dialog also offers single-line, raster-filled, and outline-plus-filled
+creation. `project/stroke_font.py` is a Qt/HTTP-free, original geometric stroke
+alphabet; `desktop/text_geometry.py` scales its explicit pen paths and preserves
+open endpoints without implicit closure. Unsupported glyphs reject creation.
+`desktop/text_creation.py` stages ordinary PATH objects and matching operation
+layers in one undoable command. Combined text groups two copies and appends a
+Raster layer before a Line layer using priorities above existing layers. New
+layers have zero power and Output off. Existing matching layers keep their
+settings; existing mismatched layers are never rewritten. Font contours use the
+existing even-odd raster planner, preserving counters. There is no persistence
+schema or planner/controller change, and browser SVG behavior is unaffected.
+
 ## Manual workpiece height
 
 The desktop daily focus panel sends the typed `set_workpiece_height` action through MachineService or its remote facade. The Pi calculates the asserted surface datum from thickness, spacers and saved honeycomb height, then uses existing session-bound job focus and operation targets. Manual provenance is retained separately from probe evidence; gauge teaching requires a probed surface. This changes the desktop project workflow and shared machine admission, not the browser single-SVG generation UI.

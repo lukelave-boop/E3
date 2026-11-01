@@ -164,8 +164,8 @@ from .speed_controls import format_speed_percent, speed_tooltip
 from .stock_layout_bar import StockLayoutToolBar
 from .template_designer import WORK_AREA_TOLERANCE_MM, GridTemplateDesignerDialog
 from .template_panel import TemplatePanel
+from .text_creation import CreateTextCommand
 from .text_dialog import VectorTextDialog
-from .text_geometry import create_vector_text_object
 from .workspace import WorkspaceFrame, WorkspaceView
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -1871,16 +1871,24 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         try:
-            item = create_vector_text_object(
+            command = CreateTextCommand(
+                self.document,
                 self.active_layer_id,
                 dialog.options(),
                 center=self._document_center(),
             )
+            self.history.execute(command)
         except Exception as exc:
             self.show_error(f"Could not create vector text: {exc}")
             return
-        self._add_object(item, "Add vector text")
-        if item.metadata.get("text_vector_mode") == "stencil":
+        self.workspace.select_objects([item.id for item in command.items])
+        item = command.items[0]
+        if command.layers:
+            self.show_notice(
+                "Created text operations with Output off. Set speed and power "
+                "in Cuts / Layers, then enable Output."
+            )
+        elif item.metadata.get("text_vector_mode") == "stencil":
             self.show_notice(
                 "Created stencil-safe vector text with "
                 f"{int(item.metadata.get('text_bridge_count', 0))} material "

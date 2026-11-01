@@ -1,5 +1,14 @@
 # Roadmap
 
+## Text engraving modes (2026-11-01)
+
+Implemented in source: built-in single-line lettering, filled normal-font text,
+and grouped raster-plus-outline operations with atomic undo/redo and ordinary
+PATH persistence. Existing outline and stencil modes remain. Pending: Windows
+compatibility CI, frozen feature handoff, operator/material verification,
+additional stroke fonts/Unicode coverage, and editable regeneration of saved
+text. No physical engraving or controller behavior is claimed verified.
+
 ## Retain stationary Z after Stop job
 
 Implemented a distinct normal-stop request that still aborts queued GRBL motion,

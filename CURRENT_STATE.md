@@ -1,5 +1,32 @@
 # Current repository state
 
+## Single-line and filled text (2026-11-01)
+
+Desktop text source now offers Single-line engrave, Filled engrave, and Outline
++ filled engrave in addition to existing outline/stencil modes. The original
+E3 Single Stroke font supports English uppercase/lowercase, digits and ASCII
+punctuation, whitespace and multiline layout; unsupported glyphs reject rather
+than substitute. Explicit stroke sequences remain open even when returning to
+their starting point. Font contours retain empty counters through the existing
+even-odd raster planner. Combined text is grouped and uses Raster before Line,
+with independently editable settings. New operation layers start at zero power
+and Output off; an existing matching operation retains its settings. All
+objects/layers form one undoable edit and persist as existing PATH geometry.
+
+Verification in the shared Windows/Python 3.14 checkout: 296 focused tests pass
+across text geometry/dialog/action transactions, stencil regression, project
+toolpath guards and history. Scoped Ruff and application compileall pass.
+Coverage includes all 94 printable non-space ASCII glyphs, counters, grouping,
+save/load, undo/redo, unsupported text, incompatible layer modes, disabled
+motion and out-of-bounds rejection. Qt offscreen widget tests and rendered
+dialog/font visual inspection were performed; no interactive operator test,
+camera/controller connection, laser output or physical qualification occurred.
+Browser SVG, project schema, planner and machine code are unchanged.
+
+The feature is being isolated against origin/main for integration/build checks;
+the original shared working-tree changes are preserved. No frozen feature build,
+CI success, main merge, launcher update or physical verification is claimed yet.
+
 ## Stop job retaining independent Z (2026-10-18)
 
 Normal desktop Stop job now uses a capability-gated priority request that still

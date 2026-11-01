@@ -177,8 +177,8 @@ geometry, G-code, safety and controller services.
   size/position/rotation, mirror, duplicate, delete, group/ungroup, alignment,
   distribution and z-order controls
 - Persistent press-drag-release rectangle drawing plus basic rounded rectangle,
-  ellipse and line creation, and vector text creation in ordinary outline or
-  automatically bridged stencil-safe mode
+  ellipse and line creation, plus single-line, filled, outline-plus-filled,
+  ordinary outline, and automatically bridged stencil-safe text
 - Physical-size SVG import for absolute `mm`, `cm`, `in`, and `px` root
   dimensions plus viewBox-only files (`96 CSS px = 1 in`), including transformed
   groups and `preserveAspectRatio` mapping. Imports remain centered at the
@@ -292,8 +292,26 @@ or named outward-facing edge, and conservative fit-to-stock scaling with preset
 or custom uncut margins. The original irregular polygon controls containment;
 its simplified edges are used only for rotation choices.
 
-The Text action now opens a vector-text dialog rather than creating a display-
-only TEXT object. **Outline cut** emits ordinary font contours. **Stencil-safe
+The Text action opens a vector-text dialog rather than creating a display-
+only TEXT object. **Single-line engrave** uses the built-in **E3 Single Stroke**
+font: uppercase/lowercase English letters, digits, and ASCII punctuation, with
+spaces and multiple lines. Unsupported characters are rejected, not replaced.
+Installed fonts remain available for **Filled engrave**, which raster engraves
+letter interiors while leaving counters (such as the center of O) empty.
+**Outline + filled engrave** creates two aligned, grouped copies on separate
+operations: Raster first, then Line for the contour. Configure their speed and
+power independently in Cuts / Layers. Ungroup to edit the copies separately.
+
+Single-operation text uses the active layer only when its mode matches (Line
+for strokes/outlines/stencils, Raster for filled text). Otherwise it creates a
+new operation without changing existing artwork. All new operations start with
+zero power and Output off; configure them and enable Output before Preview.
+Combined text always creates two new operations. Creation, layers, and grouping
+are one undo/redo action and persist as ordinary PATH objects without a schema
+change. Stroke paths remain open sequences, including loops that return to
+their starting point; assigning them to Fill/Raster is rejected.
+
+**Outline cut** emits ordinary font contours. **Stencil-safe
 cut** detects enclosed counters and opens scaled bridges through the glyph so
 centers such as O, A, R, B, and 8 remain connected to the parent sheet. Source
 text, font, mode, size, bridge width, and bridge count remain in object metadata;
