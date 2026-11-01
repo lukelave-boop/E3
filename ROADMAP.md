@@ -1,5 +1,12 @@
 # Roadmap
 
+## Approved Twin Sans lettering (2026-11-01)
+
+The operator approved the original Twin Sans specimen. It is now the source
+default for single-line engraving, with bundled OFL data and normalized curve
+precision. Existing fonts remain selectable. Application and physical engraving
+acceptance remain separate from approval of the font specimen.
+
 ## Stroke-font quality correction (2026-11-01)
 
 The operator rejected the crude single-line font in 0.8.43. Source now uses

@@ -14,9 +14,10 @@ import numpy as np
 from ..geometry.svg import _GeometryBudget, _path_to_polylines
 from .path_geometry import MAX_NATIVE_PATH_FLATTENED_POINTS
 
-STROKE_FONT_NAME = "Relief SingleLine"
+STROKE_FONT_NAME = "Twin Sans"
 STROKE_FONTS = {
-    STROKE_FONT_NAME: "ReliefSingleLineSVG-Regular.svg",
+    STROKE_FONT_NAME: "TwinSans.svg",
+    "Relief SingleLine": "ReliefSingleLineSVG-Regular.svg",
     "Hershey Sans": "HersheySans1.svg",
     "Hershey Script": "HersheyScript1.svg",
 }
@@ -32,7 +33,7 @@ class _Font:
     kerning: dict[tuple[str, str], float]
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=len(STROKE_FONTS))
 def _font(name: str) -> _Font:
     if name not in STROKE_FONTS:
         raise ValueError(f"Unknown single-line font: {name}")
@@ -51,7 +52,7 @@ def _font(name: str) -> _Font:
                 kerning[left, right] = float(pair.get("k", "0"))
     return _Font(
         glyphs, float(font.get("horiz-adv-x", "0")), float(face.get("cap-height", "1")),
-        (float(face.get("ascent", "800")) - float(face.get("descent", "-200"))) * 1.2,
+        (float(face.get("ascent", "800")) + abs(float(face.get("descent", "-200")))) * 1.2,
         kerning,
     )
 
@@ -61,9 +62,10 @@ def _glyph_strokes(name: str, character: str) -> tuple[tuple[tuple[float, float]
     data = _font(name).glyphs[character].get("d", "")
     if not data:
         return ()
-    # Reuse the bounded SVG curve parser. Tolerance is in source font units
-    # (typically 1000/em), before the ordinary text-height and output guards.
-    paths = _path_to_polylines(data, 0.1, np.eye(3), _GeometryBudget(strict_tolerance=True))
+    # Normalize tolerance by cap height: Twin Sans uses 64/em, Relief 1000/em.
+    # Both retain the same curve precision after text is scaled for engraving.
+    tolerance = _font(name).cap_height / 6800.0
+    paths = _path_to_polylines(data, tolerance, np.eye(3), _GeometryBudget(strict_tolerance=True))
     return tuple(tuple((float(x), float(y)) for x, y in path.points) for path in paths)
 
 

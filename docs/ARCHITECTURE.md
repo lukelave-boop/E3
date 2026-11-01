@@ -4,9 +4,11 @@
 
 The text dialog also offers single-line, raster-filled, and outline-plus-filled
 creation. `project/stroke_font.py` is a Qt/HTTP-free adapter for unmodified,
-licensed Relief SingleLine and Hershey Sans/Script SVG font resources. It uses
-the existing bounded SVG path parser (0.1 source-font-unit curve tolerance),
-font advance widths, provided glyph-name kerning and NFC normalization. Text
+licensed Twin Sans (default), Relief SingleLine and Hershey Sans/Script SVG
+font resources. It uses the existing bounded SVG path parser with curve tolerance
+normalized to cap height (1/6800), so small-em fonts retain smooth curves,
+font advance widths, provided glyph-name kerning and NFC normalization. Line
+spacing accounts for both positive and negative descent conventions. Text
 is bounded to 4096 input characters and the project flattened-point limit.
 `desktop/text_geometry.py` scales explicit pen paths and preserves open endpoints
 without implicit closure. Unknown fonts and unsupported glyphs reject creation.

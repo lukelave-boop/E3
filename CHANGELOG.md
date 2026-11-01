@@ -1,5 +1,13 @@
 # Changelog
 
+## Twin Sans single-line lettering (2026-11-01)
+
+- Add the approved free Twin Sans font and make it the single-line default.
+  Bundle the unmodified SVG and Open Font License with Keith Packard attribution.
+- Keep curves smooth across font coordinate scales and preserve multiline
+  spacing for fonts that store descent as a positive distance.
+- Retain other font choices and existing saved text geometry.
+
 ## Correct single-line lettering (2026-11-01)
 
 - Replace the crude hand-drawn alphabet shipped in 0.8.43 with original,

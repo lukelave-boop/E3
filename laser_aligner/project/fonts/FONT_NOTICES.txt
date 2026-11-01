@@ -1,5 +1,10 @@
 Bundled single-line fonts (downloaded 2026-11-01)
 
+Twin Sans: https://gitlab.com/oskay/svg-fonts
+Original file: fonts/Hershey/TwinSans.svg
+Designer: Keith Packard (2023), derived from Hershey Sans with Bezier curves.
+License: SIL Open Font License 1.1; see TwinSans-OFL.txt and embedded credits.
+
 Relief SingleLine: https://github.com/isdat-type/Relief-SingleLine
 Original file: fonts/open_svg/ReliefSingleLineSVG-Regular.svg
 License: SIL Open Font License 1.1; see Relief-OFL.txt and embedded credits.
@@ -12,6 +17,8 @@ The font files are redistributed unmodified. E3 uses their explicit pen paths
 and advance widths. It does not trace outlines or synthesize missing glyphs.
 
 SHA-256:
+TwinSans.svg: 38374ea44743db322e67e4afda8bc7d6417e567d5737b7d8260531f7d62609c5
+TwinSans-OFL.txt: ce243fd4a62b1b76c959ffba6ec16a7a3146b2362d441ae4f9f7f32fc3750d6c
 HersheySans1.svg: 998705d56cf5148e5b6ef8149801edda3e594ff778f65c84e97977e809db5ed3
 HersheyScript1.svg: 26854b00c2147c2a0a27dba488d7a696db581603ff43f4b85f07b435246d473f
 Relief-OFL.txt: 005834fd32a01fb021a44167cafd4fa3df8058a7b0fb7319bd19b445d2fe24a3

@@ -1,5 +1,23 @@
 # Current repository state
 
+## Approved Twin Sans lettering (2026-11-01)
+
+The operator approved the original Twin Sans sample after rejecting earlier
+Hershey specimens and experimental automatic centerlines. Twin Sans is now the
+source default for single-line text. Its unmodified upstream SVG, attribution
+and Open Font License are bundled. Existing font choices remain selectable.
+Curve flattening tolerance is normalized to cap height for equal precision with
+Twin Sans' small coordinate units; line spacing handles its positive descent.
+Only desktop text creation changes. Saved PATH geometry, project schema, browser
+SVG and controller behavior are unchanged. Windows/Python 3.14 focused checks
+passed 602 tests, plus three final open-path/multiline checks after extending
+coverage to Twin Sans. Repository Ruff and application compileall passed. The
+initial sandbox temporary-folder errors were resolved by using a workspace test
+directory. Offscreen default and multiline dialogs were rendered and inspected.
+Full compatibility CI and frozen handoff are pending; DEV TEST still selects
+0.8.45 until verification completes. No physical engraving or interactive
+operator acceptance is claimed.
+
 ## Correcting single-line lettering (2026-11-01)
 
 E3 DEV TEST selects **0.8.45**, branch **main**, frozen revision

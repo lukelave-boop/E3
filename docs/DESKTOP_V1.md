@@ -294,7 +294,8 @@ its simplified edges are used only for rotation choices.
 
 The Text action opens a vector-text dialog rather than creating a display-
 only TEXT object. **Single-line engrave** has a Font dropdown with bundled
-**Relief SingleLine** (default, smooth sans lettering), **Hershey Sans**, and
+**Twin Sans** (default, smooth conventional lettering), **Relief SingleLine**,
+**Hershey Sans**, and
 **Hershey Script**. These are the fonts' original open paths, with their advance
 widths, kerning where provided, and multiline layout. Supported accented letters
 are available; unsupported characters are rejected, not replaced. Previously

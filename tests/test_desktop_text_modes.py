@@ -61,18 +61,22 @@ def test_every_stroke_glyph_produces_finite_nonzero_segments(character, font):
         assert all(start != end for start, end in zip(stroke, stroke[1:], strict=False))
 
 
-def test_single_line_e_has_no_implicit_closing_or_double_outline():
-    item = create_vector_text_object("line", options(text="E", height=6), center=(0, 0))
+@pytest.mark.parametrize("font,length_expected", [
+    ("Relief SingleLine", (361 * 2 + 660 + 344) * 6 / 680),
+    ("Twin Sans", (26 * 2 + 42 + 24) / 7),
+])
+def test_single_line_e_has_no_implicit_closing_or_double_outline(font, length_expected):
+    item = create_vector_text_object("line", options(text="E", height=6, font=font), center=(0, 0))
     paths = object_polylines(item)
     assert len(paths) == 2
     assert all(not path.closed for path in paths)
     length = sum(math.dist(a, b) for path in paths for a, b in zip(path.points, path.points[1:], strict=False))
-    assert length == pytest.approx((361 * 2 + 660 + 344) * 6 / 680)
+    assert length == pytest.approx(length_expected)
 
 
 def test_multiline_stroke_text_centers_each_line_and_preserves_case():
-    solo = stroke_text_lines("A")
-    paths = stroke_text_lines("AA\nA")
+    solo = stroke_text_lines("A", "Relief SingleLine")
+    paths = stroke_text_lines("AA\nA", "Relief SingleLine")
     assert paths[-2][0][0] - solo[0][0][0] == pytest.approx(338 * 6 / 680)
     assert paths[-2][0][1] - solo[0][0][1] == pytest.approx(1200 * 6 / 680)
     assert stroke_text_lines("a") != stroke_text_lines("A")

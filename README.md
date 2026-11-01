@@ -1,6 +1,7 @@
 # Laser Camera Aligner / E3 Positioning System
 
-Desktop text includes **Single-line engrave** with selectable **Relief SingleLine**,
+Desktop text includes **Single-line engrave** with **Twin Sans** as the default,
+plus selectable **Relief SingleLine**,
 **Hershey Sans**, and **Hershey Script** fonts,
 **Filled engrave**, and **Outline + filled engrave**, alongside outline and
 stencil cuts. Combined text has grouped Raster and Line operations with separate
