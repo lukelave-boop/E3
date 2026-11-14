@@ -1,6 +1,6 @@
 # Current repository state
 
-## 2026-11-14 - Automatic saved material focus candidate
+## 2026-11-14 - Automatic saved material focus: verified build, installation pending
 
 Implemented on authoritative main without importing unrelated shared-tree work.
 A clean Z checkpoint now optionally retains measured/manual material dimensions,
@@ -17,7 +17,26 @@ Socket-dependent cases are excluded locally because this sandbox rejects their
 loopback listeners; CI must cover them. Real controllers/cameras, physical
 power cycles and interactive GUI operation have not been tested. No installed
 application, Pi service, firmware or permanent launcher has been changed by this
-source work. Windows compatibility CI and frozen handoff are pending.
+source work.
+
+The feature is integrated into main by PR #67 (merge 4a31037d11462e23b27e8f2cf57f4ec393dc6e11).
+[Final compatibility CI](https://github.com/lukelave-boop/E3/actions/runs/43629116114)
+passed Windows Python 3.10 (7,640 passed / 190 skipped), Windows Python 3.12
+desktop (9,718 passed / 69 skipped), POSIX (1,641 passed / 2 skipped), and Ruff.
+Two existing tests received larger scheduling time allowances; assertions and
+application behavior were unchanged. The exact application revision
+6dab8e87b056e9a56e72ad20eb87dc5d12da3a2a was frozen as **0.8.49** by the
+[canonical Windows build](https://github.com/lukelave-boop/E3/actions/runs/43627215505),
+including package identity and native-library verification. The later test-only
+commit and workflow cleanup do not change application bytes.
+
+Installation remains pending: the local artifact download and Pi SSH were
+blocked, and the permanent E3 DEV TEST pointer still selects 0.8.47. A verified
+artifact installer and exact-baseline Pi companion are prepared locally; no
+successful deployment or firmware-capability check is claimed. The existing
+restore-capable Ender firmware requirement remains. Physical acceptance is
+still required. Material saving begins with the first clean shutdown under
+the updated companion; legacy checkpoints retain only Z.
 
 
 
