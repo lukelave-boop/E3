@@ -1,0 +1,63 @@
+name: Saved material Windows test build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/saved-material-windows-test.yml
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    if: github.head_ref == 'feature/automatic-saved-material'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      E3_BUILD_VERSION: "0.8.49"
+      E3_FEATURE_REVISION: "6dab8e87b056e9a56e72ad20eb87dc5d12da3a2a"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 6dab8e87b056e9a56e72ad20eb87dc5d12da3a2a
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install desktop build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[desktop]" pyinstaller
+      - name: Prepare Inno Setup
+        shell: pwsh
+        run: .\packaging\install_inno_setup_ci.ps1
+      - name: Build exact tested source
+        shell: pwsh
+        run: |
+          .\packaging\build_windows.ps1 -EphemeralCI -InnoCompiler $env:E3_INNO_COMPILER -Revision $env:E3_FEATURE_REVISION -Channel development -Repository lukelave-boop/E3 -ReleaseTag e3-development -OutputBaseFilename E3-Saved-Material-Test
+      - name: Verify package identity
+        shell: pwsh
+        run: |
+          . .\packaging\inno_setup.ps1
+          $version = Get-E3InstallerProductVersion -InstallerPath installer-dist/E3-Saved-Material-Test.exe
+          .\.venv\Scripts\python.exe packaging/verify_release_metadata.py --revision $env:E3_FEATURE_REVISION --channel development --build-info windows-x86_64 build-info.json --build-info windows-x86_64 dist/E3/build-info.json --installer-version $version
+          if ($LASTEXITCODE -ne 0) { throw 'Package identity validation failed' }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e3-saved-material-0.8.49
+          path: dist/E3/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e3-saved-material-installer-0.8.49
+          path: |
+            installer-dist/E3-Saved-Material-Test.exe
+            build-info.json
+          if-no-files-found: error
+          retention-days: 7
