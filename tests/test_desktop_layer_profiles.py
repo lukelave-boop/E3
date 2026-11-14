@@ -78,7 +78,8 @@ def test_profile_load_invalidates_prepared_job_and_preserves_artwork(tmp_path, m
     window.setFont(QtGui.QFont("Segoe UI", 13))
     window.show()
     try:
-        _wait_until(application, lambda: window.runtime.running and not window.controller.has_active_tasks)
+        _wait_until(application, lambda: window.runtime.running and not window.controller.has_active_tasks,
+                    timeout=15.0)
         bar = window.layer_profiles_bar
         layer = window.document.layers[0]
         obj = SceneObject.rectangle(layer.id)
