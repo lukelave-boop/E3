@@ -1,5 +1,16 @@
 # Changelog
 
+## Camera Trace detection area (2026-11-14)
+
+- Add **Select detection area** and **Clear area** for non-grid camera tracing.
+  Drag a box with margin around the wanted objects; omit boundary-cut outlines.
+- Intersect the box with trusted Trace geometry and empty-bed suppression while
+  preserving image scale and object coordinates. Keep it session-only and reset
+  it for new/opened projects and changed calibration/project frames.
+- Carry forward one bounded tighter-fit retry for unresolved non-grid Auto/Contrast
+  topology, with unchanged masks and validation. The reported scene and physical
+  placement remain unverified; see CURRENT_STATE.md for verification levels.
+
 ## Twin Sans single-line lettering (2026-11-01)
 
 - Add the approved free Twin Sans font and make it the single-line default.

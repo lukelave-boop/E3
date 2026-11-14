@@ -49,6 +49,7 @@ from ..project.raster_vectorize import (
     RasterVectorizationError,
     RasterVectorizationOptions,
     RasterVectorizationTiming,
+    RasterVectorizationTopologyError,
     prepare_pixel_vectorization_source,
     select_pixel_vectorization_auto_threshold,
     vectorize_pixel_source_forest,
@@ -74,6 +75,10 @@ MAX_TRACE_CONTOURS = 8_192
 AUTO_MINIMUM_CREDIBLE_SCORE = 70.0
 AUTO_COLOR_RASTER_MARGIN = 8.0
 TraceDetectionCancelledError = RasterVectorizationCancelledError
+_CAMERA_TOPOLOGY_ADVICE = (
+    "Could not separate the traced outlines reliably. Adjust the threshold "
+    "or Minimum area to exclude honeycomb/background detail, then detect again."
+)
 
 _TRACE_CANCEL_CHECK = ContextVar["Callable[[], bool] | None"](
     "trace_detection_cancel_check",
@@ -3610,6 +3615,59 @@ def _camera_raster_diagnostics(
     }
 
 
+def _vectorize_camera_forest(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    timing: RasterVectorizationTiming,
+    mask_ready: Callable[[PixelVectorizationMaskPreview], None],
+    root_review_filter: PixelVectorizationRootReviewFilter,
+) -> tuple[PixelVectorizationForestResult, tuple[float, ...], str | None]:
+    """Retry unresolved native topology once with a closer source-edge fit.
+
+    Threshold, source pixels, eligibility and root filters stay identical. Each
+    attempt uses the ordinary forest pipeline and its unchanged global proof;
+    complexity failures, cancellation and unrelated errors are never retried.
+    """
+    attempts: list[float] = []
+    retry_reason = None
+    for attempt in range(2):
+        _check_trace_cancelled()
+        tolerance = options.simplification_tolerance_mm
+        attempts.append(tolerance)
+        tighter = max(0.01, min(0.025, tolerance / 2.0))
+        can_retry = attempt == 0 and tighter < tolerance
+        try:
+            forest = vectorize_pixel_source_forest(
+                source,
+                options,
+                displayed_width_mm=displayed_width_mm,
+                displayed_height_mm=displayed_height_mm,
+                timing=timing,
+                mask_ready=mask_ready,
+                root_review_filter=root_review_filter,
+                **_trace_cancel_kwargs(),
+            )
+        except RasterVectorizationTopologyError as exc:
+            if not can_retry:
+                raise RasterVectorizationTopologyError(_CAMERA_TOPOLOGY_ADVICE) from exc
+            retry_reason = str(exc)
+        else:
+            topology_failures = [
+                failure for failure in forest.failures
+                if failure.stage == "native_topology"
+            ]
+            # Never replace an already usable forest with a different partial
+            # result. Root-local failures remain visible in its diagnostics.
+            if forest.result is not None or not topology_failures or not can_retry:
+                return forest, tuple(attempts), retry_reason
+            retry_reason = topology_failures[0].reason
+        options = replace(options, simplification_tolerance_mm=tighter)
+    raise AssertionError("Camera topology recovery exceeded its attempt bound")
+
+
 def _detect_non_grid_contrast_raster(
     image: np.ndarray,
     options: TraceOptions,
@@ -3687,6 +3745,8 @@ def _detect_non_grid_contrast_raster(
         )
     strategy_name = preview_strategy or f"raster_{polarity}"
     hole_cleanup: RasterHoleCleanupDiagnostics | None = None
+    fit_attempts: tuple[float, ...] = ()
+    fit_retry_reason: str | None = None
 
     def hole_cleanup_diagnostics() -> dict[str, object] | None:
         return None if hole_cleanup is None else hole_cleanup.to_dict()
@@ -3695,6 +3755,12 @@ def _detect_non_grid_contrast_raster(
         return {
             "trace_detail": options.trace_detail,
             "outer_only": options.trace_detail == "outer_silhouette",
+            "native_fit": {
+                "requested_tolerance_mm": options.native_fitting_tolerance_mm,
+                "effective_tolerance_mm": effective_tolerance,
+                "attempt_tolerances_mm": list(fit_attempts),
+                "topology_retry_reason": fit_retry_reason,
+            },
             "camera_raster": _camera_raster_diagnostics(
                 normalization,
                 eligibility,
@@ -3744,7 +3810,7 @@ def _detect_non_grid_contrast_raster(
 
     forest_result: PixelVectorizationForestResult
     try:
-        forest_result = vectorize_pixel_source_forest(
+        forest_result, fit_attempts, fit_retry_reason = _vectorize_camera_forest(
             source,
             raster_options,
             displayed_width_mm=raster_width_mm,
@@ -3756,8 +3822,8 @@ def _detect_non_grid_contrast_raster(
                 minimum_width_mm=options.min_width_mm,
                 minimum_height_mm=options.min_height_mm,
             ),
-            **_trace_cancel_kwargs(),
         )
+        effective_tolerance = fit_attempts[-1]
         result = forest_result.result
         if result is None:
             reasons = [failure.reason for failure in forest_result.failures]
@@ -3766,6 +3832,8 @@ def _detect_non_grid_contrast_raster(
                 if reasons
                 else "No root contour tree produced verified geometry"
             )
+            if any(failure.stage == "native_topology" for failure in forest_result.failures):
+                message = _CAMERA_TOPOLOGY_ADVICE
             return TraceResult(
                 detected=False,
                 detections=[],
@@ -4021,6 +4089,7 @@ def _detect_non_grid_contrast_raster(
                         for contour in group_contours
                     ],
                     "native_fitting_tolerance_mm": effective_tolerance,
+                    "requested_fitting_tolerance_mm": options.native_fitting_tolerance_mm,
                     "maximum_fitting_error_mm": max(
                         contour.max_fitting_error_mm for contour in group_contours
                     ),
@@ -4155,6 +4224,8 @@ def _detect_non_grid_contrast_raster(
         )
     if not detections:
         message = "No raster trace candidates passed the current review filters"
+    elif fit_retry_reason is not None:
+        message += f"; recovered with tighter native fit ({effective_tolerance:g} mm)"
     foreground_fraction, border_foreground_fraction = _mask_occupancy(
         result.foreground_mask,
         eligibility.material_eligible_mask,

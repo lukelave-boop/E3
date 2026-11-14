@@ -918,6 +918,7 @@ def test_trace_self_heals_pristine_stale_local_project_before_strict_check() -> 
     requests: list[dict[str, object]] = []
     errors: list[str] = []
     fake = SimpleNamespace(
+        workspace=SimpleNamespace(cancel_trace_detection_area_selection=lambda: None),
         project_path=None,
         document=old_document,
         history=SimpleNamespace(

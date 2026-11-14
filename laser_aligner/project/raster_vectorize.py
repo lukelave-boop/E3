@@ -182,6 +182,10 @@ class RasterVectorizationComplexityError(RasterVectorizationError):
     """Raised when raster-derived geometry exceeds a bounded workload."""
 
 
+class RasterVectorizationTopologyError(RasterVectorizationError):
+    """Raised when fitted native boundaries cannot be proven unambiguous."""
+
+
 class RasterVectorizationCancelledError(RuntimeError):
     """Raised when a caller cancels cooperative raster/vector fitting work."""
 
@@ -7704,7 +7708,7 @@ def _topology_points(flattened: tuple[tuple[float, float], ...]) -> np.ndarray:
     if len(points) and np.linalg.norm(points[0] - points[-1]) > 1e-12:
         points = np.vstack((points, points[0]))
     if len(points) < 4:
-        raise RasterVectorizationError(
+        raise RasterVectorizationTopologyError(
             "Authoritative native-path topology validation found a collapsed contour"
         )
     return points
@@ -8000,12 +8004,12 @@ def _validate_authoritative_native_topology(
     transform = _physical_native_transform(width_mm, height_mm)
     budget = _TopologyWorkBudget()
     if _native_self_topology_is_ambiguous(contours, transform):
-        raise RasterVectorizationError(
+        raise RasterVectorizationTopologyError(
             "Authoritative native-path topology remains ambiguous within a cubic "
             "segment; reduce smoothing or simplification"
         )
     if _native_adjacent_topology_is_ambiguous(contours, transform, budget):
-        raise RasterVectorizationError(
+        raise RasterVectorizationTopologyError(
             "Authoritative native-path topology remains ambiguous between adjacent "
             "native arcs; reduce smoothing or simplification"
         )
@@ -8040,7 +8044,7 @@ def _validate_authoritative_native_topology(
         ):
             return
         if tolerance_mm <= _NATIVE_TOPOLOGY_MIN_TOLERANCE_MM:
-            raise RasterVectorizationError(
+            raise RasterVectorizationTopologyError(
                 "Authoritative native-path topology remains ambiguous at the bounded "
                 "validation tolerance; reduce smoothing or simplification"
             )
