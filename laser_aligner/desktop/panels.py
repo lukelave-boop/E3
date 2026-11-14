@@ -1398,6 +1398,8 @@ class CameraPanel(QtWidgets.QWidget):
 
 class TracePanel(QtWidgets.QWidget):
     detectRequested = QtCore.Signal(dict)
+    selectDetectionAreaRequested = QtCore.Signal()
+    clearDetectionAreaRequested = QtCore.Signal()
     pickColorRequested = QtCore.Signal()
     clearRequested = QtCore.Signal()
     createRequested = QtCore.Signal(dict)
@@ -1414,6 +1416,8 @@ class TracePanel(QtWidgets.QWidget):
         self._sampled_hue: float | None = None
         self._color_pick_active = False
         self._color_pick_sampling = False
+        self._detection_area_mm: tuple[float, float, float, float] | None = None
+        self._detection_area_selecting = False
         self._calibration_ready = False
         self._generate_enabled = True
         self._machine_ui_state = project_machine_state(None)
@@ -1510,6 +1514,24 @@ class TracePanel(QtWidgets.QWidget):
         _form_row(source_form, "Chosen threshold", self.chosen_threshold_value)
         source_form.addRow(self.contrast_invert)
         layout.addWidget(source_group)
+
+        area_group = QtWidgets.QGroupBox("Detection area")
+        area_layout = QtWidgets.QVBoxLayout(area_group)
+        self.select_detection_area_button = QtWidgets.QPushButton("Select detection area")
+        self.clear_detection_area_button = QtWidgets.QPushButton("Clear area")
+        self.detection_area_label = QtWidgets.QLabel("Full camera view")
+        self.detection_area_label.setWordWrap(True)
+        self.select_detection_area_button.setToolTip(
+            "Drag a box around the objects to detect. Turn off Use grid first. "
+            "Objects crossing the box edge are omitted."
+        )
+        self.clear_detection_area_button.setToolTip("Restore detection across the full eligible camera view.")
+        area_layout.addWidget(self.select_detection_area_button)
+        area_layout.addWidget(self.clear_detection_area_button)
+        area_layout.addWidget(self.detection_area_label)
+        self.select_detection_area_button.clicked.connect(self.selectDetectionAreaRequested)
+        self.clear_detection_area_button.clicked.connect(self.clearDetectionAreaRequested)
+        layout.addWidget(area_group)
 
         filter_group = QtWidgets.QGroupBox("Object filters")
         filter_form = _form_layout()
@@ -2244,6 +2266,14 @@ class TracePanel(QtWidgets.QWidget):
             "native_fitting_tolerance_mm": self.native_fitting_tolerance.value(),
         }
 
+    def set_detection_area(
+        self, area: tuple[float, float, float, float] | None, *, selecting: bool = False
+    ) -> None:
+        # This is temporary camera evidence, never a saved Trace preference.
+        self._detection_area_mm = area
+        self._detection_area_selecting = selecting
+        self._sync_output_controls()
+
     def set_color_sample(self, payload: dict[str, Any]) -> None:
         self.set_color_pick_active(False)
         self.mode_combo.setCurrentIndex(self.mode_combo.findData("color"))
@@ -2752,6 +2782,28 @@ class TracePanel(QtWidgets.QWidget):
         color_mode = trace_mode == "color"
         contrast_mode = trace_mode == "contrast"
         grid_enabled = self.regular_grid.isChecked()
+        self.regular_grid.setEnabled(
+            self._detection_area_mm is None and not self._detection_area_selecting
+        )
+        self.select_detection_area_button.setEnabled(
+            self._calibration_ready and not grid_enabled and not self._color_pick_sampling
+        )
+        self.select_detection_area_button.setText(
+            "Cancel area selection" if self._detection_area_selecting else "Select detection area"
+        )
+        self.clear_detection_area_button.setEnabled(
+            self._detection_area_mm is not None or self._detection_area_selecting
+        )
+        if self._detection_area_selecting:
+            area_text = "Drag a box on the camera image. Esc cancels."
+        elif self._detection_area_mm is not None:
+            left, bottom, right, top = self._detection_area_mm
+            area_text = f"Selected: {right - left:.1f} x {top - bottom:.1f} mm. Clear area to use grid."
+        elif grid_enabled:
+            area_text = "Full camera view. Turn off Use grid to select an area."
+        else:
+            area_text = "Full camera view"
+        self.detection_area_label.setText(area_text)
         self.trace_detail_label.setEnabled(not grid_enabled)
         self.trace_detail.setEnabled(not grid_enabled)
         manual_raster_contrast = contrast_mode and not grid_enabled

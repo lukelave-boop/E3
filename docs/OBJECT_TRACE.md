@@ -68,6 +68,36 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 
 ## Recommended Trace workflow
 
+### Select the detection area
+
+For individual pieces or openings, turn off **Use grid** and press **Select
+detection area**. Drag a box in the corrected camera view around the wanted
+objects, leaving a little space around every edge, then press **Detect objects**.
+The box remains visible while you adjust detection settings. **Clear area**
+restores the full eligible camera view and allows grid detection again. Escape
+or **Cancel area selection** cancels an unfinished drag.
+
+The box restricts detection; it does not crop, resize or reposition the camera
+image or the resulting objects. Existing trusted Trace geometry and empty-bed
+suppression still intersect the selected area. An outline cut by the area edge
+is omitted rather than converted into an artificial closed crop. Enlarge the
+box if a wanted piece or opening disappears, and review the **Eligible** and
+**Mask** displays before creating vectors.
+
+The area is session-only: it is not saved with the project or Trace preferences.
+New/opened projects and calibration or project-frame changes clear it. Changing
+or clearing an area invalidates previous candidates; detect again before
+creating geometry. The operator's reported round-piece/honeycomb scene has not
+been replayed from its exact camera frame or physically validated.
+
+Non-grid **Auto detect** and **By contrast** also make at most one tighter native
+fit attempt when unresolved topology prevents a usable result. The source frame,
+threshold, Mask, eligibility and validation stay the same. A recovered result
+reports the tighter fit. If it still fails, adjust the threshold/background
+filtering or area and detect again; recovery does not establish physical accuracy.
+
+### Detect and review
+
 1. Home and park at the saved camera pose. Keep the sheet or stock flat and use
    even lighting.
 2. Open **Trace** in the Inspector.

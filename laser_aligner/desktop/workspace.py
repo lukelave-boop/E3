@@ -1689,6 +1689,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     selectionIdsChanged = QtCore.Signal(list)
     selectionTransparencyChanged = QtCore.Signal(object)
     traceSelectionIdsChanged = QtCore.Signal(list)
+    traceDetectionAreaSelected = QtCore.Signal(object)
+    traceDetectionAreaSelectionCancelled = QtCore.Signal()
     objectMoveCommitted = QtCore.Signal(str, object, object)
     objectTransformCommitted = QtCore.Signal(str, object, object)
     templatePlacementEdited = QtCore.Signal(float, float, float)
@@ -1791,6 +1793,19 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._trace_drag_start = QtCore.QPoint()
         self._trace_drag_inferred_selection: dict[str, bool] = {}
         self._trace_pointer_select_active = False
+        self._trace_detection_area: tuple[float, float, float, float] | None = None
+        self._trace_detection_area_selecting = False
+        self._trace_detection_area_anchor: tuple[float, float] | None = None
+        self._trace_detection_area_drag_start = QtCore.QPoint()
+        self._trace_detection_area_item = QtWidgets.QGraphicsRectItem()
+        area_pen = QtGui.QPen(QtGui.QColor("#55CFFF"), 2.0, QtCore.Qt.PenStyle.DashLine)
+        area_pen.setCosmetic(True)
+        self._trace_detection_area_item.setPen(area_pen)
+        self._trace_detection_area_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        self._trace_detection_area_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+        self._trace_detection_area_item.setZValue(90.0)
+        self._trace_detection_area_item.hide()
+        self.workspace_scene.addItem(self._trace_detection_area_item)
         self._template_items: list[QtWidgets.QGraphicsItem] = []
         self._template_preview_item: _TemplatePreviewGraphicsItem | None = None
         self._template_rotation_handle: _TemplateRotationHandle | None = None
@@ -2026,6 +2041,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.fit_work_area()
 
     def begin_point_pick(self) -> None:
+        self.cancel_trace_detection_area_selection()
         self.set_creation_tool(None)
         self._point_pick_active = True
         self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
@@ -2058,6 +2074,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         changed = normalized != self._creation_tool
         self.cancel_shape_draft()
         if normalized:
+            self.cancel_trace_detection_area_selection()
             self._point_pick_active = False
         self._creation_tool = normalized
         self.setDragMode(
@@ -2108,6 +2125,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def cancel_authoring_interaction(self) -> None:
         """Cancel local canvas edits without invoking any machine operation."""
+        self.cancel_trace_detection_area_selection()
         grabber = self.workspace_scene.mouseGrabberItem()
         if grabber is not None:
             grabber.ungrabMouse()
@@ -2132,10 +2150,86 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     def _restore_interaction_cursor(self) -> None:
         if self._space_pan:
             self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+        elif self._trace_detection_area_selecting:
+            self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
         elif self._creation_tool:
             self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         else:
             self.unsetCursor()
+
+    @property
+    def trace_detection_area(self) -> tuple[float, float, float, float] | None:
+        return self._trace_detection_area
+
+    @property
+    def trace_detection_area_selection_active(self) -> bool:
+        return self._trace_detection_area_selecting
+
+    def set_trace_detection_area(
+        self, area: tuple[float, float, float, float] | None,
+    ) -> None:
+        """Display a camera-world rectangle without changing project geometry."""
+        if area is not None:
+            if len(area) != 4 or any(not math.isfinite(float(value)) for value in area):
+                raise ValueError("Detection area must contain four finite coordinates")
+            x_min, y_min, x_max, y_max = map(float, area)
+            if x_max <= x_min or y_max <= y_min:
+                raise ValueError("Detection area must have positive width and height")
+            area = (x_min, y_min, x_max, y_max)
+        self._trace_detection_area = area
+        self._display_trace_detection_area(area)
+
+    def _display_trace_detection_area(
+        self, area: tuple[float, float, float, float] | None,
+    ) -> None:
+        self._trace_detection_area_item.setVisible(area is not None)
+        if area is not None:
+            x_min, y_min, x_max, y_max = area
+            self._trace_detection_area_item.setRect(
+                x_min, -y_max, x_max - x_min, y_max - y_min,
+            )
+
+    def begin_trace_detection_area_selection(self) -> None:
+        self.cancel_point_pick()
+        self.set_creation_tool(None)
+        self._trace_detection_area_anchor = None
+        self._trace_detection_area_selecting = True
+        self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
+        self._restore_interaction_cursor()
+        self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+    def _finish_trace_detection_area_selection(self) -> None:
+        self._trace_detection_area_selecting = False
+        self._trace_detection_area_anchor = None
+        self.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+        self._display_trace_detection_area(self._trace_detection_area)
+        self._restore_interaction_cursor()
+
+    def cancel_trace_detection_area_selection(self) -> None:
+        if not self._trace_detection_area_selecting:
+            return
+        self._finish_trace_detection_area_selection()
+        self.traceDetectionAreaSelectionCancelled.emit()
+
+    def _trace_detection_area_point(self, position: QtCore.QPoint) -> tuple[float, float]:
+        x_mm, y_mm = self.workspace_scene.scene_to_machine(self.mapToScene(position))
+        area = self._camera_image_area or self.workspace_scene.work_area
+        return (
+            max(area.x_min, min(area.x_max, x_mm)),
+            max(area.y_min, min(area.y_max, y_mm)),
+        )
+
+    def _trace_detection_area_draft(
+        self, position: QtCore.QPoint,
+    ) -> tuple[float, float, float, float] | None:
+        anchor = self._trace_detection_area_anchor
+        if anchor is None:
+            return None
+        current = self._trace_detection_area_point(position)
+        return (
+            min(anchor[0], current[0]), min(anchor[1], current[1]),
+            max(anchor[0], current[0]), max(anchor[1], current[1]),
+        )
 
     def _snap_and_clamp_machine_point(
         self,
@@ -3461,6 +3555,16 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         self.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
+        if self._trace_detection_area_selecting:
+            if event.button() == QtCore.Qt.MouseButton.RightButton:
+                self.cancel_trace_detection_area_selection()
+            elif event.button() == QtCore.Qt.MouseButton.LeftButton:
+                self._trace_detection_area_drag_start = event.position().toPoint()
+                self._trace_detection_area_anchor = self._trace_detection_area_point(
+                    self._trace_detection_area_drag_start,
+                )
+            event.accept()
+            return
         if (
             self._point_pick_active
             and event.button() == QtCore.Qt.MouseButton.LeftButton
@@ -3553,6 +3657,12 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         scene_point = self.mapToScene(event.position().toPoint())
         x_mm, y_mm = self.workspace_scene.scene_to_machine(scene_point)
         self.cursorPositionChanged.emit(x_mm, y_mm)
+        if self._trace_detection_area_selecting:
+            draft = self._trace_detection_area_draft(event.position().toPoint())
+            if draft is not None:
+                self._display_trace_detection_area(draft)
+            event.accept()
+            return
         if self._panning:
             delta = event.position().toPoint() - self._pan_start
             self._pan_start = event.position().toPoint()
@@ -3571,6 +3681,25 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._trace_detection_area_selecting:
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                position = event.position().toPoint()
+                draft = self._trace_detection_area_draft(position)
+                distance = (position - self._trace_detection_area_drag_start).manhattanLength()
+                self._trace_detection_area_anchor = None
+                if (
+                    draft is not None
+                    and distance >= QtWidgets.QApplication.startDragDistance()
+                    and draft[2] - draft[0] >= self._MINIMUM_DRAW_SIZE_MM
+                    and draft[3] - draft[1] >= self._MINIMUM_DRAW_SIZE_MM
+                ):
+                    self.set_trace_detection_area(draft)
+                    self._finish_trace_detection_area_selection()
+                    self.traceDetectionAreaSelected.emit(draft)
+                else:
+                    self._display_trace_detection_area(self._trace_detection_area)
+            event.accept()
+            return
         if self._panning and event.button() == self._pan_button:
             self._panning = False
             self._pan_button = QtCore.Qt.MouseButton.NoButton
@@ -3634,6 +3763,11 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._update_polygon_draft(self._polygon_pointer_mm, modifiers)
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if self._trace_detection_area_selecting:
+            if event.key() == QtCore.Qt.Key.Key_Escape:
+                self.cancel_trace_detection_area_selection()
+            event.accept()
+            return
         if event.key() in (QtCore.Qt.Key.Key_Control, QtCore.Qt.Key.Key_Shift):
             modifier = (
                 QtCore.Qt.KeyboardModifier.ControlModifier

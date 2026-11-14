@@ -1094,6 +1094,17 @@ controller/firmware/configuration acceptance record, and Straighten itself still
 needs physical validation. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
 
+For individual pieces or openings, turn off **Use grid**, choose **Select
+detection area**, and drag a box around the objects with a little margin.
+**Clear area** restores the full eligible camera view. Objects cut by the box
+edge are omitted; enlarge the box if a wanted object disappears. Existing
+trusted work-area limits and empty-bed suppression still apply inside it, and
+traced objects keep their original coordinates. The box lasts only for this
+session and clears on a new/opened project or changed calibration/project frame.
+Non-grid Auto/Contrast can retry a topology failure once with a tighter native
+fit, retaining the same mask and validation. The reported round-piece scene
+and physical placement remain unverified.
+
 Reusable label-sheet cutting templates can be created from visible project
 objects, selected manually or ranked against detected sheet geometry, and
 placed by reviewed translation and rotation. Drag the cyan preview directly in

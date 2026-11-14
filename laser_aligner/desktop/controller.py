@@ -150,6 +150,32 @@ def _trace_roi_polygons(
     return support, local_authority
 
 
+def _trace_detection_area_polygon(
+    area_mm: Sequence[float] | None,
+) -> tuple[tuple[float, float], ...] | None:
+    """Validate a request-local rectangle in the current camera coordinate frame."""
+
+    if area_mm is None:
+        return None
+    message = "Detection area must contain four finite coordinates: xmin, ymin, xmax, ymax"
+    if isinstance(area_mm, (str, bytes, Mapping)):
+        raise ValueError(message)
+    try:
+        values = tuple(area_mm)
+        if len(values) != 4 or any(isinstance(value, bool) for value in values):
+            raise ValueError(message)
+        x_min, y_min, x_max, y_max = (float(value) for value in values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not all(math.isfinite(value) for value in (x_min, y_min, x_max, y_max)):
+        raise ValueError(message)
+    if not all(math.isfinite(value) and value > 0.0 for value in (
+        x_max - x_min, y_max - y_min,
+    )):
+        raise ValueError("Detection area must have positive width and height")
+    return ((x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max))
+
+
 def _honeycomb_support_metadata(
     runtime: CoreRuntime,
     *,
@@ -2101,7 +2127,13 @@ class DesktopController(QtCore.QObject):
             else:
                 self.request_camera_refresh()
 
-    def detect_trace_objects(self, raw_options: dict[str, Any]) -> int:
+    def detect_trace_objects(
+        self,
+        raw_options: dict[str, Any],
+        *,
+        detection_area_mm: Sequence[float] | None = None,
+    ) -> int:
+        detection_area_mm = copy.deepcopy(detection_area_mm)
         self._trace_cancel_event.set()
         trace_cancel_event = threading.Event()
         self._trace_cancel_event = trace_cancel_event
@@ -2116,6 +2148,10 @@ class DesktopController(QtCore.QObject):
 
         def operation() -> dict[str, Any]:
             request_started = time.perf_counter()
+            options = TraceOptions.from_mapping(raw_options)
+            detection_polygon = _trace_detection_area_polygon(detection_area_mm)
+            if detection_polygon is not None and options.regular_grid:
+                raise ValueError("Turn off Use grid before using a Detection area")
             context = self.runtime.context
             if context.bed.calibration is None:
                 raise ValueError(
@@ -2191,10 +2227,20 @@ class DesktopController(QtCore.QObject):
                     coordinate_frame=coordinate_frame,
                     **precision_options,
                 )
-            options = TraceOptions.from_mapping(raw_options)
             options.precision_placement = bool(precision_options)
             guarded_output = _guarded_output_work_area(self.runtime)
             guarded_polygon = _configured_guarded_output_polygon(self.runtime)
+            trusted_roi_polygons = _trace_roi_polygons(self.runtime, coordinate_frame)
+            roi_polygons = trusted_roi_polygons
+            if detection_polygon is not None:
+                roi_polygons = (*trusted_roi_polygons, detection_polygon)
+            roi_source = (
+                "guarded output geometry"
+                if coordinate_frame is None
+                else "honeycomb support intersected with guarded output geometry"
+            )
+            if detection_polygon is not None:
+                roi_source += " intersected with selected detection area"
 
             def raster_preview_ready(preview: object) -> None:
                 """Publish immutable production arrays without doing Qt image work."""
@@ -2215,6 +2261,7 @@ class DesktopController(QtCore.QObject):
                         },
                         "review_signature": review_signature,
                         "pixels_per_mm": pixels_per_mm,
+                        "detection_area_mm": detection_area_mm,
                     },
                 )
 
@@ -2230,19 +2277,9 @@ class DesktopController(QtCore.QObject):
                     else camera_area
                 ),
                 background_image=background_image,
-                trace_roi_polygons_mm=_trace_roi_polygons(
-                    self.runtime,
-                    coordinate_frame,
-                ),
-                trace_output_polygon_mm=_trace_roi_polygons(
-                    self.runtime,
-                    coordinate_frame,
-                )[-1],
-                trace_roi_source=(
-                    "guarded output geometry"
-                    if coordinate_frame is None
-                    else "honeycomb support intersected with guarded output geometry"
-                ),
+                trace_roi_polygons_mm=roi_polygons,
+                trace_output_polygon_mm=trusted_roi_polygons[-1],
+                trace_roi_source=roi_source,
                 reference_required=coordinate_frame is not None,
                 reference_identity=(
                     None
@@ -2297,6 +2334,7 @@ class DesktopController(QtCore.QObject):
                 "y_max": float(camera_area.y_max),
             }
             payload["request_id"] = request_id
+            payload["detection_area_mm"] = detection_area_mm
             payload["camera_image"] = image_to_qimage(image)
             payload["pixels_per_mm"] = pixels_per_mm
             payload["material_surface"] = self._material_surface_metadata()

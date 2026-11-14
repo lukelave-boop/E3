@@ -1270,6 +1270,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
         self.trace_panel.detectRequested.connect(self._detect_trace_objects)
+        self.trace_panel.selectDetectionAreaRequested.connect(self._begin_trace_detection_area)
+        self.trace_panel.clearDetectionAreaRequested.connect(self._clear_trace_detection_area)
+        self.workspace.traceDetectionAreaSelected.connect(self._trace_detection_area_selected)
+        self.workspace.traceDetectionAreaSelectionCancelled.connect(self._trace_detection_area_cancelled)
         self.trace_panel.pickColorRequested.connect(
             self._begin_trace_color_pick
         )
@@ -1749,6 +1753,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _activate_selection_tool(self, *, show_message: bool = True) -> None:
         self.actions["select_tool"].setChecked(True)
+        cancel_area = getattr(self.workspace, "cancel_trace_detection_area_selection", None)
+        if callable(cancel_area):
+            cancel_area()
         self.workspace.set_creation_tool(None)
         self.workspace.cancel_point_pick()
         self.workspace.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
@@ -2902,6 +2909,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         document = self._new_document()
         self.document = document
         self.project_path = None
+        E3MainWindow._reset_trace_detection_area(self)
         self.active_layer_id = self.document.active_layer_id
         self.history.clear()
         self.history.mark_clean()
@@ -2943,6 +2951,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self.document = document
         self.project_path = Path(filename)
+        E3MainWindow._reset_trace_detection_area(self)
         self.active_layer_id = self.document.active_layer_id
         self.history.clear()
         self.history.mark_clean()
@@ -5394,6 +5403,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        cancel_area = getattr(self.workspace, "cancel_trace_detection_area_selection", None)
+        if callable(cancel_area):
+            cancel_area()
         state = project_machine_state(
             self.runtime.context.machine.status(),
             operation_busy=self._controller_busy or self._job_preparation_busy,
@@ -5414,11 +5426,71 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._clear_template_preview(show_message=False)
         if hasattr(self, "trace_panel"):
             self.trace_panel.begin_detection()
-        self._active_trace_request_id = self.controller.detect_trace_objects(
-            raw_options
+        area = getattr(self, "_trace_detection_area_mm", None)
+        area_options = {} if area is None else {"detection_area_mm": area}
+        self._active_trace_request_id = self.controller.detect_trace_objects(raw_options, **area_options)
+
+    def _begin_trace_detection_area(self) -> None:
+        if self.workspace.trace_detection_area_selection_active:
+            self.workspace.cancel_trace_detection_area_selection()
+            return
+        if self.runtime.context.bed.calibration is None:
+            self.show_error("Bed mapping is required before selecting a detection area")
+            return
+        if self.trace_panel.regular_grid.isChecked():
+            self.show_notice("Turn off Use grid before selecting a detection area")
+            return
+        if self.trace_panel._color_pick_sampling:
+            self.show_notice("Wait for color sampling to finish before selecting a detection area")
+            return
+        self._reconcile_pristine_project_frame()
+        try:
+            self._require_project_machine_work_area_match()
+        except Exception as exc:
+            self.show_error(f"Area selection unavailable: {exc}")
+            return
+        if getattr(self.workspace, "_camera_image_area", None) is None:
+            self.show_notice("Refresh the camera image before selecting a detection area")
+            return
+        self._clear_trace_preview()
+        self._activate_selection_tool(show_message=False)
+        self.trace_panel.set_color_pick_active(False)
+        self.workspace.begin_trace_detection_area_selection()
+        self.trace_panel.set_detection_area(
+            getattr(self, "_trace_detection_area_mm", None), selecting=True
         )
+        self.show_notice("Drag a detection box around the objects. Leave a little space around their edges.")
+
+    def _trace_detection_area_selected(self, area: object) -> None:
+        self._clear_trace_preview()
+        self._trace_detection_area_mm = tuple(area)
+        self.workspace.set_trace_detection_area(self._trace_detection_area_mm)
+        self.trace_panel.set_detection_area(self._trace_detection_area_mm)
+        self.show_notice("Detection area selected. Press Detect objects.")
+
+    def _trace_detection_area_cancelled(self) -> None:
+        self.trace_panel.set_detection_area(getattr(self, "_trace_detection_area_mm", None))
+
+    def _reset_trace_detection_area(self) -> None:
+        self._trace_detection_area_mm = None
+        workspace = getattr(self, "workspace", None)
+        cancel = getattr(workspace, "cancel_trace_detection_area_selection", None)
+        if callable(cancel):
+            cancel()
+        setter = getattr(workspace, "set_trace_detection_area", None)
+        if callable(setter):
+            setter(None)
+        panel_setter = getattr(getattr(self, "trace_panel", None), "set_detection_area", None)
+        if callable(panel_setter):
+            panel_setter(None)
+
+    def _clear_trace_detection_area(self) -> None:
+        E3MainWindow._reset_trace_detection_area(self)
+        self._clear_trace_preview()
+        self.show_notice("Detection area cleared. Detection uses the full eligible camera view.")
 
     def _begin_trace_color_pick(self) -> None:
+        self.workspace.cancel_trace_detection_area_selection()
         if self.runtime.context.bed.calibration is None:
             self.show_error("Bed mapping is required before sampling camera color")
             return
@@ -6358,6 +6430,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
 
     def _camera_image_invalidated(self) -> None:
+        had_area = getattr(self, "_trace_detection_area_mm", None) is not None
+        E3MainWindow._reset_trace_detection_area(self)
+        if had_area:
+            self._clear_trace_preview()
         self.workspace.set_camera_image(None)
 
     def _precision_placement_changed(self, enabled: bool) -> None:
@@ -6883,6 +6959,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return False
         self._invalidate_generated_job()
         self.document = replacement
+        E3MainWindow._reset_trace_detection_area(self)
         self.active_layer_id = self.document.active_layer_id
         self.history.clear()
         self.history.mark_clean()
@@ -6911,6 +6988,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _calibration_review_evidence_invalidated(self) -> None:
         """Remove camera evidence whose coordinates belonged to the old map/pose."""
 
+        E3MainWindow._reset_trace_detection_area(self)
         self._active_trace_request_id = None
         self._trace_raster_preview_images = {}
         self._trace_raster_preview_area = None

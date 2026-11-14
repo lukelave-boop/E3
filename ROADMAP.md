@@ -1,5 +1,14 @@
 # Roadmap
 
+## Camera Trace detection area (2026-11-14)
+
+Implemented in source: session-only **Select detection area** / **Clear area**
+for non-grid tracing, intersecting existing trusted ROI and empty-bed suppression.
+Boundary-cut objects are omitted and world coordinates stay unchanged. The bounded
+tighter-fit topology recovery is carried forward. Exact camera-scene replay and
+physical placement remain pending; automated, frozen-build and launcher evidence
+are tracked separately in [current state](CURRENT_STATE.md).
+
 ## Approved Twin Sans lettering (2026-11-01)
 
 The operator approved the original Twin Sans specimen. It is now the source
