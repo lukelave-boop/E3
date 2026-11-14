@@ -2147,6 +2147,8 @@ class RemoteMachineService:
             raise MachineError("Update the E3 Pi service to use taught laser focus")
         if action == "set_workpiece_height" and MANUAL_HEIGHT_CAPABILITY not in (self._node_capabilities or ()):
             raise MachineError("Update the Pi companion before entering manual workpiece height")
+        if action == "reuse_workpiece" and "pi-saved-workpiece-v1" not in (self._node_capabilities or ()):
+            raise MachineError("Update the Pi companion before reusing saved material setup")
         if action in {"measure_workpiece", "set_honeycomb_height", "set_workpiece_height"} and THICKNESS_CAPABILITY not in (self._node_capabilities or ()):
             self._job_focus_required = True
             self._selected_job_focus = None
@@ -2186,7 +2188,7 @@ class RemoteMachineService:
                 self._job_focus_required = True
                 self._selected_job_focus = None
                 raise PiJobProtocolError("Pi did not confirm the entered workpiece height")
-        if action in {"measure_workpiece", "set_workpiece_height"} and (
+        if action in {"measure_workpiece", "set_workpiece_height", "reuse_workpiece"} and (
             result.get("thickness_focus_available") is not True
             or (result.get("job_focus") is not None
                 and (type(result["job_focus"]) is not dict
@@ -2195,6 +2197,10 @@ class RemoteMachineService:
             self._job_focus_required = True
             self._selected_job_focus = None
             raise PiJobProtocolError("Pi did not confirm thickness-derived workpiece focus")
+        if action == "reuse_workpiece" and type(result.get("job_focus")) is not dict:
+            self._job_focus_required = True
+            self._selected_job_focus = None
+            raise PiJobProtocolError("Pi did not select the saved material setup")
         if action == "set_honeycomb_height" and (
             result.get("honeycomb_height_mm") != value
             or result.get("honeycomb_height_persistent") is not True
@@ -2273,6 +2279,9 @@ class RemoteMachineService:
                 self._status_cache["setup_evidence"] = None
                 self._cache_workpiece_focus(result)
         result["workpiece_focus_available"] = workpiece_supported
+        result["saved_workpiece_available"] = "pi-saved-workpiece-v1" in (self._node_capabilities or ())
+        if not result["saved_workpiece_available"]:
+            result.pop("saved_workpiece", None)
         result["thickness_focus_available"] = THICKNESS_CAPABILITY in (self._node_capabilities or ())
         result["manual_height_available"] = MANUAL_HEIGHT_CAPABILITY in (self._node_capabilities or ())
         if not workpiece_supported and action == "use_job":

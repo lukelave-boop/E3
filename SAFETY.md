@@ -129,6 +129,9 @@ connection; failed/interrupted shutdown, STOP, changed configuration/firmware or
 failed controller validation requires a new reference. Restoration sends no
 travel/probe command and separately enables Z motor hold; XY must still Home.
 Measurements, previews and job selections do not survive this restoration.
+Compatible material settings can create a fresh binding after verified Home /
+park, assuming unchanged material/supports. Clear the height when they change.
+See [saved material focus](docs/SAVED_MATERIAL.md).
 
 Manual Z movement, unpowered axis drift, probe-mount changes and border/support
 movement while off cannot be detected by this feature. After any such change,
@@ -164,8 +167,9 @@ The operator
 must still confirm the actual path, flat patch, gauge fit and changed workpiece.
 The workpiece height is reusable after successful jobs, framing, XY jogging and
 Home / park only with verified clearance and unchanged reference/controller
-authority. New measurement replaces the height; it is not restored after a
-Pi/controller restart. Once focus is required, a missing or invalid datum blocks
+authority. New measurement replaces the height. Compatible material settings
+are reused only after a clean verified restart and Home / park; failed or dirty
+restarts never restore job authority. Once focus is required, a missing or invalid datum blocks
 powered jobs instead of allowing a job to omit its Z move. Changing gap is an
 explicit no-motion recalculation; status polling cannot change the selected gap.
 No focus actions fire the laser or provide safety-rated stopping or collision

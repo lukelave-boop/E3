@@ -31,7 +31,8 @@ def z_retention_path(focus_path: Path | None) -> Path | None:
 
 
 def validate_snapshot(snapshot):
-    if type(snapshot) is not dict or set(snapshot) != {"z_mm", "clearance_z_mm", "max_z_mm", "reference"}:
+    fields = {"z_mm", "clearance_z_mm", "max_z_mm", "reference"}
+    if type(snapshot) is not dict or set(snapshot) not in (fields, fields | {"workpiece"}):
         raise SafetyError("Invalid saved Z checkpoint")
     maximum = _number(snapshot["max_z_mm"], "Saved Z maximum", 20, 80)
     clearance = _number(snapshot["clearance_z_mm"], "Saved Z clearance", 20, maximum)
@@ -48,6 +49,10 @@ def validate_snapshot(snapshot):
         or any(type(v) not in {int, float} for v in reference["geometry"].values())
         or reference["geometry"] != geometry or not restore_supported(firmware.splitlines())):
         raise SafetyError("Saved Z firmware or geometry does not support restoration")
+    if "workpiece" in snapshot:
+        from .saved_workpiece import validate_saved_workpiece
+
+        validate_saved_workpiece(snapshot["workpiece"], reference, clearance, maximum)
     return copy.deepcopy(snapshot)
 
 
@@ -184,12 +189,15 @@ class ZRetention:
                 try:
                     data = self._read_locked()
                     if (type(data) is not dict or set(data) != {"schema_version", "clean", "binding", "snapshot", "session"}
-                        or type(data["schema_version"]) is not int or data["schema_version"] != 1
+                        or type(data["schema_version"]) is not int or data["schema_version"] not in (1, 2)
                         or type(data["clean"]) is not bool or type(data["session"]) is not str
                         or str(uuid.UUID(data["session"])) != data["session"]):
                         raise ValueError("Unknown checkpoint format")
                     if data["clean"] and data["binding"] == self.binding:
                         candidate = validate_snapshot(data["snapshot"])
+                        if ("workpiece" in candidate) != (data["schema_version"] == 2):
+                            candidate = None
+                            raise ValueError("Saved material checkpoint version mismatch")
                     elif data["clean"]:
                         self.reason = "Machine configuration changed; reference the border."
                     else:
@@ -233,7 +241,7 @@ class ZRetention:
         if self.path is None:
             return False
         revision = self._revision if expected_revision is None else expected_revision
-        payload = {"schema_version": 1, "clean": True, "binding": self.binding,
+        payload = {"schema_version": 2 if "workpiece" in snapshot else 1, "clean": True, "binding": self.binding,
                    "snapshot": snapshot, "session": self._claim}
         # Stage all potentially slow serialization/fsync outside the STOP gate.
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,8 +312,14 @@ def capture_z(owner, focus, maximum, guard):
         final = parse_position(send("M114"))
         if abs(final - z) > .001 or not parse_status(send("M123"))["z_known"]:
             raise SafetyError("Z changed during clean shutdown verification")
-        return validate_snapshot({"z_mm": z, "clearance_z_mm": focus.selected_clearance,
-                                  "max_z_mm": maximum, "reference": reference})
+        from .saved_workpiece import capture_workpiece
+
+        snapshot = {"z_mm": z, "clearance_z_mm": focus.selected_clearance,
+                    "max_z_mm": maximum, "reference": reference}
+        workpiece = capture_workpiece(focus, reference, maximum)
+        if workpiece is not None:
+            snapshot["workpiece"] = workpiece
+        return validate_snapshot(snapshot)
 
 
 def restore_z(owner, focus, snapshot, maximum, guard):
@@ -348,3 +362,7 @@ def restore_z(owner, focus, snapshot, maximum, guard):
         _stowed(send, True)
         with guard():
             focus.restore_z_reference(snapshot["reference"], owner.generation, snapshot["clearance_z_mm"])
+            from .saved_workpiece import compatible
+
+            workpiece = snapshot.get("workpiece")
+            focus.saved_workpiece = copy.deepcopy(workpiece) if workpiece is not None and compatible(workpiece, focus) else None

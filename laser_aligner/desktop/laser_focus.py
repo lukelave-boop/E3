@@ -340,6 +340,11 @@ class LaserFocusPanel(QtWidgets.QWidget):
             layout.addWidget(teach)
             layout.addWidget(self.offset_editor)
 
+        self.reuse_note = QtWidgets.QLabel(
+            "Saved material focus will be reused automatically after Home / park XY. "
+            "If material height or supports changed, clear the measurement and measure again."
+        )
+        self.reuse_note.setWordWrap(True)
         self.preview_group = QtWidgets.QGroupBox("Preview and position" if calibration_mode else "Workpiece focus", self)
         focus_layout = QtWidgets.QGridLayout(self.preview_group)
         self.spacers = MeasurementSpinBox()
@@ -406,6 +411,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
             for row, control in enumerate((
                 self.height_mode, self.manual_thickness, self.spacers, self.manual_note, self.manual_apply,
                 self.thickness_note, self.target, self.job_note,
+                self.reuse_note,
             )):
                 focus_layout.addWidget(control, row, 0)
         else:
@@ -738,7 +744,7 @@ class LaserFocusPanel(QtWidgets.QWidget):
         )
         self.message.setText({
             "reference": "Border reference saved. Position over a flat surface at clearance, then measure.",
-            "home_retained": "XY parked. Saved Z reference retained; select and measure the current workpiece.",
+            "home_retained": "XY parked. Saved Z reference retained; compatible material focus is reused automatically.",
             "measure": (
                 "Surface measured. Teach with the gauge, or preview using the saved offset."
                 if self.calibration_mode else
@@ -954,7 +960,10 @@ class LaserFocusPanel(QtWidgets.QWidget):
         return_allowed = return_minimum is None or (clearance is not None and clearance >= return_minimum)
         self.return_clearance.setEnabled(bool(moving and known and z is not None and return_allowed
                                              and clearance is not None and z <= clearance + .05))
-        self.clear_surface.setEnabled(bool(ready and (surface or self._result.get("job_focus"))))
+        saved = self._result.get("saved_workpiece")
+        saved_available = (type(saved) is dict and self._result.get("saved_workpiece_available") is True)
+        self.reuse_note.setVisible(bool(not self.calibration_mode and saved_available))
+        self.clear_surface.setEnabled(bool(ready and (surface or self._result.get("job_focus") or saved_available)))
         if self.calibration_mode:
             self.forget.setEnabled(bool(ready and self._result.get("calibration")
                                         and self._result.get("calibration_persistent") is True))
@@ -1021,8 +1030,14 @@ class LaserFocusPanel(QtWidgets.QWidget):
             if job_focus else "Job focus: not selected. Preview the measured surface, then select."
         )
         workpiece_ready = self._sync_workpiece_focus() if not self.calibration_mode else False
+        if saved_available and not self.calibration_mode and not job_focus:
+            elevation = _number(saved.get("surface_elevation_mm"))
+            spacer = _number(saved.get("spacer_thickness_mm"))
+            if elevation is not None and spacer is not None:
+                self.target.setText(f"Saved surface: {elevation:+.3f} mm above border; spacers: {spacer:.3f} mm")
+                self.spacers.setValue(spacer)
         if not self.calibration_mode:
-            editable = bool(ready and not surface and not job_focus)
+            editable = bool(ready and not surface and not job_focus and not saved_available)
             self.spacers.setEnabled(editable)
             self.height_mode.setEnabled(editable)
             manual = self.height_mode.currentData() == "manual"
@@ -1075,6 +1090,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
             "Next: Return Z to clearance before transferring XY." if requires_clearance and probe_phase else
             "Next: Choose Move probe here with the gauge removed and XY path clear." if self._camera_target else
             f"Next: Click a solid probe spot in the {self._camera_location}." if self.position_probe.isChecked() else
+            "Next: Home / park XY will automatically reuse saved material focus. Clear measurement if the setup changed."
+            if saved_available and not self.calibration_mode else
             f"Jobs blocked: {self._result['job_focus_block_reason']}"
             if not self.calibration_mode and self._result.get("job_focus_block_reason") else
             "Next: Return the laser to the measured spot at clearance." if probe_phase and surface else
@@ -1127,6 +1144,8 @@ class LaserFocusPanel(QtWidgets.QWidget):
                     f"Jobs use cut focus or the 7 mm raster gap and travel at Z{clearance:g} mm. "
                     "Reapply the height or measure again after changing the material or its supports."
                 )
+                if plan.get("source") == "saved_workpiece":
+                    self.job_note.setText("Using saved material setup. " + self.job_note.text())
                 return True
         self.job_note.setText(
             "Workpiece focus: measure a solid, flat spot before starting jobs."

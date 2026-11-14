@@ -134,6 +134,7 @@ SERVER_CAPABILITIES = (
     "pi-operation-focus-v1",
     "pi-thickness-focus-v2",
     "pi-manual-workpiece-height-v1",
+    "pi-saved-workpiece-v1",
     "pi-creality-z-probe-v1",
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,

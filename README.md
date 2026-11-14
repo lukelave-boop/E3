@@ -422,8 +422,11 @@ in the update cache. See [updates](docs/UPDATES.md).
 The retained-Z feature preserves a verified border reference and Z coordinate
 when the Pi finishes a clean, idle disconnect or shutdown at or above the saved
 clearance. The next connection can restore Z without probing or travel; fresh
-XY Home / park is still required. Surface measurements and job selections are
-not retained. If the axis, probe mount, or border/support moved while off, use
+XY Home / park is still required and automatically selects compatible saved
+material focus. There is no Reuse button or startup confirmation; change the
+workpiece height only when its material or supports change. Old measurements
+and job selections are discarded; reuse creates a fresh guarded binding. See
+[saved material focus](docs/SAVED_MATERIAL.md). If the axis, probe mount, or border/support moved while off, use
 **Forget saved Z**, then use the reference action again.
 
 This candidate requires matching desktop, Pi and restore-capable firmware.
@@ -483,8 +486,8 @@ off and lifts before Home / park. Successful jobs, framing, XY jogging and
 Home / park retain the workpiece height under unchanged controller/reference
 authority. A new measurement replaces it. Lost reference, STOP, failed moves
 or changed calibration block powered jobs until a fresh measurement; they
-cannot silently fall back to XY-only cutting. Workpiece height is not restored
-across a Pi/controller restart. Establish a fresh reference/measurement after
+cannot silently fall back to XY-only cutting. Compatible workpiece settings are reused automatically after a clean restart
+and verified Home / park with the matching saved-material companion. Establish a fresh reference/measurement after
 the matching Pi update; saved gauge teaching is preserved.
 
 The focus-preview client fix refreshes completed-operation status before

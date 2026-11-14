@@ -34,7 +34,7 @@ HONEYCOMB_HEIGHT_MM = -1.5
 THICKNESS_POLICY = "linear-0-6mm-v2"
 ACTIONS = {"status", "reference", "measure", "jog", "teach", "preview", "move",
            "clearance", "clear_surface", "forget", "set_xy_offset", "align_probe", "align_laser",
-           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece", "set_honeycomb_height", "set_workpiece_height"}
+           "position_probe", "recover", "recover_xy", "use_job", "forget_z", "set_job_gap", "measure_workpiece", "set_honeycomb_height", "set_workpiece_height", "reuse_workpiece"}
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 _GEOMETRY = re.compile(rf"E3SG:2 PROBE_Z:({_NUM}) RETRACT:({_NUM}) MIN:({_NUM}) MAX:({_NUM}) CEILING:({_NUM})")
 _CONTACT = re.compile(rf"E3MH:2 Z:({_NUM})")
@@ -215,7 +215,7 @@ class LaserFocus:
         self.honeycomb_path = None if path is None else path.with_name(path.stem + "-honeycomb.json")
         self.honeycomb_height_mm = self._load_honeycomb()
         # A lost workpiece datum must never downgrade a calibrated machine to
-        # ordinary unfocused output. A new process requires a fresh measurement.
+        # ordinary unfocused output. Restart restores compatible material focus after verified XY Home.
         self.job_focus_required = (self.calibration is not None
                                    or (self.honeycomb_path is not None and self.honeycomb_path.exists()))
         self.job_focus_block_reason = "Measure the workpiece before starting a powered job"
@@ -224,6 +224,7 @@ class LaserFocus:
         self.requires_clearance = False
         self.xy_recovery_pending_reference = False
         self.selected_clearance = 30.0
+        self.saved_workpiece = None
         self._z_reference = None
         self._z_reference_generation = None
         self._reference_id = None
@@ -252,6 +253,7 @@ class LaserFocus:
         self.z_reference_required = False
 
     def drop_z_reference(self, *, require_reference=True):
+        self.saved_workpiece = None
         self.invalidate()
         self._z_reference = None
         self._z_reference_generation = None
@@ -260,6 +262,7 @@ class LaserFocus:
             self.z_reference_required = True
 
     def clear_surface(self, *, keep_alignment=False):
+        self.saved_workpiece = None
         self.job_plan = None
         self.surface = self.preview = None
         if not keep_alignment:
@@ -589,6 +592,7 @@ class LaserFocus:
                 raise SafetyError("Align the laser over the measured point before lowering or teaching Z")
 
         if action in {"jog", "teach", "forget", "set_xy_offset"}:
+            self.saved_workpiece = None
             self.job_plan = None
         if action == "reference":
             self.drop_z_reference()
@@ -698,7 +702,15 @@ class LaserFocus:
                 raise SafetyError(self.job_focus_block_reason)
             self.job_plan.update(derived, height_source="manual", entered_height=entered)
             self.job_focus_block_reason = "Manual workpiece height is no longer current; enter it again"
+        elif action == "reuse_workpiece":
+            from .saved_workpiece import reuse_workpiece
+
+            known()
+            with guard():
+                reuse_workpiece(self, firmware=firmware, geometry=geometry, maximum=maximum,
+                                session=session, xy=xy, current=current, clearance=clearance)
         elif action == "measure":
+            self.saved_workpiece = None
             self.job_focus_required = True
             self.job_plan = None
             known()
@@ -848,6 +860,8 @@ class LaserFocus:
         return copy.deepcopy({"action": requested_action, "available": True, "job_focus_available": True, "job_focus": self.job_plan, "reference_ready": self.reference is not None,
                               "reference": self.reference,
                               "reference_id": self._reference_id if self.reference is not None else None,
+                              "saved_workpiece_available": True,
+                              "saved_workpiece": self.saved_workpiece,
                               "thickness_focus_available": True,
                               "manual_height_available": True,
                               "workpiece_focus_available": True,
