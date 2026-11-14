@@ -1,5 +1,26 @@
 # Current repository state
 
+## 2026-11-14 - Automatic saved material focus candidate
+
+Implemented on authoritative main without importing unrelated shared-tree work.
+A clean Z checkpoint now optionally retains measured/manual material dimensions,
+spacers and focus policy. Successful Home / park XY selects them automatically;
+there is no Reuse button or routine startup confirmation. Clear/update height
+when material or supports change. Existing fault, reference and arming guards
+remain. See [workflow and schema compatibility](docs/SAVED_MATERIAL.md).
+
+Windows Python 3.14 source tests: all 45 feature tests pass, including a complete
+fake-controller restart/job for measured and manual heights. The broader runs
+passed 438 focus/retention/backend/offscreen-widget checks and 183 additional
+manual-height/operation/remote-focus regressions. Ruff and compileall pass.
+Socket-dependent cases are excluded locally because this sandbox rejects their
+loopback listeners; CI must cover them. Real controllers/cameras, physical
+power cycles and interactive GUI operation have not been tested. No installed
+application, Pi service, firmware or permanent launcher has been changed by this
+source work. Windows compatibility CI and frozen handoff are pending.
+
+
+
 ## Approved Twin Sans lettering (2026-11-01)
 
 The operator approved the original Twin Sans sample after rejecting earlier

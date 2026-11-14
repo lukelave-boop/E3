@@ -1068,6 +1068,10 @@ class MachineService:
             with owner._lock:
                 owner._all_fans_off(allow_open=False, write_guard=guard, timeout=.5,
                                    interrupt_on_failure=False)
+                if self._laser_focus.job_plan is not None:
+                    from .job_focus import selection_snapshot
+
+                    selection_snapshot(self, self._laser_focus.job_plan["id"])
                 snapshot = capture_z(owner, self._laser_focus, self.settings.mainboard_max_z_mm, guard)
             with guard():
                 pass
@@ -4112,6 +4116,7 @@ class MachineService:
                         allow_rehome=True,
                         focus_park_guard=focus_park_guard,
                     )
+                self._reuse_saved_material_after_home(operation_stop_epoch, attempt_session)
             except BaseException as exc:
                 self._invalidate_retained_z("Home / park failed; reference Z again")
                 self._log_home_outcome(
@@ -4160,6 +4165,19 @@ class MachineService:
                 error=None,
             )
             return result
+
+    def _reuse_saved_material_after_home(self, stop_epoch, session):
+        """Reuse unchanged material after successful ordinary XY Home only."""
+        if self._laser_focus.saved_workpiece is None:
+            return
+        # Retain Home's original epoch. STOP cannot authorize a new selection.
+        with self.operation_scope(stop_epoch):
+            if (not self._z_retention_restored
+                    or not self._same_controller_session(self._session, session)):
+                raise SafetyError("Saved material lost its restored machine reference")
+            self.focus_control("reuse_workpiece", confirmed=True,
+                               clearance_z_mm=self._laser_focus.selected_clearance)
+        self._append_log("INFO", "Saved material focus reused automatically after XY Home")
 
     def _log_home_outcome(
         self,
@@ -4746,7 +4764,7 @@ class MachineService:
                     probe.owner.recover_off(write_guard=guard, deadline=min(deadline, time.monotonic() + 60))
                     secondary_generation = probe.owner.generation
                 with probe.owner._lock:
-                    if self._laser_focus.xy_sequence and action in {"measure", "measure_workpiece", "jog", "teach", "preview", "move"}:
+                    if action == "reuse_workpiece" or (self._laser_focus.xy_sequence and action in {"measure", "measure_workpiece", "jog", "teach", "preview", "move"}):
                         check_focus_xy(self._jog_position_mm, guard)
 
                     def execute_focus(focus_action):

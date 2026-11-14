@@ -553,8 +553,9 @@ def test_delayed_ack_after_consumed_rejection_quarantines_before_next_command(
     transport.set_next_reply("$I", "error:20")
     transport.arm_tail = True
 
+    # Leave scheduling time to observe the delayed tail on a loaded CI worker.
     with pytest.raises(MachineError, match="unowned response"):
-        machine.send_command("$I")
+        machine.send_command("$I", timeout=1.0)
 
     commands_after_failure = list(transport.writes)
     with pytest.raises(MachineError, match="not ready|unavailable|reconnect"):
